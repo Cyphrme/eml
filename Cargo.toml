@@ -1,0 +1,12 @@
+[package]
+name        = "tsml"
+version     = "0.1.0"
+description = "Temporally-Sparse Merkle Log — multi-algorithm append-only log with epoch semantics"
+edition      = "2024"
+rust-version = "1.85"
+
+[dependencies]
+# Zero external dependencies. Hash operations injected via the Hasher trait.
+
+[dev-dependencies]
+sha2 = "0.10"
