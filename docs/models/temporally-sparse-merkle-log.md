@@ -5,7 +5,6 @@
   Extends the malt verifiable-log model with multi-algorithm support,
   null-fill semantics, and epoch-aware proof generation.
 
-  See: .sketches/2026-05-12-topology-invariant-malt.md for exploration history.
   See: malt docs/models/verifiable-log.md for the base model this extends.
 -->
 
@@ -14,16 +13,16 @@
 **Problem Statement:**
 
 A single RFC 9162 append-only Merkle log supporting dynamic sets of hash
-algorithms over a shared topology. Algorithms activate and deactivate at
-commit boundaries. Pre-activation positions are filled with deterministic
-null constants, enabling O(1) algorithm addition without retroactive
-computation while preserving algorithm-independent verification. Deactivated
-algorithms freeze at their removal point.
+algorithms over a shared topology. Algorithms activate and deactivate
+between appends. A new algorithm's view of pre-activation positions
+consists of deterministic null constants, enabling O(1) algorithm addition
+without retroactive computation while preserving algorithm-independent
+verification. Deactivated algorithms freeze at their removal point.
 
 **Domain Characteristics:**
 
-- **State**: Mutable, append-only. Leaf data is immutable once committed.
-  The active algorithm set changes at commit boundaries.
+- **State**: Mutable, append-only. Leaf data is immutable once appended.
+  The active algorithm set changes between appends.
 - **Construction**: Inductive (leaves → internal nodes → root). Classical
   initial algebra.
 - **Multi-dimensionality**: Each tree position stores a vector of digests
@@ -104,11 +103,11 @@ hash operations and requires `O(H)` storage, where `H = ⌈log₂(n)⌉`.
 
 ```
 act: Alg ⇀ (ℕ, ℕ ∪ {∞})
-act(a) = (activation_commit, deactivation_commit)
+act(a) = (activation_index, deactivation_index)
 ```
 
-where `activation_commit < deactivation_commit`. Algorithms with
-`deactivation_commit = ∞` are currently active.
+where `activation_index < deactivation_index`. Algorithms with
+`deactivation_index = ∞` are currently active.
 
 **Definition 4** (Active predicate). Algorithm `a` is active at leaf
 index `i` iff:
@@ -229,9 +228,9 @@ do not update its frontier stack.
 
 **Resolved:** Removed algorithms freeze. Null-filling a deactivated algorithm
 implies unbounded maintenance cost (computing `Nₕ(a)` merges for every
-subsequent commit, indefinitely) for an algorithm the identity no longer
-trusts. Freezing aligns the data structure's topology with its cryptographic
-authority: the CR Manifest records `tree_size(a) = act(a).deactivation`,
+subsequent append, indefinitely) for an algorithm no longer in use.
+Freezing aligns the data structure's topology with its cryptographic
+authority: the manifest records `tree_size(a) = act(a).deactivation`,
 and any proof request beyond that boundary is structurally out-of-bounds.
 
 ### §10. Root Extraction
@@ -247,16 +246,16 @@ root(a) = empty(a)                                         if stacks(a) = []
 
 This is identical to malt's root extraction, applied per algorithm.
 
-**Definition 13** (CR Manifest). The Commit Root is a structured manifest:
+**Definition 13** (TSML Manifest). The state manifest is a structured snapshot:
 
 ```
-CR = {
+Manifest = {
   global_tree_size: S.size,
   algorithms: {
     a ↦ {
       root:               root(a),
-      activation_commit:  act(a).activation,
-      deactivation_commit: act(a).deactivation,    — ∞ if active
+      activation_index:   act(a).activation,
+      deactivation_index: act(a).deactivation,    — ∞ if active
       tree_size:          tree_size(a)
     }
     | a ∈ dom(act)
@@ -423,20 +422,20 @@ per algorithm, plus the multi-algorithm extension laws above.
 
 ## Validation
 
-| Check                    | Result | Detail                                                                                                                                              |
-| :----------------------- | :----- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A-EQUIV-TSML             | PASS   | Follows from malt's A-EQUIV applied per-algorithm over the projected sequence. The null constants are just another leaf value.                      |
-| A-STACK-TSML             | PASS   | Active algorithms track `popcount(global_tree_size)`, frozen algorithms track `popcount(deactivation_commit)`. Unified by `popcount(tree_size(a))`. |
-| N-DET                    | PASS   | By construction: `Nₕ(a)` is a pure function of `(a, h)`.                                                                                            |
-| D-SEP                    | PASS   | Three distinct prefix bytes (0x00, 0x01, 0x02) under cryptographic hash. Collision requires breaking preimage resistance.                           |
-| I-SOUND-TSML             | PASS   | Reduces to malt's I-SOUND over the projected leaf sequence. Null leaves verify as `N₀(a)`, not as real data.                                        |
-| K-SOUND-TSML             | PASS   | Reduces to malt's K-SOUND. Null subtrees are valid tree nodes.                                                                                      |
-| T-BOUND                  | PASS   | Pre-activation: D-SEP prevents forgery. Post-deactivation: projection bounds prevent proof generation.                                              |
-| ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                  |
-| PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                 |
-| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-TSML → PROJ-VALID, ALG-IND standalone.                        |
-| **External adequacy**    | PASS   | The model captures all seven design constraints (C1–C7) from the sketch.                                                                            |
-| **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                     |
+| Check                    | Result | Detail                                                                                                                                             |
+| :----------------------- | :----- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A-EQUIV-TSML             | PASS   | Follows from malt's A-EQUIV applied per-algorithm over the projected sequence. The null constants are just another leaf value.                     |
+| A-STACK-TSML             | PASS   | Active algorithms track `popcount(global_tree_size)`, frozen algorithms track `popcount(deactivation_index)`. Unified by `popcount(tree_size(a))`. |
+| N-DET                    | PASS   | By construction: `Nₕ(a)` is a pure function of `(a, h)`.                                                                                           |
+| D-SEP                    | PASS   | Three distinct prefix bytes (0x00, 0x01, 0x02) under cryptographic hash. Collision requires breaking preimage resistance.                          |
+| I-SOUND-TSML             | PASS   | Reduces to malt's I-SOUND over the projected leaf sequence. Null leaves verify as `N₀(a)`, not as real data.                                       |
+| K-SOUND-TSML             | PASS   | Reduces to malt's K-SOUND. Null subtrees are valid tree nodes.                                                                                     |
+| T-BOUND                  | PASS   | Pre-activation: D-SEP prevents forgery. Post-deactivation: projection bounds prevent proof generation.                                             |
+| ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                 |
+| PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                |
+| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-TSML → PROJ-VALID, ALG-IND standalone.                       |
+| **External adequacy**    | PASS   | The model captures all design constraints from the original exploration.                                                                           |
+| **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                    |
 
 ### Performance Bounds
 
@@ -454,7 +453,7 @@ per algorithm, plus the multi-algorithm extension laws above.
 
 ### Proof Size Trade-off (Resolved: Elided Proofs)
 
-In independent MALTs, algorithm `a` active for `nₐ` commits has proof depth
+In independent MALTs, algorithm `a` active for `nₐ` appends has proof depth
 `O(log nₐ)`. In TSML, proof depth is `O(log n)` where `n` is global tree
 size. If `nₐ ≪ n`, TSML proofs are deeper.
 
@@ -462,17 +461,17 @@ size. If `nₐ ≪ n`, TSML proofs are deeper.
 need not be transmitted. The proof flow is:
 
 1. **Server (prover):** Generates the full `malt` proof. Siblings whose
-   entire leaf-coverage range falls strictly below `activation_commit` are
+   entire leaf-coverage range falls strictly below `activation_index` are
    null subtrees. The server omits them from the wire payload.
 2. **TSML client envelope:** The client knows `tree_size`, `index`, and
-   `activation_commit`. It walks the virtual tree path, detects positions
+   `activation_index`. It walks the virtual tree path, detects positions
    fully inside the inactive epoch, synthesizes `Nₕ(a)` locally, and
    injects them into the proof array.
-3. **Core verifier (C6 preserved):** The envelope hands the rehydrated,
-   full proof to the unmodified `malt::verify_*` function.
+3. **Core verifier:** The envelope hands the rehydrated, full proof to the
+   unmodified `malt::verify_*` function.
 
 Wire proof size collapses to `O(log nₐ)`, neutralizing TSML's only
-theoretical overhead while preserving verifier independence (C6).
+theoretical overhead while preserving verifier independence.
 
 ## Implications
 
@@ -495,7 +494,7 @@ theoretical overhead while preserving verifier independence (C6).
    }
    ```
 
-3. **CR Manifest.** Introduce a structured `CommitRoot` type that includes
+3. **Manifest.** Introduce a structured manifest type that includes
    `global_tree_size`, per-algorithm roots, and activation metadata.
 
 ### Testing Strategy
@@ -513,27 +512,26 @@ theoretical overhead while preserving verifier independence (C6).
 ### Architecture Decisions
 
 - **Algorithm removal: freeze.** Deactivated algorithms freeze at their
-  removal point. Zero ongoing maintenance cost. The CR Manifest records
+  removal point. Zero ongoing maintenance cost. The manifest records
   the terminal `tree_size(a)` explicitly.
 
 - **Proof transmission: elide null siblings.** The TSML client envelope
   rehydrates deterministic null subtree siblings before handing to the
   standard `malt` verifier. Wire size is `O(log nₐ)`, not `O(log n)`.
 
-- **CR format.** The CR Manifest replaces the current `MultihashDigest` for
-  the commit root. Wire format is a specification concern (candidate:
-  deterministic canonical serialization keyed by algorithm IDs). This is a
-  SPEC-level change that requires careful migration planning.
+- **Manifest wire format.** The manifest's serialization format is a
+  consumer concern (candidate: deterministic canonical serialization
+  keyed by algorithm IDs).
 
 ### Remaining Open Questions
 
-1. CR Manifest wire format (Coz-native JSON vs. CBOR vs. other canonical form)
+1. Manifest wire format (JSON vs. CBOR vs. other canonical form)
 
 **Resolved:** Elided proof wire encoding requires no explicit metadata.
 The client deterministically identifies omitted siblings via interval
 arithmetic: for each sibling in the proof path, the client computes its
-leaf-coverage range `[start, end)`. If `end ≤ activation_commit`, the
+leaf-coverage range `[start, end)`. If `end ≤ activation_index`, the
 entire subtree is null and was elided — the client synthesizes `Nₕ(a)`
 locally. Otherwise, the sibling was transmitted. Both parties share
-`tree_size(a)`, `index`, and `activation_commit`, ensuring lockstep
+`tree_size(a)`, `index`, and `activation_index`, ensuring lockstep
 agreement with zero wire overhead.
