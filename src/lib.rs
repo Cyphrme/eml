@@ -46,3 +46,6 @@ pub use proof::{
     ConsistencyProof, ElidedInclusionProof, InclusionProof, elide_inclusion_proof,
     rehydrate_inclusion_proof, verify_consistency, verify_inclusion,
 };
+
+#[cfg(test)]
+mod proptests;
