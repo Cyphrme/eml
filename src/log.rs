@@ -1,7 +1,8 @@
 //! TSML Log — the core state machine.
 //!
-//! Implements Definitions 6-12 of the formal model: the TSML state tuple,
-//! leaf value function, append, algorithm add/remove, and root extraction.
+//! Implements Definitions 6-14 of the formal model: the TSML state tuple,
+//! leaf value function, append, algorithm add/remove, root extraction,
+//! projection, and proof generation.
 
 use std::collections::BTreeMap;
 
@@ -323,6 +324,117 @@ impl Log {
     #[cfg(test)]
     fn stack_len(&self, alg_id: u64) -> Option<usize> {
         self.algs.get(&alg_id).map(|s| s.stack.len())
+    }
+
+    // ========================================================================
+    // Projection (Definition 14)
+    // ========================================================================
+
+    /// Compute the projected leaf hash sequence for an algorithm.
+    ///
+    /// Definition 14: for each global index `i` in `[0, tree_size(a))`,
+    /// the projected leaf is `leaf(a, data[i])` if `active(a, i)`, else
+    /// `N₀(a)` (the null leaf constant).
+    ///
+    /// The returned sequence is a valid input to the batch Merkle tree
+    /// hash function (PROJ-VALID).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
+    pub fn project(&self, alg_id: u64) -> Result<Vec<Vec<u8>>> {
+        let state = self
+            .algs
+            .get(&alg_id)
+            .ok_or(Error::UnknownAlgorithm(alg_id))?;
+
+        let ts = state.tree_size(self.size());
+        let leaves: Vec<Vec<u8>> = (0..ts)
+            .map(|i| {
+                if state.is_active_at(i) {
+                    state.hasher.leaf(&self.leaves[i as usize])
+                } else {
+                    state.null_table.leaf_null().to_vec()
+                }
+            })
+            .collect();
+        Ok(leaves)
+    }
+
+    // ========================================================================
+    // Proof generation (Definitions 15-16)
+    // ========================================================================
+
+    /// Generate an inclusion proof for leaf `index` under algorithm `alg_id`.
+    ///
+    /// The proof operates over the projected leaf sequence and verifies
+    /// against the algorithm's root via [`verify_inclusion`](crate::verify_inclusion).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
+    /// Returns [`Error::IndexOutOfBounds`] if `index >= tree_size(alg_id)`.
+    pub fn inclusion_proof(&self, alg_id: u64, index: u64) -> Result<crate::proof::InclusionProof> {
+        let state = self
+            .algs
+            .get(&alg_id)
+            .ok_or(Error::UnknownAlgorithm(alg_id))?;
+
+        let ts = state.tree_size(self.size());
+        if ts == 0 || index >= ts {
+            return Err(Error::IndexOutOfBounds {
+                index,
+                tree_size: ts,
+            });
+        }
+
+        let projected = self.project(alg_id)?;
+        let path = crate::proof::gen_path(state.hasher.as_ref(), index as usize, &projected);
+
+        Ok(crate::proof::InclusionProof {
+            index,
+            tree_size: ts,
+            path,
+        })
+    }
+
+    /// Generate a consistency proof from `old_size` to the current tree
+    /// for algorithm `alg_id`.
+    ///
+    /// The proof demonstrates that the tree at `old_size` is a prefix of
+    /// the current tree. Verify with [`verify_consistency`](crate::verify_consistency).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
+    /// Returns [`Error::IndexOutOfBounds`] if `old_size` is out of range.
+    pub fn consistency_proof(
+        &self,
+        alg_id: u64,
+        old_size: u64,
+    ) -> Result<crate::proof::ConsistencyProof> {
+        let state = self
+            .algs
+            .get(&alg_id)
+            .ok_or(Error::UnknownAlgorithm(alg_id))?;
+
+        let ts = state.tree_size(self.size());
+        if old_size == 0 || old_size >= ts {
+            return Err(Error::IndexOutOfBounds {
+                index: old_size,
+                tree_size: ts,
+            });
+        }
+
+        let projected = self.project(alg_id)?;
+        let path =
+            crate::proof::gen_subproof(state.hasher.as_ref(), old_size as usize, &projected, true);
+
+        Ok(crate::proof::ConsistencyProof {
+            old_size,
+            new_size: ts,
+            path,
+        })
     }
 }
 
@@ -683,5 +795,175 @@ mod tests {
             let batch = batch_root(&Sha256Hasher, &projected);
             assert_eq!(incremental, batch, "A-EQUIV failed at size {size}");
         }
+    }
+
+    // ---- I-SOUND-TSML: inclusion proof soundness ----
+
+    #[test]
+    fn i_sound_single_algorithm() {
+        let mut log = Log::new();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..12u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let root = log.root(0).unwrap();
+        let projected = log.project(0).unwrap();
+
+        for idx in 0..12u64 {
+            let proof = log.inclusion_proof(0, idx).unwrap();
+            let leaf_hash = &projected[idx as usize];
+            assert!(
+                crate::proof::verify_inclusion(&Sha256Hasher, leaf_hash, &proof, &root),
+                "I-SOUND-TSML failed at index {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn i_sound_mid_stream_algorithm() {
+        let mut log = Log::new();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // Add alg 1 mid-stream.
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 4..12u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // Verify inclusion proofs for alg 1 (null prefix at 0..4, real at 4..12).
+        let root = log.root(1).unwrap();
+        let projected = log.project(1).unwrap();
+
+        for idx in 0..12u64 {
+            let proof = log.inclusion_proof(1, idx).unwrap();
+            let leaf_hash = &projected[idx as usize];
+            assert!(
+                crate::proof::verify_inclusion(&AltHasher, leaf_hash, &proof, &root),
+                "I-SOUND-TSML (mid-stream) failed at index {idx}"
+            );
+        }
+    }
+
+    // ---- K-SOUND-TSML: consistency proof soundness ----
+
+    #[test]
+    fn k_sound_single_algorithm() {
+        let mut log = Log::new();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        // Build up to size 8, checking consistency at each step.
+        let mut roots: Vec<Vec<u8>> = Vec::new();
+        for i in 0..8u8 {
+            log.append(&[i]).unwrap();
+            roots.push(log.root(0).unwrap());
+        }
+
+        let current_root = log.root(0).unwrap();
+
+        for old_size in 1..8u64 {
+            let proof = log.consistency_proof(0, old_size).unwrap();
+            let old_root = &roots[(old_size - 1) as usize];
+            assert!(
+                crate::proof::verify_consistency(&Sha256Hasher, &proof, old_root, &current_root),
+                "K-SOUND-TSML failed for old_size={old_size}"
+            );
+        }
+    }
+
+    // ---- T-BOUND: proof-level temporal binding ----
+
+    #[test]
+    fn t_bound_inclusion_proof_at_null_position() {
+        let mut log = Log::new();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // Add alg 1 at index 4 — indices 0..4 are null for alg 1.
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let root = log.root(1).unwrap();
+
+        // Get the inclusion proof at a null-prefix position.
+        let proof = log.inclusion_proof(1, 0).unwrap();
+
+        // The proof DOES verify with the null leaf hash (this is correct —
+        // the tree genuinely contains N₀ at position 0).
+        let null_leaf = AltHasher.null();
+        assert!(
+            crate::proof::verify_inclusion(&AltHasher, &null_leaf, &proof, &root),
+            "null leaf should verify at null position"
+        );
+
+        // But no real payload can produce a valid proof at that position.
+        // T-BOUND: ∄ d. verify_inclusion(leaf(a, d), proof, root) = true
+        for d in [b"any".as_slice(), b"data", b"", &[0], &[1], &[2], &[3]] {
+            let forged_leaf = AltHasher.leaf(d);
+            assert!(
+                !crate::proof::verify_inclusion(&AltHasher, &forged_leaf, &proof, &root),
+                "T-BOUND violated: real leaf verified at null position for data {:?}",
+                d
+            );
+        }
+    }
+
+    // ---- Proof error cases ----
+
+    #[test]
+    fn inclusion_proof_out_of_bounds() {
+        let mut log = Log::new();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.append(b"data").unwrap();
+
+        let err = log.inclusion_proof(0, 1).unwrap_err();
+        assert_eq!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 1,
+                tree_size: 1
+            }
+        );
+    }
+
+    #[test]
+    fn consistency_proof_bounds() {
+        let mut log = Log::new();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // old_size = 0 is invalid.
+        let err = log.consistency_proof(0, 0).unwrap_err();
+        assert_eq!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 0,
+                tree_size: 4
+            }
+        );
+
+        // old_size >= tree_size is invalid.
+        let err = log.consistency_proof(0, 4).unwrap_err();
+        assert_eq!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 4,
+                tree_size: 4
+            }
+        );
     }
 }

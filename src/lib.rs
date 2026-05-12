@@ -13,6 +13,13 @@
 //! TSML is algorithm-agnostic. Callers provide hash implementations via the
 //! [`Hasher`] trait. The crate has zero runtime dependencies.
 //!
+//! # Proofs
+//!
+//! TSML generates standard RFC 9162 inclusion and consistency proofs per
+//! algorithm, operating over the projected leaf sequence. Proofs verify
+//! against the standard [`verify_inclusion`] and [`verify_consistency`]
+//! functions — no modified verifier is needed (PROJ-VALID).
+//!
 //! # Usage
 //!
 //! ```ignore
@@ -29,8 +36,10 @@ mod error;
 mod hasher;
 mod log;
 mod null;
+mod proof;
 
 pub use error::Error;
 pub use hasher::Hasher;
 pub use log::Log;
 pub use null::NullTable;
+pub use proof::{ConsistencyProof, InclusionProof, verify_consistency, verify_inclusion};
