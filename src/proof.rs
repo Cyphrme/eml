@@ -228,6 +228,170 @@ pub fn verify_consistency(
 }
 
 // ============================================================================
+// Elided proofs — wire-optimized inclusion proofs for TSML
+// ============================================================================
+
+/// An inclusion proof with null subtree siblings elided.
+///
+/// Wire-optimized proof for TSML: siblings covering ranges entirely
+/// within the null prefix are omitted (represented as `None`). The
+/// client rehydrates them deterministically using interval arithmetic
+/// and the algorithm's [`NullTable`](crate::NullTable).
+///
+/// # Wire Size
+///
+/// For an algorithm active for `nₐ` commits in a tree of `n` total,
+/// the elided proof contains `O(log nₐ)` entries instead of `O(log n)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElidedInclusionProof {
+    /// 0-based leaf index.
+    pub index: u64,
+    /// Size of the tree for which this proof is valid.
+    pub tree_size: u64,
+    /// Sibling hashes from leaf to root. `None` = elided null subtree.
+    pub path: Vec<Option<Vec<u8>>>,
+}
+
+impl ElidedInclusionProof {
+    /// Count of non-elided (transmitted) siblings.
+    pub fn wire_len(&self) -> usize {
+        self.path.iter().filter(|e| e.is_some()).count()
+    }
+}
+
+/// Compute the leaf-coverage range `[start, end)` for each sibling in an
+/// inclusion proof path.
+///
+/// The returned vector is parallel to the proof path (leaf-adjacent first,
+/// root-adjacent last). Each entry is `(start, end)` representing the
+/// absolute range of leaves that the sibling subtree covers.
+fn sibling_ranges(index: u64, tree_size: u64) -> Vec<(u64, u64)> {
+    let mut ranges = Vec::new();
+    walk_path(index as usize, tree_size as usize, 0, &mut ranges);
+    ranges
+}
+
+/// Recursive tree walk matching `gen_path` traversal order.
+fn walk_path(m: usize, n: usize, base: u64, out: &mut Vec<(u64, u64)>) {
+    if n == 1 {
+        return;
+    }
+    let k = largest_pow2_lt(n);
+    if m < k {
+        // Recurse into left subtree first (matching gen_path order).
+        walk_path(m, k, base, out);
+        // Right sibling covers [base+k, base+n).
+        out.push((base + k as u64, base + n as u64));
+    } else {
+        // Recurse into right subtree first.
+        walk_path(m - k, n - k, base + k as u64, out);
+        // Left sibling covers [base, base+k).
+        out.push((base, base + k as u64));
+    }
+}
+
+/// Compute the hash of a null subtree covering `size` leaves.
+///
+/// For complete subtrees (power-of-2 size), this is a direct `NullTable`
+/// lookup. For incomplete subtrees, this recursively decomposes using the
+/// RFC 9162 splitting rule.
+fn null_subtree_hash(hasher: &dyn Hasher, null_table: &mut crate::NullTable, size: u64) -> Vec<u8> {
+    if size == 0 {
+        return hasher.empty();
+    }
+    if size == 1 {
+        return null_table.leaf_null().to_vec();
+    }
+    if size.is_power_of_two() {
+        return null_table
+            .get(hasher, size.trailing_zeros() as usize)
+            .to_vec();
+    }
+    let k = largest_pow2_lt(size as usize) as u64;
+    let left = null_subtree_hash(hasher, null_table, k);
+    let right = null_subtree_hash(hasher, null_table, size - k);
+    hasher.node(&left, &right)
+}
+
+/// Elide null subtree siblings from a full inclusion proof.
+///
+/// Uses interval arithmetic to identify siblings whose entire
+/// leaf-coverage range falls within the null prefix (before
+/// `activation_commit`). These siblings are replaced with `None`.
+///
+/// Both the server (elider) and client (rehydrator) share
+/// `tree_size`, `index`, and `activation_commit`, ensuring lockstep
+/// agreement with zero wire overhead.
+pub fn elide_inclusion_proof(
+    proof: &InclusionProof,
+    activation_commit: u64,
+) -> ElidedInclusionProof {
+    let ranges = sibling_ranges(proof.index, proof.tree_size);
+
+    let path: Vec<Option<Vec<u8>>> = proof
+        .path
+        .iter()
+        .zip(ranges.iter())
+        .map(|(hash, &(start, end))| {
+            // A sibling is elidable if its entire coverage is in the
+            // null prefix: end ≤ activation_commit.
+            let _ = start; // used only for documentation clarity
+            if end <= activation_commit {
+                None
+            } else {
+                Some(hash.clone())
+            }
+        })
+        .collect();
+
+    ElidedInclusionProof {
+        index: proof.index,
+        tree_size: proof.tree_size,
+        path,
+    }
+}
+
+/// Rehydrate an elided inclusion proof by synthesizing null subtree hashes.
+///
+/// For each elided sibling (`None` entry), computes the deterministic null
+/// subtree hash from the [`NullTable`](crate::NullTable). The returned proof
+/// is a standard [`InclusionProof`] that verifies against the unmodified
+/// [`verify_inclusion`] function (C6 preservation).
+///
+/// # Arguments
+///
+/// * `elided` — The elided proof from the server.
+/// * `hasher` — The algorithm's hasher instance.
+pub fn rehydrate_inclusion_proof(
+    elided: &ElidedInclusionProof,
+    hasher: &dyn Hasher,
+) -> InclusionProof {
+    let ranges = sibling_ranges(elided.index, elided.tree_size);
+    let mut null_table = crate::NullTable::new(hasher);
+
+    let path: Vec<Vec<u8>> = elided
+        .path
+        .iter()
+        .zip(ranges.iter())
+        .map(|(entry, &(start, end))| {
+            match entry {
+                Some(hash) => hash.clone(),
+                None => {
+                    // Sibling covers [start, end), entirely in null prefix.
+                    let size = end - start;
+                    null_subtree_hash(hasher, &mut null_table, size)
+                },
+            }
+        })
+        .collect();
+
+    InclusionProof {
+        index: elided.index,
+        tree_size: elided.tree_size,
+        path,
+    }
+}
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -282,15 +446,6 @@ mod tests {
         let leaves: Vec<Vec<u8>> = (0..7u8).map(|i| h.leaf(&[i])).collect();
         let batch = mth(&h, &leaves);
 
-        // Cross-check: build incrementally via manual tree construction.
-        // For 7 leaves, the tree structure is:
-        //         root
-        //        /    \
-        //      n4      n3 (odd, promoted from right)
-        //     / \     / \
-        //   n2   n2  n1  leaf[6]
-        //  / \ / \  / \
-        // 0 1 2 3 4 5
         let n01 = h.node(&leaves[0], &leaves[1]);
         let n23 = h.node(&leaves[2], &leaves[3]);
         let n45 = h.node(&leaves[4], &leaves[5]);
@@ -368,5 +523,146 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- Elided proof tests ----
+
+    #[test]
+    fn sibling_ranges_power_of_two() {
+        // Tree of 8 leaves, proof for leaf 6.
+        let ranges = sibling_ranges(6, 8);
+        // gen_path traversal for m=6, n=8:
+        //   k=4, m>=k → recurse right (m=2, n=4, base=4)
+        //     k=2, m>=k → recurse right (m=0, n=2, base=6)
+        //       k=1, m<k → recurse left (m=0, n=1, base=6): base case
+        //       push right sibling [7, 8)
+        //     push left sibling [4, 6)
+        //   push left sibling [0, 4)
+        assert_eq!(ranges, vec![(7, 8), (4, 6), (0, 4)]);
+    }
+
+    #[test]
+    fn elide_rehydrate_roundtrip() {
+        let h = Sha256Hasher;
+        // Build a tree: 8 null leaves (activation=8) + 8 real leaves.
+        let activation = 8u64;
+        let tree_size = 16u64;
+
+        // Construct the projected leaf sequence.
+        let null_leaf = h.null();
+        let mut leaves = Vec::new();
+        for _ in 0..activation {
+            leaves.push(null_leaf.clone());
+        }
+        for i in 0..8u8 {
+            leaves.push(h.leaf(&[i]));
+        }
+
+        let root = mth(&h, &leaves);
+
+        // Proof for leaf at index 10 (in the real range).
+        let path = gen_path(&h, 10, &leaves);
+        let full_proof = InclusionProof {
+            index: 10,
+            tree_size,
+            path,
+        };
+
+        // Sanity: full proof verifies.
+        assert!(verify_inclusion(&h, &leaves[10], &full_proof, &root));
+
+        // Elide null siblings.
+        let elided = elide_inclusion_proof(&full_proof, activation);
+
+        // The elided proof should be shorter on the wire.
+        assert!(
+            elided.wire_len() < full_proof.path.len(),
+            "elided proof should have fewer wire entries: wire_len={}, full_len={}",
+            elided.wire_len(),
+            full_proof.path.len()
+        );
+
+        // Rehydrate.
+        let rehydrated = rehydrate_inclusion_proof(&elided, &h);
+
+        // Rehydrated proof must equal the original full proof.
+        assert_eq!(
+            rehydrated, full_proof,
+            "rehydrated proof differs from original"
+        );
+
+        // And it must verify.
+        assert!(verify_inclusion(&h, &leaves[10], &rehydrated, &root));
+    }
+
+    #[test]
+    fn elide_no_null_prefix() {
+        let h = Sha256Hasher;
+        // Algorithm active from genesis — no null prefix.
+        let activation = 0u64;
+        let leaves: Vec<Vec<u8>> = (0..8u8).map(|i| h.leaf(&[i])).collect();
+
+        let path = gen_path(&h, 3, &leaves);
+        let full_proof = InclusionProof {
+            index: 3,
+            tree_size: 8,
+            path,
+        };
+
+        let elided = elide_inclusion_proof(&full_proof, activation);
+
+        // Nothing should be elided.
+        assert_eq!(
+            elided.wire_len(),
+            full_proof.path.len(),
+            "no siblings should be elided when activation=0"
+        );
+    }
+
+    #[test]
+    fn elide_large_null_prefix() {
+        let h = Sha256Hasher;
+        // Extreme case: activation at 960 in tree of 1024.
+        // Algorithm only active for last 64 leaves.
+        let activation = 960u64;
+        let tree_size = 1024u64;
+
+        let null_leaf = h.null();
+        let mut leaves = Vec::new();
+        for _ in 0..activation {
+            leaves.push(null_leaf.clone());
+        }
+        for i in 0..64u8 {
+            leaves.push(h.leaf(&[i]));
+        }
+        assert_eq!(leaves.len(), tree_size as usize);
+
+        let root = mth(&h, &leaves);
+
+        // Proof for leaf near the end (index 1000).
+        let path = gen_path(&h, 1000, &leaves);
+        let full_proof = InclusionProof {
+            index: 1000,
+            tree_size,
+            path,
+        };
+
+        let elided = elide_inclusion_proof(&full_proof, activation);
+
+        // Full proof depth: log2(1024) = 10 siblings.
+        assert_eq!(full_proof.path.len(), 10);
+
+        // Elided should have substantially fewer wire entries.
+        // (960 = 512+256+128+64, so left siblings at depths 0,1,2,3 from
+        // root are entirely null → 4 elided, 6 remain)
+        assert!(
+            elided.wire_len() < full_proof.path.len(),
+            "large null prefix should produce wire savings"
+        );
+
+        // Roundtrip.
+        let rehydrated = rehydrate_inclusion_proof(&elided, &h);
+        assert_eq!(rehydrated, full_proof);
+        assert!(verify_inclusion(&h, &leaves[1000], &rehydrated, &root));
     }
 }

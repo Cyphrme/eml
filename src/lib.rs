@@ -42,4 +42,7 @@ pub use error::Error;
 pub use hasher::Hasher;
 pub use log::Log;
 pub use null::NullTable;
-pub use proof::{ConsistencyProof, InclusionProof, verify_consistency, verify_inclusion};
+pub use proof::{
+    ConsistencyProof, ElidedInclusionProof, InclusionProof, elide_inclusion_proof,
+    rehydrate_inclusion_proof, verify_consistency, verify_inclusion,
+};

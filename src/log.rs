@@ -524,44 +524,9 @@ mod tests {
         }
     }
 
-    /// Batch-compute the Merkle tree root from a leaf sequence.
-    /// This is the "reference" implementation for A-EQUIV-TSML testing.
+    /// Batch-compute the Merkle tree root via the canonical RFC 9162 mth.
     fn batch_root(hasher: &dyn Hasher, leaf_hashes: &[Vec<u8>]) -> Vec<u8> {
-        if leaf_hashes.is_empty() {
-            return hasher.empty();
-        }
-        let mut level = leaf_hashes.to_vec();
-        while level.len() > 1 {
-            let mut next = Vec::new();
-            let mut i = 0;
-            while i < level.len() {
-                if i + 1 < level.len() {
-                    next.push(hasher.node(&level[i], &level[i + 1]));
-                } else {
-                    // Odd node: promote
-                    next.push(level[i].clone());
-                }
-                i += 2;
-            }
-            level = next;
-        }
-        level.into_iter().next().unwrap()
-    }
-
-    /// Compute the projected leaf sequence for an algorithm.
-    /// Definition 14: V(a, i) = leaf(a, data[i]) if active, else N₀(a).
-    fn project(log: &Log, alg_id: u64) -> Vec<Vec<u8>> {
-        let state = log.algs.get(&alg_id).unwrap();
-        let ts = state.tree_size(log.size());
-        (0..ts)
-            .map(|i| {
-                if state.is_active_at(i) {
-                    state.hasher.leaf(&log.leaves[i as usize])
-                } else {
-                    state.null_table.leaf_null().to_vec()
-                }
-            })
-            .collect()
+        crate::proof::mth(hasher, leaf_hashes)
     }
 
     // ---- A-EQUIV-TSML: incremental equals batch ----
@@ -575,7 +540,7 @@ mod tests {
             log.append(&[i]).unwrap();
 
             let incremental = log.root(0).unwrap();
-            let projected = project(&log, 0);
+            let projected = log.project(0).unwrap();
             let batch = batch_root(&Sha256Hasher, &projected);
             assert_eq!(incremental, batch, "A-EQUIV-TSML failed at size {}", i + 1);
         }
@@ -602,7 +567,7 @@ mod tests {
         // Verify A-EQUIV for both algorithms.
         for alg_id in [0, 1] {
             let incremental = log.root(alg_id).unwrap();
-            let projected = project(&log, alg_id);
+            let projected = log.project(alg_id).unwrap();
             let hasher: &dyn Hasher = if alg_id == 0 {
                 &Sha256Hasher
             } else {
@@ -791,7 +756,7 @@ mod tests {
             }
 
             let incremental = log.root(0).unwrap();
-            let projected = project(&log, 0);
+            let projected = log.project(0).unwrap();
             let batch = batch_root(&Sha256Hasher, &projected);
             assert_eq!(incremental, batch, "A-EQUIV failed at size {size}");
         }
