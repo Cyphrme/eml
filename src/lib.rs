@@ -1,10 +1,10 @@
 //! # TSML — Temporally-Sparse Merkle Log
 //!
 //! A single RFC 9162 append-only Merkle tree supporting dynamic sets of hash
-//! algorithms over a shared topology. Algorithms activate and deactivate at
-//! commit boundaries. Pre-activation positions are filled with deterministic
-//! null constants, enabling O(1) algorithm addition without retroactive
-//! computation.
+//! algorithms over a shared topology. Algorithms activate and deactivate
+//! between appends. A new algorithm's view of pre-activation positions
+//! consists of deterministic null constants, enabling O(1) algorithm addition
+//! without retroactive computation.
 //!
 //! See `docs/models/temporally-sparse-merkle-log.md` for the formal model.
 //!

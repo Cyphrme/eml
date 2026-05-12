@@ -240,7 +240,7 @@ pub fn verify_consistency(
 ///
 /// # Wire Size
 ///
-/// For an algorithm active for `nₐ` commits in a tree of `n` total,
+/// For an algorithm active for `nₐ` appends in a tree of `n` total,
 /// the elided proof contains `O(log nₐ)` entries instead of `O(log n)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElidedInclusionProof {
@@ -317,14 +317,14 @@ fn null_subtree_hash(hasher: &dyn Hasher, null_table: &mut crate::NullTable, siz
 ///
 /// Uses interval arithmetic to identify siblings whose entire
 /// leaf-coverage range falls within the null prefix (before
-/// `activation_commit`). These siblings are replaced with `None`.
+/// `activation_index`). These siblings are replaced with `None`.
 ///
 /// Both the server (elider) and client (rehydrator) share
-/// `tree_size`, `index`, and `activation_commit`, ensuring lockstep
+/// `tree_size`, `index`, and `activation_index`, ensuring lockstep
 /// agreement with zero wire overhead.
 pub fn elide_inclusion_proof(
     proof: &InclusionProof,
-    activation_commit: u64,
+    activation_index: u64,
 ) -> ElidedInclusionProof {
     let ranges = sibling_ranges(proof.index, proof.tree_size);
 
@@ -334,9 +334,9 @@ pub fn elide_inclusion_proof(
         .zip(ranges.iter())
         .map(|(hash, &(start, end))| {
             // A sibling is elidable if its entire coverage is in the
-            // null prefix: end ≤ activation_commit.
+            // null prefix: end ≤ activation_index.
             let _ = start; // used only for documentation clarity
-            if end <= activation_commit {
+            if end <= activation_index {
                 None
             } else {
                 Some(hash.clone())
@@ -356,7 +356,7 @@ pub fn elide_inclusion_proof(
 /// For each elided sibling (`None` entry), computes the deterministic null
 /// subtree hash from the [`NullTable`](crate::NullTable). The returned proof
 /// is a standard [`InclusionProof`] that verifies against the unmodified
-/// [`verify_inclusion`] function (C6 preservation).
+/// [`verify_inclusion`] function.
 ///
 /// # Arguments
 ///

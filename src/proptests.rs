@@ -387,12 +387,12 @@ proptest! {
         let info = infos.iter().find(|a| a.id == 0).expect("algorithm 0 missing from manifest");
         let expected_root = log.root(0).unwrap();
         let expected_ts = log.tree_size(0).unwrap();
-        let expected_act = log.activation_commit(0).unwrap();
-        let expected_deact = log.deactivation_commit(0).unwrap();
+        let expected_act = log.activation_index(0).unwrap();
+        let expected_deact = log.deactivation_index(0).unwrap();
 
-        prop_assert!(info.root == expected_root, "CR root mismatch");
-        prop_assert!(info.tree_size == expected_ts, "CR tree_size mismatch");
-        prop_assert!(info.activation_commit == expected_act, "CR activation mismatch");
-        prop_assert!(info.deactivation_commit == expected_deact, "CR deactivation mismatch");
+        prop_assert!(info.root == expected_root, "manifest root mismatch");
+        prop_assert!(info.tree_size == expected_ts, "manifest tree_size mismatch");
+        prop_assert!(info.activation_index == expected_act, "manifest activation mismatch");
+        prop_assert!(info.deactivation_index == expected_deact, "manifest deactivation mismatch");
     }
 }
