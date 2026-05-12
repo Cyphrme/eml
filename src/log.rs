@@ -97,6 +97,25 @@ fn null_prefix_peaks(hasher: &dyn Hasher, null_table: &mut NullTable, k: u64) ->
 // TSML Log
 // ============================================================================
 
+/// Per-algorithm metadata snapshot for CR Manifest construction (Definition 13).
+///
+/// Returned by [`Log::algorithms`]. Contains all the data an implementor
+/// needs to serialize a Commit Root manifest in their chosen wire format.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlgorithmInfo {
+    /// Algorithm identifier.
+    pub id: u64,
+    /// Current root hash for this algorithm.
+    pub root: Vec<u8>,
+    /// Global index at which this algorithm was activated (inclusive).
+    pub activation_commit: u64,
+    /// Global index at which this algorithm was deactivated (exclusive).
+    /// `None` if the algorithm is still active.
+    pub deactivation_commit: Option<u64>,
+    /// Effective tree size: `deactivation_commit` if frozen, else global tree size.
+    pub tree_size: u64,
+}
+
 /// A Temporally-Sparse Merkle Log.
 ///
 /// Maintains a single shared topology across multiple hash algorithms.
@@ -318,6 +337,61 @@ impl Log {
             .get(&alg_id)
             .map(|s| s.activation)
             .ok_or(Error::UnknownAlgorithm(alg_id))
+    }
+
+    /// Returns the deactivation commit index for an algorithm.
+    ///
+    /// Returns `None` in the inner `Option` if the algorithm is still active.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
+    pub fn deactivation_commit(&self, alg_id: u64) -> Result<Option<u64>> {
+        self.algs
+            .get(&alg_id)
+            .map(|s| {
+                if s.is_active() {
+                    None
+                } else {
+                    Some(s.deactivation)
+                }
+            })
+            .ok_or(Error::UnknownAlgorithm(alg_id))
+    }
+
+    // ========================================================================
+    // CR Manifest (Definition 13)
+    // ========================================================================
+
+    /// Produce a snapshot of all registered algorithms' state.
+    ///
+    /// Definition 13 (CR Manifest): returns the data needed to construct
+    /// a Commit Root manifest. Each [`AlgorithmInfo`] contains the
+    /// algorithm's root hash, activation/deactivation boundaries, and
+    /// tree size.
+    ///
+    /// The serialization format is left to the implementor — TSML provides
+    /// the raw data; the consumer chooses the wire encoding (Coz JSON,
+    /// CBOR, etc.).
+    pub fn algorithms(&self) -> Vec<AlgorithmInfo> {
+        self.algs
+            .keys()
+            .map(|&id| {
+                // Safe: id is from self.algs, so root/tree_size/etc. cannot fail.
+                let root = self.root(id).expect("registered algorithm");
+                let ts = self.tree_size(id).expect("registered algorithm");
+                let activation_commit = self.activation_commit(id).expect("registered algorithm");
+                let deactivation_commit =
+                    self.deactivation_commit(id).expect("registered algorithm");
+                AlgorithmInfo {
+                    id,
+                    root,
+                    activation_commit,
+                    deactivation_commit,
+                    tree_size: ts,
+                }
+            })
+            .collect()
     }
 
     /// Returns the stack length for a specific algorithm (for testing invariants).
@@ -930,5 +1004,42 @@ mod tests {
                 tree_size: 4
             }
         );
+    }
+
+    // ---- CR Manifest (Definition 13) ----
+
+    #[test]
+    fn algorithms_returns_manifest_data() {
+        let mut log = Log::new();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // Add alg 1, then freeze alg 0.
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+        log.remove_algorithm(0).unwrap();
+
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let infos = log.algorithms();
+        assert_eq!(infos.len(), 2);
+
+        // Alg 0: frozen at index 4, activated at 0.
+        let a0 = infos.iter().find(|a| a.id == 0).unwrap();
+        assert_eq!(a0.activation_commit, 0);
+        assert_eq!(a0.deactivation_commit, Some(4));
+        assert_eq!(a0.tree_size, 4);
+        assert_eq!(a0.root, log.root(0).unwrap());
+
+        // Alg 1: active, activated at 4.
+        let a1 = infos.iter().find(|a| a.id == 1).unwrap();
+        assert_eq!(a1.activation_commit, 4);
+        assert_eq!(a1.deactivation_commit, None);
+        assert_eq!(a1.tree_size, 8); // global tree size
+        assert_eq!(a1.root, log.root(1).unwrap());
     }
 }

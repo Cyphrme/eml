@@ -40,7 +40,7 @@ mod proof;
 
 pub use error::Error;
 pub use hasher::Hasher;
-pub use log::Log;
+pub use log::{AlgorithmInfo, Log};
 pub use null::NullTable;
 pub use proof::{
     ConsistencyProof, ElidedInclusionProof, InclusionProof, elide_inclusion_proof,
