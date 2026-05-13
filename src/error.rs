@@ -14,6 +14,9 @@ pub enum Error {
     /// Algorithm is frozen (deactivated) and cannot be modified.
     FrozenAlgorithm(u64),
 
+    /// Algorithm is currently active and cannot be resumed.
+    AlgorithmActive(u64),
+
     /// No algorithms are active.
     NoActiveAlgorithms,
 
@@ -35,6 +38,7 @@ impl fmt::Display for Error {
             Self::UnknownAlgorithm(id) => write!(f, "unknown algorithm: {id}"),
             Self::DuplicateAlgorithm(id) => write!(f, "algorithm already registered: {id}"),
             Self::FrozenAlgorithm(id) => write!(f, "algorithm is frozen: {id}"),
+            Self::AlgorithmActive(id) => write!(f, "algorithm is active: {id}"),
             Self::NoActiveAlgorithms => write!(f, "no active algorithms"),
             Self::IndexOutOfBounds { index, tree_size } => {
                 write!(f, "index {index} out of bounds for tree size {tree_size}")
@@ -50,6 +54,7 @@ impl PartialEq for Error {
             (Self::UnknownAlgorithm(a), Self::UnknownAlgorithm(b)) => a == b,
             (Self::DuplicateAlgorithm(a), Self::DuplicateAlgorithm(b)) => a == b,
             (Self::FrozenAlgorithm(a), Self::FrozenAlgorithm(b)) => a == b,
+            (Self::AlgorithmActive(a), Self::AlgorithmActive(b)) => a == b,
             (Self::NoActiveAlgorithms, Self::NoActiveAlgorithms) => true,
             (
                 Self::IndexOutOfBounds {

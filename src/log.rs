@@ -20,10 +20,10 @@ use crate::storage::Storage;
 struct AlgState {
     /// The hasher instance for this algorithm.
     hasher: Box<dyn Hasher>,
-    /// Activation index (inclusive).
-    activation: u64,
-    /// Deactivation index (exclusive). `u64::MAX` means active.
-    deactivation: u64,
+    /// Disjoint active epochs. Each epoch is `(start, end)` where
+    /// `end == u64::MAX` means the algorithm is currently active.
+    /// Epochs are in chronological order and non-overlapping.
+    epochs: Vec<(u64, u64)>,
     /// Frontier stack: roots of complete subtrees along the right edge.
     stack: Vec<Vec<u8>>,
     /// Precomputed null subtree constants.
@@ -33,24 +33,31 @@ struct AlgState {
 impl AlgState {
     /// Whether this algorithm is currently active (not frozen).
     fn is_active(&self) -> bool {
-        self.deactivation == u64::MAX
+        self.epochs.last().is_some_and(|&(_, end)| end == u64::MAX)
     }
 
-    /// Whether leaf index `i` falls within this algorithm's active window.
+    /// Whether leaf index `i` falls within any of this algorithm's active epochs.
     fn is_active_at(&self, i: u64) -> bool {
-        self.activation <= i && i < self.deactivation
+        self.epochs
+            .iter()
+            .any(|&(start, end)| start <= i && i < end)
     }
 
     /// The tree size for this algorithm.
     ///
     /// Active algorithms track the global tree size.
-    /// Frozen algorithms stopped at their deactivation point.
+    /// Frozen algorithms stopped at their last deactivation point.
     fn tree_size(&self, global_size: u64) -> u64 {
         if self.is_active() {
             global_size
         } else {
-            self.deactivation
+            self.epochs.last().map_or(0, |&(_, end)| end)
         }
+    }
+
+    /// The activation index of the first epoch.
+    fn first_activation(&self) -> u64 {
+        self.epochs.first().map_or(0, |&(start, _)| start)
     }
 }
 
@@ -94,6 +101,88 @@ fn null_prefix_peaks(hasher: &dyn Hasher, null_table: &mut NullTable, k: u64) ->
     peaks
 }
 
+/// Merge two frontier stacks via binary addition.
+///
+/// The frozen stack represents a tree of `deact` leaves (positions `[0, deact)`).
+/// The gap peaks represent `gap` null leaves (positions `[deact, deact+gap)`).
+/// Both stacks are MSB-first (descending height order).
+///
+/// The merge is equivalent to binary addition of `deact + gap`:
+/// at each bit level, if two or three peaks exist (from frozen, gap, and/or
+/// carry), same-height peers are merged via `node(left, right)` and the
+/// result carries to the next level. The merge is O(log(deact + gap)).
+fn merge_stacks(
+    frozen: &[Vec<u8>],
+    gap: &[Vec<u8>],
+    hasher: &dyn Hasher,
+    deact: u64,
+    gap_size: u64,
+) -> Vec<Vec<u8>> {
+    let total = deact + gap_size;
+    if total == 0 {
+        return Vec::new();
+    }
+
+    // Index into each stack from the LSB end (last element = lowest height).
+    let mut f_idx = frozen.len();
+    let mut g_idx = gap.len();
+    let mut carry: Option<Vec<u8>> = None;
+    let mut result = Vec::new(); // built LSB-first, reversed at end
+
+    let max_bits = 64 - total.leading_zeros();
+    for bit in 0..max_bits {
+        let f_peak = if deact & (1u64 << bit) != 0 {
+            f_idx -= 1;
+            Some(frozen[f_idx].clone())
+        } else {
+            None
+        };
+        let g_peak = if gap_size & (1u64 << bit) != 0 {
+            g_idx -= 1;
+            Some(gap[g_idx].clone())
+        } else {
+            None
+        };
+        let c_peak = carry.take();
+
+        // Tree ordering: frozen covers [0, deact), gap covers [deact, total).
+        // Carry from lower levels covers the boundary between the two.
+        // At every level: frozen is LEFT, carry is MIDDLE, gap is RIGHT.
+        match (f_peak, g_peak, c_peak) {
+            (None, None, None) => {},
+            (Some(p), None, None) | (None, Some(p), None) | (None, None, Some(p)) => {
+                result.push(p);
+            },
+            (Some(f), Some(g), None) => {
+                // frozen LEFT, gap RIGHT
+                carry = Some(hasher.node(&f, &g));
+            },
+            (Some(f), None, Some(c)) => {
+                // frozen LEFT, carry RIGHT (carry from lower boundary merges)
+                carry = Some(hasher.node(&f, &c));
+            },
+            (None, Some(g), Some(c)) => {
+                // carry LEFT (covers earlier positions), gap RIGHT
+                carry = Some(hasher.node(&c, &g));
+            },
+            (Some(f), Some(g), Some(c)) => {
+                // All three present. Binary addition: 1+1+1 = 1 carry 1.
+                // Keep gap (rightmost) at this level.
+                // Merge frozen (left) + carry (middle) → new carry.
+                result.push(g);
+                carry = Some(hasher.node(&f, &c));
+            },
+        }
+    }
+
+    if let Some(c) = carry {
+        result.push(c);
+    }
+
+    result.reverse(); // MSB-first
+    result
+}
+
 // ============================================================================
 // TSML Log
 // ============================================================================
@@ -108,13 +197,16 @@ pub struct AlgorithmInfo {
     pub id: u64,
     /// Current root hash for this algorithm.
     pub root: Vec<u8>,
-    /// Global index at which this algorithm was activated (inclusive).
+    /// Global index at which this algorithm was first activated (inclusive).
     pub activation_index: u64,
-    /// Global index at which this algorithm was deactivated (exclusive).
-    /// `None` if the algorithm is still active.
+    /// Global index at which this algorithm was last deactivated (exclusive).
+    /// `None` if the algorithm is currently active.
     pub deactivation_index: Option<u64>,
-    /// Effective tree size: `deactivation_index` if frozen, else global tree size.
+    /// Effective tree size: last deactivation if frozen, else global tree size.
     pub tree_size: u64,
+    /// Complete epoch history. Each `(start, end)` is an active interval.
+    /// `end == None` means the epoch is currently open (algorithm is active).
+    pub epochs: Vec<(u64, Option<u64>)>,
 }
 
 /// A Temporally-Sparse Merkle Log.
@@ -178,8 +270,7 @@ impl<S: Storage> Log<S> {
             alg_id,
             AlgState {
                 hasher,
-                activation,
-                deactivation: u64::MAX,
+                epochs: vec![(activation, u64::MAX)],
                 stack,
                 null_table,
             },
@@ -209,7 +300,51 @@ impl<S: Storage> Log<S> {
             return Err(Error::FrozenAlgorithm(alg_id));
         }
 
-        state.deactivation = current_size;
+        if let Some(last) = state.epochs.last_mut() {
+            last.1 = current_size;
+        }
+        Ok(())
+    }
+
+    /// Reactivate a frozen algorithm at the current tree size.
+    ///
+    /// The frozen frontier stack is fast-forwarded through the null gap
+    /// (positions from deactivation to current size) in O(log gap) hash
+    /// operations. A new active epoch `(current_size, ∞)` is appended.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
+    /// Returns [`Error::AlgorithmActive`] if the algorithm is already active.
+    pub fn resume_algorithm(&mut self, alg_id: u64) -> Result<()> {
+        let current_size = self.size();
+        let state = self
+            .algs
+            .get_mut(&alg_id)
+            .ok_or(Error::UnknownAlgorithm(alg_id))?;
+
+        if state.is_active() {
+            return Err(Error::AlgorithmActive(alg_id));
+        }
+
+        let deactivation = state.epochs.last().unwrap().1;
+        let gap = current_size - deactivation;
+
+        if gap > 0 {
+            // Fast-forward: merge frozen stack with null gap peaks via
+            // binary addition. Both stacks are MSB-first (descending height).
+            let gap_peaks = null_prefix_peaks(state.hasher.as_ref(), &mut state.null_table, gap);
+
+            state.stack = merge_stacks(
+                &state.stack,
+                &gap_peaks,
+                state.hasher.as_ref(),
+                deactivation,
+                gap,
+            );
+        }
+
+        state.epochs.push((current_size, u64::MAX));
         Ok(())
     }
 
@@ -331,7 +466,7 @@ impl<S: Storage> Log<S> {
         self.algs.keys().copied()
     }
 
-    /// Returns the activation index for an algorithm.
+    /// Returns the first activation index for an algorithm.
     ///
     /// # Errors
     ///
@@ -339,13 +474,13 @@ impl<S: Storage> Log<S> {
     pub fn activation_index(&self, alg_id: u64) -> Result<u64> {
         self.algs
             .get(&alg_id)
-            .map(|s| s.activation)
+            .map(|s| s.first_activation())
             .ok_or(Error::UnknownAlgorithm(alg_id))
     }
 
-    /// Returns the deactivation index for an algorithm.
+    /// Returns the last deactivation index for an algorithm.
     ///
-    /// Returns `None` in the inner `Option` if the algorithm is still active.
+    /// Returns `None` in the inner `Option` if the algorithm is currently active.
     ///
     /// # Errors
     ///
@@ -357,8 +492,33 @@ impl<S: Storage> Log<S> {
                 if s.is_active() {
                     None
                 } else {
-                    Some(s.deactivation)
+                    s.epochs.last().map(|&(_, end)| end)
                 }
+            })
+            .ok_or(Error::UnknownAlgorithm(alg_id))
+    }
+
+    /// Returns the full epoch history for an algorithm.
+    ///
+    /// Each epoch is `(start, end)` where `end == None` means active.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
+    pub fn epochs(&self, alg_id: u64) -> Result<Vec<(u64, Option<u64>)>> {
+        self.algs
+            .get(&alg_id)
+            .map(|s| {
+                s.epochs
+                    .iter()
+                    .map(|&(start, end)| {
+                        if end == u64::MAX {
+                            (start, None)
+                        } else {
+                            (start, Some(end))
+                        }
+                    })
+                    .collect()
             })
             .ok_or(Error::UnknownAlgorithm(alg_id))
     }
@@ -384,12 +544,14 @@ impl<S: Storage> Log<S> {
                 let ts = self.tree_size(id).expect("registered algorithm");
                 let activation_index = self.activation_index(id).expect("registered algorithm");
                 let deactivation_index = self.deactivation_index(id).expect("registered algorithm");
+                let epochs = self.epochs(id).expect("registered algorithm");
                 AlgorithmInfo {
                     id,
                     root,
                     activation_index,
                     deactivation_index,
                     tree_size: ts,
+                    epochs,
                 }
             })
             .collect()
