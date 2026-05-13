@@ -101,86 +101,46 @@ fn null_prefix_peaks(hasher: &dyn Hasher, null_table: &mut NullTable, k: u64) ->
     peaks
 }
 
-/// Merge two frontier stacks via binary addition.
+/// Extend a frozen frontier stack by appending null leaves.
 ///
 /// The frozen stack represents a tree of `deact` leaves (positions `[0, deact)`).
-/// The gap peaks represent `gap` null leaves (positions `[deact, deact+gap)`).
-/// Both stacks are MSB-first (descending height order).
+/// This function appends `gap_size` null leaves (positions `[deact, deact+gap_size)`)
+/// using the standard CTO-based frontier merge algorithm.
 ///
-/// The merge is equivalent to binary addition of `deact + gap`:
-/// at each bit level, if two or three peaks exist (from frozen, gap, and/or
-/// carry), same-height peers are merged via `node(left, right)` and the
-/// result carries to the next level. The merge is O(log(deact + gap)).
-fn merge_stacks(
+/// The result is the correct frontier stack for `deact + gap_size` leaves,
+/// with real data in `[0, deact)` and null constants in `[deact, deact+gap_size)`.
+///
+/// Complexity: O(gap_size) total hash operations (amortized O(1) per append).
+fn extend_with_nulls(
     frozen: &[Vec<u8>],
-    gap: &[Vec<u8>],
     hasher: &dyn Hasher,
     deact: u64,
     gap_size: u64,
 ) -> Vec<Vec<u8>> {
-    let total = deact + gap_size;
-    if total == 0 {
-        return Vec::new();
+    if gap_size == 0 {
+        return frozen.to_vec();
     }
 
-    // Index into each stack from the LSB end (last element = lowest height).
-    let mut f_idx = frozen.len();
-    let mut g_idx = gap.len();
-    let mut carry: Option<Vec<u8>> = None;
-    let mut result = Vec::new(); // built LSB-first, reversed at end
+    let null_leaf = hasher.null();
 
-    let max_bits = 64 - total.leading_zeros();
-    for bit in 0..max_bits {
-        let f_peak = if deact & (1u64 << bit) != 0 {
-            f_idx -= 1;
-            Some(frozen[f_idx].clone())
-        } else {
-            None
-        };
-        let g_peak = if gap_size & (1u64 << bit) != 0 {
-            g_idx -= 1;
-            Some(gap[g_idx].clone())
-        } else {
-            None
-        };
-        let c_peak = carry.take();
+    // Stack is MSB-first, same convention as Log::append().
+    // push/pop operate on the end (LSB position).
+    let mut stack: Vec<Vec<u8>> = frozen.to_vec();
 
-        // Tree ordering: frozen covers [0, deact), gap covers [deact, total).
-        // Carry from lower levels covers the boundary between the two.
-        // At every level: frozen is LEFT, carry is MIDDLE, gap is RIGHT.
-        match (f_peak, g_peak, c_peak) {
-            (None, None, None) => {},
-            (Some(p), None, None) | (None, Some(p), None) | (None, None, Some(p)) => {
-                result.push(p);
-            },
-            (Some(f), Some(g), None) => {
-                // frozen LEFT, gap RIGHT
-                carry = Some(hasher.node(&f, &g));
-            },
-            (Some(f), None, Some(c)) => {
-                // frozen LEFT, carry RIGHT (carry from lower boundary merges)
-                carry = Some(hasher.node(&f, &c));
-            },
-            (None, Some(g), Some(c)) => {
-                // carry LEFT (covers earlier positions), gap RIGHT
-                carry = Some(hasher.node(&c, &g));
-            },
-            (Some(f), Some(g), Some(c)) => {
-                // All three present. Binary addition: 1+1+1 = 1 carry 1.
-                // Keep gap (rightmost) at this level.
-                // Merge frozen (left) + carry (middle) → new carry.
-                result.push(g);
-                carry = Some(hasher.node(&f, &c));
-            },
+    for i in 0..gap_size {
+        let n = deact + i; // tree size before this append
+        stack.push(null_leaf.clone());
+
+        // Standard frontier merge: count trailing ones determines merge depth.
+        let merges = n.trailing_ones();
+        for _ in 0..merges {
+            let right = stack.pop().expect("stack underflow during null extend");
+            let left = stack.pop().expect("stack underflow during null extend");
+            stack.push(hasher.node(&left, &right));
         }
     }
 
-    if let Some(c) = carry {
-        result.push(c);
-    }
-
-    result.reverse(); // MSB-first
-    result
+    stack
 }
 
 // ============================================================================
@@ -331,17 +291,9 @@ impl<S: Storage> Log<S> {
         let gap = current_size - deactivation;
 
         if gap > 0 {
-            // Fast-forward: merge frozen stack with null gap peaks via
-            // binary addition. Both stacks are MSB-first (descending height).
-            let gap_peaks = null_prefix_peaks(state.hasher.as_ref(), &mut state.null_table, gap);
-
-            state.stack = merge_stacks(
-                &state.stack,
-                &gap_peaks,
-                state.hasher.as_ref(),
-                deactivation,
-                gap,
-            );
+            // Fast-forward: extend the frozen stack by appending null leaves
+            // through the gap using the standard CTO-based frontier algorithm.
+            state.stack = extend_with_nulls(&state.stack, state.hasher.as_ref(), deactivation, gap);
         }
 
         state.epochs.push((current_size, u64::MAX));

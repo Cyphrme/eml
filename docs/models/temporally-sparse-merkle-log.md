@@ -250,30 +250,28 @@ resume_alg(S, a) → S' where:
   — all other fields unchanged
 ```
 
-**Definition 11c** (Frontier merge). `merge_stacks(frozen, gap, hasher, D, G)`
-performs binary addition of two frontier stacks representing `D` and `G`
-leaves respectively, producing the correct frontier for `D + G` leaves:
+**Definition 11c** (Frontier extension). `extend_with_nulls(frozen, hasher, D, G)`
+appends `G` null leaves to a frozen frontier stack of `D` leaves, producing
+the correct frontier for `D + G` leaves:
 
 ```
-merge_stacks(frozen, gap, hasher, D, G):
-  for bit in 0..max_bits(D + G):
-    f_peak = frozen peak at this bit level (if D has bit set)
-    g_peak = gap peak at this bit level (if G has bit set)
-    c_peak = carry from previous level (if any)
-
-    Tree ordering: f_peak < c_peak < g_peak
-
-    match count(f_peak, g_peak, c_peak):
-      1 → keep at this level
-      2 → merge(left, right) → carry
-      3 → keep rightmost, merge(left, middle) → carry
+extend_with_nulls(frozen, hasher, D, G):
+  stack ← copy(frozen)
+  for i in 0..G:
+    n ← D + i                  // tree size before this append
+    stack.push(null(hasher))    // append N₀
+    for _ in 0..cto(n):         // standard frontier merge
+      right ← stack.pop()
+      left  ← stack.pop()
+      stack.push(node(hasher, left, right))
+  return stack
 ```
 
-The frozen stack covers positions `[0, D)`, the gap covers `[D, D+G)`.
-At every bit level, tree ordering is enforced: frozen peaks are leftmost,
-carry (from lower-level merges) is middle, gap peaks are rightmost.
+This is the standard CTO-based frontier append algorithm (Definition 7)
+applied with null leaf constants. The frozen stack covers positions
+`[0, D)`, and positions `[D, D+G)` are filled with null constants.
 
-**Complexity:** `O(log(D + G))` hash operations.
+**Complexity:** `O(G)` hash operations (amortized `O(1)` per append).
 
 ### §10. Root Extraction
 
@@ -370,7 +368,7 @@ For active algorithms, this follows from malt's A-EQUIV applied at each
 append. For frozen algorithms, `stacks(a)` ceased updating at the last epoch's close
 and `project(S, a)` is bounded at `tree_size(a) = last(act(a)).end` — the
 frozen stack and the truncated projection agree by construction. For resumed
-algorithms, `merge_stacks` (Definition 11c) fast-forwards the stack through
+algorithms, `extend_with_nulls` (Definition 11c) fast-forwards the stack through
 the null gap, preserving the invariant. This is Theorem 1, restated as a
 universal invariant.
 
