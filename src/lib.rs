@@ -37,6 +37,7 @@ mod hasher;
 mod log;
 mod null;
 mod proof;
+mod storage;
 
 pub use error::Error;
 pub use hasher::Hasher;
@@ -46,6 +47,7 @@ pub use proof::{
     ConsistencyProof, ElidedInclusionProof, InclusionProof, elide_inclusion_proof,
     rehydrate_inclusion_proof, verify_consistency, verify_inclusion,
 };
+pub use storage::{MemoryStorage, MemoryStorageError, Storage};
 
 #[cfg(test)]
 mod proptests;

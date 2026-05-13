@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::Log;
 use crate::hasher::Hasher;
 use crate::proof;
+use crate::storage::MemoryStorage;
 
 // ============================================================================
 // Test hasher
@@ -52,8 +53,8 @@ impl Hasher for Sha256Hasher {
 ///
 /// When `activation > 0`, a bootstrap algorithm (id=99) is active from
 /// genesis so the log can accept appends before the test algorithm activates.
-fn build_log(size: usize, activation: usize) -> Log {
-    let mut log = Log::new();
+fn build_log(size: usize, activation: usize) -> Log<MemoryStorage> {
+    let mut log = Log::new(MemoryStorage::new());
 
     if activation == 0 {
         // Algorithm under test is active from genesis.

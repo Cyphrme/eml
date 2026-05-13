@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use crate::error::{Error, Result};
 use crate::hasher::Hasher;
 use crate::null::NullTable;
+use crate::storage::Storage;
 
 // ============================================================================
 // Algorithm state
@@ -125,22 +126,23 @@ pub struct AlgorithmInfo {
 /// # Model Mapping
 ///
 /// This struct implements Definition 6 (TSML state):
-/// `S = (leaves, size, act, stacks)`
+/// `S = (storage, size, act, stacks)`
 ///
-/// Raw leaf payloads are retained for proof generation (future rounds).
+/// Raw leaf payloads are persisted through the [`Storage`] backend.
+/// The log retains only frontier stacks in memory (O(log n) per algorithm).
 #[derive(Debug)]
-pub struct Log {
-    /// Raw leaf payloads, shared across all algorithms.
-    leaves: Vec<Vec<u8>>,
+pub struct Log<S: Storage> {
+    /// Backend for raw leaf payloads.
+    storage: S,
     /// Per-algorithm state, keyed by algorithm ID.
     algs: BTreeMap<u64, AlgState>,
 }
 
-impl Log {
-    /// Create a new empty TSML log.
-    pub fn new() -> Self {
+impl<S: Storage> Log<S> {
+    /// Create a new empty TSML log with the given storage backend.
+    pub fn new(storage: S) -> Self {
         Self {
-            leaves: Vec::new(),
+            storage,
             algs: BTreeMap::new(),
         }
     }
@@ -148,7 +150,7 @@ impl Log {
     /// Current number of leaves in the global log.
     #[must_use]
     pub fn size(&self) -> u64 {
-        self.leaves.len() as u64
+        self.storage.len()
     }
 
     // ========================================================================
@@ -260,7 +262,9 @@ impl Log {
         let index = self.size();
         let merge_count = count_trailing_ones(index);
 
-        self.leaves.push(data.to_vec());
+        self.storage
+            .store_leaf(index, data)
+            .map_err(|e| Error::Storage(Box::new(e)))?;
 
         for state in self.algs.values_mut() {
             if !state.is_active() {
@@ -420,15 +424,19 @@ impl Log {
             .ok_or(Error::UnknownAlgorithm(alg_id))?;
 
         let ts = state.tree_size(self.size());
-        let leaves: Vec<Vec<u8>> = (0..ts)
-            .map(|i| {
-                if state.is_active_at(i) {
-                    state.hasher.leaf(&self.leaves[i as usize])
-                } else {
-                    state.null_table.leaf_null().to_vec()
-                }
-            })
-            .collect();
+        let mut leaves = Vec::with_capacity(ts as usize);
+        for i in 0..ts {
+            let leaf_hash = if state.is_active_at(i) {
+                let data = self
+                    .storage
+                    .get_leaf(i)
+                    .map_err(|e| Error::Storage(Box::new(e)))?;
+                state.hasher.leaf(&data)
+            } else {
+                state.null_table.leaf_null().to_vec()
+            };
+            leaves.push(leaf_hash);
+        }
         Ok(leaves)
     }
 
@@ -509,9 +517,9 @@ impl Log {
     }
 }
 
-impl Default for Log {
+impl Default for Log<crate::storage::MemoryStorage> {
     fn default() -> Self {
-        Self::new()
+        Self::new(crate::storage::MemoryStorage::new())
     }
 }
 
@@ -522,6 +530,7 @@ impl Default for Log {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::MemoryStorage;
     use sha2::{Digest, Sha256};
 
     /// SHA-256 implementation of the TSML Hasher trait.
@@ -604,7 +613,7 @@ mod tests {
 
     #[test]
     fn a_equiv_single_algorithm() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..16u8 {
@@ -619,7 +628,7 @@ mod tests {
 
     #[test]
     fn a_equiv_mid_stream_algorithm() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         // Append 4 leaves with only alg 0.
@@ -653,7 +662,7 @@ mod tests {
 
     #[test]
     fn a_stack_popcount_invariant() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..20u8 {
@@ -670,7 +679,7 @@ mod tests {
 
     #[test]
     fn a_stack_frozen_algorithm() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..6u8 {
@@ -695,7 +704,7 @@ mod tests {
 
     #[test]
     fn t_bound_null_prefix_differs_from_real_leaf() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         // Append 4 leaves.
@@ -714,7 +723,8 @@ mod tests {
         // The projected leaf at index 0 for alg 1 should be N₀, not leaf(data[0]).
         let state = log.algs.get(&1).unwrap();
         let null_leaf = state.null_table.leaf_null();
-        let real_leaf = state.hasher.leaf(&log.leaves[0]);
+        let leaf0_data = log.storage.get_leaf(0).unwrap();
+        let real_leaf = state.hasher.leaf(&leaf0_data);
 
         assert_ne!(
             null_leaf,
@@ -727,7 +737,7 @@ mod tests {
 
     #[test]
     fn alg_ind_different_algorithms_different_roots() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
         log.add_algorithm(1, Box::new(AltHasher)).unwrap();
 
@@ -747,7 +757,7 @@ mod tests {
 
     #[test]
     fn error_duplicate_algorithm() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
         let err = log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap_err();
         assert_eq!(err, Error::DuplicateAlgorithm(0));
@@ -755,21 +765,21 @@ mod tests {
 
     #[test]
     fn error_unknown_algorithm() {
-        let log = Log::new();
+        let log = Log::new(MemoryStorage::new());
         let err = log.root(99).unwrap_err();
         assert_eq!(err, Error::UnknownAlgorithm(99));
     }
 
     #[test]
     fn error_no_active_algorithms() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         let err = log.append(b"data").unwrap_err();
         assert_eq!(err, Error::NoActiveAlgorithms);
     }
 
     #[test]
     fn error_double_freeze() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
         log.append(b"data").unwrap();
         log.remove_algorithm(0).unwrap();
@@ -781,7 +791,7 @@ mod tests {
 
     #[test]
     fn empty_tree_root() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
         let root = log.root(0).unwrap();
         assert_eq!(root, Sha256Hasher.empty());
@@ -791,7 +801,7 @@ mod tests {
 
     #[test]
     fn frozen_root_is_stable() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..5u8 {
@@ -819,7 +829,7 @@ mod tests {
     fn a_equiv_non_power_of_two() {
         // Test sizes that exercise the incomplete-tree fold path.
         for size in [1, 3, 5, 7, 9, 11, 13, 15, 17, 19] {
-            let mut log = Log::new();
+            let mut log = Log::new(MemoryStorage::new());
             log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
             for i in 0..size as u8 {
@@ -837,7 +847,7 @@ mod tests {
 
     #[test]
     fn i_sound_single_algorithm() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..12u8 {
@@ -859,7 +869,7 @@ mod tests {
 
     #[test]
     fn i_sound_mid_stream_algorithm() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..4u8 {
@@ -891,7 +901,7 @@ mod tests {
 
     #[test]
     fn k_sound_single_algorithm() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         // Build up to size 8, checking consistency at each step.
@@ -917,7 +927,7 @@ mod tests {
 
     #[test]
     fn t_bound_inclusion_proof_at_null_position() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..4u8 {
@@ -960,7 +970,7 @@ mod tests {
 
     #[test]
     fn inclusion_proof_out_of_bounds() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
         log.append(b"data").unwrap();
 
@@ -976,7 +986,7 @@ mod tests {
 
     #[test]
     fn consistency_proof_bounds() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
         for i in 0..4u8 {
             log.append(&[i]).unwrap();
@@ -1007,7 +1017,7 @@ mod tests {
 
     #[test]
     fn algorithms_returns_manifest_data() {
-        let mut log = Log::new();
+        let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
 
         for i in 0..4u8 {

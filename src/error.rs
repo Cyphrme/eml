@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// Errors that can occur during TSML operations.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Error {
     /// Algorithm not found in the activation map.
     UnknownAlgorithm(u64),
@@ -24,6 +24,9 @@ pub enum Error {
         /// The algorithm's tree size.
         tree_size: u64,
     },
+
+    /// Storage backend error.
+    Storage(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl fmt::Display for Error {
@@ -36,9 +39,35 @@ impl fmt::Display for Error {
             Self::IndexOutOfBounds { index, tree_size } => {
                 write!(f, "index {index} out of bounds for tree size {tree_size}")
             },
+            Self::Storage(e) => write!(f, "storage error: {e}"),
         }
     }
 }
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::UnknownAlgorithm(a), Self::UnknownAlgorithm(b)) => a == b,
+            (Self::DuplicateAlgorithm(a), Self::DuplicateAlgorithm(b)) => a == b,
+            (Self::FrozenAlgorithm(a), Self::FrozenAlgorithm(b)) => a == b,
+            (Self::NoActiveAlgorithms, Self::NoActiveAlgorithms) => true,
+            (
+                Self::IndexOutOfBounds {
+                    index: i1,
+                    tree_size: t1,
+                },
+                Self::IndexOutOfBounds {
+                    index: i2,
+                    tree_size: t2,
+                },
+            ) => i1 == i2 && t1 == t2,
+            (Self::Storage(_), Self::Storage(_)) => false, // opaque; not comparable
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Error {}
 
 impl std::error::Error for Error {}
 
