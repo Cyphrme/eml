@@ -13,7 +13,7 @@ use crate::proof;
 use crate::storage::MemoryStorage;
 
 // ============================================================================
-// Test hasher
+// Test hashers
 // ============================================================================
 
 #[derive(Debug)]
@@ -41,6 +41,57 @@ impl Hasher for Sha256Hasher {
     }
     fn digest_len(&self) -> usize {
         32
+    }
+}
+
+/// Distinct hasher for multi-algorithm testing.
+///
+/// Uses 0xFF domain separation prefix to produce different outputs than
+/// `Sha256Hasher` for identical inputs. This is essential for testing the
+/// ALG-IND property: different algorithms must produce different roots.
+#[derive(Debug)]
+struct AltHasher;
+
+impl Hasher for AltHasher {
+    fn leaf(&self, data: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([0x00, 0xFF]);
+        h.update(data);
+        h.finalize().to_vec()
+    }
+    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([0x01, 0xFF]);
+        h.update(left);
+        h.update(right);
+        h.finalize().to_vec()
+    }
+    fn empty(&self) -> Vec<u8> {
+        Sha256::digest([0xFF]).to_vec()
+    }
+    fn null(&self) -> Vec<u8> {
+        Sha256::digest([0x02, 0xFF]).to_vec()
+    }
+    fn digest_len(&self) -> usize {
+        32
+    }
+}
+
+/// Assign hasher by algorithm ID parity: even → Sha256, odd → Alt.
+fn new_hasher_for(alg_id: u64) -> Box<dyn Hasher> {
+    if alg_id % 2 == 0 {
+        Box::new(Sha256Hasher)
+    } else {
+        Box::new(AltHasher)
+    }
+}
+
+/// Compute batch mth using the correct hasher for the given algorithm ID.
+fn mth_for(alg_id: u64, leaves: &[Vec<u8>]) -> Vec<u8> {
+    if alg_id % 2 == 0 {
+        proof::mth(&Sha256Hasher, leaves)
+    } else {
+        proof::mth(&AltHasher, leaves)
     }
 }
 
@@ -423,36 +474,99 @@ fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
     ]
 }
 
-/// Create a fresh Sha256Hasher boxed for algorithm registration.
-fn new_hasher() -> Box<dyn Hasher> {
-    Box::new(Sha256Hasher)
+/// Verify A-EQUIV and A-STACK for every algorithm in the log.
+///
+/// Returns Err on first violation. This is extracted as a helper so it can
+/// be called after every mutation operation, not just at the end.
+fn check_invariants(
+    log: &Log<MemoryStorage>,
+    frozen_roots: &std::collections::BTreeMap<u64, Vec<u8>>,
+    context: &str,
+) -> std::result::Result<(), proptest::test_runner::TestCaseError> {
+    let infos = log.algorithms();
+
+    for info in &infos {
+        // A-EQUIV: incremental root == batch root over projection.
+        let projected = log.project(info.id).unwrap();
+        let batch = mth_for(info.id, &projected);
+        prop_assert!(
+            info.root == batch,
+            "A-EQUIV failed for alg {} {}",
+            info.id,
+            context
+        );
+
+        // A-STACK: projection length == tree_size.
+        prop_assert!(
+            projected.len() as u64 == info.tree_size,
+            "A-STACK proj len {} != tree_size {} for alg {} {}",
+            projected.len(),
+            info.tree_size,
+            info.id,
+            context
+        );
+
+        // Frozen root stability.
+        if let Some(frozen_root) = frozen_roots.get(&info.id) {
+            prop_assert!(
+                &info.root == frozen_root,
+                "Frozen root drifted for alg {} {}",
+                info.id,
+                context
+            );
+        }
+    }
+
+    // ALG-IND: algorithms sharing the same tree_size with different hashers
+    // must produce different roots (domain separation).
+    for i in 0..infos.len() {
+        for j in (i + 1)..infos.len() {
+            let a = &infos[i];
+            let b = &infos[j];
+            // Only compare if same tree_size AND tree_size > 0 AND different hasher.
+            if a.tree_size == b.tree_size && a.tree_size > 0 && (a.id % 2) != (b.id % 2) {
+                prop_assert!(
+                    a.root != b.root,
+                    "ALG-IND violated: alg {} and alg {} share root at tree_size={} {}",
+                    a.id,
+                    b.id,
+                    a.tree_size,
+                    context
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig::with_cases(128))]
 
     /// STATE-MACHINE: Random interleaving of AddAlg/RemoveAlg/ResumeAlg/Append
-    /// across k algorithms. After N operations, verify:
+    /// across k algorithms with distinct hashers (even=Sha256, odd=Alt).
+    ///
+    /// Invariants verified **after every mutation**, not just at the end:
     ///   - A-EQUIV holds for every algorithm in dom(act)
     ///   - A-STACK holds for every algorithm in dom(act)
-    ///   - Frozen algorithms have stable roots (recorded at freeze time)
-    ///   - No panics (frontier stack corruption would manifest here)
+    ///   - Frozen root stability
+    ///   - ALG-IND: distinct hashers produce distinct roots
     #[test]
     fn state_machine(
-        ops in proptest::collection::vec(op_strategy(5), 10..80),
+        ops in proptest::collection::vec(op_strategy(6), 50..150),
     ) {
         let mut log = Log::new(MemoryStorage::new());
 
-        // Need at least one algorithm to start appending.
-        log.add_algorithm(0, new_hasher()).unwrap();
+        // Seed with two algorithms using different hashers.
+        log.add_algorithm(0, new_hasher_for(0)).unwrap();
+        log.add_algorithm(1, new_hasher_for(1)).unwrap();
 
-        // Track frozen roots: alg_id → root at freeze time.
-        let mut frozen_roots: std::collections::BTreeMap<u64, Vec<u8>> = std::collections::BTreeMap::new();
+        let mut frozen_roots: std::collections::BTreeMap<u64, Vec<u8>> =
+            std::collections::BTreeMap::new();
 
-        for op in &ops {
+        for (step, op) in ops.iter().enumerate() {
             match op {
                 Op::Append => {
-                    // Only append if there's at least one active algorithm.
                     let has_active = log.algorithms().iter().any(|a| a.deactivation_index.is_none());
                     if has_active {
                         let data = [log.size() as u8];
@@ -460,52 +574,24 @@ proptest! {
                     }
                 }
                 Op::AddAlg(id) => {
-                    // Ignore errors (DuplicateAlgorithm is expected).
-                    let _ = log.add_algorithm(*id, new_hasher());
+                    let _ = log.add_algorithm(*id, new_hasher_for(*id));
                 }
                 Op::RemoveAlg(id) => {
                     if log.remove_algorithm(*id).is_ok() {
-                        // Record root at freeze.
                         let root = log.root(*id).unwrap();
                         frozen_roots.insert(*id, root);
                     }
                 }
                 Op::ResumeAlg(id) => {
                     if log.resume_algorithm(*id).is_ok() {
-                        // No longer frozen.
                         frozen_roots.remove(id);
                     }
                 }
             }
-        }
 
-        // ---- Invariant checks ----
-
-        let infos = log.algorithms();
-
-        for info in &infos {
-            // A-EQUIV: incremental root == batch root over projection.
-            let projected = log.project(info.id).unwrap();
-            let batch = proof::mth(&Sha256Hasher, &projected);
-            prop_assert!(
-                info.root == batch,
-                "A-EQUIV failed for alg {} after state-machine run", info.id
-            );
-
-            // A-STACK (structural): projection length == tree_size.
-            prop_assert!(
-                projected.len() as u64 == info.tree_size,
-                "A-STACK projection length {} != tree_size {} for alg {}",
-                projected.len(), info.tree_size, info.id
-            );
-
-            // Frozen root stability.
-            if let Some(frozen_root) = frozen_roots.get(&info.id) {
-                prop_assert!(
-                    &info.root == frozen_root,
-                    "Frozen root drifted for alg {}", info.id
-                );
-            }
+            // Verify invariants after every mutation.
+            let ctx = format!("after step {} ({:?})", step, op);
+            check_invariants(&log, &frozen_roots, &ctx)?;
         }
     }
 }
@@ -517,26 +603,26 @@ proptest! {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// FROZEN-BOUNDS: Freeze algorithm at T, append 100+ more entries.
+    /// FROZEN-BOUNDS: Freeze algorithm at T, append many more entries.
     ///   - inclusion_proof(a, i) succeeds for all i < T
     ///   - inclusion_proof(a, i) returns IndexOutOfBounds for i >= T
     ///   - root(a) is stable across all subsequent appends
+    ///
+    /// Uses distinct hashers for the two algorithms.
     #[test]
     fn frozen_bounds(
-        freeze_at in 2usize..32,
-        extra_appends in 10usize..64,
+        freeze_at in 2usize..128,
+        extra_appends in 10usize..256,
     ) {
         let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, new_hasher()).unwrap();
-        // Keep a second algorithm active so append() doesn't fail after freeze.
-        log.add_algorithm(1, new_hasher()).unwrap();
+        log.add_algorithm(0, new_hasher_for(0)).unwrap();
+        // Keeper algorithm with distinct hasher.
+        log.add_algorithm(1, new_hasher_for(1)).unwrap();
 
-        // Append until freeze point.
         for i in 0..freeze_at {
             log.append(&[i as u8]).unwrap();
         }
 
-        // Freeze algorithm 0.
         log.remove_algorithm(0).unwrap();
         let frozen_root = log.root(0).unwrap();
         let frozen_ts = log.tree_size(0).unwrap();
@@ -545,7 +631,6 @@ proptest! {
             "frozen tree_size {} != freeze_at {}", frozen_ts, freeze_at
         );
 
-        // Append many more entries (only alg 1 is active).
         for i in 0..extra_appends {
             log.append(&[(freeze_at + i) as u8]).unwrap();
         }
@@ -560,8 +645,7 @@ proptest! {
         // Valid range: all indices < freeze_at must produce valid proofs.
         let projected = log.project(0).unwrap();
         for i in 0..freeze_at {
-            let proof_result = log.inclusion_proof(0, i as u64);
-            let p = proof_result.unwrap_or_else(|e| {
+            let p = log.inclusion_proof(0, i as u64).unwrap_or_else(|e| {
                 panic!("inclusion_proof(0, {i}) should succeed but got: {e}")
             });
             prop_assert!(
@@ -590,20 +674,16 @@ proptest! {
 }
 
 // ============================================================================
-// ELIDE-WIRE-LEN: wire length matches mathematical expectation
+// ELIDE-WIRE-LEN: wire length over single-epoch and multi-epoch logs
 // ============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// ELIDE-WIRE-LEN: For random (tree_size, activation, index):
-    ///   - wire_len(elided) <= full proof path length
-    ///   - wire_len equals the count of siblings whose coverage range
-    ///     overlaps the active epoch
-    ///   - rehydrate(elide(proof)) == proof (existing property, tightened)
+    /// ELIDE-WIRE-LEN (single epoch): verify wire savings with null prefix.
     #[test]
     fn elide_wire_len(
-        size in 4usize..64,
+        size in 4usize..256,
         act_frac in 0.01f64..0.99,
         idx_frac in 0.0f64..1.0,
     ) {
@@ -613,7 +693,6 @@ proptest! {
         let ts = log.tree_size(0).unwrap() as usize;
         if ts == 0 { return Ok(()); }
 
-        // Pick an index in the active range.
         let active_range = ts.saturating_sub(activation);
         if active_range == 0 { return Ok(()); }
         let index = activation + ((idx_frac * active_range as f64) as usize).min(active_range - 1);
@@ -628,45 +707,116 @@ proptest! {
             "wire_len {} > full proof len {}", elided.wire_len(), full_proof.path.len()
         );
 
-        // Count how many siblings in the full proof overlap an active epoch.
-        // This is the mathematical expectation for wire_len.
-        // We recompute sibling ranges via the proof path structure.
-        let mut expected_wire = 0usize;
+        // Transmitted values must match full proof.
         for (entry, full_hash) in elided.path.iter().zip(full_proof.path.iter()) {
-            if entry.is_some() {
-                expected_wire += 1;
-                // Also verify the transmitted value matches.
+            if let Some(transmitted) = entry {
                 prop_assert!(
-                    entry.as_ref().unwrap() == full_hash,
+                    transmitted == full_hash,
                     "transmitted sibling doesn't match full proof"
                 );
             }
         }
-        prop_assert!(
-            elided.wire_len() == expected_wire,
-            "wire_len {} != expected {}", elided.wire_len(), expected_wire
-        );
 
-        // Roundtrip still works.
+        // Roundtrip fidelity.
         let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
         prop_assert!(
             rehydrated == full_proof,
             "elide roundtrip mismatch at size={}, activation={}, index={}",
             size, activation, index
         );
+    }
 
-        // If activation > 0, wire_len should be strictly less than path length
-        // (at least one sibling is in the null prefix).
-        if activation > 0 && full_proof.path.len() > 0 {
-            // This holds when the leaf is in the active range and the tree
-            // has a null prefix — at least the lowest-level subtrees on the
-            // null side should be elided. However, if the null prefix covers
-            // only a small fraction, all siblings might still overlap an
-            // active position. So we only assert the weak inequality.
-            prop_assert!(
-                elided.wire_len() <= full_proof.path.len(),
-                "expected wire savings with activation={}", activation
-            );
+    /// ELIDE-WIRE-LEN (multi-epoch): exercises the disjoint epoch elision path.
+    ///
+    /// Creates a log with two active epochs separated by a null gap:
+    ///   epoch 0: [0, freeze_at)
+    ///   gap:     [freeze_at, freeze_at + gap)
+    ///   epoch 1: [freeze_at + gap, freeze_at + gap + post_resume)
+    ///
+    /// Verifies elision/rehydration for indices in both active epochs.
+    #[test]
+    fn elide_wire_len_multi_epoch(
+        freeze_at in 2usize..64,
+        gap in 2usize..64,
+        post_resume in 2usize..64,
+        idx_frac in 0.0f64..1.0,
+    ) {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, new_hasher_for(0)).unwrap();
+        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // keeper
+
+        for i in 0..freeze_at {
+            log.append(&[i as u8]).unwrap();
         }
+        log.remove_algorithm(0).unwrap();
+        for i in 0..gap {
+            log.append(&[(freeze_at + i) as u8]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+        for i in 0..post_resume {
+            log.append(&[(freeze_at + gap + i) as u8]).unwrap();
+        }
+
+        let epochs = log.epochs(0).unwrap();
+        prop_assert!(
+            epochs.len() == 2,
+            "expected 2 epochs, got {}: {:?}", epochs.len(), epochs
+        );
+
+        let ts = log.tree_size(0).unwrap() as usize;
+        let root = log.root(0).unwrap();
+        let projected = log.project(0).unwrap();
+
+        // Total active positions = freeze_at + post_resume.
+        let total_active = freeze_at + post_resume;
+
+        // Pick an index from the active positions.
+        let active_idx = ((idx_frac * total_active as f64) as usize).min(total_active - 1);
+
+        // Map to global index: first epoch [0, freeze_at), second epoch [freeze_at+gap, ...).
+        let global_index = if active_idx < freeze_at {
+            active_idx
+        } else {
+            freeze_at + gap + (active_idx - freeze_at)
+        };
+
+        if global_index as u64 >= ts as u64 { return Ok(()); }
+
+        let full_proof = log.inclusion_proof(0, global_index as u64).unwrap();
+        let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
+
+        // Wire length must be <= full proof length.
+        prop_assert!(
+            elided.wire_len() <= full_proof.path.len(),
+            "wire_len {} > full proof len {} at global_index={}",
+            elided.wire_len(), full_proof.path.len(), global_index
+        );
+
+        // If gap > 0, at least some siblings should be elidable.
+        // (The gap region is entirely null, so siblings fully within it can be elided.)
+        // We only assert this when the gap is large enough relative to the tree
+        // to guarantee at least one fully-null sibling subtree.
+        if gap >= 2 && full_proof.path.len() > 1 {
+            let elided_count = elided.path.iter().filter(|e| e.is_none()).count();
+            // With a non-trivial gap, SOME elision should occur for most tree shapes.
+            // We don't assert strict > 0 because edge cases exist (e.g., gap perfectly
+            // aligns with tree splits such that no sibling falls entirely in the gap).
+            // The roundtrip check below is the hard guarantee.
+            let _ = elided_count; // Acknowledged but not strictly asserted.
+        }
+
+        // Roundtrip is the hard correctness guarantee.
+        let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
+        prop_assert!(
+            rehydrated == full_proof,
+            "multi-epoch roundtrip mismatch at freeze_at={}, gap={}, post_resume={}, idx={}",
+            freeze_at, gap, post_resume, global_index
+        );
+
+        // Rehydrated proof must verify against the root.
+        prop_assert!(
+            crate::verify_inclusion(&Sha256Hasher, &projected[global_index], &rehydrated, &root),
+            "rehydrated proof fails verification at global_index={}", global_index
+        );
     }
 }

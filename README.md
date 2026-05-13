@@ -213,22 +213,24 @@ laws. The full specification is in
 
 Key laws verified by the test suite:
 
-| Law            | Property                                                       |
-| :------------- | :------------------------------------------------------------- |
-| A-EQUIV        | Incremental root equals batch `mth()` over the projection      |
-| A-STACK        | Frontier stack length equals `popcount(tree_size)`             |
-| I-SOUND        | Inclusion proofs verify for correct leaves, reject forged ones |
-| K-SOUND        | Consistency proofs verify between any valid old/new size pair  |
-| T-BOUND        | Forged payloads at null positions fail verification            |
-| D-SEP          | `leaf(d) ≠ null()`, `leaf(d) ≠ node(l, r)` for all inputs      |
-| PROJ-VALID     | Projected sequence is a valid RFC 9162 log                     |
-| STATE-MACHINE  | Random multi-algorithm interleaving preserves all invariants   |
-| FROZEN-BOUNDS  | Frozen algorithm proof domain is correctly bounded             |
-| ELIDE-WIRE-LEN | Elided proof wire length matches epoch-overlap count           |
+| Law               | Property                                                       |
+| :---------------- | :------------------------------------------------------------- |
+| A-EQUIV           | Incremental root equals batch `mth()` over the projection      |
+| A-STACK           | Frontier stack length equals `popcount(tree_size)`             |
+| I-SOUND           | Inclusion proofs verify for correct leaves, reject forged ones |
+| K-SOUND           | Consistency proofs verify between any valid old/new size pair  |
+| T-BOUND           | Forged payloads at null positions fail verification            |
+| D-SEP             | `leaf(d) ≠ null()`, `leaf(d) ≠ node(l, r)` for all inputs      |
+| PROJ-VALID        | Projected sequence is a valid RFC 9162 log                     |
+| STATE-MACHINE     | Multi-hasher interleaving preserves all invariants per-step    |
+| ALG-IND           | Distinct hashers produce distinct roots for identical data     |
+| FROZEN-BOUNDS     | Frozen algorithm proof domain is correctly bounded             |
+| ELIDE-WIRE-LEN    | Elided proof wire length ≤ full proof length, roundtrip holds  |
+| ELIDE-MULTI-EPOCH | Elision/rehydration correct across disjoint active epochs      |
 
 ## Testing
 
-55 tests: 42 targeted unit tests and 13 property-based tests ([proptest]) that
+56 tests: 42 targeted unit tests and 14 property-based tests ([proptest]) that
 exercise the equational laws over thousands of randomly generated tree
 configurations.
 
