@@ -11,7 +11,8 @@
 //! # Architecture
 //!
 //! TSML is algorithm-agnostic. Callers provide hash implementations via the
-//! [`Hasher`] trait. The crate has zero runtime dependencies.
+//! [`Hasher`] trait. Leaf storage is decoupled via the [`Storage`] trait.
+//! The crate has zero runtime dependencies.
 //!
 //! # Proofs
 //!
@@ -23,10 +24,10 @@
 //! # Usage
 //!
 //! ```ignore
-//! use tsml::{Log, Hasher};
+//! use tsml::{Log, Hasher, MemoryStorage};
 //!
 //! // Implement Hasher for your algorithm, then:
-//! let mut log = Log::new();
+//! let mut log = Log::new(MemoryStorage::new());
 //! log.add_algorithm(0, my_hasher);     // algorithm 0 active from genesis
 //! log.append(b"first entry");
 //! let root = log.root(0).unwrap();

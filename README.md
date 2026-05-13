@@ -32,8 +32,8 @@ A TSML log is a single data structure. Not one tree per algorithm — one shared
 structure with one list of raw data entries:
 
 ```
-Log {
-    leaves: ["A", "B", "C", "D"],       ← raw data, stored once
+Log<S: Storage> {
+    storage: S,                              ← raw data, persisted via Storage trait
     algs: {
         SHA-256: { activation: 0, stack: [...] },
         BLAKE3:  { activation: 2, stack: [...] },
@@ -41,9 +41,10 @@ Log {
 }
 ```
 
-When you `append("D")`, the raw bytes go into `leaves` once. Then each active
-algorithm hashes that data with its own hash function and updates its own
-frontier stack. The raw data is shared; the hash computations are independent.
+When you `append("D")`, the raw bytes are persisted through the storage backend
+once. Then each active algorithm hashes that data with its own hash function and
+updates its own frontier stack. The raw data is shared; the hash computations
+are independent.
 
 ### What each algorithm computes
 
@@ -157,9 +158,9 @@ restores the full proof client-side.
 Implement `Hasher` for your algorithm, then:
 
 ```rust
-use tsml::{Log, Hasher};
+use tsml::{Log, Hasher, MemoryStorage};
 
-let mut log = Log::new();
+let mut log = Log::new(MemoryStorage::new());
 log.add_algorithm(0, Box::new(my_sha256_hasher))?;
 
 log.append(b"first entry")?;
@@ -176,11 +177,17 @@ log.append(b"third entry")?;
 let root_blake3 = log.root(1)?;
 ```
 
+For production, implement the `Storage` trait for your persistence layer
+(database, filesystem, etc.). `MemoryStorage` is provided for testing and
+small logs.
+
 ## Public API
 
 | Type / Function             | Purpose                                                               |
 | :-------------------------- | :-------------------------------------------------------------------- |
-| `Log`                       | The state machine. Append data, manage algorithms, extract proofs.    |
+| `Log<S: Storage>`           | The state machine. Append data, manage algorithms, extract proofs.    |
+| `Storage`                   | Trait for leaf persistence backends (store/retrieve raw payloads).    |
+| `MemoryStorage`             | In-memory `Storage` implementation for testing and small logs.        |
 | `Hasher`                    | Trait for hash algorithm implementations (leaf, node, empty, null).   |
 | `AlgorithmInfo`             | Per-algorithm metadata snapshot (root, epoch boundaries, tree size).  |
 | `NullTable`                 | Memoized null-sibling ladder (internal, but public for advanced use). |
