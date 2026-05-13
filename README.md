@@ -26,6 +26,105 @@ immediately participates in the shared append sequence with no backfill.
 Deactivated algorithms freeze at their removal point. Their root and tree size
 remain immutable.
 
+## How It Works
+
+A TSML log is a single data structure. Not one tree per algorithm — one shared
+structure with one list of raw data entries:
+
+```
+Log {
+    leaves: ["A", "B", "C", "D"],       ← raw data, stored once
+    algs: {
+        SHA-256: { activation: 0, stack: [...] },
+        BLAKE3:  { activation: 2, stack: [...] },
+    }
+}
+```
+
+When you `append("D")`, the raw bytes go into `leaves` once. Then each active
+algorithm hashes that data with its own hash function and updates its own
+frontier stack. The raw data is shared; the hash computations are independent.
+
+### What each algorithm computes
+
+Each algorithm maintains a _frontier stack_ — the running state needed to
+incrementally compute a Merkle root. At any point, each algorithm has hashed
+every leaf position in the log, but they hash different values depending on
+whether they were active at that position:
+
+```
+Position:       0       1       2       3
+Raw data:      "A"     "B"     "C"     "D"
+
+SHA-256 sees:  S("A")  S("B")  S("C")  S("D")    ← active from 0, hashes all data
+BLAKE3 sees:   null    null    B("C")  B("D")     ← active from 2, nulls before
+               ^^^^    ^^^^
+               BLAKE3(0x02) — a fixed constant
+```
+
+There is one tree topology — 4 leaves, same branching pattern. Each algorithm
+computes its own hash at every node of that topology, yielding its own root:
+
+```
+The single tree topology:         What lives at each node:
+
+         [ root ]                 SHA-256: Root_S    BLAKE3: Root_B
+        /        \
+    [01]          [23]            SHA-256: N01_S     BLAKE3: N01_B
+    /  \          /  \
+  [0]  [1]     [2]  [3]          SHA-256: L0..L3    BLAKE3: null,null,L2,L3
+```
+
+Each node in the tree has as many hash values as there are registered
+algorithms. But these values are computed independently — SHA-256's `Root_S` is
+derived entirely from SHA-256 operations. BLAKE3's `Root_B` is derived entirely
+from BLAKE3 operations. They never mix.
+
+### Content addressing with a single hash
+
+To verify entry "C" at position 2, you pick one algorithm and work entirely
+within it. Say you choose BLAKE3:
+
+```
+1. Compute the leaf hash:   leaf_hash = BLAKE3(0x00 ‖ "C")
+2. Get the inclusion proof: sibling at level 0 = BLAKE3's hash of position 3
+                            sibling at level 1 = BLAKE3's hash of [0,1] subtree
+3. Walk the proof to the root, check against Root_B.
+```
+
+SHA-256 is not involved. Its hashes don't appear in the proof. The verifier
+doesn't need to know SHA-256 exists. From the verifier's perspective, they are
+checking a standard RFC 9162 Merkle tree proof — the fact that other algorithms
+computed different hashes at the same positions is invisible and irrelevant.
+
+This is why a single algorithm is sufficient to address any entry: each
+algorithm's hashes form a complete, independent Merkle tree over the shared
+topology. Picking an algorithm selects which column of hashes you verify
+against. The other columns are inert.
+
+### Why algorithms can't weaken each other
+
+Every algorithm computes its own hashes from its own operations. Adding a
+weak algorithm doesn't change, touch, or reference the strong algorithm's
+hashes. It's like adding a column to a spreadsheet — existing columns don't
+change. Verification within one column never reads another column's values.
+
+### Why null-fill is cheap
+
+Because every null leaf is identical, null subtrees are perfectly symmetric:
+
+```
+N₁ = H(0x01 ‖ N₀ ‖ N₀)        N₂ = H(0x01 ‖ N₁ ‖ N₁)
+     /          \                    /          \
+    N₀          N₀                  N₁          N₁
+                                   / \          / \
+                                 N₀   N₀      N₀   N₀
+```
+
+`N₁` is computed once from `N₀`. `N₂` once from `N₁`. To fill a gap of
+1,000,000 positions, compute ~20 values (one per bit), not 1,000,000.
+Algorithm addition is O(log n), not O(n).
+
 ## Core Concepts
 
 **Shared topology.** One tree, many hash functions. Every algorithm sees the
