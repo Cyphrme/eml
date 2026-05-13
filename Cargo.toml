@@ -10,4 +10,6 @@ rust-version = "1.85"
 
 [dev-dependencies]
 sha2 = "0.10"
+sha3 = "0.10"
+blake2 = "0.10"
 proptest = "1"

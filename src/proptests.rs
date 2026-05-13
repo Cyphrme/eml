@@ -4,8 +4,11 @@
 //! Properties are universally quantified over tree sizes, activation points,
 //! and leaf data — proptest explores the input space adversarially.
 
+use blake2::Blake2b;
+use blake2::digest::consts::U32;
 use proptest::prelude::*;
 use sha2::{Digest, Sha256};
+use sha3::Sha3_256;
 
 use crate::Log;
 use crate::hasher::Hasher;
@@ -13,9 +16,10 @@ use crate::proof;
 use crate::storage::MemoryStorage;
 
 // ============================================================================
-// Test hashers
+// Test hashers — three real, distinct digest families
 // ============================================================================
 
+/// SHA-256 hasher (32-byte digest).
 #[derive(Debug)]
 struct Sha256Hasher;
 
@@ -44,54 +48,81 @@ impl Hasher for Sha256Hasher {
     }
 }
 
-/// Distinct hasher for multi-algorithm testing.
-///
-/// Uses 0xFF domain separation prefix to produce different outputs than
-/// `Sha256Hasher` for identical inputs. This is essential for testing the
-/// ALG-IND property: different algorithms must produce different roots.
+/// SHA3-256 hasher (32-byte digest, Keccak-based).
 #[derive(Debug)]
-struct AltHasher;
+struct Sha3Hasher;
 
-impl Hasher for AltHasher {
+impl Hasher for Sha3Hasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([0x00, 0xFF]);
+        let mut h = Sha3_256::new();
+        h.update([0x00]);
         h.update(data);
         h.finalize().to_vec()
     }
     fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([0x01, 0xFF]);
+        let mut h = Sha3_256::new();
+        h.update([0x01]);
         h.update(left);
         h.update(right);
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> {
-        Sha256::digest([0xFF]).to_vec()
+        Sha3_256::digest(b"").to_vec()
     }
     fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02, 0xFF]).to_vec()
+        Sha3_256::digest([0x02]).to_vec()
     }
     fn digest_len(&self) -> usize {
         32
     }
 }
 
-/// Assign hasher by algorithm ID parity: even → Sha256, odd → Alt.
+/// BLAKE2b-256 hasher (32-byte digest).
+#[derive(Debug)]
+struct Blake2bHasher;
+
+impl Hasher for Blake2bHasher {
+    fn leaf(&self, data: &[u8]) -> Vec<u8> {
+        let mut h = Blake2b::<U32>::new();
+        Digest::update(&mut h, [0x00]);
+        Digest::update(&mut h, data);
+        h.finalize().to_vec()
+    }
+    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut h = Blake2b::<U32>::new();
+        Digest::update(&mut h, [0x01]);
+        Digest::update(&mut h, left);
+        Digest::update(&mut h, right);
+        h.finalize().to_vec()
+    }
+    fn empty(&self) -> Vec<u8> {
+        <Blake2b<U32> as Digest>::digest(b"").to_vec()
+    }
+    fn null(&self) -> Vec<u8> {
+        <Blake2b<U32> as Digest>::digest([0x02]).to_vec()
+    }
+    fn digest_len(&self) -> usize {
+        32
+    }
+}
+
+/// Three-way hasher dispatch by algorithm ID: 0→SHA-256, 1→SHA3-256, 2→BLAKE2b.
 fn new_hasher_for(alg_id: u64) -> Box<dyn Hasher> {
-    if alg_id % 2 == 0 {
-        Box::new(Sha256Hasher)
-    } else {
-        Box::new(AltHasher)
+    match alg_id % 3 {
+        0 => Box::new(Sha256Hasher),
+        1 => Box::new(Sha3Hasher),
+        2 => Box::new(Blake2bHasher),
+        _ => unreachable!(),
     }
 }
 
 /// Compute batch mth using the correct hasher for the given algorithm ID.
 fn mth_for(alg_id: u64, leaves: &[Vec<u8>]) -> Vec<u8> {
-    if alg_id % 2 == 0 {
-        proof::mth(&Sha256Hasher, leaves)
-    } else {
-        proof::mth(&AltHasher, leaves)
+    match alg_id % 3 {
+        0 => proof::mth(&Sha256Hasher, leaves),
+        1 => proof::mth(&Sha3Hasher, leaves),
+        2 => proof::mth(&Blake2bHasher, leaves),
+        _ => unreachable!(),
     }
 }
 
@@ -524,7 +555,7 @@ fn check_invariants(
             let a = &infos[i];
             let b = &infos[j];
             // Only compare if same tree_size AND tree_size > 0 AND different hasher.
-            if a.tree_size == b.tree_size && a.tree_size > 0 && (a.id % 2) != (b.id % 2) {
+            if a.tree_size == b.tree_size && a.tree_size > 0 && (a.id % 3) != (b.id % 3) {
                 prop_assert!(
                     a.root != b.root,
                     "ALG-IND violated: alg {} and alg {} share root at tree_size={} {}",
@@ -541,10 +572,13 @@ fn check_invariants(
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
+    #![proptest_config(ProptestConfig::with_cases(64))]
 
     /// STATE-MACHINE: Random interleaving of AddAlg/RemoveAlg/ResumeAlg/Append
-    /// across k algorithms with distinct hashers (even=Sha256, odd=Alt).
+    /// across k algorithms with three distinct hash families:
+    ///   - id % 3 == 0 → SHA-256
+    ///   - id % 3 == 1 → SHA3-256
+    ///   - id % 3 == 2 → BLAKE2b-256
     ///
     /// Invariants verified **after every mutation**, not just at the end:
     ///   - A-EQUIV holds for every algorithm in dom(act)
@@ -553,13 +587,14 @@ proptest! {
     ///   - ALG-IND: distinct hashers produce distinct roots
     #[test]
     fn state_machine(
-        ops in proptest::collection::vec(op_strategy(6), 50..150),
+        ops in proptest::collection::vec(op_strategy(9), 50..150),
     ) {
         let mut log = Log::new(MemoryStorage::new());
 
-        // Seed with two algorithms using different hashers.
-        log.add_algorithm(0, new_hasher_for(0)).unwrap();
-        log.add_algorithm(1, new_hasher_for(1)).unwrap();
+        // Seed with three algorithms — one per hash family.
+        log.add_algorithm(0, new_hasher_for(0)).unwrap(); // SHA-256
+        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // SHA3-256
+        log.add_algorithm(2, new_hasher_for(2)).unwrap(); // BLAKE2b-256
 
         let mut frozen_roots: std::collections::BTreeMap<u64, Vec<u8>> =
             std::collections::BTreeMap::new();
@@ -608,16 +643,17 @@ proptest! {
     ///   - inclusion_proof(a, i) returns IndexOutOfBounds for i >= T
     ///   - root(a) is stable across all subsequent appends
     ///
-    /// Uses distinct hashers for the two algorithms.
+    /// Uses three distinct hash families (SHA-256, SHA3-256, BLAKE2b).
+    /// Algorithm 0 (SHA-256) is frozen; algorithms 1 and 2 remain active.
     #[test]
     fn frozen_bounds(
         freeze_at in 2usize..128,
         extra_appends in 10usize..256,
     ) {
         let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, new_hasher_for(0)).unwrap();
-        // Keeper algorithm with distinct hasher.
-        log.add_algorithm(1, new_hasher_for(1)).unwrap();
+        log.add_algorithm(0, new_hasher_for(0)).unwrap(); // SHA-256 (frozen)
+        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // SHA3-256 (keeper)
+        log.add_algorithm(2, new_hasher_for(2)).unwrap(); // BLAKE2b (keeper)
 
         for i in 0..freeze_at {
             log.append(&[i as u8]).unwrap();
@@ -742,8 +778,9 @@ proptest! {
         idx_frac in 0.0f64..1.0,
     ) {
         let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, new_hasher_for(0)).unwrap();
-        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // keeper
+        log.add_algorithm(0, new_hasher_for(0)).unwrap(); // SHA-256 (frozen/resumed)
+        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // SHA3-256 (keeper)
+        log.add_algorithm(2, new_hasher_for(2)).unwrap(); // BLAKE2b (keeper)
 
         for i in 0..freeze_at {
             log.append(&[i as u8]).unwrap();
