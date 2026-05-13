@@ -1211,4 +1211,243 @@ mod tests {
         assert_eq!(a1.tree_size, 8); // global tree size
         assert_eq!(a1.root, log.root(1).unwrap());
     }
+
+    // ====================================================================
+    // Reactivation tests
+    // ====================================================================
+
+    #[test]
+    fn resume_basic_a_equiv() {
+        // Add alg 0 at genesis, append 4, freeze, append 4 more, resume, append 4.
+        // Alg 1 (keeper) stays active throughout to permit appends.
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+        for i in 8..12u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // A-EQUIV: incremental root must equal batch root.
+        let root = log.root(0).unwrap();
+        let projected = log.project(0).unwrap();
+
+        let batch_root = crate::proof::mth(&Sha256Hasher, &projected);
+        assert_eq!(root, batch_root, "A-EQUIV violated after resume");
+    }
+
+    #[test]
+    fn resume_a_stack_invariant() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 0..3u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+        for i in 3..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+        for i in 8..13u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // A-STACK: stack length == popcount(tree_size)
+        let ts = log.tree_size(0).unwrap();
+        let expected_len = ts.count_ones() as usize;
+        assert_eq!(
+            log.stack_len(0).unwrap(),
+            expected_len,
+            "A-STACK violated after resume: tree_size={ts}"
+        );
+    }
+
+    #[test]
+    fn resume_error_active_algorithm() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.append(b"a").unwrap();
+
+        let err = log.resume_algorithm(0).unwrap_err();
+        assert_eq!(err, Error::AlgorithmActive(0));
+    }
+
+    #[test]
+    fn resume_error_unknown_algorithm() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        let err = log.resume_algorithm(99).unwrap_err();
+        assert_eq!(err, Error::UnknownAlgorithm(99));
+    }
+
+    #[test]
+    fn resume_inclusion_proof_soundness() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        // Epoch 1: leaves 0..4
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+
+        // Gap: leaves 4..8 (null for alg 0)
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+
+        // Epoch 2: leaves 8..12
+        for i in 8..12u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let root = log.root(0).unwrap();
+        let projected = log.project(0).unwrap();
+
+        // I-SOUND: proofs verify for all active positions.
+        for &idx in &[0u64, 1, 2, 3, 8, 9, 10, 11] {
+            let proof = log.inclusion_proof(0, idx).unwrap();
+            assert!(
+                crate::verify_inclusion(&Sha256Hasher, &projected[idx as usize], &proof, &root),
+                "I-SOUND failed at active index {idx}"
+            );
+        }
+
+        // Null positions (4..8) also produce valid proofs (over null leaf).
+        for idx in 4..8u64 {
+            let proof = log.inclusion_proof(0, idx).unwrap();
+            assert!(
+                crate::verify_inclusion(&Sha256Hasher, &projected[idx as usize], &proof, &root),
+                "proof at null gap position {idx} failed"
+            );
+        }
+    }
+
+    #[test]
+    fn resume_consistency_proof_soundness() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        let root_at_4 = log.root(0).unwrap();
+
+        log.remove_algorithm(0).unwrap();
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+        for i in 8..12u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // K-SOUND: consistency from size 4 to current.
+        let proof = log.consistency_proof(0, 4).unwrap();
+        let root_now = log.root(0).unwrap();
+        assert!(
+            crate::verify_consistency(&Sha256Hasher, &proof, &root_at_4, &root_now),
+            "K-SOUND failed after resume"
+        );
+    }
+
+    #[test]
+    fn resume_epochs_metadata() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+
+        let epochs = log.epochs(0).unwrap();
+        assert_eq!(epochs.len(), 2);
+        assert_eq!(epochs[0], (0, Some(4)));
+        assert_eq!(epochs[1], (8, None));
+
+        assert_eq!(log.activation_index(0).unwrap(), 0);
+        assert_eq!(log.deactivation_index(0).unwrap(), None); // currently active
+    }
+
+    #[test]
+    fn resume_immediate_no_gap() {
+        // Resume immediately after freeze (gap = 0).
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        let root_before = log.root(0).unwrap();
+        log.remove_algorithm(0).unwrap();
+        log.resume_algorithm(0).unwrap();
+
+        // Root should be unchanged — zero-gap fast-forward is identity.
+        let root_after = log.root(0).unwrap();
+        assert_eq!(root_before, root_after, "zero-gap resume changed root");
+    }
+
+    #[test]
+    fn resume_elide_multi_epoch() {
+        // Build a scenario with a gap in the middle.
+        // Epoch 1: [0, 4), gap: [4, 8), epoch 2: [8, 16).
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+        for i in 8..16u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let epochs = log.epochs(0).unwrap();
+        let root = log.root(0).unwrap();
+
+        // Proof for leaf in epoch 2 (index 10).
+        let full_proof = log.inclusion_proof(0, 10).unwrap();
+        let projected = log.project(0).unwrap();
+        assert!(crate::verify_inclusion(
+            &Sha256Hasher,
+            &projected[10],
+            &full_proof,
+            &root
+        ));
+
+        let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
+        let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
+        assert_eq!(rehydrated, full_proof, "multi-epoch elide roundtrip failed");
+        assert!(crate::verify_inclusion(
+            &Sha256Hasher,
+            &projected[10],
+            &rehydrated,
+            &root
+        ));
+    }
 }

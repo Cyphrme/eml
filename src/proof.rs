@@ -316,15 +316,16 @@ fn null_subtree_hash(hasher: &dyn Hasher, null_table: &mut crate::NullTable, siz
 /// Elide null subtree siblings from a full inclusion proof.
 ///
 /// Uses interval arithmetic to identify siblings whose entire
-/// leaf-coverage range falls within the null prefix (before
-/// `activation_index`). These siblings are replaced with `None`.
+/// leaf-coverage range falls within an inactive gap (outside all
+/// active epochs). These siblings are replaced with `None`.
 ///
-/// Both the server (elider) and client (rehydrator) share
-/// `tree_size`, `index`, and `activation_index`, ensuring lockstep
-/// agreement with zero wire overhead.
+/// Each epoch is `(start, end)` where `end == None` means the epoch
+/// extends to the current tree size. Both the server (elider) and
+/// client (rehydrator) share `tree_size`, `index`, and the epoch list,
+/// ensuring lockstep agreement with zero wire overhead.
 pub fn elide_inclusion_proof(
     proof: &InclusionProof,
-    activation_index: u64,
+    epochs: &[(u64, Option<u64>)],
 ) -> ElidedInclusionProof {
     let ranges = sibling_ranges(proof.index, proof.tree_size);
 
@@ -333,14 +334,16 @@ pub fn elide_inclusion_proof(
         .iter()
         .zip(ranges.iter())
         .map(|(hash, &(start, end))| {
-            // A sibling is elidable if its entire coverage is in the
-            // null prefix: end ≤ activation_index.
-            let _ = start; // used only for documentation clarity
-            if end <= activation_index {
-                None
-            } else {
-                Some(hash.clone())
-            }
+            // A sibling is elidable if its entire coverage range [start, end)
+            // is inactive — i.e., no position in [start, end) belongs to any
+            // active epoch. Equivalently, no epoch overlaps [start, end).
+            let any_active = epochs.iter().any(|&(ep_start, ep_end)| {
+                let ep_end = ep_end.unwrap_or(proof.tree_size);
+                // Two intervals [start, end) and [ep_start, ep_end) overlap
+                // iff start < ep_end && ep_start < end.
+                start < ep_end && ep_start < end
+            });
+            if any_active { Some(hash.clone()) } else { None }
         })
         .collect();
 
@@ -572,7 +575,7 @@ mod tests {
         assert!(verify_inclusion(&h, &leaves[10], &full_proof, &root));
 
         // Elide null siblings.
-        let elided = elide_inclusion_proof(&full_proof, activation);
+        let elided = elide_inclusion_proof(&full_proof, &[(activation, None)]);
 
         // The elided proof should be shorter on the wire.
         assert!(
@@ -609,7 +612,7 @@ mod tests {
             path,
         };
 
-        let elided = elide_inclusion_proof(&full_proof, activation);
+        let elided = elide_inclusion_proof(&full_proof, &[(activation, None)]);
 
         // Nothing should be elided.
         assert_eq!(
@@ -647,7 +650,7 @@ mod tests {
             path,
         };
 
-        let elided = elide_inclusion_proof(&full_proof, activation);
+        let elided = elide_inclusion_proof(&full_proof, &[(activation, None)]);
 
         // Full proof depth: log2(1024) = 10 siblings.
         assert_eq!(full_proof.path.len(), 10);

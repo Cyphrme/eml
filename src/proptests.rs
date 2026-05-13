@@ -294,7 +294,7 @@ proptest! {
         );
 
         // Elide → rehydrate.
-        let elided = crate::elide_inclusion_proof(&full_proof, activation as u64);
+        let elided = crate::elide_inclusion_proof(&full_proof, &[(activation as u64, None)]);
         let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
 
         // Rehydrated must equal original.
