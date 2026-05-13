@@ -138,14 +138,19 @@ H_a(0x02)` — a single-byte hash with a prefix distinct from leaf (`0x00`) and
 node (`0x01`) operations. This three-way domain separation (D-SEP) ensures null
 leaves cannot collide with real data or internal nodes.
 
-**Epochs.** Each algorithm has an activation index and an optional deactivation
-index. These partition the leaf space into a null prefix and an active suffix. The temporal binding property (T-BOUND) guarantees that no
-forged payload can verify at a null position.
+**Epochs.** Each algorithm has a vector of disjoint `(start, end)` intervals.
+The initial epoch begins at activation; removal closes the current epoch;
+resumption opens a new one. These epochs partition the leaf space into active
+and inactive regions. The temporal binding property (T-BOUND) guarantees that
+no forged payload can verify at any inactive position — whether in the null
+prefix before first activation, inter-epoch gaps, or the null suffix after
+final deactivation.
 
 **Projection.** `Log::project(alg_id)` materializes the full leaf sequence for
-one algorithm — null constants for the prefix, real hashes for the suffix. This
-projected sequence is a standard RFC 9162 log. All proofs operate over it
-directly (PROJ-VALID), so standard verifiers work without modification.
+one algorithm — null constants for inactive positions, real hashes for active
+positions. This projected sequence is a standard RFC 9162 log. All proofs
+operate over it directly (PROJ-VALID), so standard verifiers work without
+modification.
 
 **Elided proofs.** Inclusion proofs contain null-sibling hashes that are
 deterministically reconstructable by the verifier. `elide_inclusion_proof`
@@ -196,13 +201,13 @@ small logs.
 | `ElidedInclusionProof`      | Wire-optimized proof with null siblings stripped.                     |
 | `verify_inclusion`          | Verify an inclusion proof against a root.                             |
 | `verify_consistency`        | Verify a consistency proof between two roots.                         |
-| `elide_inclusion_proof`     | Strip null siblings from a proof.                                     |
+| `elide_inclusion_proof`     | Strip null siblings from a proof (epoch-aware).                       |
 | `rehydrate_inclusion_proof` | Restore elided siblings using the algorithm's `Hasher`.               |
 | `Error`                     | Structured error type for all fallible operations.                    |
 
 ## Formal Model
 
-The implementation follows a 16-definition algebraic model with 9 equational
+The implementation follows an 18-definition algebraic model with 9 equational
 laws. The full specification is in
 [`docs/models/temporally-sparse-merkle-log.md`](docs/models/temporally-sparse-merkle-log.md).
 
@@ -220,7 +225,7 @@ Key laws verified by the test suite:
 
 ## Testing
 
-43 tests: 33 targeted unit tests and 10 property-based tests ([proptest]) that
+52 tests: 42 targeted unit tests and 10 property-based tests ([proptest]) that
 exercise the equational laws over thousands of randomly generated tree
 configurations.
 

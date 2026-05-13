@@ -102,18 +102,19 @@ hash operations and requires `O(H)` storage, where `H = ⌈log₂(n)⌉`.
 **Definition 3** (Activation map). An activation map is a partial function:
 
 ```
-act: Alg ⇀ (ℕ, ℕ ∪ {∞})
-act(a) = (activation_index, deactivation_index)
+act: Alg ⇀ Vec<(ℕ, ℕ ∪ {∞})>
+act(a) = [(start₁, end₁), (start₂, end₂), ...]
 ```
 
-where `activation_index < deactivation_index`. Algorithms with
-`deactivation_index = ∞` are currently active.
+where each `(startₖ, endₖ)` is an _epoch_ satisfying `startₖ < endₖ`, and
+epochs are disjoint and chronologically ordered: `endₖ ≤ startₖ₊₁`. An
+algorithm whose final epoch has `endₖ = ∞` is currently active.
 
 **Definition 4** (Active predicate). Algorithm `a` is active at leaf
 index `i` iff:
 
 ```
-active(a, i) ⟺ act(a) is defined ∧ act(a).activation ≤ i < act(a).deactivation
+active(a, i) ⟺ act(a) is defined ∧ ∃ (startₖ, endₖ) ∈ act(a). startₖ ≤ i < endₖ
 ```
 
 **Definition 5** (Active set at index). The set of algorithms active at
@@ -135,10 +136,10 @@ where:
 
 - `leaves: Vec<Bytes>` — raw leaf payloads (shared across all algorithms)
 - `size: ℕ` — number of appended leaves (`= |leaves|`)
-- `act: Alg ⇀ (ℕ, ℕ ∪ {∞})` — algorithm activation map
+- `act: Alg ⇀ Vec<(ℕ, ℕ ∪ {∞})>` — algorithm activation map (epoch vectors)
 - `stacks: Alg → Vec<Digest>` — per-algorithm frontier stacks
 
-For each `a ∈ active_algs(S)` (algorithms where `act(a).deactivation = ∞`),
+For each `a ∈ active_algs(S)` (algorithms whose final epoch has `end = ∞`),
 `stacks(a)` is the frontier stack for algorithm `a` over the global tree.
 
 ### §6. Leaf Value Function
@@ -176,8 +177,8 @@ append(S, d) → S' where:
 
 where `cto(n)` counts trailing one-bits in the binary representation of `n`.
 
-**Note:** Frozen algorithms (where `act(a).deactivation ≤ S.size`) are NOT
-updated. Their frontier stacks are immutable after deactivation.
+**Note:** Frozen algorithms (whose final epoch end ≤ `S.size`) are NOT
+updated. Their frontier stacks are immutable until resumed.
 
 ### §8. Algorithm Addition
 
@@ -186,7 +187,7 @@ the current tree size:
 
 ```
 add_alg(S, a) → S' where:
-  S'.act    = S.act ∪ {a ↦ (S.size, ∞)}
+  S'.act    = S.act ∪ {a ↦ [(S.size, ∞)]}
   S'.stacks(a) = null_prefix_peaks(a, S.size)
   — all other fields unchanged
 ```
@@ -218,8 +219,9 @@ remove:
 
 ```
 remove_alg(S, a) → S' where:
-  S'.act(a) = (S.act(a).activation, S.size)     — set deactivation
-  S'.stacks(a) is frozen (no further updates)
+  Let act(a) = [..., (startₖ, ∞)]      — last epoch must be open
+  S'.act(a) = [..., (startₖ, S.size)]   — close last epoch
+  S'.stacks(a) is frozen (no further updates until resumed)
   — all other fields unchanged
 ```
 
@@ -230,8 +232,48 @@ do not update its frontier stack.
 implies unbounded maintenance cost (computing `Nₕ(a)` merges for every
 subsequent append, indefinitely) for an algorithm no longer in use.
 Freezing aligns the data structure's topology with its cryptographic
-authority: the manifest records `tree_size(a) = act(a).deactivation`,
+authority: the manifest records `tree_size(a) = last(act(a)).end`,
 and any proof request beyond that boundary is structurally out-of-bounds.
+
+### §9b. Algorithm Resumption
+
+**Definition 11b** (Resume algorithm). Given state `S`, frozen algorithm
+`a` to reactivate:
+
+```
+resume_alg(S, a) → S' where:
+  Let act(a) = [..., (startₖ, endₖ)]    — last epoch must be closed (endₖ ≠ ∞)
+  Let gap = S.size - endₖ               — null positions since deactivation
+  S'.stacks(a) = merge_stacks(S.stacks(a), null_prefix_peaks(a, gap),
+                               hasher_a, endₖ, gap)
+  S'.act(a) = act(a) ++ [(S.size, ∞)]   — append new open epoch
+  — all other fields unchanged
+```
+
+**Definition 11c** (Frontier merge). `merge_stacks(frozen, gap, hasher, D, G)`
+performs binary addition of two frontier stacks representing `D` and `G`
+leaves respectively, producing the correct frontier for `D + G` leaves:
+
+```
+merge_stacks(frozen, gap, hasher, D, G):
+  for bit in 0..max_bits(D + G):
+    f_peak = frozen peak at this bit level (if D has bit set)
+    g_peak = gap peak at this bit level (if G has bit set)
+    c_peak = carry from previous level (if any)
+
+    Tree ordering: f_peak < c_peak < g_peak
+
+    match count(f_peak, g_peak, c_peak):
+      1 → keep at this level
+      2 → merge(left, right) → carry
+      3 → keep rightmost, merge(left, middle) → carry
+```
+
+The frozen stack covers positions `[0, D)`, the gap covers `[D, D+G)`.
+At every bit level, tree ordering is enforced: frozen peaks are leftmost,
+carry (from lower-level merges) is middle, gap peaks are rightmost.
+
+**Complexity:** `O(log(D + G))` hash operations.
 
 ### §10. Root Extraction
 
@@ -254,16 +296,17 @@ Manifest = {
   algorithms: {
     a ↦ {
       root:               root(a),
-      activation_index:   act(a).activation,
-      deactivation_index: act(a).deactivation,    — ∞ if active
-      tree_size:          tree_size(a)
+      activation_index:   first(act(a)).start,     — first epoch start
+      deactivation_index: last(act(a)).end,         — ∞ if active
+      tree_size:          tree_size(a),
+      epochs:             [(startₖ, endₖ) | ...]    — full epoch history
     }
     | a ∈ dom(act)
   }
 }
 ```
 
-where `tree_size(a) = act(a).deactivation` if deactivated, else
+where `tree_size(a) = last(act(a)).end` if deactivated, else
 `global_tree_size`.
 
 ### §11. Projection
@@ -324,10 +367,12 @@ root equals the batch-computed root over the projected leaf sequence:
 ```
 
 For active algorithms, this follows from malt's A-EQUIV applied at each
-append. For frozen algorithms, `stacks(a)` ceased updating at
-`act(a).deactivation` and `project(S, a)` is bounded at `tree_size(a) =
-act(a).deactivation` — the frozen stack and the truncated projection
-agree by construction. This is Theorem 1, restated as a universal invariant.
+append. For frozen algorithms, `stacks(a)` ceased updating at the last epoch's close
+and `project(S, a)` is bounded at `tree_size(a) = last(act(a)).end` — the
+frozen stack and the truncated projection agree by construction. For resumed
+algorithms, `merge_stacks` (Definition 11c) fast-forwards the stack through
+the null gap, preserving the invariant. This is Theorem 1, restated as a
+universal invariant.
 
 #### A-STACK-TSML — Frontier stack size invariant
 
@@ -339,8 +384,9 @@ For all algorithms in the activation map:
 ```
 
 For active algorithms, `tree_size(a) = global_tree_size`. For frozen
-algorithms, `tree_size(a) = act(a).deactivation`. This single law
-governs the entire state map.
+algorithms, `tree_size(a) = last(act(a)).end`. Resume (Definition 11b)
+preserves this invariant via `merge_stacks`. This single law governs
+the entire state map.
 
 #### N-DET — Null determinism
 
@@ -383,19 +429,19 @@ let old_root = root_at(a, old_size)
 
 #### T-BOUND — Temporal binding
 
-For all `a` and `i` in the null prefix (before activation):
+For all `a` and `i` in any inactive gap (outside all epochs):
 
 ```
-∀ a, i where i < act(a).activation:
+∀ a, i where ¬active(a, i) ∧ i < tree_size(a):
   ∄ d ∈ Bytes.
     verify_inclusion(hasher_a, leaf(a, d), inclusion_proof(S, a, i), root(a)) = true
 ```
 
-No payload can produce a valid inclusion proof at a null-prefix position,
+No payload can produce a valid inclusion proof at an inactive position,
 because the tree contains `N₀(a)` at that position, and `leaf(a, d) ≠ N₀(a)`
-by D-SEP. For post-deactivation indices (`i ≥ act(a).deactivation`), the
-projection is structurally bounded at `tree_size(a)` — the proof request
-fails domain bounds before cryptography applies.
+by D-SEP. This covers the null prefix (before first activation), the null
+suffix (after final deactivation for frozen algorithms, bounded by
+`tree_size(a)`), and any inter-epoch gaps introduced by resumption.
 
 #### ALG-IND — Algorithm independence
 
@@ -422,20 +468,20 @@ per algorithm, plus the multi-algorithm extension laws above.
 
 ## Validation
 
-| Check                    | Result | Detail                                                                                                                                             |
-| :----------------------- | :----- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A-EQUIV-TSML             | PASS   | Follows from malt's A-EQUIV applied per-algorithm over the projected sequence. The null constants are just another leaf value.                     |
-| A-STACK-TSML             | PASS   | Active algorithms track `popcount(global_tree_size)`, frozen algorithms track `popcount(deactivation_index)`. Unified by `popcount(tree_size(a))`. |
-| N-DET                    | PASS   | By construction: `Nₕ(a)` is a pure function of `(a, h)`.                                                                                           |
-| D-SEP                    | PASS   | Three distinct prefix bytes (0x00, 0x01, 0x02) under cryptographic hash. Collision requires breaking preimage resistance.                          |
-| I-SOUND-TSML             | PASS   | Reduces to malt's I-SOUND over the projected leaf sequence. Null leaves verify as `N₀(a)`, not as real data.                                       |
-| K-SOUND-TSML             | PASS   | Reduces to malt's K-SOUND. Null subtrees are valid tree nodes.                                                                                     |
-| T-BOUND                  | PASS   | Pre-activation: D-SEP prevents forgery. Post-deactivation: projection bounds prevent proof generation.                                             |
-| ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                 |
-| PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                |
-| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-TSML → PROJ-VALID, ALG-IND standalone.                       |
-| **External adequacy**    | PASS   | The model captures all design constraints from the original exploration.                                                                           |
-| **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                    |
+| Check                    | Result | Detail                                                                                                                                                                                              |
+| :----------------------- | :----- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A-EQUIV-TSML             | PASS   | Follows from malt's A-EQUIV applied per-algorithm over the projected sequence. The null constants are just another leaf value.                                                                      |
+| A-STACK-TSML             | PASS   | Active algorithms track `popcount(global_tree_size)`, frozen algorithms track `popcount(last(act(a)).end)`. Resume via `merge_stacks` preserves the invariant. Unified by `popcount(tree_size(a))`. |
+| N-DET                    | PASS   | By construction: `Nₕ(a)` is a pure function of `(a, h)`.                                                                                                                                            |
+| D-SEP                    | PASS   | Three distinct prefix bytes (0x00, 0x01, 0x02) under cryptographic hash. Collision requires breaking preimage resistance.                                                                           |
+| I-SOUND-TSML             | PASS   | Reduces to malt's I-SOUND over the projected leaf sequence. Null leaves verify as `N₀(a)`, not as real data.                                                                                        |
+| K-SOUND-TSML             | PASS   | Reduces to malt's K-SOUND. Null subtrees are valid tree nodes.                                                                                                                                      |
+| T-BOUND                  | PASS   | All inactive positions (pre-activation, inter-epoch gaps, post-deactivation): D-SEP prevents forgery. Beyond `tree_size(a)`: projection bounds prevent proof generation.                            |
+| ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                                                                  |
+| PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                                                                 |
+| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-TSML → PROJ-VALID, ALG-IND standalone.                                                                        |
+| **External adequacy**    | PASS   | The model captures all design constraints from the original exploration.                                                                                                                            |
+| **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                                                                     |
 
 ### Performance Bounds
 
@@ -445,6 +491,7 @@ per algorithm, plus the multi-algorithm extension laws above.
 | Append (total)              | O(\|A(i)\|) amortized | Linear in active algorithm count    |
 | Algorithm addition          | O(log K)              | Null prefix peak computation        |
 | Algorithm removal           | O(1)                  | Freeze frontier stack               |
+| Algorithm resumption        | O(log n)              | Null gap peaks + binary merge       |
 | Root extraction (per alg)   | O(log n)              | Frontier stack fold                 |
 | Inclusion proof (per alg)   | O(log n)              | Global tree depth                   |
 | Consistency proof (per alg) | O(log n)              | Global tree depth                   |
@@ -461,12 +508,12 @@ size. If `nₐ ≪ n`, TSML proofs are deeper.
 need not be transmitted. The proof flow is:
 
 1. **Server (prover):** Generates the full `malt` proof. Siblings whose
-   entire leaf-coverage range falls strictly below `activation_index` are
-   null subtrees. The server omits them from the wire payload.
+   entire leaf-coverage range falls outside all active epochs are null
+   subtrees. The server omits them from the wire payload.
 2. **TSML client envelope:** The client knows `tree_size`, `index`, and
-   `activation_index`. It walks the virtual tree path, detects positions
-   fully inside the inactive epoch, synthesizes `Nₕ(a)` locally, and
-   injects them into the proof array.
+   the epoch list. It walks the virtual tree path, detects positions fully
+   inside an inactive gap, synthesizes `Nₕ(a)` locally, and injects them
+   into the proof array.
 3. **Core verifier:** The envelope hands the rehydrated, full proof to the
    unmodified `malt::verify_*` function.
 
@@ -487,10 +534,15 @@ theoretical overhead while preserving verifier independence.
 
    ```rust
    struct Log {
-       leaves: Vec<Vec<u8>>,           // raw payloads
-       act: BTreeMap<Alg, (u64, u64)>, // activation map
-       stacks: BTreeMap<Alg, Vec<Vec<u8>>>, // per-alg frontier stacks
-       null_tables: BTreeMap<Alg, Vec<Vec<u8>>>, // precomputed Nₕ(a)
+       storage: S,                                  // raw payloads via Storage trait
+       algs: BTreeMap<Alg, AlgState>,                // per-algorithm state
+   }
+
+   struct AlgState {
+       epochs: Vec<(u64, u64)>,                      // disjoint epoch intervals
+       stack: Vec<Vec<u8>>,                           // frontier stack
+       hasher: Box<dyn Hasher>,                       // hash implementation
+       null_table: NullTable,                         // precomputed Nₕ(a)
    }
    ```
 
@@ -530,8 +582,8 @@ theoretical overhead while preserving verifier independence.
 **Resolved:** Elided proof wire encoding requires no explicit metadata.
 The client deterministically identifies omitted siblings via interval
 arithmetic: for each sibling in the proof path, the client computes its
-leaf-coverage range `[start, end)`. If `end ≤ activation_index`, the
-entire subtree is null and was elided — the client synthesizes `Nₕ(a)`
+leaf-coverage range `[start, end)`. If the range overlaps no active epoch,
+the entire subtree is null and was elided — the client synthesizes `Nₕ(a)`
 locally. Otherwise, the sibling was transmitted. Both parties share
-`tree_size(a)`, `index`, and `activation_index`, ensuring lockstep
+`tree_size(a)`, `index`, and the epoch list, ensuring lockstep
 agreement with zero wire overhead.
