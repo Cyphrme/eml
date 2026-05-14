@@ -568,22 +568,38 @@ impl<S: Storage> Log<S> {
     /// The serialization format is left to the implementor — TSML provides
     /// the raw data; the consumer chooses the wire encoding.
     pub fn algorithms(&self) -> Vec<AlgorithmInfo> {
+        let global_size = self.size();
         self.algs
-            .keys()
-            .map(|&id| {
-                // Safe: id is from self.algs, so root/tree_size/etc. cannot fail.
-                let root = self.root(id).expect("registered algorithm");
-                let ts = self.tree_size(id).expect("registered algorithm");
-                let activation_index = self.activation_index(id).expect("registered algorithm");
-                let deactivation_index = self.deactivation_index(id).expect("registered algorithm");
-                let epochs = self.epochs(id).expect("registered algorithm");
+            .iter()
+            .map(|(&id, state)| {
+                let ts = state.tree_size(global_size);
+                let root = if state.stack.is_empty() {
+                    state.hasher.empty()
+                } else {
+                    state
+                        .stack
+                        .iter()
+                        .rev()
+                        .cloned()
+                        .reduce(|acc, left| state.hasher.node(&left, &acc))
+                        .expect("non-empty stack has at least one element")
+                };
                 AlgorithmInfo {
                     id,
                     root,
-                    activation_index,
-                    deactivation_index,
+                    activation_index: state.epochs.first().map(|e| e.0).unwrap_or(0),
+                    deactivation_index: state
+                        .epochs
+                        .last()
+                        .and_then(|e| if e.1 == u64::MAX { None } else { Some(e.1) }),
                     tree_size: ts,
-                    epochs,
+                    epochs: state
+                        .epochs
+                        .iter()
+                        .map(|&(start, end)| {
+                            (start, if end == u64::MAX { None } else { Some(end) })
+                        })
+                        .collect(),
                 }
             })
             .collect()
