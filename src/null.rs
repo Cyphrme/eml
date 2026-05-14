@@ -38,6 +38,27 @@ impl NullTable {
         &self.table[height]
     }
 
+    /// Ensure the table is pre-populated to at least the given height.
+    ///
+    /// Call this before immutable operations that need null constants
+    /// at a known maximum height (e.g., proof generation).
+    pub fn ensure_height(&mut self, hasher: &dyn Hasher, height: usize) {
+        if self.table.len() <= height {
+            self.get(hasher, height);
+        }
+    }
+
+    /// Get `Nₕ(a)` from the pre-populated table without mutation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `height` exceeds the pre-populated range. Call
+    /// [`ensure_height`](Self::ensure_height) first.
+    #[must_use]
+    pub fn get_precomputed(&self, height: usize) -> &[u8] {
+        &self.table[height]
+    }
+
     /// Get `N₀(a)` — the null leaf constant.
     #[must_use]
     pub fn leaf_null(&self) -> &[u8] {

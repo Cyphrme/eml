@@ -21,7 +21,8 @@ pub(crate) fn largest_pow2_lt(n: usize) -> usize {
 /// Batch Merkle Tree Hash (RFC 9162 §2.1).
 ///
 /// Computes the root hash of an ordered list of leaf hashes using the
-/// recursive definition. Used internally for proof generation.
+/// recursive definition. Specification oracle — used by test code only.
+#[cfg(test)]
 pub(crate) fn mth(hasher: &dyn Hasher, leaves: &[Vec<u8>]) -> Vec<u8> {
     match leaves.len() {
         0 => hasher.empty(),
@@ -42,6 +43,8 @@ pub(crate) fn mth(hasher: &dyn Hasher, leaves: &[Vec<u8>]) -> Vec<u8> {
 /// PATH algorithm for inclusion proofs (RFC 9162 §2.1.3).
 ///
 /// Recursively computes the sibling hashes from leaf `m` to the root.
+/// Specification oracle — superseded by `Log::path` for production use.
+#[cfg(test)]
 pub(crate) fn gen_path(hasher: &dyn Hasher, m: usize, leaves: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let n = leaves.len();
     if n == 1 {
@@ -63,6 +66,8 @@ pub(crate) fn gen_path(hasher: &dyn Hasher, m: usize, leaves: &[Vec<u8>]) -> Vec
 ///
 /// Recursively computes the intermediate hashes proving that the first
 /// `m` leaves are a prefix of the `leaves` slice.
+/// Specification oracle — superseded by `Log::subproof` for production use.
+#[cfg(test)]
 pub(crate) fn gen_subproof(
     hasher: &dyn Hasher,
     m: usize,

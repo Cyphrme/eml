@@ -59,6 +59,16 @@ impl AlgState {
     fn first_activation(&self) -> u64 {
         self.epochs.first().map_or(0, |&(start, _)| start)
     }
+
+    /// Whether algorithm has active content in the half-open range `[lo, hi)`.
+    ///
+    /// Definition 14b (Active range): true iff any epoch overlaps the interval.
+    /// Generalizes `is_active_at` from a single index to an interval.
+    fn active_range(&self, lo: u64, hi: u64) -> bool {
+        self.epochs
+            .iter()
+            .any(|&(start, end)| start < hi && end > lo)
+    }
 }
 
 // ============================================================================
@@ -69,6 +79,14 @@ impl AlgState {
 ///
 /// Used by the append algorithm (Definition 8) to determine the number
 /// of stack merges after pushing a new leaf.
+/// Largest power of 2 strictly less than `n` (u64 variant).
+///
+/// Defined for `n > 1`. Panics if `n <= 1`.
+fn largest_pow2_lt_u64(n: u64) -> u64 {
+    debug_assert!(n > 1, "largest_pow2_lt_u64 requires n > 1, got {n}");
+    1u64 << (63 - (n - 1).leading_zeros())
+}
+
 fn count_trailing_ones(n: u64) -> u32 {
     (!n).trailing_zeros()
 }
@@ -242,6 +260,13 @@ impl<S: Storage> Log<S> {
         let mut null_table = NullTable::new(hasher.as_ref());
         let stack = null_prefix_peaks(hasher.as_ref(), &mut null_table, activation);
 
+        // Eagerly populate null table to current tree height so that
+        // proof generation (which takes &self) never needs mutation.
+        if activation > 0 {
+            let max_height = (64 - activation.leading_zeros()) as usize;
+            null_table.ensure_height(hasher.as_ref(), max_height);
+        }
+
         self.algs.insert(
             alg_id,
             AlgState {
@@ -327,6 +352,15 @@ impl<S: Storage> Log<S> {
                 gap,
             )?;
             self.algs.get_mut(&alg_id).unwrap().stack = new_stack;
+        }
+
+        // Eagerly populate null table to current tree height.
+        {
+            let state = self.algs.get_mut(&alg_id).unwrap();
+            let max_height = (64 - current_size.leading_zeros()) as usize;
+            state
+                .null_table
+                .ensure_height(state.hasher.as_ref(), max_height);
         }
 
         self.algs
@@ -421,6 +455,13 @@ impl<S: Storage> Log<S> {
 
                 state.stack.push(parent);
             }
+
+            // Eagerly populate null table to current tree height.
+            let tree_size = index + 1;
+            let max_height = (64 - tree_size.leading_zeros()) as usize;
+            state
+                .null_table
+                .ensure_height(state.hasher.as_ref(), max_height);
         }
 
         Ok(index)
@@ -563,7 +604,99 @@ impl<S: Storage> Log<S> {
     }
 
     // ========================================================================
-    // Projection (Definition 14)
+    // Subtree root query (Definition 14c)
+    // ========================================================================
+
+    /// Compute the root hash of the subtree covering leaves `[lo, hi)` for
+    /// algorithm `alg_id`.
+    ///
+    /// Definition 14c (Subtree root): dispatches through stored node lookups,
+    /// NullTable for inactive ranges, and recursive binary splits for ranges
+    /// not directly cached.
+    ///
+    /// This is the O(log n) mechanism that replaces projection-based proof
+    /// generation.
+    fn subtree_root(&self, state: &AlgState, alg_id: u64, lo: u64, hi: u64) -> Result<Vec<u8>> {
+        let size = hi - lo;
+
+        // Base cases.
+        if size == 0 {
+            return Ok(state.hasher.empty());
+        }
+        if size == 1 {
+            // Single leaf: compute V(a, lo).
+            if state.is_active_at(lo) {
+                let data = self
+                    .storage
+                    .get_leaf(lo)
+                    .map_err(|e| Error::Storage(Box::new(e)))?;
+                return Ok(state.hasher.leaf(&data));
+            } else {
+                return Ok(state.null_table.leaf_null().to_vec());
+            }
+        }
+
+        // Null range optimization: if no epoch overlaps [lo, hi), the entire
+        // subtree is null-valued.
+        if !state.active_range(lo, hi) {
+            if size.is_power_of_two() {
+                // Power-of-2 null range: direct NullTable lookup.
+                let h = size.trailing_zeros() as usize;
+                return Ok(state.null_table.get_precomputed(h).to_vec());
+            } else {
+                // Non-power-of-2 null range: decompose into power-of-2 subtrees.
+                return self.null_range_root(state, size);
+            }
+        }
+
+        // Stored node lookup: only valid for power-of-2 aligned ranges.
+        if size.is_power_of_two() {
+            let h = size.trailing_zeros() as usize;
+            if let Some(hash) = self
+                .storage
+                .get_node(alg_id, lo, h)
+                .map_err(|e| Error::Storage(Box::new(e)))?
+            {
+                return Ok(hash);
+            }
+        }
+
+        // RFC 9162 binary split.
+        let k = largest_pow2_lt_u64(size);
+        let left = self.subtree_root(state, alg_id, lo, lo + k)?;
+        let right = self.subtree_root(state, alg_id, lo + k, hi)?;
+        Ok(state.hasher.node(&left, &right))
+    }
+
+    /// Compute the root of `size` consecutive null leaves for algorithm `a`.
+    ///
+    /// Definition 14d (Null range root): decomposes a non-power-of-2 null
+    /// range into power-of-2 subtrees whose roots are NullTable lookups.
+    /// Complexity: O(popcount(size)) hash operations.
+    fn null_range_root(&self, state: &AlgState, size: u64) -> Result<Vec<u8>> {
+        debug_assert!(size > 0, "null_range_root requires size > 0");
+
+        if size == 1 {
+            return Ok(state.null_table.leaf_null().to_vec());
+        }
+
+        // Decompose: largest power-of-2 subtree on the left, remainder on right.
+        let k_bits = 63 - (size.leading_zeros() as u64);
+        let k = 1u64 << k_bits;
+
+        let left_root = state.null_table.get_precomputed(k_bits as usize).to_vec();
+
+        let remainder = size - k;
+        if remainder == 0 {
+            return Ok(left_root);
+        }
+
+        let right_root = self.null_range_root(state, remainder)?;
+        Ok(state.hasher.node(&left_root, &right_root))
+    }
+
+    // ========================================================================
+    // Projection (Definition 14) — Specification Oracle
     // ========================================================================
 
     /// Compute the projected leaf hash sequence for an algorithm.
@@ -572,12 +705,14 @@ impl<S: Storage> Log<S> {
     /// the projected leaf is `leaf(a, data[i])` if `active(a, i)`, else
     /// `N₀(a)` (the null leaf constant).
     ///
-    /// The returned sequence is a valid input to the batch Merkle tree
-    /// hash function (PROJ-VALID).
+    /// **Oracle designation:** This is an O(n) specification oracle used
+    /// exclusively by test code for equational law verification. Production
+    /// proof generation uses `subtree_root` (Definition 14c).
     ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
+    #[cfg(test)]
     pub fn project(&self, alg_id: u64) -> Result<Vec<Vec<u8>>> {
         let state = self
             .algs
@@ -602,13 +737,13 @@ impl<S: Storage> Log<S> {
     }
 
     // ========================================================================
-    // Proof generation (Definitions 15-16)
+    // Proof generation (Definitions 15-16 — Operational)
     // ========================================================================
 
     /// Generate an inclusion proof for leaf `index` under algorithm `alg_id`.
     ///
-    /// The proof operates over the projected leaf sequence and verifies
-    /// against the algorithm's root via [`verify_inclusion`](crate::verify_inclusion).
+    /// Definition 15 (Inclusion proof — operational): uses range-based PATH
+    /// algorithm with `subtree_root` for O(log n) sibling resolution.
     ///
     /// # Errors
     ///
@@ -628,8 +763,7 @@ impl<S: Storage> Log<S> {
             });
         }
 
-        let projected = self.project(alg_id)?;
-        let path = crate::proof::gen_path(state.hasher.as_ref(), index as usize, &projected);
+        let path = self.path(state, alg_id, index, 0, ts)?;
 
         Ok(crate::proof::InclusionProof {
             index,
@@ -638,11 +772,41 @@ impl<S: Storage> Log<S> {
         })
     }
 
+    /// RFC 9162 PATH algorithm (§2.1.3) using `subtree_root`.
+    ///
+    /// Recursively computes sibling hashes from leaf `m` within `[lo, hi)`.
+    fn path(
+        &self,
+        state: &AlgState,
+        alg_id: u64,
+        m: u64,
+        lo: u64,
+        hi: u64,
+    ) -> Result<Vec<Vec<u8>>> {
+        let size = hi - lo;
+        if size <= 1 {
+            return Ok(Vec::new());
+        }
+
+        let k = largest_pow2_lt_u64(size);
+        if m - lo < k {
+            // Target is in the left subtree; right subtree is the sibling.
+            let mut result = self.path(state, alg_id, m, lo, lo + k)?;
+            result.push(self.subtree_root(state, alg_id, lo + k, hi)?);
+            Ok(result)
+        } else {
+            // Target is in the right subtree; left subtree is the sibling.
+            let mut result = self.path(state, alg_id, m, lo + k, hi)?;
+            result.push(self.subtree_root(state, alg_id, lo, lo + k)?);
+            Ok(result)
+        }
+    }
+
     /// Generate a consistency proof from `old_size` to the current tree
     /// for algorithm `alg_id`.
     ///
-    /// The proof demonstrates that the tree at `old_size` is a prefix of
-    /// the current tree. Verify with [`verify_consistency`](crate::verify_consistency).
+    /// Definition 16 (Consistency proof — operational): uses range-based
+    /// SUBPROOF algorithm with `subtree_root` for O(log n) sibling resolution.
     ///
     /// # Errors
     ///
@@ -666,15 +830,47 @@ impl<S: Storage> Log<S> {
             });
         }
 
-        let projected = self.project(alg_id)?;
-        let path =
-            crate::proof::gen_subproof(state.hasher.as_ref(), old_size as usize, &projected, true);
+        let path = self.subproof(state, alg_id, old_size, 0, ts, true)?;
 
         Ok(crate::proof::ConsistencyProof {
             old_size,
             new_size: ts,
             path,
         })
+    }
+
+    /// RFC 9162 SUBPROOF algorithm (§2.1.4) using `subtree_root`.
+    ///
+    /// Recursively computes the intermediate hashes proving that the first
+    /// `m` leaves (relative to `lo`) form a prefix of `[lo, hi)`.
+    fn subproof(
+        &self,
+        state: &AlgState,
+        alg_id: u64,
+        m: u64,
+        lo: u64,
+        hi: u64,
+        b: bool,
+    ) -> Result<Vec<Vec<u8>>> {
+        let size = hi - lo;
+        if m == size {
+            if b {
+                return Ok(Vec::new());
+            } else {
+                return Ok(vec![self.subtree_root(state, alg_id, lo, hi)?]);
+            }
+        }
+
+        let k = largest_pow2_lt_u64(size);
+        if m <= k {
+            let mut result = self.subproof(state, alg_id, m, lo, lo + k, b)?;
+            result.push(self.subtree_root(state, alg_id, lo + k, hi)?);
+            Ok(result)
+        } else {
+            let mut result = self.subproof(state, alg_id, m - k, lo + k, hi, false)?;
+            result.push(self.subtree_root(state, alg_id, lo, lo + k)?);
+            Ok(result)
+        }
     }
 }
 
