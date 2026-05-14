@@ -129,7 +129,7 @@ A(i) = { a ∈ dom(act) | active(a, i) }
 **Definition 6** (TSML state). A TSML state is a tuple:
 
 ```
-S = (leaves, size, act, stacks)
+S = (leaves, size, act, stacks, nodes)
 ```
 
 where:
@@ -138,9 +138,15 @@ where:
 - `size: ℕ` — number of appended leaves (`= |leaves|`)
 - `act: Alg ⇀ Vec<(ℕ, ℕ ∪ {∞})>` — algorithm activation map (epoch vectors)
 - `stacks: Alg → Vec<Digest>` — per-algorithm frontier stacks
+- `nodes: Alg ⇀ ((ℕ, ℕ) ⇀ Digest)` — per-algorithm sealed internal node hashes
 
 For each `a ∈ active_algs(S)` (algorithms whose final epoch has `end = ∞`),
 `stacks(a)` is the frontier stack for algorithm `a` over the global tree.
+
+The `nodes` store maps `(a, left, height)` to the sealed root hash of the
+subtree covering leaves `[left, left + 2^height)`. Entries are persisted
+during the CTO merge in `append` (Definition 8). This store enables
+O(log n) proof generation (§12) without materializing the full projection.
 
 ### §6. Leaf Value Function
 
@@ -168,17 +174,27 @@ append(S, d) → S' where:
   for each a ∈ active_algs(S):
     let h = V(a, S.size)                    — real hash or null constant
     let merge_count = cto(S.size)           — count trailing ones
+    let left_pos = S.size                   — position of this leaf
+    let height = 0
     S'.stacks(a) = push(h, S.stacks(a))
     for _ in 0..merge_count:
       let r = pop(S'.stacks(a))
       let l = pop(S'.stacks(a))
-      push(node(a, l, r), S'.stacks(a))
+      let parent = node(a, l, r)
+      left_pos = left_pos - 2^height       — left edge of merged subtree
+      height = height + 1
+      S'.nodes(a)[(left_pos, height)] = parent   — persist sealed node
+      push(parent, S'.stacks(a))
 ```
 
 where `cto(n)` counts trailing one-bits in the binary representation of `n`.
 
+The node persistence adds `O(1)` amortized storage writes per algorithm
+per append — zero additional hash computations beyond what the CTO merge
+already performs.
+
 **Note:** Frozen algorithms (whose final epoch end ≤ `S.size`) are NOT
-updated. Their frontier stacks are immutable until resumed.
+updated. Their frontier stacks and node stores are immutable until resumed.
 
 ### §8. Algorithm Addition
 
@@ -211,6 +227,12 @@ components (MMR peaks).
 
 **Complexity:** `O(⌈log₂(K)⌉)` hash operations (computing the null constant
 table). Zero retroactive computation over historical leaf data.
+
+**Observation 2** (Null subtree storage optimization). The peaks produced by
+`null_prefix_peaks` are `Nₕ(a)` values — deterministic from `(a, h)` alone.
+These need not be persisted in `nodes(a)` because `subtree_root` (Definition
+14c) reconstructs them via the null constant table in O(1). Only nodes whose
+subtrees contain at least one active leaf require storage.
 
 ### §9. Algorithm Removal
 
@@ -255,23 +277,37 @@ appends `G` null leaves to a frozen frontier stack of `D` leaves, producing
 the correct frontier for `D + G` leaves:
 
 ```
-extend_with_nulls(frozen, hasher, D, G):
+extend_with_nulls(frozen, hasher, nodes_a, D, G):
   stack ← copy(frozen)
   for i in 0..G:
     n ← D + i                  // tree size before this append
+    left_pos ← n               // position of this null leaf
+    height ← 0
     stack.push(null(hasher))    // append N₀
     for _ in 0..cto(n):         // standard frontier merge
       right ← stack.pop()
       left  ← stack.pop()
-      stack.push(node(hasher, left, right))
+      parent ← node(hasher, left, right)
+      left_pos ← left_pos - 2^height
+      height ← height + 1
+      nodes_a[(left_pos, height)] ← parent   // persist sealed node
+      stack.push(parent)
   return stack
 ```
 
-This is the standard CTO-based frontier append algorithm (Definition 7)
+This is the standard CTO-based frontier append algorithm (Definition 8)
 applied with null leaf constants. The frozen stack covers positions
 `[0, D)`, and positions `[D, D+G)` are filled with null constants.
 
-**Complexity:** `O(G)` hash operations (amortized `O(1)` per append).
+Node persistence during gap fill follows the same rule as Definition 8.
+Merges that combine a pre-existing active subtree with null gap leaves
+produce **mixed** nodes that cannot be derived from the null constant
+table alone — these must be persisted. By Observation 2, purely-null
+subtrees within the gap are reconstructible from NullTable and need
+not be stored; implementations may elide them.
+
+**Complexity:** `O(G)` hash operations and `O(G)` node stores (amortized
+`O(1)` per append).
 
 ### §10. Root Extraction
 
@@ -307,7 +343,7 @@ Manifest = {
 where `tree_size(a) = last(act(a)).end` if deactivated, else
 `global_tree_size`.
 
-### §11. Projection
+### §11. Projection (Specification Oracle)
 
 **Definition 14** (Single-algorithm projection). The projection of a TSML
 onto algorithm `a` yields a sequence of digests:
@@ -320,6 +356,12 @@ This sequence is equivalent to the leaves of a standard malt::Log where
 positions outside `a`'s active window contain `N₀(a)` and positions
 inside contain `leaf(a, leaves[i])`.
 
+**Oracle designation.** `project` is a specification oracle — an `O(n)`
+mathematical construction used exclusively by the equational laws (§13)
+to prove correctness. It is not used operationally. Proof generation
+uses `subtree_root` (Definition 14c), which achieves `O(log n)` by
+querying the `nodes` store directly.
+
 **Theorem 1** (Projection equivalence). For any algorithm `a`, the root
 computed by `root(a)` from the TSML frontier stack equals the root of a
 batch-constructed malt::Log over the projected leaf sequence:
@@ -328,27 +370,110 @@ batch-constructed malt::Log over the projected leaf sequence:
 root(a) = malt::mth(hasher_a, project(S, a))
 ```
 
+### §11b. Active Range Predicate
+
+**Definition 14b** (Active range). Algorithm `a` has active content in the
+half-open range `[lo, hi)` iff any epoch overlaps it:
+
+```
+active_range(a, lo, hi) ⟺ ∃ (startₖ, endₖ) ∈ act(a). startₖ < hi ∧ endₖ > lo
+```
+
+This generalizes `active(a, i)` (Definition 4) from a single index to an
+interval. It is `O(k)` where `k = |act(a)|` (the number of epochs).
+
+### §11c. Subtree Root Query
+
+**Definition 14c** (Subtree root). The root hash of the subtree covering
+leaves `[lo, hi)` for algorithm `a`:
+
+```
+subtree_root(S, a, lo, hi) =
+  empty(a)                                       if hi - lo = 0
+  V(a, lo)                                       if hi - lo = 1
+  Nₕ(a) where h = log₂(hi - lo)                 if ¬active_range(a, lo, hi)
+                                                    ∧ hi - lo is a power of 2
+  null_range_root(a, hi - lo)                    if ¬active_range(a, lo, hi)
+  nodes(a)[(lo, log₂(hi - lo))]                  if hi - lo is a power of 2
+                                                    ∧ (lo, log₂(hi - lo)) ∈ nodes(a)
+  node(a,                                        otherwise (RFC 9162 split)
+    subtree_root(S, a, lo, lo + k),
+    subtree_root(S, a, lo + k, hi))
+  where k = largest_pow2_lt(hi - lo)
+```
+
+**Definition 14d** (Null range root). The root of `size` consecutive null
+leaves for algorithm `a`:
+
+```
+null_range_root(a, size) =
+  N₀(a)                                         if size = 1
+  node(a,                                        if size > 1
+    Nₖ(a),
+    null_range_root(a, size - 2^k))
+  where k = ⌊log₂(size)⌋
+```
+
+This decomposes a non-power-of-2 null range into power-of-2 subtrees
+whose roots are NullTable lookups. Complexity: `O(popcount(size))` hash
+operations.
+
+**Complexity of subtree_root:** Each recursive call either terminates via
+a stored node lookup / NullTable lookup (O(1)), or splits into two
+subproblems where at least one child terminates. The proof path requires
+at most `⌈log₂(n)⌉` siblings, each resolved by a single `subtree_root`
+call. Total: `O(log n)` lookups + `O(log n)` hash operations.
+
 ### §12. Proof Generation
 
-**Definition 15** (Inclusion proof). For algorithm `a` and leaf index
-`index`:
+**Definition 15** (Inclusion proof — operational). For algorithm `a` and
+leaf index `index`:
 
 ```
 inclusion_proof(S, a, index) =
-  malt::gen_path(hasher_a, index, project(S, a))
+  path(S, a, index, 0, tree_size(a))
+
+path(S, a, m, lo, hi) =
+  []                                             if hi - lo = 1
+  path(S, a, m, lo, lo+k)                       if m < lo+k
+    ++ [subtree_root(S, a, lo+k, hi)]
+  path(S, a, m, lo+k, hi)                       if m ≥ lo+k
+    ++ [subtree_root(S, a, lo, lo+k)]
+  where k = largest_pow2_lt(hi - lo)
 ```
 
-The proof path contains digests from algorithm `a` only. Some siblings
-may be null subtree constants (for branches in the null prefix), but
-the verifier processes them identically to any other digest.
+This is the RFC 9162 PATH algorithm (§2.1.3) with `subtree_root` replacing
+materialized-array slicing. Each sibling is resolved via Definition 14c.
 
-**Definition 16** (Consistency proof). For algorithm `a` and old tree
-size `old_size`:
+**Complexity:** `O(log n)` — the recursion depth is `⌈log₂(n)⌉`, and each
+level performs one `subtree_root` call (O(1) lookup or NullTable).
+
+**Definition 16** (Consistency proof — operational). For algorithm `a` and
+old tree size `old_size`:
 
 ```
 consistency_proof(S, a, old_size) =
-  malt::gen_subproof(hasher_a, old_size, project(S, a), true)
+  subproof(S, a, old_size, 0, tree_size(a), true)
+
+subproof(S, a, m, lo, hi, b) =
+  []                                             if m = hi - lo ∧ b
+  [subtree_root(S, a, lo, hi)]                   if m = hi - lo ∧ ¬b
+  subproof(S, a, m, lo, lo+k, b)                 if m ≤ k
+    ++ [subtree_root(S, a, lo+k, hi)]
+  subproof(S, a, m-k, lo+k, hi, false)           if m > k
+    ++ [subtree_root(S, a, lo, lo+k)]
+  where k = largest_pow2_lt(hi - lo)
 ```
+
+This is the RFC 9162 SUBPROOF algorithm (§2.1.4) with `subtree_root`
+replacing materialized-array slicing.
+
+**Correctness bridge.** The operational definitions produce identical output
+to the oracle definitions (`malt::gen_path` and `malt::gen_subproof` over
+`project(S, a)`) by Theorem 1 and the structural correspondence between
+range-based and array-based recursion. Both decompose the tree identically
+via `largest_pow2_lt`; the only difference is how sibling roots are obtained
+(stored lookup vs. batch recomputation).
 
 ### §13. Equational Laws
 
@@ -483,18 +608,20 @@ per algorithm, plus the multi-algorithm extension laws above.
 
 ### Performance Bounds
 
-| Operation                   | Complexity            | Notes                               |
-| :-------------------------- | :-------------------- | :---------------------------------- |
-| Append (per algorithm)      | O(1) amortized        | Same as malt                        |
-| Append (total)              | O(\|A(i)\|) amortized | Linear in active algorithm count    |
-| Algorithm addition          | O(log K)              | Null prefix peak computation        |
-| Algorithm removal           | O(1)                  | Freeze frontier stack               |
-| Algorithm resumption        | O(log n)              | Null gap peaks + binary merge       |
-| Root extraction (per alg)   | O(log n)              | Frontier stack fold                 |
-| Inclusion proof (per alg)   | O(log n)              | Global tree depth                   |
-| Consistency proof (per alg) | O(log n)              | Global tree depth                   |
-| Null constant table         | O(log n) precompute   | Per algorithm, once                 |
-| Total storage               | Σ O(nᵢ)               | Where nᵢ = active duration of alg i |
+| Operation                   | Complexity            | Notes                                                        |
+| :-------------------------- | :-------------------- | :----------------------------------------------------------- |
+| Append (per algorithm)      | O(1) amortized        | Same as malt (hash + CTO merge)                              |
+| Append node storage         | O(1) amortized        | Per algorithm; persists sealed CTO nodes                     |
+| Append (total)              | O(\|A(i)\|) amortized | Linear in active algorithm count                             |
+| Algorithm addition          | O(log K)              | Null prefix peak computation                                 |
+| Algorithm removal           | O(1)                  | Freeze frontier stack                                        |
+| Algorithm resumption        | O(G)                  | Null gap extension + node storage                            |
+| Root extraction (per alg)   | O(log n)              | Frontier stack fold                                          |
+| Inclusion proof (per alg)   | O(log n)              | Via subtree_root (Def. 14c); stored node + NullTable lookups |
+| Consistency proof (per alg) | O(log n)              | Via subtree_root (Def. 14c); stored node + NullTable lookups |
+| Null constant table         | O(log n) precompute   | Per algorithm, once                                          |
+| Node storage (per alg)      | O(nᵢ)                 | One sealed node per internal tree position                   |
+| Total storage               | Σ O(nᵢ)               | Leaves + nodes; nᵢ = tree_size of alg i                      |
 
 ### Proof Size Trade-off (Resolved: Elided Proofs)
 
@@ -532,7 +659,7 @@ theoretical overhead while preserving verifier independence.
 
    ```rust
    struct Log {
-       storage: S,                                  // raw payloads via Storage trait
+       storage: S,                                  // raw payloads + sealed nodes via Storage trait
        algs: BTreeMap<Alg, AlgState>,                // per-algorithm state
    }
 
@@ -543,6 +670,14 @@ theoretical overhead while preserving verifier independence.
        null_table: NullTable,                         // precomputed Nₕ(a)
    }
    ```
+
+   The `Storage` trait provides both leaf storage (`store_leaf`/`get_leaf`)
+   and sealed node storage (`store_node`/`get_node`). Node entries are
+   keyed by `(alg_id, left_index, height)` and written during CTO merges.
+
+   `project()` is a test-only method (specification oracle) gated behind
+   `#[cfg(test)]`. Production proof generation uses `subtree_root`
+   (Definition 14c) which queries stored nodes directly.
 
 3. **Manifest.** Introduce a structured manifest type that includes
    `global_tree_size`, per-algorithm roots, and activation metadata.
