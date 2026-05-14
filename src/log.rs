@@ -249,6 +249,13 @@ impl<S: Storage> Log<S> {
         }
 
         let activation = self.size();
+        let epochs = vec![(activation, u64::MAX)];
+
+        // Persist metadata BEFORE committing in-memory state.
+        self.storage
+            .store_algorithm_meta(alg_id, &epochs)
+            .map_err(|e| Error::Storage(Box::new(e)))?;
+
         let mut null_table = NullTable::new(hasher.as_ref());
         let stack = null_prefix_peaks(hasher.as_ref(), &mut null_table, activation);
 
@@ -263,7 +270,7 @@ impl<S: Storage> Log<S> {
             alg_id,
             AlgState {
                 hasher,
-                epochs: vec![(activation, u64::MAX)],
+                epochs,
                 stack,
                 null_table,
             },
@@ -293,9 +300,17 @@ impl<S: Storage> Log<S> {
             return Err(Error::FrozenAlgorithm(alg_id));
         }
 
-        if let Some(last) = state.epochs.last_mut() {
+        // Compute new epochs, persist, then commit in-memory.
+        let mut new_epochs = state.epochs.clone();
+        if let Some(last) = new_epochs.last_mut() {
             last.1 = current_size;
         }
+
+        self.storage
+            .store_algorithm_meta(alg_id, &new_epochs)
+            .map_err(|e| Error::Storage(Box::new(e)))?;
+
+        self.algs.get_mut(&alg_id).unwrap().epochs = new_epochs;
         Ok(())
     }
 
@@ -329,6 +344,14 @@ impl<S: Storage> Log<S> {
         let deactivation = state.epochs.last().unwrap().1;
         let gap = current_size - deactivation;
 
+        // Compute new epochs and persist BEFORE committing in-memory state.
+        let mut new_epochs = state.epochs.clone();
+        new_epochs.push((current_size, u64::MAX));
+
+        self.storage
+            .store_algorithm_meta(alg_id, &new_epochs)
+            .map_err(|e| Error::Storage(Box::new(e)))?;
+
         if gap > 0 {
             // Split borrow: access self.algs (shared) and self.storage (mutable)
             // as disjoint fields.
@@ -355,11 +378,7 @@ impl<S: Storage> Log<S> {
                 .ensure_height(state.hasher.as_ref(), max_height);
         }
 
-        self.algs
-            .get_mut(&alg_id)
-            .unwrap()
-            .epochs
-            .push((current_size, u64::MAX));
+        self.algs.get_mut(&alg_id).unwrap().epochs = new_epochs;
         Ok(())
     }
 

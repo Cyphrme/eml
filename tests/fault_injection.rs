@@ -225,6 +225,20 @@ impl Storage for CorruptingStorage {
         self.mode.set(mode);
         result
     }
+
+    fn store_algorithm_meta(
+        &mut self,
+        _alg_id: u64,
+        _epochs: &[(u64, u64)],
+    ) -> Result<(), Self::Error> {
+        // Metadata is not a corruption target in fault injection tests.
+        Ok(())
+    }
+
+    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error> {
+        // Fault injection tests don't reconstruct from storage.
+        Ok(Vec::new())
+    }
 }
 
 // ============================================================================

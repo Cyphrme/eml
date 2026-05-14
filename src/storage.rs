@@ -84,6 +84,29 @@ pub trait Storage {
         left: u64,
         height: usize,
     ) -> Result<Option<Vec<u8>>, Self::Error>;
+
+    /// Persist algorithm metadata (epoch boundaries).
+    ///
+    /// Called by the log during `add_algorithm`, `remove_algorithm`, and
+    /// `resume_algorithm`. The full epoch vector is written on every call
+    /// (replace semantics, not append).
+    ///
+    /// Epochs use `u64::MAX` as the sentinel for "currently active" — the
+    /// internal representation. Consumers should not interpret this value;
+    /// it is an implementation detail of the log.
+    fn store_algorithm_meta(
+        &mut self,
+        alg_id: u64,
+        epochs: &[(u64, u64)],
+    ) -> Result<(), Self::Error>;
+
+    /// Load all persisted algorithm metadata.
+    ///
+    /// Returns the algorithm ID and epoch vector for every algorithm that
+    /// has been registered (including frozen ones). Used by
+    /// `Log::from_storage` to reconstruct the algorithm registry on cold
+    /// start.
+    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error>;
 }
 
 // ============================================================================
@@ -103,6 +126,8 @@ pub struct MemoryStorage {
     /// `HashMap` for O(1) amortized lookups — this map is point-queried
     /// only (never iterated or range-scanned).
     nodes: HashMap<(u64, u64, usize), Vec<u8>>,
+    /// Algorithm epoch metadata, keyed by algorithm ID.
+    algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
 }
 
 impl MemoryStorage {
@@ -112,6 +137,7 @@ impl MemoryStorage {
         Self {
             leaves: Vec::new(),
             nodes: HashMap::new(),
+            algorithm_metas: HashMap::new(),
         }
     }
 }
@@ -184,5 +210,22 @@ impl Storage for MemoryStorage {
         height: usize,
     ) -> Result<Option<Vec<u8>>, Self::Error> {
         Ok(self.nodes.get(&(alg_id, left, height)).cloned())
+    }
+
+    fn store_algorithm_meta(
+        &mut self,
+        alg_id: u64,
+        epochs: &[(u64, u64)],
+    ) -> Result<(), Self::Error> {
+        self.algorithm_metas.insert(alg_id, epochs.to_vec());
+        Ok(())
+    }
+
+    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error> {
+        Ok(self
+            .algorithm_metas
+            .iter()
+            .map(|(&id, e)| (id, e.clone()))
+            .collect())
     }
 }
