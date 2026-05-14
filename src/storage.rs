@@ -8,7 +8,7 @@
 //! [`MemoryStorage`] provides an in-memory implementation suitable for
 //! testing and small logs.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 /// Backend for persisting and retrieving raw leaf payloads and sealed
 /// internal node hashes.
@@ -99,7 +99,10 @@ pub trait Storage {
 pub struct MemoryStorage {
     leaves: Vec<Vec<u8>>,
     /// Sealed internal node hashes, keyed by `(alg_id, left_index, height)`.
-    nodes: BTreeMap<(u64, u64, usize), Vec<u8>>,
+    ///
+    /// `HashMap` for O(1) amortized lookups — this map is point-queried
+    /// only (never iterated or range-scanned).
+    nodes: HashMap<(u64, u64, usize), Vec<u8>>,
 }
 
 impl MemoryStorage {
@@ -108,7 +111,7 @@ impl MemoryStorage {
     pub fn new() -> Self {
         Self {
             leaves: Vec::new(),
-            nodes: BTreeMap::new(),
+            nodes: HashMap::new(),
         }
     }
 }
