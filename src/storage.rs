@@ -1,31 +1,38 @@
-//! Storage abstraction for leaf persistence.
+//! Storage abstraction for leaf and node persistence.
 //!
-//! The [`Storage`] trait decouples the TSML log from its leaf storage
+//! The [`Storage`] trait decouples the TSML log from its persistence
 //! strategy. The log retains only frontier stacks in memory (O(log n)
-//! per algorithm); raw leaf payloads are persisted through this trait.
+//! per algorithm); raw leaf payloads and sealed internal node hashes
+//! are persisted through this trait.
 //!
 //! [`MemoryStorage`] provides an in-memory implementation suitable for
 //! testing and small logs.
 
-/// Backend for persisting and retrieving raw leaf payloads.
+use std::collections::BTreeMap;
+
+/// Backend for persisting and retrieving raw leaf payloads and sealed
+/// internal node hashes.
 ///
 /// # Integrity Contract
 ///
 /// `get_leaf(i)` **must** return exactly the bytes that were passed to
-/// `store_leaf(i, data)`, or return an error. Implementations are
-/// responsible for ensuring this invariant through whatever mechanism
-/// is appropriate for their storage layer (content-addressing,
-/// checksums, database constraints, etc.).
+/// `store_leaf(i, data)`, or return an error. Likewise, `get_node`
+/// **must** return exactly the bytes passed to `store_node` for the
+/// same `(alg_id, left, height)` triple.
+///
+/// # Node Storage
+///
+/// Internal node hashes are persisted during CTO merges in `append`.
+/// Each entry is keyed by `(alg_id, left_index, height)` and contains
+/// the root hash of the subtree covering leaves `[left, left + 2^height)`.
+/// This enables O(log n) proof generation without materializing the
+/// full projection.
 ///
 /// # Implementor Guidance
 ///
-/// - [`MemoryStorage`] satisfies the contract trivially (in-process `Vec`).
+/// - [`MemoryStorage`] satisfies the contract trivially (in-process collections).
 /// - Database backends should use integrity constraints or checksums.
 /// - Filesystem backends may use content-addressed storage (hash as filename).
-///
-/// TSML does not prescribe a caching strategy for intermediate node
-/// hashes. Implementors who need O(log n) proof generation can maintain
-/// their own node cache internally.
 pub trait Storage {
     /// Error type for storage operations.
     type Error: std::error::Error + Send + Sync + 'static;
@@ -49,13 +56,41 @@ pub trait Storage {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Persist a sealed internal node hash.
+    ///
+    /// Called during CTO merges when a parent node is computed from two
+    /// children. The node covers leaves `[left, left + 2^height)`.
+    ///
+    /// - `alg_id`: the algorithm this node belongs to.
+    /// - `left`: the leftmost leaf index of the subtree.
+    /// - `height`: the height of this node (1 = parent of two leaves).
+    /// - `hash`: the computed node hash.
+    fn store_node(
+        &mut self,
+        alg_id: u64,
+        left: u64,
+        height: usize,
+        hash: &[u8],
+    ) -> Result<(), Self::Error>;
+
+    /// Retrieve a sealed internal node hash.
+    ///
+    /// Returns `None` if no node has been stored for this coordinate.
+    /// Returns `Err` only on storage corruption or I/O failure.
+    fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: usize,
+    ) -> Result<Option<Vec<u8>>, Self::Error>;
 }
 
 // ============================================================================
 // In-memory implementation
 // ============================================================================
 
-/// In-memory leaf storage backed by a `Vec`.
+/// In-memory leaf and node storage backed by collections.
 ///
 /// Suitable for testing and small logs. The integrity contract is
 /// satisfied trivially — in-process memory cannot be corrupted by
@@ -63,13 +98,18 @@ pub trait Storage {
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
     leaves: Vec<Vec<u8>>,
+    /// Sealed internal node hashes, keyed by `(alg_id, left_index, height)`.
+    nodes: BTreeMap<(u64, u64, usize), Vec<u8>>,
 }
 
 impl MemoryStorage {
     /// Create a new empty in-memory storage.
     #[must_use]
     pub fn new() -> Self {
-        Self { leaves: Vec::new() }
+        Self {
+            leaves: Vec::new(),
+            nodes: BTreeMap::new(),
+        }
     }
 }
 
@@ -121,5 +161,25 @@ impl Storage for MemoryStorage {
 
     fn len(&self) -> u64 {
         self.leaves.len() as u64
+    }
+
+    fn store_node(
+        &mut self,
+        alg_id: u64,
+        left: u64,
+        height: usize,
+        hash: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.nodes.insert((alg_id, left, height), hash.to_vec());
+        Ok(())
+    }
+
+    fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: usize,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        Ok(self.nodes.get(&(alg_id, left, height)).cloned())
     }
 }

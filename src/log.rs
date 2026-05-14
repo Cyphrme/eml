@@ -1,8 +1,8 @@
 //! TSML Log — the core state machine.
 //!
-//! Implements Definitions 6-14 of the formal model: the TSML state tuple,
-//! leaf value function, append, algorithm add/remove, root extraction,
-//! projection, and proof generation.
+//! Implements Definitions 6-14c of the formal model: the TSML state tuple,
+//! leaf value function, append (with node persistence), algorithm
+//! add/remove/resume, root extraction, projection, and proof generation.
 
 use std::collections::BTreeMap;
 
@@ -107,18 +107,25 @@ fn null_prefix_peaks(hasher: &dyn Hasher, null_table: &mut NullTable, k: u64) ->
 /// This function appends `gap_size` null leaves (positions `[deact, deact+gap_size)`)
 /// using the standard CTO-based frontier merge algorithm.
 ///
+/// Sealed internal nodes are persisted into `storage` during CTO merges.
+/// By Observation 2, purely-null subtrees are derivable from NullTable
+/// and need not be stored; however, mixed nodes (combining previously-active
+/// content with null gap leaves) must be persisted.
+///
 /// The result is the correct frontier stack for `deact + gap_size` leaves,
 /// with real data in `[0, deact)` and null constants in `[deact, deact+gap_size)`.
 ///
 /// Complexity: O(gap_size) total hash operations (amortized O(1) per append).
-fn extend_with_nulls(
+fn extend_with_nulls<S: Storage>(
     frozen: &[Vec<u8>],
     hasher: &dyn Hasher,
+    storage: &mut S,
+    alg_id: u64,
     deact: u64,
     gap_size: u64,
-) -> Vec<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     if gap_size == 0 {
-        return frozen.to_vec();
+        return Ok(frozen.to_vec());
     }
 
     let null_leaf = hasher.null();
@@ -133,14 +140,22 @@ fn extend_with_nulls(
 
         // Standard frontier merge: count trailing ones determines merge depth.
         let merges = n.trailing_ones();
-        for _ in 0..merges {
+        for j in 1..=merges {
             let right = stack.pop().expect("stack underflow during null extend");
             let left = stack.pop().expect("stack underflow during null extend");
-            stack.push(hasher.node(&left, &right));
+            let parent = hasher.node(&left, &right);
+
+            let height = j as usize;
+            let left_pos = n + 1 - (1u64 << height);
+            storage
+                .store_node(alg_id, left_pos, height, &parent)
+                .map_err(|e| Error::Storage(Box::new(e)))?;
+
+            stack.push(parent);
         }
     }
 
-    stack
+    Ok(stack)
 }
 
 // ============================================================================
@@ -178,13 +193,14 @@ pub struct AlgorithmInfo {
 /// # Model Mapping
 ///
 /// This struct implements Definition 6 (TSML state):
-/// `S = (storage, size, act, stacks)`
+/// `S = (storage, size, act, stacks, nodes)`
 ///
-/// Raw leaf payloads are persisted through the [`Storage`] backend.
-/// The log retains only frontier stacks in memory (O(log n) per algorithm).
+/// Raw leaf payloads and sealed internal node hashes are persisted
+/// through the [`Storage`] backend. The log retains only frontier
+/// stacks in memory (O(log n) per algorithm).
 #[derive(Debug)]
 pub struct Log<S: Storage> {
-    /// Backend for raw leaf payloads.
+    /// Backend for raw leaf payloads and sealed internal node hashes.
     storage: S,
     /// Per-algorithm state, keyed by algorithm ID.
     algs: BTreeMap<u64, AlgState>,
@@ -269,18 +285,24 @@ impl<S: Storage> Log<S> {
     /// Reactivate a frozen algorithm at the current tree size.
     ///
     /// The frozen frontier stack is fast-forwarded through the null gap
-    /// (positions from deactivation to current size) in O(log gap) hash
-    /// operations. A new active epoch `(current_size, ∞)` is appended.
+    /// (positions from deactivation to current size) using the standard
+    /// CTO-based frontier algorithm. Sealed internal nodes are persisted
+    /// into storage during the gap extension. A new active epoch
+    /// `(current_size, ∞)` is appended.
+    ///
+    /// Complexity: O(gap) hash operations and node stores.
     ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
     /// Returns [`Error::AlgorithmActive`] if the algorithm is already active.
     pub fn resume_algorithm(&mut self, alg_id: u64) -> Result<()> {
-        let current_size = self.size();
+        let current_size = self.storage.len();
+
+        // Validate state and extract parameters.
         let state = self
             .algs
-            .get_mut(&alg_id)
+            .get(&alg_id)
             .ok_or(Error::UnknownAlgorithm(alg_id))?;
 
         if state.is_active() {
@@ -291,12 +313,27 @@ impl<S: Storage> Log<S> {
         let gap = current_size - deactivation;
 
         if gap > 0 {
-            // Fast-forward: extend the frozen stack by appending null leaves
-            // through the gap using the standard CTO-based frontier algorithm.
-            state.stack = extend_with_nulls(&state.stack, state.hasher.as_ref(), deactivation, gap);
+            // Split borrow: access self.algs (shared) and self.storage (mutable)
+            // as disjoint fields.
+            let state = &self.algs[&alg_id];
+            let frozen_stack = state.stack.clone();
+            let hasher = state.hasher.as_ref();
+            let new_stack = extend_with_nulls(
+                &frozen_stack,
+                hasher,
+                &mut self.storage,
+                alg_id,
+                deactivation,
+                gap,
+            )?;
+            self.algs.get_mut(&alg_id).unwrap().stack = new_stack;
         }
 
-        state.epochs.push((current_size, u64::MAX));
+        self.algs
+            .get_mut(&alg_id)
+            .unwrap()
+            .epochs
+            .push((current_size, u64::MAX));
         Ok(())
     }
 
@@ -331,7 +368,8 @@ impl<S: Storage> Log<S> {
     ///
     /// Definition 8 (Append): pushes the leaf hash (or null constant) onto
     /// each active algorithm's frontier stack, then merges complete pairs
-    /// by counting trailing ones in the pre-increment size.
+    /// by counting trailing ones in the pre-increment size. Sealed parent
+    /// nodes are persisted into storage for O(log n) proof generation.
     ///
     /// Frozen algorithms are not updated.
     ///
@@ -353,7 +391,7 @@ impl<S: Storage> Log<S> {
             .store_leaf(index, data)
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
-        for state in self.algs.values_mut() {
+        for (&alg_id, state) in self.algs.iter_mut() {
             if !state.is_active() {
                 continue;
             }
@@ -367,12 +405,21 @@ impl<S: Storage> Log<S> {
 
             state.stack.push(digest);
 
-            for _ in 0..merge_count {
-                // Structure-guarded: merge_count is bounded by trailing ones
-                // in the pre-append size, guaranteeing sufficient stack depth.
+            // CTO merge with node persistence (Definition 8).
+            // After merge j (1-indexed), the sealed subtree covers
+            // [index + 1 - 2^j, index + 1) at height j.
+            for j in 1..=merge_count {
                 let right = state.stack.pop().expect("stack underflow in merge");
                 let left = state.stack.pop().expect("stack underflow in merge");
-                state.stack.push(state.hasher.node(&left, &right));
+                let parent = state.hasher.node(&left, &right);
+
+                let height = j as usize;
+                let left_pos = index + 1 - (1u64 << height);
+                self.storage
+                    .store_node(alg_id, left_pos, height, &parent)
+                    .map_err(|e| Error::Storage(Box::new(e)))?;
+
+                state.stack.push(parent);
             }
         }
 
