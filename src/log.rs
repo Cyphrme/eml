@@ -79,14 +79,6 @@ impl AlgState {
 ///
 /// Used by the append algorithm (Definition 8) to determine the number
 /// of stack merges after pushing a new leaf.
-/// Largest power of 2 strictly less than `n` (u64 variant).
-///
-/// Defined for `n > 1`. Panics if `n <= 1`.
-fn largest_pow2_lt_u64(n: u64) -> u64 {
-    debug_assert!(n > 1, "largest_pow2_lt_u64 requires n > 1, got {n}");
-    1u64 << (63 - (n - 1).leading_zeros())
-}
-
 fn count_trailing_ones(n: u64) -> u32 {
     (!n).trailing_zeros()
 }
@@ -675,7 +667,7 @@ impl<S: Storage> Log<S> {
         }
 
         // RFC 9162 binary split.
-        let k = largest_pow2_lt_u64(size);
+        let k = crate::proof::largest_pow2_lt(size);
         let left = self.subtree_root(state, alg_id, lo, lo + k)?;
         let right = self.subtree_root(state, alg_id, lo + k, hi)?;
         Ok(state.hasher.node(&left, &right))
@@ -801,7 +793,7 @@ impl<S: Storage> Log<S> {
             return Ok(Vec::new());
         }
 
-        let k = largest_pow2_lt_u64(size);
+        let k = crate::proof::largest_pow2_lt(size);
         if m - lo < k {
             // Target is in the left subtree; right subtree is the sibling.
             let mut result = self.path(state, alg_id, m, lo, lo + k)?;
@@ -874,7 +866,7 @@ impl<S: Storage> Log<S> {
             }
         }
 
-        let k = largest_pow2_lt_u64(size);
+        let k = crate::proof::largest_pow2_lt(size);
         if m <= k {
             let mut result = self.subproof(state, alg_id, m, lo, lo + k, b)?;
             result.push(self.subtree_root(state, alg_id, lo + k, hi)?);

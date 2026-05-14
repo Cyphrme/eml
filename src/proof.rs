@@ -13,9 +13,9 @@ use crate::Hasher;
 /// Largest power of 2 strictly less than `n`.
 ///
 /// Defined for `n > 1`. Panics if `n <= 1`.
-pub(crate) fn largest_pow2_lt(n: usize) -> usize {
+pub(crate) fn largest_pow2_lt(n: u64) -> u64 {
     debug_assert!(n > 1, "largest_pow2_lt requires n > 1, got {n}");
-    1 << (usize::BITS - 1 - (n - 1).leading_zeros())
+    1u64 << (63 - (n - 1).leading_zeros())
 }
 
 /// Batch Merkle Tree Hash (RFC 9162 §2.1).
@@ -28,7 +28,7 @@ pub(crate) fn mth(hasher: &dyn Hasher, leaves: &[Vec<u8>]) -> Vec<u8> {
         0 => hasher.empty(),
         1 => leaves[0].clone(),
         n => {
-            let k = largest_pow2_lt(n);
+            let k = largest_pow2_lt(n as u64) as usize;
             let left = mth(hasher, &leaves[..k]);
             let right = mth(hasher, &leaves[k..]);
             hasher.node(&left, &right)
@@ -50,7 +50,7 @@ pub(crate) fn gen_path(hasher: &dyn Hasher, m: usize, leaves: &[Vec<u8>]) -> Vec
     if n == 1 {
         return Vec::new();
     }
-    let k = largest_pow2_lt(n);
+    let k = largest_pow2_lt(n as u64) as usize;
     if m < k {
         let mut result = gen_path(hasher, m, &leaves[..k]);
         result.push(mth(hasher, &leaves[k..]));
@@ -82,7 +82,7 @@ pub(crate) fn gen_subproof(
             return vec![mth(hasher, leaves)];
         }
     }
-    let k = largest_pow2_lt(n);
+    let k = largest_pow2_lt(n as u64) as usize;
     if m <= k {
         let mut result = gen_subproof(hasher, m, &leaves[..k], b);
         result.push(mth(hasher, &leaves[k..]));
@@ -272,12 +272,12 @@ impl ElidedInclusionProof {
 /// absolute range of leaves that the sibling subtree covers.
 fn sibling_ranges(index: u64, tree_size: u64) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
-    walk_path(index as usize, tree_size as usize, 0, &mut ranges);
+    walk_path(index, tree_size, 0, &mut ranges);
     ranges
 }
 
 /// Recursive tree walk matching `gen_path` traversal order.
-fn walk_path(m: usize, n: usize, base: u64, out: &mut Vec<(u64, u64)>) {
+fn walk_path(m: u64, n: u64, base: u64, out: &mut Vec<(u64, u64)>) {
     if n == 1 {
         return;
     }
@@ -286,12 +286,12 @@ fn walk_path(m: usize, n: usize, base: u64, out: &mut Vec<(u64, u64)>) {
         // Recurse into left subtree first (matching gen_path order).
         walk_path(m, k, base, out);
         // Right sibling covers [base+k, base+n).
-        out.push((base + k as u64, base + n as u64));
+        out.push((base + k, base + n));
     } else {
         // Recurse into right subtree first.
-        walk_path(m - k, n - k, base + k as u64, out);
+        walk_path(m - k, n - k, base + k, out);
         // Left sibling covers [base, base+k).
-        out.push((base, base + k as u64));
+        out.push((base, base + k));
     }
 }
 
@@ -312,7 +312,7 @@ fn null_subtree_hash(hasher: &dyn Hasher, null_table: &mut crate::NullTable, siz
             .get(hasher, size.trailing_zeros() as usize)
             .to_vec();
     }
-    let k = largest_pow2_lt(size as usize) as u64;
+    let k = largest_pow2_lt(size);
     let left = null_subtree_hash(hasher, null_table, k);
     let right = null_subtree_hash(hasher, null_table, size - k);
     hasher.node(&left, &right)
@@ -466,6 +466,9 @@ mod tests {
         assert_eq!(largest_pow2_lt(9), 8);
         assert_eq!(largest_pow2_lt(16), 8);
         assert_eq!(largest_pow2_lt(17), 16);
+        // 32-bit boundary: values above 2^32 must work.
+        assert_eq!(largest_pow2_lt(1u64 << 33), 1u64 << 32);
+        assert_eq!(largest_pow2_lt((1u64 << 33) + 1), 1u64 << 33);
     }
 
     #[test]
