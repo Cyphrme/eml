@@ -158,6 +158,19 @@ strips these redundant siblings, reducing wire size from O(log _n_) to O(log
 _n_\_a) where _n_\_a is the algorithm's active tree size. `rehydrate_inclusion_proof`
 restores the full proof client-side.
 
+**Node caching.** During `append`, sealed internal nodes (complete subtree roots
+computed during CTO merges) are persisted through the `Storage` backend. This
+enables O(log n) proof generation via point lookups rather than O(n)
+materialization. `subtree_root` resolves sibling hashes through stored-node
+lookups, falling back to recursive recomputation only when a node is absent.
+
+**Cold reconstruction.** `Log::from_storage` reconstructs the full log state
+from a populated storage backend. Algorithm metadata (IDs, epoch boundaries) is
+loaded from storage; frontier stacks are rebuilt in O(log n) per algorithm by
+decomposing the tree size into binary and resolving each complete subtree root
+through stored nodes. This enables process restarts without replaying the
+append history.
+
 ## Usage
 
 Implement `Hasher` for your algorithm, then:
@@ -184,26 +197,31 @@ let root_blake3 = log.root(1)?;
 
 For production, implement the `Storage` trait for your persistence layer
 (database, filesystem, etc.). `MemoryStorage` is provided for testing and
-small logs.
+small logs. On cold start, reconstruct the log from an existing storage backend
+via `Log::from_storage(storage, hashers)`.
 
 ## Public API
 
-| Type / Function             | Purpose                                                               |
-| :-------------------------- | :-------------------------------------------------------------------- |
-| `Log<S: Storage>`           | The state machine. Append data, manage algorithms, extract proofs.    |
-| `Storage`                   | Trait for leaf persistence backends (store/retrieve raw payloads).    |
-| `MemoryStorage`             | In-memory `Storage` implementation for testing and small logs.        |
-| `Hasher`                    | Trait for hash algorithm implementations (leaf, node, empty, null).   |
-| `AlgorithmInfo`             | Per-algorithm metadata snapshot (root, epoch boundaries, tree size).  |
-| `NullTable`                 | Memoized null-sibling ladder (internal, but public for advanced use). |
-| `InclusionProof`            | RFC 9162 inclusion proof for a leaf at a given index.                 |
-| `ConsistencyProof`          | RFC 9162 consistency proof between two tree sizes.                    |
-| `ElidedInclusionProof`      | Wire-optimized proof with null siblings stripped.                     |
-| `verify_inclusion`          | Verify an inclusion proof against a root.                             |
-| `verify_consistency`        | Verify a consistency proof between two roots.                         |
-| `elide_inclusion_proof`     | Strip null siblings from a proof (epoch-aware).                       |
-| `rehydrate_inclusion_proof` | Restore elided siblings using the algorithm's `Hasher`.               |
-| `Error`                     | Structured error type for all fallible operations.                    |
+| Type / Function             | Purpose                                                                            |
+| :-------------------------- | :--------------------------------------------------------------------------------- |
+| `Log<S: Storage>`           | The state machine. Append data, manage algorithms, extract proofs.                 |
+| `Log::new`                  | Create an empty log with a fresh storage backend.                                  |
+| `Log::from_storage`         | Reconstruct log state from a populated storage backend (cold start).               |
+| `Log::into_storage`         | Consume the log and reclaim the underlying storage backend.                        |
+| `Storage`                   | Trait for persistence backends (leaves, sealed nodes, algorithm metadata).         |
+| `MemoryStorage`             | In-memory `Storage` implementation for testing and small logs.                     |
+| `MemoryStorageError`        | Error type for `MemoryStorage` (out-of-bounds leaf reads).                         |
+| `Hasher`                    | Trait for hash algorithm implementations (leaf, node, empty, null). `Send + Sync`. |
+| `AlgorithmInfo`             | Per-algorithm metadata snapshot (root, epoch boundaries, tree size).               |
+| `NullTable`                 | Memoized null-sibling ladder (internal, but public for advanced use).              |
+| `InclusionProof`            | RFC 9162 inclusion proof for a leaf at a given index.                              |
+| `ConsistencyProof`          | RFC 9162 consistency proof between two tree sizes.                                 |
+| `ElidedInclusionProof`      | Wire-optimized proof with null siblings stripped.                                  |
+| `verify_inclusion`          | Verify an inclusion proof against a root.                                          |
+| `verify_consistency`        | Verify a consistency proof between two roots.                                      |
+| `elide_inclusion_proof`     | Strip null siblings from a proof (epoch-aware).                                    |
+| `rehydrate_inclusion_proof` | Restore elided siblings using the algorithm's `Hasher`.                            |
+| `Error`                     | Structured error type for all fallible operations.                                 |
 
 ## Formal Model
 
@@ -230,12 +248,40 @@ Key laws verified by the test suite:
 
 ## Testing
 
-56 tests: 42 targeted unit tests and 14 property-based tests ([proptest]) that
-exercise the equational laws over thousands of randomly generated tree
-configurations.
+74 tests across four categories:
+
+- **Unit tests (51):** Targeted tests for individual operations — append
+  semantics, algorithm lifecycle, proof generation, null-fill, and cold
+  reconstruction via `from_storage`.
+- **Property-based tests (16):** [proptest]-driven verification of equational
+  laws over thousands of randomly generated tree configurations, including a
+  comprehensive state machine test that exercises arbitrary interleavings of
+  add, remove, resume, and append operations.
+- **Fault injection tests (7):** Adversarial storage backends that corrupt
+  node hashes (bit-flip, drop) to verify that tampered proofs are reliably
+  rejected. Includes 2 property-based corruption tests.
+- **Complexity regression tests (6):** Empirical curve-fitting against
+  performance bounds from the formal model (O(log n) proofs, O(1) amortized
+  append, O(log K) algorithm addition, O(G) gap resumption). Gated behind
+  release profile.
 
 ```sh
-cargo test
+cargo test                              # unit + proptest + fault injection
+cargo test --release --test complexity  # complexity regression
+```
+
+### Fuzz targets
+
+4 [cargo-fuzz] harnesses exercise adversarial inputs against the proof
+verification and elision surfaces:
+
+- `verify_inclusion` — arbitrary inclusion proof / root pairs
+- `verify_consistency` — arbitrary consistency proof / root pairs
+- `rehydrate_proof` — arbitrary elided proofs through rehydration
+- `proof_mutation` — single-bit mutations of valid proofs
+
+```sh
+cargo +nightly fuzz run <target>
 ```
 
 ## Status
@@ -253,3 +299,4 @@ the project reaches stability.
 
 [rfc9162]: https://datatracker.ietf.org/doc/html/rfc9162
 [proptest]: https://crates.io/crates/proptest
+[cargo-fuzz]: https://crates.io/crates/cargo-fuzz
