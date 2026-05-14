@@ -17,9 +17,16 @@
 //! # Proofs
 //!
 //! TSML generates standard RFC 9162 inclusion and consistency proofs per
-//! algorithm, operating over the projected leaf sequence. Proofs verify
-//! against the standard [`verify_inclusion`] and [`verify_consistency`]
-//! functions — no modified verifier is needed (PROJ-VALID).
+//! algorithm. Proofs verify against the standard [`verify_inclusion`] and
+//! [`verify_consistency`] functions — no modified verifier is needed.
+//!
+//! **Specification vs. implementation.** The formal model (§11) defines
+//! `project(S, a)` as an O(n) specification oracle — the conceptual
+//! per-algorithm leaf sequence that establishes correctness via equational
+//! laws. The implementation does not materialize this sequence. Proof
+//! generation instead uses `subtree_root` (§11c), which resolves sibling
+//! hashes via O(1) stored-node lookups, achieving O(log n) proof generation.
+//! The correctness bridge (§12) proves these produce identical output.
 //!
 //! # Usage
 //!
