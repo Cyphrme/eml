@@ -33,7 +33,7 @@ use std::fmt::Debug;
 /// - `leaf(d) ≠ node(l, r)` for all inputs  (0x00 ≠ 0x01)
 /// - `null() ≠ leaf(d)` for all inputs       (0x02 ≠ 0x00)
 /// - `null() ≠ node(l, r)` for all inputs    (0x02 ≠ 0x01)
-pub trait Hasher: Debug {
+pub trait Hasher: Debug + Send + Sync {
     /// Hash a leaf entry: `H(0x00 ‖ data)`.
     fn leaf(&self, data: &[u8]) -> Vec<u8>;
 
