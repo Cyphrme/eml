@@ -1,0 +1,46 @@
+[package]
+name = "tsml-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[dependencies.tsml]
+path = ".."
+
+# --- Fuzz targets ---
+
+[[bin]]
+name = "verify_inclusion"
+path = "fuzz_targets/verify_inclusion.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verify_consistency"
+path = "fuzz_targets/verify_consistency.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rehydrate_proof"
+path = "fuzz_targets/rehydrate_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proof_mutation"
+path = "fuzz_targets/proof_mutation.rs"
+test = false
+doc = false
+bench = false
