@@ -374,6 +374,21 @@ pub fn rehydrate_inclusion_proof(
     elided: &ElidedInclusionProof,
     hasher: &dyn Hasher,
 ) -> InclusionProof {
+    // Guard against degenerate inputs from untrusted wire data.
+    // A tree of size 0 or 1 has no siblings; an out-of-bounds index is
+    // nonsensical. Return a passthrough that harmlessly fails verification.
+    if elided.tree_size <= 1 || elided.index >= elided.tree_size {
+        return InclusionProof {
+            index: elided.index,
+            tree_size: elided.tree_size,
+            path: elided
+                .path
+                .iter()
+                .map(|e| e.clone().unwrap_or_default())
+                .collect(),
+        };
+    }
+
     let ranges = sibling_ranges(elided.index, elided.tree_size);
     let mut null_table = crate::NullTable::new(hasher);
 
