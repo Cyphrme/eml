@@ -30,6 +30,12 @@ pub enum Error {
 
     /// Storage backend error.
     Storage(Box<dyn std::error::Error + Send + Sync>),
+
+    /// Algorithm metadata exists in storage but no hasher was provided.
+    OrphanedMetadata(u64),
+
+    /// Hasher provided for an algorithm with no persisted metadata.
+    UnknownMetadata(u64),
 }
 
 impl fmt::Display for Error {
@@ -44,6 +50,18 @@ impl fmt::Display for Error {
                 write!(f, "index {index} out of bounds for tree size {tree_size}")
             },
             Self::Storage(e) => write!(f, "storage error: {e}"),
+            Self::OrphanedMetadata(id) => {
+                write!(
+                    f,
+                    "algorithm {id} in storage metadata but no hasher provided"
+                )
+            },
+            Self::UnknownMetadata(id) => {
+                write!(
+                    f,
+                    "hasher provided for algorithm {id} with no stored metadata"
+                )
+            },
         }
     }
 }
@@ -67,6 +85,8 @@ impl PartialEq for Error {
                 },
             ) => i1 == i2 && t1 == t2,
             (Self::Storage(_), Self::Storage(_)) => false, // opaque; not comparable
+            (Self::OrphanedMetadata(a), Self::OrphanedMetadata(b)) => a == b,
+            (Self::UnknownMetadata(a), Self::UnknownMetadata(b)) => a == b,
             _ => false,
         }
     }

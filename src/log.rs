@@ -225,10 +225,137 @@ impl<S: Storage> Log<S> {
         }
     }
 
+    /// Reconstruct a TSML log from a populated storage backend.
+    ///
+    /// Reads algorithm metadata (IDs, epoch boundaries) from storage and
+    /// rebuilds frontier stacks in O(log n) per algorithm by resolving
+    /// subtree roots from stored nodes.
+    ///
+    /// The consumer provides hasher instances mapped by algorithm ID.
+    /// There must be a 1:1 correspondence between persisted metadata and
+    /// provided hashers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OrphanedMetadata`] if storage contains metadata for
+    /// an algorithm without a corresponding hasher.
+    ///
+    /// Returns [`Error::UnknownMetadata`] if a hasher is provided for an
+    /// algorithm with no persisted metadata.
+    pub fn from_storage(storage: S, hashers: Vec<(u64, Box<dyn Hasher>)>) -> Result<Self> {
+        let metas = storage
+            .load_algorithm_metas()
+            .map_err(|e| Error::Storage(Box::new(e)))?;
+
+        let mut hasher_map: BTreeMap<u64, Box<dyn Hasher>> = hashers.into_iter().collect();
+
+        // Validate 1:1 correspondence.
+        for &(alg_id, _) in &metas {
+            if !hasher_map.contains_key(&alg_id) {
+                return Err(Error::OrphanedMetadata(alg_id));
+            }
+        }
+        let meta_ids: std::collections::BTreeSet<u64> = metas.iter().map(|&(id, _)| id).collect();
+        for &alg_id in hasher_map.keys() {
+            if !meta_ids.contains(&alg_id) {
+                return Err(Error::UnknownMetadata(alg_id));
+            }
+        }
+
+        let global_size = storage.len();
+
+        let mut log = Self {
+            storage,
+            algs: BTreeMap::new(),
+        };
+
+        for (alg_id, epochs) in metas {
+            let hasher = hasher_map.remove(&alg_id).expect("validated above");
+
+            let mut null_table = NullTable::new(hasher.as_ref());
+
+            // Determine this algorithm's effective tree size.
+            let is_active = epochs.last().is_some_and(|&(_, end)| end == u64::MAX);
+            let tree_size = if is_active {
+                global_size
+            } else {
+                epochs.last().map_or(0, |&(_, end)| end)
+            };
+
+            // Eagerly populate null table to tree height.
+            if tree_size > 0 {
+                let max_height = (64 - tree_size.leading_zeros()) as usize;
+                null_table.ensure_height(hasher.as_ref(), max_height);
+            }
+
+            // Build a temporary AlgState so subtree_root can access epoch
+            // and null_table data. Stack starts empty — we'll populate it.
+            let state = AlgState {
+                hasher,
+                epochs: epochs.clone(),
+                stack: Vec::new(),
+                null_table,
+            };
+
+            // Reconstruct frontier stack by decomposing tree_size into binary.
+            // MSB-first: iterate bits from MSB to LSB.
+            let stack = Self::reconstruct_frontier(&log, &state, alg_id, tree_size)?;
+
+            log.algs.insert(alg_id, AlgState { stack, ..state });
+        }
+
+        Ok(log)
+    }
+
+    /// Reconstruct the frontier stack for an algorithm from stored nodes.
+    ///
+    /// Decomposes `tree_size` into its binary representation. Each set bit
+    /// at position `j` (MSB-first) corresponds to a complete subtree of size
+    /// `2^j`. The root of each subtree is resolved via `subtree_root`, which
+    /// performs O(1) stored-node lookups for intact data or falls back to
+    /// recursive recomputation.
+    ///
+    /// Complexity: O(popcount(tree_size) * log(tree_size)) expected, with
+    /// O(popcount) stored-node hits in the common case.
+    fn reconstruct_frontier(
+        log: &Self,
+        state: &AlgState,
+        alg_id: u64,
+        tree_size: u64,
+    ) -> Result<Vec<Vec<u8>>> {
+        if tree_size == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut stack = Vec::new();
+        let bit_width = 64 - tree_size.leading_zeros();
+        let mut pos = 0u64;
+
+        // MSB-first: largest subtrees at the bottom of the stack.
+        for bit in (0..bit_width).rev() {
+            if tree_size & (1 << bit) != 0 {
+                let subtree_size = 1u64 << bit;
+                let root = log.subtree_root(state, alg_id, pos, pos + subtree_size)?;
+                stack.push(root);
+                pos += subtree_size;
+            }
+        }
+
+        Ok(stack)
+    }
+
     /// Current number of leaves in the global log.
     #[must_use]
     pub fn size(&self) -> u64 {
         self.storage.len()
+    }
+
+    /// Consume the log and return the underlying storage backend.
+    ///
+    /// Useful for passing a populated storage to [`Log::from_storage`] after
+    /// a process restart, or for direct storage inspection.
+    pub fn into_storage(self) -> S {
+        self.storage
     }
 
     // ========================================================================
@@ -1718,5 +1845,197 @@ mod tests {
             &rehydrated,
             &root
         ));
+    }
+
+    // ====================================================================
+    // from_storage: cold reconstruction tests
+    // ====================================================================
+
+    /// Round-trip: build a log, extract storage, reconstruct, verify roots match.
+    #[test]
+    fn from_storage_single_algorithm() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..20u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let original_root = log.root(0).unwrap();
+        let original_size = log.size();
+        let original_algos = log.algorithms();
+
+        let storage = log.into_storage();
+        let reconstructed = Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
+
+        assert_eq!(reconstructed.size(), original_size);
+        assert_eq!(reconstructed.root(0).unwrap(), original_root);
+        assert_eq!(reconstructed.algorithms(), original_algos);
+    }
+
+    /// Multi-algorithm round-trip with one active and one frozen algorithm.
+    #[test]
+    fn from_storage_multi_algorithm_frozen_active() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..10u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        // Freeze algorithm 1.
+        log.remove_algorithm(1).unwrap();
+
+        for i in 10..20u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let root0 = log.root(0).unwrap();
+        let root1 = log.root(1).unwrap();
+        let algos = log.algorithms();
+
+        let storage = log.into_storage();
+        let reconstructed = Log::from_storage(
+            storage,
+            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+        )
+        .unwrap();
+
+        assert_eq!(reconstructed.root(0).unwrap(), root0);
+        assert_eq!(reconstructed.root(1).unwrap(), root1);
+        assert_eq!(reconstructed.algorithms(), algos);
+    }
+
+    /// Resume-after-gap round-trip: algorithm deactivated, gap grows, resumed.
+    #[test]
+    fn from_storage_resume_after_gap() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+
+        // Add a second algorithm to keep appends going.
+        log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        log.resume_algorithm(0).unwrap();
+        for i in 8..16u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let root0 = log.root(0).unwrap();
+        let root1 = log.root(1).unwrap();
+        let algos = log.algorithms();
+
+        let storage = log.into_storage();
+        let reconstructed = Log::from_storage(
+            storage,
+            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+        )
+        .unwrap();
+
+        assert_eq!(reconstructed.root(0).unwrap(), root0);
+        assert_eq!(reconstructed.root(1).unwrap(), root1);
+        assert_eq!(reconstructed.algorithms(), algos);
+    }
+
+    /// After reconstruction, continued appends must produce identical state
+    /// as a log that was never interrupted.
+    #[test]
+    fn from_storage_continued_appends() {
+        // Build original log with 10 leaves.
+        let mut original = Log::new(MemoryStorage::new());
+        original.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        for i in 0..10u8 {
+            original.append(&[i]).unwrap();
+        }
+
+        // Reconstruct at leaf 10.
+        let storage = original.into_storage();
+        let mut reconstructed =
+            Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
+
+        // Build a reference log with the same 10 leaves.
+        let mut reference = Log::new(MemoryStorage::new());
+        reference.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        for i in 0..10u8 {
+            reference.append(&[i]).unwrap();
+        }
+
+        // Append 10 more leaves to both.
+        for i in 10..20u8 {
+            reconstructed.append(&[i]).unwrap();
+            reference.append(&[i]).unwrap();
+        }
+
+        assert_eq!(reconstructed.root(0).unwrap(), reference.root(0).unwrap());
+        assert_eq!(reconstructed.size(), reference.size());
+    }
+
+    /// Error: metadata exists but no hasher provided.
+    #[test]
+    fn from_storage_error_orphaned_metadata() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.append(b"data").unwrap();
+
+        let storage = log.into_storage();
+        let result = Log::from_storage(storage, vec![]);
+        assert_eq!(result.unwrap_err(), Error::OrphanedMetadata(0));
+    }
+
+    /// Error: hasher provided for non-existent algorithm.
+    #[test]
+    fn from_storage_error_unknown_metadata() {
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.append(b"data").unwrap();
+
+        let storage = log.into_storage();
+        let result = Log::from_storage(
+            storage,
+            vec![(0, Box::new(Sha256Hasher)), (99, Box::new(Sha256Hasher))],
+        );
+        assert_eq!(result.unwrap_err(), Error::UnknownMetadata(99));
+    }
+
+    /// Edge case: reconstruction of an empty log with no algorithms.
+    #[test]
+    fn from_storage_empty_log() {
+        let log = Log::new(MemoryStorage::new());
+        let storage = log.into_storage();
+        let reconstructed = Log::<MemoryStorage>::from_storage(storage, vec![]).unwrap();
+        assert_eq!(reconstructed.size(), 0);
+        assert!(reconstructed.algorithms().is_empty());
+    }
+
+    /// Various tree sizes to exercise different bit patterns in frontier
+    /// reconstruction (powers of two, odd sizes, etc.).
+    #[test]
+    fn from_storage_various_sizes() {
+        for n in [1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 33, 63, 64, 100] {
+            let mut log = Log::new(MemoryStorage::new());
+            log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+            for i in 0..n {
+                log.append(&(i as u64).to_le_bytes()).unwrap();
+            }
+
+            let original_root = log.root(0).unwrap();
+            let storage = log.into_storage();
+            let reconstructed =
+                Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
+
+            assert_eq!(
+                reconstructed.root(0).unwrap(),
+                original_root,
+                "root mismatch for n={n}"
+            );
+        }
     }
 }
