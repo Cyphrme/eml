@@ -180,6 +180,33 @@ proptest! {
 }
 
 // ============================================================================
+// SUBTREE-ROOT-EQUIV: subtree_root(S, a, 0, ts) == root(a)
+// ============================================================================
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// SUBTREE-ROOT-EQUIV: the operational primitive produces the same root
+    /// as the frontier-stack fold. This is the foundational bridge between
+    /// the O(n) oracle world and the O(log n) stored-node world.
+    #[test]
+    fn subtree_root_equiv(size in 1usize..128, act_frac in 0.0f64..1.0) {
+        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+        let log = build_log(size, activation);
+
+        let ts = log.tree_size(0).unwrap();
+        let root = log.root(0).unwrap();
+        let subtree = log.test_subtree_root(0, 0, ts).unwrap();
+
+        prop_assert!(
+            subtree == root,
+            "subtree_root(0, {}) != root: size={}, activation={}",
+            ts, size, activation
+        );
+    }
+}
+
+// ============================================================================
 // A-STACK-TSML: popcount invariant (indirect via A-EQUIV)
 // ============================================================================
 
@@ -275,6 +302,35 @@ proptest! {
         prop_assert!(
             crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
             "K-SOUND-TSML failed: size={}, old_size={}", size, old_size
+        );
+    }
+
+    /// K-SOUND with activation offset: consistency proofs must verify when
+    /// the algorithm has a null prefix (activated mid-stream).
+    #[test]
+    fn k_sound_activation(
+        size in 4usize..128,
+        act_frac in 0.01f64..0.99,
+        old_frac in 0.0f64..1.0,
+    ) {
+        let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
+        let log = build_log(size, activation);
+
+        let ts = log.tree_size(0).unwrap();
+        if ts < 2 { return Ok(()); }
+        let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
+
+        // Compute old_root from the projection oracle.
+        let projected = log.project(0).unwrap();
+        let old_root = proof::mth(&Sha256Hasher, &projected[..old_size as usize]);
+        let new_root = log.root(0).unwrap();
+
+        let proof = log.consistency_proof(0, old_size).unwrap();
+
+        prop_assert!(
+            crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
+            "K-SOUND-ACTIVATION failed: size={}, activation={}, old_size={}",
+            size, activation, old_size
         );
     }
 }
@@ -505,7 +561,8 @@ fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
     ]
 }
 
-/// Verify A-EQUIV and A-STACK for every algorithm in the log.
+/// Verify A-EQUIV, A-STACK, proof soundness, and domain separation for
+/// every algorithm in the log.
 ///
 /// Returns Err on first violation. This is extracted as a helper so it can
 /// be called after every mutation operation, not just at the end.
@@ -545,6 +602,64 @@ fn check_invariants(
                 info.id,
                 context
             );
+        }
+
+        // --- Proof soundness (sampled) ---
+        if info.tree_size > 0 {
+            // I-SOUND: verify inclusion proofs at first, last, and midpoint.
+            let sample_indices: Vec<u64> = {
+                let ts = info.tree_size;
+                let mut v = vec![0, ts - 1];
+                if ts > 2 {
+                    v.push(ts / 2);
+                }
+                v
+            };
+
+            for &idx in &sample_indices {
+                let proof = log.inclusion_proof(info.id, idx).unwrap_or_else(|e| {
+                    panic!(
+                        "inclusion_proof({}, {}) failed {}: {}",
+                        info.id, idx, context, e
+                    )
+                });
+                let hasher: Box<dyn crate::Hasher> = new_hasher_for(info.id);
+                prop_assert!(
+                    crate::verify_inclusion(
+                        hasher.as_ref(),
+                        &projected[idx as usize],
+                        &proof,
+                        &info.root
+                    ),
+                    "I-SOUND failed for alg {} at index {} {}",
+                    info.id,
+                    idx,
+                    context
+                );
+            }
+
+            // K-SOUND: verify one consistency proof from midpoint.
+            if info.tree_size > 1 {
+                let old_size = std::cmp::max(1, info.tree_size / 2);
+                let hasher: Box<dyn crate::Hasher> = new_hasher_for(info.id);
+                let old_root = crate::proof::mth(hasher.as_ref(), &projected[..old_size as usize]);
+
+                let proof = log
+                    .consistency_proof(info.id, old_size)
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "consistency_proof({}, {}) failed {}: {}",
+                            info.id, old_size, context, e
+                        )
+                    });
+                prop_assert!(
+                    crate::verify_consistency(hasher.as_ref(), &proof, &old_root, &info.root),
+                    "K-SOUND failed for alg {} old_size={} {}",
+                    info.id,
+                    old_size,
+                    context
+                );
+            }
         }
     }
 

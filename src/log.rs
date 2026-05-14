@@ -603,6 +603,19 @@ impl<S: Storage> Log<S> {
         self.algs.get(&alg_id).map(|s| s.stack.len())
     }
 
+    /// Test accessor: compute subtree root over `[lo, hi)` for `alg_id`.
+    ///
+    /// Delegates to `subtree_root` (Definition 14c) without requiring
+    /// callers to hold an `AlgState` reference.
+    #[cfg(test)]
+    pub(crate) fn test_subtree_root(&self, alg_id: u64, lo: u64, hi: u64) -> Result<Vec<u8>> {
+        let state = self
+            .algs
+            .get(&alg_id)
+            .ok_or(Error::UnknownAlgorithm(alg_id))?;
+        self.subtree_root(state, alg_id, lo, hi)
+    }
+
     // ========================================================================
     // Subtree root query (Definition 14c)
     // ========================================================================
@@ -1558,6 +1571,39 @@ mod tests {
             crate::verify_consistency(&Sha256Hasher, &proof, &root_at_4, &root_now),
             "K-SOUND failed after resume"
         );
+    }
+
+    #[test]
+    fn resume_consistency_across_gap() {
+        // Epoch 1: [0,4), gap: [4,8), epoch 2: [8,12).
+        // Test consistency for EVERY old_size 1..12, including mid-gap positions.
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+
+        for i in 0..4u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+        for i in 4..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.resume_algorithm(0).unwrap();
+        for i in 8..12u8 {
+            log.append(&[i]).unwrap();
+        }
+
+        let root_now = log.root(0).unwrap();
+        let projected = log.project(0).unwrap();
+
+        for old_size in 1..12u64 {
+            let old_root = crate::proof::mth(&Sha256Hasher, &projected[..old_size as usize]);
+            let proof = log.consistency_proof(0, old_size).unwrap();
+            assert!(
+                crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &root_now),
+                "K-SOUND across gap failed for old_size={old_size}"
+            );
+        }
     }
 
     #[test]
