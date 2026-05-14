@@ -80,18 +80,22 @@ mod tests {
             v.extend_from_slice(data);
             v
         }
+
         fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
             let mut v = vec![0x01];
             v.extend_from_slice(left);
             v.extend_from_slice(right);
             v
         }
+
         fn empty(&self) -> Vec<u8> {
             vec![]
         }
+
         fn null(&self) -> Vec<u8> {
             vec![0x02]
         }
+
         fn digest_len(&self) -> usize {
             0 // variable for concat hasher
         }

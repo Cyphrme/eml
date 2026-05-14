@@ -899,9 +899,10 @@ impl Default for Log<crate::storage::MemoryStorage> {
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest, Sha256};
+
     use super::*;
     use crate::storage::MemoryStorage;
-    use sha2::{Digest, Sha256};
 
     /// SHA-256 implementation of the TSML Hasher trait.
     #[derive(Debug)]

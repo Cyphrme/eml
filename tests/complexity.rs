@@ -3,15 +3,13 @@
 //! Verifies that TSML operations maintain the performance bounds stated
 //! in the formal model (§Performance Bounds):
 //!
-//! - **Read-only proofs** (O(log n)): `bigoish` curve-fitting via
-//!   closure-based measurement (proofs are `&self` — repeatable).
-//! - **Mutating operations** (O(1), O(log K), O(G)): `big_o` model
-//!   inference from per-thread CPU time via `cpu_time::ThreadTime`
-//!   (`&mut self` — one-shot per input, incompatible with bigoish's
-//!   `Fn + Clone` requirement). ThreadTime uses
-//!   `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` — immune to scheduling
-//!   noise and requires no elevated privileges. Multiple independent
-//!   trials with median selection suppress outliers.
+//! - **Read-only proofs** (O(log n)): `bigoish` curve-fitting via closure-based measurement (proofs
+//!   are `&self` — repeatable).
+//! - **Mutating operations** (O(1), O(log K), O(G)): `big_o` model inference from per-thread CPU
+//!   time via `cpu_time::ThreadTime` (`&mut self` — one-shot per input, incompatible with bigoish's
+//!   `Fn + Clone` requirement). ThreadTime uses `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` — immune
+//!   to scheduling noise and requires no elevated privileges. Multiple independent trials with
+//!   median selection suppress outliers.
 //!
 //! # Model Selection
 //!
@@ -39,9 +37,8 @@
 
 use std::sync::Arc;
 
-use cpu_time::ThreadTime;
-
 use bigoish::{Log as LogModel, N, assert_best_fit, growing_inputs};
+use cpu_time::ThreadTime;
 use sha2::{Digest, Sha256};
 use tsml::{Hasher, Log, MemoryStorage};
 
@@ -176,7 +173,8 @@ fn assert_rank_at_most(data: Vec<(f64, f64)>, max_rank: u32, label: &str, expect
     let (best, _all) = big_o::infer_complexity(data).unwrap();
     assert!(
         best.rank <= max_rank,
-        "{label} should be {expected_notation}, but best fit is {} (rank {}, max allowed {max_rank})",
+        "{label} should be {expected_notation}, but best fit is {} (rank {}, max allowed \
+         {max_rank})",
         best.notation,
         best.rank,
     );

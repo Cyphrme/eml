@@ -10,10 +10,9 @@ use proptest::prelude::*;
 use sha2::{Digest, Sha256};
 use sha3::Sha3_256;
 
-use crate::Log;
 use crate::hasher::Hasher;
-use crate::proof;
 use crate::storage::MemoryStorage;
+use crate::{Log, proof};
 
 // ============================================================================
 // Test hashers — three real, distinct digest families
@@ -30,6 +29,7 @@ impl Hasher for Sha256Hasher {
         h.update(data);
         h.finalize().to_vec()
     }
+
     fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01]);
@@ -37,12 +37,15 @@ impl Hasher for Sha256Hasher {
         h.update(right);
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
     }
+
     fn null(&self) -> Vec<u8> {
         Sha256::digest([0x02]).to_vec()
     }
+
     fn digest_len(&self) -> usize {
         32
     }
@@ -59,6 +62,7 @@ impl Hasher for Sha3Hasher {
         h.update(data);
         h.finalize().to_vec()
     }
+
     fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
         let mut h = Sha3_256::new();
         h.update([0x01]);
@@ -66,12 +70,15 @@ impl Hasher for Sha3Hasher {
         h.update(right);
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha3_256::digest(b"").to_vec()
     }
+
     fn null(&self) -> Vec<u8> {
         Sha3_256::digest([0x02]).to_vec()
     }
+
     fn digest_len(&self) -> usize {
         32
     }
@@ -88,6 +95,7 @@ impl Hasher for Blake2bHasher {
         Digest::update(&mut h, data);
         h.finalize().to_vec()
     }
+
     fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
         let mut h = Blake2b::<U32>::new();
         Digest::update(&mut h, [0x01]);
@@ -95,12 +103,15 @@ impl Hasher for Blake2bHasher {
         Digest::update(&mut h, right);
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         <Blake2b<U32> as Digest>::digest(b"").to_vec()
     }
+
     fn null(&self) -> Vec<u8> {
         <Blake2b<U32> as Digest>::digest([0x02]).to_vec()
     }
+
     fn digest_len(&self) -> usize {
         32
     }
@@ -717,7 +728,10 @@ proptest! {
         for (step, op) in ops.iter().enumerate() {
             match op {
                 Op::Append => {
-                    let has_active = log.algorithms().iter().any(|a| a.deactivation_index.is_none());
+                    let has_active = log.
+                    algorithms().
+                    iter().
+                    any(|a| a.deactivation_index.is_none());
                     if has_active {
                         let data = [log.size() as u8];
                         log.append(&data).unwrap();
