@@ -1,0 +1,199 @@
+% ═══════════════════════════════════════════════════════════════════
+% EML Whitepaper — Bibliography
+% ═══════════════════════════════════════════════════════════════════
+
+% ─── Foundational ─────────────────────────────────────────────────
+
+@phdthesis{merkle1979,
+  author = {Ralph C. Merkle},
+  title  = {Secrecy, Authentication, and Public Key Systems},
+  school = {Stanford University},
+  year   = {1979},
+  month  = {June},
+  url    = {https://www.ralphmerkle.com/papers/thesis.pdf}
+}
+
+@inproceedings{merkle1989,
+  author    = {Ralph C. Merkle},
+  title     = {A Certified Digital Signature},
+  booktitle = {Advances in Cryptology --- {CRYPTO} '89 Proceedings},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {435},
+  pages     = {218--238},
+  year      = {1990},
+  publisher = {Springer},
+  doi       = {10.1007/0-387-34805-0_21}
+}
+
+@inproceedings{crosby2009,
+  author    = {Scott A. Crosby and Dan S. Wallach},
+  title     = {Efficient Data Structures for Tamper-Evident Logging},
+  booktitle = {Proceedings of the 18th {USENIX} Security Symposium},
+  pages     = {317--334},
+  year      = {2009},
+  month     = {August},
+  publisher = {{USENIX} Association},
+  address   = {Montreal, Canada},
+  url       = {https://www.usenix.org/conference/usenix-security-09/efficient-data-structures-tamper-evident-logging}
+}
+
+% ─── Certificate Transparency ────────────────────────────────────
+
+@techreport{rfc6962,
+  author      = {Ben Laurie and Adam Langley and Emilia Kasper},
+  title       = {Certificate Transparency},
+  type        = {{RFC}},
+  number      = {6962},
+  year        = {2013},
+  month       = {June},
+  institution = {Internet Engineering Task Force},
+  doi         = {10.17487/RFC6962},
+  url         = {https://www.rfc-editor.org/info/rfc6962}
+}
+
+@techreport{rfc9162,
+  author      = {Ben Laurie and Eran Messeri and Rob Stradling},
+  title       = {Certificate Transparency Version 2.0},
+  type        = {{RFC}},
+  number      = {9162},
+  year        = {2021},
+  month       = {December},
+  institution = {Internet Engineering Task Force},
+  doi         = {10.17487/RFC9162},
+  url         = {https://www.rfc-editor.org/info/rfc9162}
+}
+
+% ─── Sparse Merkle Trees ─────────────────────────────────────────
+
+@techreport{laurie2012,
+  author = {Ben Laurie and Emilia Kasper},
+  title  = {Revocation Transparency},
+  year   = {2012},
+  url    = {http://sump2.links.org/files/RevocationTransparency.pdf}
+}
+
+@techreport{tari2018,
+  author       = {{Tari Development Community}},
+  title        = {{RFC}-0141: Sparse {Merkle} Trees},
+  year         = {2018},
+  institution  = {Tari},
+  url          = {https://rfc.tari.com/RFC-0141_Sparse_Merkle_Trees}
+}
+
+@techreport{jmt2021,
+  author       = {{Diem Developers}},
+  title        = {Jellyfish {Merkle} Tree},
+  year         = {2021},
+  institution  = {Diem Association},
+  url          = {https://developers.diem.com/papers/jellyfish-merkle-tree/2021-01-14.pdf}
+}
+
+@misc{csmt2018,
+  author = {Faraz Haider},
+  title  = {Compact Sparse {Merkle} Trees},
+  year   = {2018},
+  url    = {https://osf.io/download/8mcnh}
+}
+
+% ─── Balloon ──────────────────────────────────────────────────────
+
+@inproceedings{pulls2015,
+  author    = {Tobias Pulls and Roel Peeters},
+  title     = {Balloon: A Forward-Secure Append-Only Persistent Authenticated Data Structure},
+  booktitle = {Computer Security -- {ESORICS} 2015},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {9327},
+  pages     = {622--641},
+  year      = {2015},
+  publisher = {Springer},
+  doi       = {10.1007/978-3-319-24177-7_32}
+}
+
+% ─── Trillian ─────────────────────────────────────────────────────
+
+@misc{trillian2016,
+  author       = {{Google LLC}},
+  title        = {Trillian: A Scalable, Multi-Tenant Implementation of Verifiable Data Structures},
+  year         = {2016},
+  howpublished = {GitHub Repository},
+  url          = {https://github.com/google/trillian}
+}
+
+% ─── Git ──────────────────────────────────────────────────────────
+
+@misc{git-hash-transition,
+  author       = {{Git Project}},
+  title        = {Hash Function Transition},
+  howpublished = {Technical Documentation},
+  url          = {https://www.kernel.org/pub/software/scm/git/docs/technical/hash-function-transition.html}
+}
+
+% ─── IPFS ─────────────────────────────────────────────────────────
+
+@misc{ipfs-cid,
+  author       = {{Protocol Labs}},
+  title        = {Content Identifiers ({CID}s)},
+  howpublished = {IPFS Documentation},
+  url          = {https://docs.ipfs.tech/concepts/content-addressing/}
+}
+
+@misc{multiformats,
+  author       = {{Protocol Labs}},
+  title        = {Multiformats: Self-describing Values for Future-proofing},
+  howpublished = {Specification},
+  url          = {https://multiformats.io}
+}
+
+% ─── Algorithm Agility / Sigstore / Sigsum ────────────────────────
+
+@misc{sigstore-agility,
+  author       = {Andrea Schirone},
+  title        = {Building Cryptographic Agility into {Sigstore}},
+  year         = {2026},
+  howpublished = {Trail of Bits Blog},
+  url          = {https://blog.trailofbits.com/2026/01/29/building-cryptographic-agility-into-sigstore/}
+}
+
+@misc{sigsum2021,
+  author       = {{Sigsum Project}},
+  title        = {Sigsum Logging Design v0},
+  year         = {2021},
+  howpublished = {Design Document},
+  url          = {https://git.sigsum.org/sigsum/tree/doc/design.md}
+}
+
+% ─── Post-Quantum ─────────────────────────────────────────────────
+
+@techreport{mtc-draft,
+  author      = {{IETF PLANTS Working Group}},
+  title       = {Merkle Tree Certificates},
+  type        = {Internet-Draft},
+  number      = {draft-ietf-plants-merkle-tree-certs-03},
+  institution = {Internet Engineering Task Force},
+  url         = {https://datatracker.ietf.org/doc/draft-ietf-plants-merkle-tree-certs/}
+}
+
+@article{chopra2026,
+  author  = {Chopra and Rathi},
+  title   = {Merkle Tree Certificate Post-Quantum {PKI} for {Kubernetes} and Cloud-Native {5G/B5G} Core},
+  journal = {arXiv preprint},
+  year    = {2026},
+  url     = {https://arxiv.org/html/2604.04191v1}
+}
+
+@misc{caraf,
+  author       = {{CARAF Authors}},
+  title        = {{CARAF}: Crypto Agility Risk Assessment Framework},
+  howpublished = {ResearchGate},
+  url          = {https://www.researchgate.net/publication/351988005_CARAF_Crypto_Agility_Risk_Assessment_Framework}
+}
+
+% ─── Merkle tree performance ──────────────────────────────────────
+
+@inproceedings{elhindi2023,
+  author    = {Muhammad El-Hindi and Tobias Ziegler and Carsten Binnig},
+  title     = {Towards High-Performance {Merkle} Trees},
+  booktitle = {VDBS 2023},
+  year      = {2023},
+  doi       = {10.1145/3595647.3595651}
+}

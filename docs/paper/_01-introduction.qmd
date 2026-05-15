@@ -1,0 +1,108 @@
+## Introduction {#sec-introduction}
+
+Cryptographic hash functions have finite lifetimes. MD5 was deprecated
+after practical collision attacks in 2004; SHA-1 fell to the SHAttered
+attack in 2017 [@crosby2009]. The current ubiquitous standard, SHA-256,
+faces an accelerating deprecation horizon as post-quantum cryptographic
+transitions move from theoretical concern to active standardization
+[@mtc-draft; @chopra2026]. For authenticated append-only
+logs---Certificate Transparency [@rfc6962; @rfc9162], software supply
+chain attestation, and identity state trees---this obsolescence poses a
+structural crisis. The log's historical immutability derives from its
+hash function. When the hash function must change, the log's integrity
+guarantee is at risk.
+
+Existing systems resolve this tension by accepting one horn of what we
+term the *upgrade trilemma*:
+
+1. **Fork the ledger.** Abandon the old log and create a new one under a
+   stronger algorithm. History is preserved but fragmented: auditors must
+   track multiple disjoint log identities, and the append-only property
+   holds only within each fragment. Certificate Transparency operates in
+   this mode---RFC 9162 binds each log instance to a single hash
+   algorithm, and algorithm migration requires a new log [@rfc9162].
+   Sigsum adopts this model explicitly through time-bounded shard
+   intervals [@sigsum2021].
+
+2. **Accept weakest-link dependencies.** Construct a chimeric log where
+   multiple algorithms coexist through runtime negotiation or layered
+   signing. The security of the composite degrades to that of the
+   weakest constituent---a vulnerability surface that has produced
+   repeated downgrade attacks in TLS cipher suite negotiation and JWT
+   algorithm confusion [@caraf]. This is the failure mode that motivates
+   Bernstein and others' critique of "cryptographic agility" as
+   architectural risk.
+
+3. **Pay $\mathcal{O}(N)$ retroactive computation.** Re-hash the entire
+   history under the new algorithm. Git's SHA-1 to SHA-256 transition
+   exemplifies this cost: every object in the repository must be
+   translated through a bidirectional mapping, requiring a four-phase
+   deployment and years of engineering effort for a single algorithm
+   change [@git-hash-transition]. For logs with billions of entries, the
+   cost is prohibitive; for append-only logs that disallow history
+   mutation by construction, it is architecturally impossible without
+   violating the core invariant.
+
+We present the **Epoch Merkle Log (EML)**, a verifiable append-only data
+structure that escapes the trilemma entirely. The EML maintains a single
+RFC 9162 Merkle tree topology shared across all hash algorithms. Each
+algorithm occupies discrete chronological *epochs*---intervals during
+which it actively hashes appended data. Positions outside an algorithm's
+active epochs contain deterministic *null constants*: fixed-point values
+derived from the algorithm's own hash function, domain-separated from
+both real leaf hashes and internal node hashes. A new algorithm added at
+tree position $n$ computes $\mathcal{O}(\log n)$ null constants to
+establish its frontier over the existing tree, then immediately
+participates in subsequent appends. No historical data is re-hashed. No
+fork is created. No algorithm's security depends on any other's.
+
+The key theoretical result is the *projection isomorphism*: for any
+algorithm $a$, the EML's per-algorithm projection $\pi_a$ yields a
+standard RFC 9162 Merkle tree whose leaves are the null-or-real values at
+each position. This projection is a valid input to unmodified RFC 9162
+verification. Correctness of the multi-algorithm EML thus *reduces* to
+correctness of the single-algorithm standard, a property we formalize as
+\lawname{Proj-Valid}.
+
+### Contributions
+
+We make the following contributions:
+
+1. **The Epoch Merkle Log data structure** (§[III](#sec-architecture)):
+   a shared-topology append-only Merkle tree supporting concurrent,
+   independent hash algorithms via null-padded chronological epochs. The
+   EML achieves $\mathcal{O}(1)$ amortized appends per algorithm,
+   $\mathcal{O}(\log n)$ algorithm addition, and $\mathcal{O}(1)$
+   algorithm removal.
+
+2. **A formal algebraic model** (§[IV](#sec-formal-model)): an initial
+   algebra over 18 definitions with 9 equational laws establishing
+   algorithm-independent correctness. The projection isomorphism
+   ($\pi_a(\text{EML}) \cong \text{RFC 9162}(\text{leaves}_a)$) reduces
+   multi-algorithm verification to standard single-algorithm
+   verification.
+
+3. **Deterministic proof elision** (§[VI](#sec-elided-proofs)): a
+   zero-metadata wire optimization that compresses inclusion proofs from
+   $\mathcal{O}(\log n)$ to $\mathcal{O}(\log n_a)$ siblings, where
+   $n_a$ is the algorithm's active entry count. The verifier
+   reconstructs elided null siblings via interval arithmetic over the
+   epoch boundaries, requiring no explicit markers or bitmaps.
+
+4. **A production Rust implementation with empirical evaluation**
+   (§[VII](#sec-evaluation)): 74 tests across unit, property-based,
+   fault injection, and complexity regression categories; 4 fuzz targets
+   with approximately 2 million runs and zero panics; and
+   $\mathcal{O}(\log n)$ complexity confirmed via curve fitting against
+   formal bounds.
+
+### Roadmap
+
+§[II](#sec-background) establishes the RFC 9162 baseline and design
+constraints. §[III](#sec-architecture) introduces the EML construction
+informally. §[IV](#sec-formal-model) presents the formal model.
+§[V](#sec-proof-engine) describes the operational proof engine.
+§[VI](#sec-elided-proofs) details wire-level proof elision.
+§[VII](#sec-evaluation) reports empirical results.
+§[VIII](#sec-related-work) situates the EML within the literature.
+§[IX](#sec-conclusion) concludes.

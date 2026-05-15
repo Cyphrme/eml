@@ -1,0 +1,74 @@
+% Quarto/Pandoc custom template for USENIX Security 2026.
+% Uses the official usenix.sty package with the standard article class.
+
+\documentclass[letterpaper,twocolumn,10pt]{article}
+\usepackage{usenix}
+
+% ─── Packages ─────────────────────────────────────────────────────────────────
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usepackage{booktabs}      % professional tables
+\usepackage{graphicx}      % includegraphics
+\usepackage{array}         % column types in tables
+\usepackage{calc}          % \real{} in Pandoc table column widths
+
+% Pandoc tight_list support
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+% Pandoc CSL / natbib interop
+\newlength{\cslhangindent}
+\setlength{\cslhangindent}{1.5em}
+\newlength{\csllabelwidth}
+\setlength{\csllabelwidth}{3em}
+\newenvironment{CSLReferences}[2]{}{}
+
+% Theorem environments provided by Quarto (do not declare here)
+\usepackage{amsthm}
+
+% ─── Custom preamble (math macros, etc.) ──────────────────────────────────────
+$for(header-includes)$
+$header-includes$
+$endfor$
+
+%-------------------------------------------------------------------------------
+\begin{document}
+%-------------------------------------------------------------------------------
+
+% Suppress date (USENIX style)
+\date{}
+
+% Title — USENIX: 14pt bold, handled by usenix.sty \maketitle
+\title{\Large \bf $title$}
+
+% Authors — must not contain \par (blank lines); usenix.sty uses tabular
+\author{%
+$for(by-author)${\rm $by-author.name.literal$}\\$for(by-author.affiliations)$$by-author.affiliations.name$$endfor$$if(by-author.email)$\\\texttt{$by-author.email$}$endif$$sep$\and$endfor$%
+}
+
+\maketitle
+
+%-------------------------------------------------------------------------------
+\begin{abstract}
+%-------------------------------------------------------------------------------
+$abstract$
+\end{abstract}
+
+%-------------------------------------------------------------------------------
+% Body
+%-------------------------------------------------------------------------------
+$body$
+
+%-------------------------------------------------------------------------------
+% Bibliography
+%-------------------------------------------------------------------------------
+\cleardoublepage
+\bibliographystyle{plain}
+$if(bibliography)$
+\bibliography{$for(bibliography)$$bibliography$$sep$,$endfor$}
+$endif$
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\end{document}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

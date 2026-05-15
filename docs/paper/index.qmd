@@ -1,0 +1,57 @@
+---
+title: "$\\mathcal{O}(\\log N)$ Hash Transitions: Algorithm-Independent Verification in Append-Only Logs"
+author:
+  - name: Timothy DeHerrera
+    affiliations:
+      - name: Cyphrpunk LLC
+    email: timothy@cyphrpunk.com
+  - name: Zachary Collier
+    affiliations:
+      - name: Cyphrpunk LLC
+    email: zach@cyphrpunk.com
+abstract: |
+  Authenticated append-only logs rely on cryptographic hashes for historical
+  immutability. However, executing a hash transition on a live log
+  traditionally forces a trilemma: fracturing the ledger into incompatible
+  forks, accepting weakest-link algorithmic dependencies through chimeric
+  constructions, or incurring a catastrophic $\mathcal{O}(N)$ retroactive
+  compute penalty. We introduce the *Epoch Merkle Log* (EML), an append-only
+  data structure that partitions algorithm lifecycles into discrete,
+  null-padded chronological epochs over a shared RFC 9162 topology. The EML
+  achieves strictly algorithm-independent verification---each hash
+  algorithm's projection yields a complete, independently verifiable standard
+  Merkle tree---while enabling $\mathcal{O}(\log N)$ hash transitions with
+  zero retroactive computation. We formalize the EML via an initial algebra
+  with 9 equational laws and provide a production Rust implementation
+  validated by property-based testing, fault injection, and complexity
+  regression, demonstrating $\mathcal{O}(1)$ amortized appends,
+  $\mathcal{O}(\log N)$ proofs, and zero-overhead bandwidth compression via
+  deterministic proof elision.
+date: 2026-05-15
+---
+
+<!-- Section files are included via the Quarto include shorthand.
+     Each section is authored as a standalone partial (_-prefixed)
+     so Quarto does not render it independently. -->
+
+{{< include _01-introduction.qmd >}}
+
+{{< include _02-background.qmd >}}
+
+{{< include _03-architecture.qmd >}}
+
+{{< include _04-formal-model.qmd >}}
+
+{{< include _05-proof-engine.qmd >}}
+
+{{< include _06-elided-proofs.qmd >}}
+
+{{< include _07-evaluation.qmd >}}
+
+{{< include _08-related-work.qmd >}}
+
+{{< include _09-conclusion.qmd >}}
+
+{{< include _appendix-ethics.qmd >}}
+
+{{< include _appendix-openscience.qmd >}}

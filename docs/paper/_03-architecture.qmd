@@ -1,0 +1,116 @@
+## The Epoch Merkle Log {#sec-architecture}
+
+This section introduces the EML construction informally. The formal
+algebraic model follows in §[IV](#sec-formal-model).
+
+### Shared Topology
+
+An EML is a single binary Merkle tree. Every registered algorithm
+observes the same tree topology---the same number of leaf positions, the
+same branching structure, the same internal node relationships. What
+differs across algorithms is the *value* computed at each node: each
+algorithm hashes every position independently using its own hash
+function.
+
+This is not one tree per algorithm. It is one tree with multiple
+projections. The topology is shared; the hash computations are
+independent.
+
+### Null Constants
+
+When a new algorithm $a$ is added to a log that already contains $n$
+entries, the algorithm must account for positions $0$ through $n-1$
+without re-hashing any historical data. The EML accomplishes this
+through *null constants*: per-algorithm, per-height deterministic values
+that occupy inactive positions.
+
+The null leaf constant for algorithm $a$ is:
+
+$$
+N_0(a) = H_a(\mathtt{0x02})
+$$ {#eq-null-leaf}
+
+The prefix byte $\mathtt{0x02}$ is distinct from both the leaf prefix
+$\mathtt{0x00}$ and the node prefix $\mathtt{0x01}$, establishing a
+third domain through the same single-byte mechanism used by RFC 9162. No
+additional payload is required---domain separation is achieved by the
+prefix alone.
+
+Null constants propagate upward through the tree deterministically. A
+subtree of $2^h$ null leaves has root:
+
+$$
+N_h(a) = H_a(\mathtt{0x01} \concat N_{h-1}(a) \concat N_{h-1}(a))
+$$ {#eq-null-subtree}
+
+Because every null leaf is identical, null subtrees are perfectly
+symmetric. The entire table $\{N_0(a), N_1(a), \ldots, N_H(a)\}$ is
+precomputable in $\mathcal{O}(H)$ hash operations, where
+$H = \lceil \log_2 n \rceil$.
+
+### Leaf Value Function
+
+The value at tree position $i$ for algorithm $a$ is:
+
+$$
+V(a, i) = \begin{cases}
+  H_a(\mathtt{0x00} \concat \text{data}[i]) & \text{if } a \text{ is active at } i \\
+  N_0(a) & \text{otherwise}
+\end{cases}
+$$ {#eq-leaf-value}
+
+This is the central definition. Active positions receive the standard
+RFC 9162 leaf hash of the raw data. Inactive positions receive the null
+constant. The tree topology is dense---every position is filled---but the
+*semantic content* is sparse in the temporal dimension for newly added
+algorithms.
+
+### Epochs
+
+An algorithm's lifetime within the log is partitioned into *epochs*:
+disjoint chronological intervals $[(s_1, e_1), (s_2, e_2), \ldots]$
+during which the algorithm actively hashes appended data. Between epochs,
+the algorithm is frozen: its root and frontier state are immutable, and
+new appends produce null constants in its projection.
+
+Three lifecycle operations govern epochs:
+
+- **`add_alg`$(a)$**: Registers algorithm $a$ with initial epoch
+  $[(n, \infty)]$, where $n$ is the current tree size. The algorithm's
+  frontier is initialized to the *null prefix peaks*: the Merkle mountain
+  range (MMR) peaks of $n$ null leaves, each computable as a NullTable
+  lookup. Cost: $\mathcal{O}(\log n)$.
+
+- **`remove_alg`$(a)$**: Closes $a$'s current epoch at the current tree
+  size. The algorithm's frontier and root are frozen; future appends do
+  not update them. Cost: $\mathcal{O}(1)$.
+
+- **`resume_alg`$(a)$**: Reopens a frozen algorithm by appending a new
+  epoch $[(n, \infty)]$. The gap between the previous epoch's end and
+  the current tree size is bridged by extending the frozen frontier with
+  null constants---the standard CTO-based append applied with $N_0(a)$
+  at each gap position. Cost: $\mathcal{O}(G)$, where $G$ is the gap
+  length.
+
+### One Tree, Many Projections
+
+The *projection* of the EML onto algorithm $a$ yields a sequence of
+leaf values:
+
+$$
+\pi_a(\text{EML}) = [V(a, 0),\ V(a, 1),\ \ldots,\ V(a, \text{tree\_size}(a) - 1)]
+$$
+
+This sequence is a valid input to the standard RFC 9162 MTH construction.
+The root computed from this projection equals the root maintained by the
+EML's incremental frontier for algorithm $a$. From the perspective of a
+verifier holding a single algorithm's root hash and proof, the EML is
+indistinguishable from a standard single-algorithm Merkle tree.
+
+Other algorithms are invisible. SHA-256's proofs never reference
+BLAKE3's hashes. BLAKE3's proofs never reference SHA-256's. The
+algorithms share topology but not trust.
+
+<!-- TODO: Figure 1 — EML topology with two algorithms and null positions -->
+<!-- TODO: Figure 2 — Projection: same tree viewed through algo A vs algo B -->
+<!-- TODO: Figure 3 — Epoch timeline showing add/remove/resume lifecycle -->

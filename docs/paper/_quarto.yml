@@ -1,0 +1,29 @@
+project:
+  type: manuscript
+  output-dir: _output
+
+manuscript:
+  article: index.qmd
+
+format:
+  pdf:
+    template: template.tex
+    keep-tex: true
+    pdf-engine: pdflatex
+    cite-method: natbib
+    number-sections: false
+    fig-pos: "tbp"
+    tbl-cap-location: top
+    filters:
+      - _table-filter.lua
+    include-in-header:
+      - _preamble.tex
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+    html-math-method: katex
+
+bibliography: references.bib

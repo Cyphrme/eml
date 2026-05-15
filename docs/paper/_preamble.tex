@@ -1,0 +1,35 @@
+% EML Whitepaper — Custom LaTeX Preamble
+% Math macros for consistent notation throughout the paper.
+
+% ─── Two-column overflow mitigation ──────────────────────────────
+\sloppy                              % permit looser word spacing
+\setlength{\emergencystretch}{3em}   % extra stretch before overflow
+\allowdisplaybreaks                  % allow page breaks in display math
+
+% ─── Algorithm & Hash ─────────────────────────────────────────────
+\newcommand{\Ha}{H_a}                        % hash function for algorithm a
+\newcommand{\nulla}{\bot_a}                  % null constant for algorithm a
+\newcommand{\nulltable}{\mathit{NullTable}}  % precomputed null table
+\newcommand{\proj}{\pi_a}                    % projection for algorithm a
+\newcommand{\act}{\mathit{act}}              % activation map
+\newcommand{\leafval}{V}                     % leaf value function
+\newcommand{\treesz}[1]{\mathit{tree\_size}(#1)}
+
+% ─── Null constants at height h ───────────────────────────────────
+\newcommand{\Nh}[1]{N_{#1}}                  % N_h(a) — null at height h
+
+% ─── Equational law names ─────────────────────────────────────────
+\newcommand{\lawname}[1]{\textsc{#1}}
+
+% ─── Complexity ───────────────────────────────────────────────────
+\newcommand{\Ologn}{\mathcal{O}(\log n)}
+\newcommand{\Oone}{\mathcal{O}(1)}
+
+% ─── Domain separation bytes ─────────────────────────────────────
+\newcommand{\leafpfx}{\mathtt{0x00}}
+\newcommand{\nodepfx}{\mathtt{0x01}}
+\newcommand{\nullpfx}{\mathtt{0x02}}
+
+% ─── Misc ─────────────────────────────────────────────────────────
+\newcommand{\concat}{\mathbin{\Vert}}        % concatenation operator
+\newcommand{\eml}{\textsc{eml}}              % small-caps EML

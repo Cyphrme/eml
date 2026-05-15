@@ -1,0 +1,108 @@
+## Implementation and Evaluation {#sec-evaluation}
+
+We implement the EML as a Rust crate providing a generic, storage-backed
+append-only log with multi-algorithm support. The implementation follows
+the formal model (§[IV](#sec-formal-model)) directly: the `Log<S:
+Storage>` type maintains per-algorithm frontier stacks, epoch vectors,
+and the sealed node store. The `Storage` trait abstracts persistence,
+admitting in-memory, file-backed, and database backends. The `Hasher`
+trait abstracts hash algorithms; callers inject implementations at
+runtime. The crate has zero runtime dependencies.
+
+### Test Suite
+
+The implementation is validated by 74 tests across four categories:
+
+::: {#tbl-test-categories}
+| Category | Tests | Coverage |
+|:---------|------:|:---------|
+| Unit tests | 51 | Append semantics, algorithm lifecycle (`add`/`remove`/`resume`), proof generation, null-fill correctness, cold reconstruction via `from_storage`, manifest extraction |
+| Property-based (proptest) | 16 | Equational law verification over thousands of randomly generated tree configurations; state machine test exercising arbitrary interleavings of operations |
+| Fault injection | 7 | Adversarial `CorruptingStorage` backends: bit-flip, truncation, hash drop; includes 2 property-based corruption tests |
+| Complexity regression | 6 | Empirical curve fitting against formal bounds ($\mathcal{O}(\log n)$ proofs, $\mathcal{O}(1)$ amortized append, $\mathcal{O}(\log K)$ addition, $\mathcal{O}(G)$ gap resumption) |
+
+: Test suite composition. {#tbl-test-categories}
+:::
+
+### Complexity Regression
+
+The complexity regression suite empirically validates the performance
+bounds from @tbl-perf-bounds. Each test generates trees at
+exponentially increasing sizes ($n = 2^4$ through $2^{16}$), measures
+operation timing, and fits the empirical curve against the expected
+complexity class using the `bigoish` library.
+
+<!-- TODO: Figure 5 — Inclusion proof time vs tree size (log-log) -->
+<!-- TODO: Figure 6 — Consistency proof time vs tree size (log-log) -->
+
+The fitted curves confirm:
+
+- **Inclusion proofs**: $\mathcal{O}(\log n)$. Proof generation time
+  scales logarithmically with tree size across all tested configurations.
+- **Consistency proofs**: $\mathcal{O}(\log n)$. The `subtree_root`
+  engine resolves sibling hashes via stored-node lookups, maintaining
+  logarithmic scaling even for trees with multiple active algorithms.
+- **Append (per algorithm)**: $\mathcal{O}(1)$ amortized. The CTO merge
+  produces at most one sealed node per bit position in the tree size's
+  binary representation.
+- **Algorithm addition**: $\mathcal{O}(\log K)$. Null prefix peak
+  computation requires one NullTable entry per set bit in the tree size
+  at the point of addition.
+
+### Fault Injection
+
+The `CorruptingStorage` adapter wraps any `Storage` implementation and
+introduces controlled corruptions: single-bit flips in stored node
+hashes, truncation of hash digests, and omission of stored entries. All
+7 fault injection tests confirm that corrupted proofs are reliably
+rejected by the verification functions. No corruption produced a false
+positive (a tampered proof that verified successfully).
+
+### Fuzz Testing
+
+Four `cargo-fuzz` harnesses exercise adversarial inputs against the
+proof verification and elision surfaces:
+
+::: {#tbl-fuzz-targets}
+| Target | Runs | Panics |
+|:-------|-----:|-------:|
+| `verify_inclusion` | ~500K | 0 |
+| `verify_consistency` | ~500K | 0 |
+| `rehydrate_proof` | ~500K | 0 |
+| `proof_mutation` | ~500K | 0 |
+| **Total** | **~2M** | **0** |
+
+: Fuzz target coverage summary. {#tbl-fuzz-targets}
+:::
+
+The `proof_mutation` target is particularly notable: it takes valid
+proofs, applies single-bit mutations at random positions, and confirms
+that the mutated proof is rejected. Zero panics across approximately 2
+million combined runs demonstrate that the proof verification surface
+handles arbitrary malformed inputs gracefully.
+
+### Property-Based Testing
+
+The 16 proptest-driven tests verify equational laws over randomly
+generated configurations. The state machine proptest exercises arbitrary
+interleavings of `append`, `add_alg`, `remove_alg`, and `resume_alg`
+operations, checking all invariants (\lawname{A-Equiv},
+\lawname{A-Stack}, \lawname{I-Sound}, \lawname{K-Sound},
+\lawname{T-Bound}, \lawname{Proj-Valid}) after each operation. The
+default configuration runs 256 cases per test with tree sizes up to
+$2^{12}$ and up to 4 concurrent algorithms.
+
+### Limitations
+
+The implementation has not been subjected to machine-checked formal
+verification (Lean, Coq, or similar). The equational laws are validated
+empirically through property-based testing and complexity regression, not
+through mechanized proof. We identify machine-checked verification as
+future work (§[IX](#sec-conclusion)).
+
+The complexity regression tests measure asymptotic scaling, not
+absolute throughput. We deliberately avoid micro-benchmarks: the EML's
+contribution is a data structure with provable complexity bounds, not a
+performance-optimized production system. Absolute performance depends on
+the injected hash implementation and storage backend, neither of which
+is part of the EML's specification.

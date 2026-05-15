@@ -1,0 +1,42 @@
+```{=latex}
+\cleardoublepage
+
+\section*{Open Science}
+```
+
+We provide the following artifacts for evaluation. All materials are
+included in the supplementary archive accompanying this submission.
+
+**Source code.** The complete Rust implementation of the EML, including
+the `Log<S: Storage>` state machine, the `Hasher` and `Storage` traits,
+proof generation and verification functions, and the elision/rehydration
+engine. The crate has zero runtime dependencies; all hash algorithm
+implementations are injected by the caller via the `Hasher` trait.
+
+**Test suite.** 74 tests across four categories:
+
+- 51 unit tests covering append semantics, algorithm lifecycle, proof
+  generation, null-fill correctness, and cold reconstruction.
+- 16 property-based tests (proptest) verifying equational laws over
+  randomized tree configurations, including a comprehensive state
+  machine test.
+- 7 fault injection tests using adversarial `CorruptingStorage` backends.
+- 6 complexity regression tests validating asymptotic bounds via curve
+  fitting.
+
+All tests are reproducible via `cargo test` (unit, proptest, fault
+injection) and `cargo test --release --test complexity` (complexity
+regression).
+
+**Fuzz harnesses.** 4 `cargo-fuzz` targets exercising adversarial inputs
+against proof verification and elision surfaces. Reproduction:
+`cargo +nightly fuzz run <target>`.
+
+**Formal model.** The algebraic specification (18 definitions, 9
+equational laws) is provided as a standalone Markdown document in
+`docs/models/`.
+
+**Reproduction instructions.** A `README` in the supplementary archive
+documents the exact commands to build, test, and reproduce all results
+reported in §VII. The development environment is reproducible via a Nix
+shell specification (`shell.nix`).

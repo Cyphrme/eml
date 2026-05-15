@@ -1,0 +1,345 @@
+## Formal Model {#sec-formal-model}
+
+We formalize the EML as an initial algebra over carrier types with
+equational laws. The formalism extends the standard RFC 9162 model with
+algorithm-indexed products and null-fill semantics. All definitions are
+numbered for unambiguous reference.
+
+### Carrier Types
+
+::: {#def-carriers}
+**Definition 1** (Carrier types).
+
+- $\textit{Alg}$ --- a finite, totally ordered set of hash algorithm
+  identifiers.
+- $\textit{Digest}$ --- the type of hash outputs (fixed-width byte
+  sequences per algorithm).
+- $\textit{Bytes}$ --- arbitrary byte sequences (leaf payloads).
+- $\mathbb{N}$ --- natural numbers (leaf indices, tree sizes, heights).
+- $\textit{AlgSet}$ --- finite subsets of $\textit{Alg}$.
+:::
+
+### Hash Operations
+
+::: {#def-hash-ops}
+**Definition 2** (Hash operations). For each algorithm $a \in
+\textit{Alg}$:
+
+$$
+\begin{aligned}
+\text{leaf}(a, d)    &= H_a(\mathtt{0x00} \concat d) \\
+\text{node}(a, l, r) &= H_a(\mathtt{0x01} \concat l \concat r) \\
+\text{empty}(a)      &= H_a(\text{""})
+\end{aligned}
+$$
+
+Domain separation is enforced by the prefix byte (RFC 9162 §2.1):
+$\text{leaf}(a, d) \neq \text{node}(a, l, r)$ for all inputs.
+:::
+
+### Null Constants
+
+::: {#def-null-leaf}
+**Definition 3** (Null leaf constant). For each algorithm $a$:
+
+$$
+N_0(a) = H_a(\mathtt{0x02})
+$$
+
+The byte $\mathtt{0x02}$ is distinct from $\mathtt{0x00}$ (leaf) and
+$\mathtt{0x01}$ (node), establishing a third domain.
+:::
+
+::: {#def-null-subtree}
+**Definition 4** (Null subtree constant). For each $a$ and height
+$h \geq 1$:
+
+$$
+N_h(a) = \text{node}(a, N_{h-1}(a), N_{h-1}(a))
+$$
+
+$N_h(a)$ is uniquely determined by $(a, h)$. The null constant table
+$\{N_0(a), \ldots, N_H(a)\}$ is precomputable in $\mathcal{O}(H)$ hash
+operations.
+:::
+
+### Algorithm Activation
+
+::: {#def-activation-map}
+**Definition 5** (Activation map). An activation map is a partial
+function:
+
+$$
+\text{act}: \textit{Alg} \rightharpoonup \text{Vec}\langle(\mathbb{N},
+\mathbb{N} \cup \{\infty\})\rangle
+$$
+
+where each $(s_k, e_k)$ is an *epoch* satisfying $s_k < e_k$, epochs
+are disjoint and chronologically ordered ($e_k \leq s_{k+1}$), and an
+algorithm whose final epoch has $e_k = \infty$ is currently active.
+:::
+
+::: {#def-active-pred}
+**Definition 6** (Active predicate). Algorithm $a$ is active at leaf
+index $i$ iff:
+
+$$
+\text{active}(a, i) \iff \text{act}(a) \text{ is defined} \wedge \exists
+(s_k, e_k) \in \text{act}(a).\ s_k \leq i < e_k
+$$
+:::
+
+::: {#def-active-set}
+**Definition 7** (Active set). The set of algorithms active at index
+$i$:
+
+$$
+A(i) = \{a \in \text{dom}(\text{act}) \mid \text{active}(a, i)\}
+$$
+:::
+
+### EML State
+
+::: {#def-state}
+**Definition 8** (EML state). An EML state is a tuple:
+
+$$
+S = (\text{leaves}, \text{size}, \text{act}, \text{stacks}, \text{nodes})
+$$
+
+where:
+
+- $\text{leaves}: \text{Vec}\langle\textit{Bytes}\rangle$ --- raw leaf
+  payloads (shared across algorithms);
+- $\text{size}: \mathbb{N}$ --- number of appended leaves;
+- $\text{act}$ --- activation map (Definition 5);
+- $\text{stacks}: \textit{Alg} \to \text{Vec}\langle\textit{Digest}\rangle$ ---
+  per-algorithm frontier stacks;
+- $\text{nodes}: \textit{Alg} \rightharpoonup ((\mathbb{N}, \mathbb{N})
+  \rightharpoonup \textit{Digest})$ --- per-algorithm sealed internal
+  node hashes, keyed by (left index, height).
+:::
+
+### Leaf Value Function
+
+::: {#def-leaf-value}
+**Definition 9** (Leaf value). The digest at position $i$ for
+algorithm $a$:
+
+$$
+V(a, i) = \begin{cases}
+\text{leaf}(a, \text{leaves}[i]) & \text{if active}(a, i) \\
+N_0(a) & \text{otherwise}
+\end{cases}
+$$
+:::
+
+### Append
+
+::: {#def-append}
+**Definition 10** (Append). Given state $S$ and payload $d$:
+
+$$
+\text{append}(S, d) \to S'
+$$
+
+where $S'.\text{leaves} = S.\text{leaves} \mathbin{+\!\!+} [d]$,
+$S'.\text{size} = S.\text{size} + 1$, $S'.\text{act} = S.\text{act}$,
+and for each active algorithm $a$: the frontier stack is updated via the
+standard count-trailing-ones (CTO) merge, persisting each sealed
+internal node to $\text{nodes}(a)$.
+
+Node persistence adds $\mathcal{O}(1)$ amortized storage writes per
+algorithm per append. Frozen algorithms are not updated.
+:::
+
+### Algorithm Lifecycle
+
+::: {#def-add-alg}
+**Definition 11** (Add algorithm). $\text{add\_alg}(S, a) \to S'$ sets
+$\text{act}(a) = [(S.\text{size}, \infty)]$ and initializes the frontier
+stack to the *null prefix peaks*: the MMR peaks of $S.\text{size}$ null
+leaves.
+
+$$
+\begin{aligned}
+\text{null\_prefix\_peaks}&(a, K) = \\
+  &[N_{h_i}(a) \mid \text{bit } i \text{ set in } K,
+    \text{ descending}]
+\end{aligned}
+$$
+
+Cost: $\mathcal{O}(\log K)$ hash operations. Zero retroactive
+computation.
+:::
+
+::: {#def-remove-alg}
+**Definition 12** (Remove algorithm). $\text{remove\_alg}(S, a) \to S'$
+closes the last epoch: $\text{act}(a)[\text{last}] = (s_k,
+S.\text{size})$. The frontier is frozen.
+:::
+
+::: {#def-resume-alg}
+**Definition 13** (Resume algorithm). $\text{resume\_alg}(S, a) \to S'$
+extends the frozen frontier through the null gap of length
+$G = S.\text{size} - e_k$ using the standard CTO append with
+$N_0(a)$ at each position, then appends a new epoch
+$[(S.\text{size}, \infty)]$. Cost: $\mathcal{O}(G)$.
+:::
+
+### Root Extraction and Projection
+
+::: {#def-root}
+**Definition 14** (Per-algorithm root).
+
+$$
+\text{root}(a) = \begin{cases}
+\text{empty}(a) & \text{if } \text{stacks}(a) = [] \\
+f_r(\text{stacks}(a)) & \text{otherwise}
+\end{cases}
+$$
+
+where $f_r = \text{fold\_right}(\lambda(\text{acc}, l).\ \text{node}(a, l, \text{acc}))$.
+:::
+
+::: {#def-projection}
+**Definition 15** (Projection). The projection of the EML onto
+algorithm $a$:
+
+$$
+\pi_a(S) = [V(a, i) \mid 0 \leq i < \text{tree\_size}(a)]
+$$
+
+This sequence constitutes a valid RFC 9162 leaf set.
+:::
+
+### Equational Laws
+
+The following laws govern the EML. Each extends the standard RFC 9162
+invariants to the multi-algorithm setting.
+
+::: {#law-aequiv}
+**Law 1** (\lawname{A-Equiv}). *Incremental equals batch.* For all
+$a \in \text{dom}(\text{act})$:
+
+$$
+\text{root}(a) = \text{MTH}(H_a, \pi_a(S))
+$$
+:::
+
+::: {#law-astack}
+**Law 2** (\lawname{A-Stack}). *Frontier stack size invariant.* For all
+$a$:
+
+$$
+|\text{stacks}(a)| = \text{popcount}(\text{tree\_size}(a))
+$$
+:::
+
+::: {#law-ndet}
+**Law 3** (\lawname{N-Det}). *Null determinism.* For all $a, h$:
+$N_h(a)$ is uniquely determined by $(a, h)$.
+:::
+
+::: {#law-dsep}
+**Law 4** (\lawname{D-Sep}). *Domain separation.* Three-way separation
+across all tree domains:
+
+$$
+\begin{aligned}
+\forall a, d:          &\quad N_0(a) \neq \text{leaf}(a, d) \\
+\forall a, l, r:       &\quad N_0(a) \neq \text{node}(a, l, r) \\
+\forall a, d, l, r:    &\quad \text{leaf}(a, d) \neq \text{node}(a, l, r)
+\end{aligned}
+$$
+:::
+
+::: {#law-isound}
+**Law 5** (\lawname{I-Sound}). *Inclusion proof soundness.* For all
+active $(a, i)$:
+
+$$
+\begin{aligned}
+&\text{verify\_inclusion}(H_a,\
+  \text{leaf}(a, \text{leaves}[i]), \\
+&\quad \text{inclusion\_proof}(S, a, i),\
+  \text{root}(a)) \\
+&= \text{true}
+\end{aligned}
+$$
+:::
+
+::: {#law-ksound}
+**Law 6** (\lawname{K-Sound}). *Consistency proof soundness.* For all
+$a$ and $\text{old\_size} < \text{tree\_size}(a)$:
+
+$$
+\begin{aligned}
+&\text{verify\_consistency}(H_a,\ \text{proof}, \\
+&\quad \text{root\_at}(a, \text{old\_size}),\
+  \text{root}(a)) \\
+&= \text{true}
+\end{aligned}
+$$
+:::
+
+::: {#law-tbound}
+**Law 7** (\lawname{T-Bound}). *Temporal binding.* For all $a$ and $i$
+where $\neg\text{active}(a, i) \wedge i < \text{tree\_size}(a)$:
+
+$$
+\begin{aligned}
+&\nexists\, d \in \textit{Bytes}:\
+  \text{verify\_inclusion}(H_a, \\
+&\quad \text{leaf}(a, d),\
+  \text{incl\_proof}(S, a, i), \\
+&\quad \text{root}(a)) = \text{true}
+\end{aligned}
+$$
+
+No payload can produce a valid inclusion proof at an inactive position.
+:::
+
+::: {#law-algind}
+**Law 8** (\lawname{Alg-Ind}). *Algorithm independence.* Under ROM, for
+all $a \neq b$:
+
+$$
+\pi_a(S) \text{ and } \pi_b(S) \text{ are mutually incompressible}
+$$
+:::
+
+::: {#law-projvalid}
+**Law 9** (\lawname{Proj-Valid}). *Projection validity.* For all
+$a \in \text{dom}(\text{act})$:
+
+$$
+\pi_a(S) \text{ is a valid RFC 9162 leaf sequence; all standard
+invariants hold for the projected tree.}
+$$
+:::
+
+### Projection Isomorphism
+
+::: {#thm-projection-iso}
+**Theorem 1** (Projection isomorphism). For any algorithm $a$, the root
+computed by $\text{root}(a)$ from the EML frontier equals the root of a
+batch-constructed RFC 9162 tree over the projected leaf sequence:
+
+$$
+\text{root}(a) = \text{MTH}(H_a, \pi_a(S))
+$$
+
+*Proof sketch.* By \lawname{A-Equiv}, the incremental and batch roots
+agree. By Definition 9, the projected sequence consists of standard leaf
+hashes at active positions and null constants at inactive positions. By
+\lawname{D-Sep}, null constants are valid---but unforgeable---leaf
+values. By \lawname{Proj-Valid}, the projected sequence satisfies all
+RFC 9162 invariants. The EML's per-algorithm root is therefore
+indistinguishable from a standard single-algorithm Merkle tree root over
+$\pi_a(S)$. $\square$
+:::
+
+This theorem is the paper's central result. It reduces the correctness
+of multi-algorithm verification to the well-understood correctness of
+single-algorithm RFC 9162 verification.

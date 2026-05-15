@@ -1,0 +1,41 @@
+## Conclusion {#sec-conclusion}
+
+We have presented the Epoch Merkle Log, a verifiable append-only data
+structure that resolves the upgrade trilemma for hash algorithm
+transitions in authenticated logs. By partitioning algorithm lifecycles
+into null-padded chronological epochs over a shared RFC 9162 topology,
+the EML achieves $\mathcal{O}(\log n)$ algorithm addition with zero
+retroactive computation, strictly algorithm-independent verification via
+the projection isomorphism, and zero-metadata proof compression through
+deterministic elision.
+
+The formal algebraic model (9 equational laws over 18 definitions)
+reduces multi-algorithm correctness to the well-understood correctness of
+single-algorithm RFC 9162 verification. The production Rust
+implementation validates these properties empirically through
+property-based testing, fault injection, complexity regression, and
+sustained fuzz testing.
+
+Epoch boundaries transform what has historically been a global
+infrastructure crisis---coordinating hash algorithm deprecation across
+distributed systems---into a locally managed, formally verifiable
+structural operation. A log operator adds a post-quantum hash algorithm
+in $\mathcal{O}(\log n)$ time, and every existing verifier continues
+operating without modification, without awareness of the new algorithm,
+and without any degradation in the security of its own verification.
+
+### Future Work
+
+- **Machine-checked proofs.** The equational laws are currently
+  validated empirically. A mechanized formalization in Lean or Coq would
+  provide a stronger correctness guarantee for the projection
+  isomorphism and the three-way domain separation.
+
+- **Post-quantum hash integration.** Integrating the EML with Merkle
+  Tree Certificates [@mtc-draft] would combine per-epoch hash lifecycle
+  management with amortized post-quantum signature costs.
+
+- **P2P replication semantics.** The EML's append-only guarantees and
+  per-algorithm consistency proofs are natural building blocks for
+  gossip-based log replication, but the replication protocol is an
+  application-layer concern outside the scope of this work.

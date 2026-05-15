@@ -1,0 +1,121 @@
+## Related Work {#sec-related-work}
+
+We organize related work by theme, situating the EML against five
+categories of prior and adjacent constructions.
+
+### Foundational Constructions
+
+Merkle introduced the authenticated hash tree in his 1979 doctoral
+thesis [@merkle1979] and refined it for digital signature applications at
+CRYPTO '89 [@merkle1989]. Crosby and Wallach [@crosby2009] extended the
+static tree into a dynamic *history tree* supporting append-only
+semantics with $\mathcal{O}(\log n)$ consistency proofs---the
+construction that underlies both Certificate Transparency and the EML.
+Pulls and Peeters [@pulls2015] introduced the *Balloon* structure, which
+adds forward security: even a compromised log operator cannot rewrite
+entries observed by a monitor. The EML does not claim forward security;
+it addresses a complementary problem (algorithm lifecycle management)
+over the same Crosby--Wallach foundation.
+
+### Transparency Log Standards
+
+RFC 6962 [@rfc6962] defined the original Certificate Transparency
+protocol, binding each log to a single hash algorithm. RFC 9162
+[@rfc9162] introduced algorithm selection via IANA registries but
+preserved the single-algorithm-per-log constraint: migrating requires
+creating a new log identity. Google's Trillian [@trillian2016]
+generalized the CT backend into a multi-tenant platform for verifiable
+logs and maps, introducing tiled tree storage for distributed
+scalability. Trillian inherits RFC 9162's algorithm binding.
+
+Sigsum [@sigsum2021] adopted the inverse posture: *no* algorithm
+selection, fixing SHA-256 and Ed25519 by design. Algorithm lifecycle is
+managed through time-bounded shard intervals---effectively the "fork the
+ledger" horn of the upgrade trilemma. This is a defensible architectural
+choice that prioritizes simplicity over migration flexibility.
+
+The EML occupies a distinct position: it retains the single-tree
+topology of RFC 9162 but permits multiple algorithms to coexist via
+projections, avoiding both the fragmentation of per-algorithm logs and
+the coupling of chimeric constructions.
+
+### Algorithm Migration Approaches
+
+**Git.** The SHA-1 to SHA-256 transition in Git is the most extensively
+documented hash migration in a Merkle-structured system
+[@git-hash-transition]. Because Git's object identity *is* its hash,
+changing algorithms requires a bidirectional mapping between SHA-1 and
+SHA-256 representations of every object. The transition proceeds through
+four phased modes (Dark Launch, Early, Late, Post-Transition), each
+requiring explicit compatibility code. The cost is $\mathcal{O}(N)$ in
+repository size---every object must be translated. The EML's null-fill
+mechanism avoids this cost entirely: a new algorithm's projection of
+historical positions is computed from the NullTable in
+$\mathcal{O}(\log n)$, with no access to historical data.
+
+**IPFS.** The Content Identifier (CID) v1 format uses self-describing
+multihash fields to encode the algorithm alongside the digest
+[@ipfs-cid; @multiformats]. This enables multiple hash algorithms to
+coexist within the network's address space. However, the self-description
+is per-object, not per-tree: re-hashing content under a new algorithm
+requires full network re-propagation, as the DHT routes by hash and
+cannot re-derive addresses without the original data.
+
+**Sigstore.** Sigstore achieves controlled algorithm selection through
+predefined suites and out-of-band configuration [@sigstore-agility]. The
+algorithm is not negotiated within the data structure but selected by
+policy. This avoids in-band downgrade attacks but does not support
+concurrent multi-algorithm projections or structural lifecycle
+management.
+
+### Sparse Merkle Trees
+
+Sparse Merkle Trees (SMTs) address a superficially similar problem:
+managing a vast space of positions, most of which are empty. The
+original SMT formulation by Laurie and Kasper [@laurie2012] simulated a
+complete binary tree of height 256 for certificate revocation, using
+pre-computed default hashes at each level to represent the $2^{256}$
+empty leaves. The Jellyfish Merkle Tree (JMT) [@jmt2021] optimized this
+for high-performance blockchain state commitment through path collapsing
+and version-based keys. Compact SMTs [@csmt2018] further reduced storage
+via XOR-distance-based key placement. Tari's SMT specification
+[@tari2018] detailed pruning strategies for removing empty subtrees.
+
+The distinction between SMTs and the EML is the domain of sparsity:
+
+- **SMTs** pad positions in a *spatial* $2^{256}$ keyspace that may
+  never be occupied. The empty positions represent potential keys that
+  have no associated value. Proof compression uses a bitmap to indicate
+  which siblings on a 256-level path are default values.
+
+- **The EML** pads positions on a *temporal* axis where an algorithm was
+  not yet active. The empty positions represent real chronological
+  entries that existed before the algorithm was added. Proof compression
+  uses interval arithmetic over epoch boundaries, requiring no explicit
+  bitmap.
+
+Both constructions use deterministic null constants. But SMT null
+constants fill a fixed-depth spatial gap; EML null constants fill a
+variable-depth temporal gap. The proof compression mechanisms are
+correspondingly different: SMTs transmit a 32-byte bitmap; the EML
+transmits nothing.
+
+### Post-Quantum Context
+
+The IETF PLANTS working group is developing Merkle Tree Certificates
+(MTC) [@mtc-draft], which aggregate millions of certificates into a
+Merkle tree signed by a single post-quantum signature. This amortizes
+the bandwidth cost of post-quantum signatures (ML-DSA-65 at 3,309 bytes
+vs. Ed25519 at 64 bytes) across all certificates in the batch
+[@chopra2026]. The Crypto Agility Risk Assessment Framework (CARAF)
+[@caraf] provides a structured methodology for evaluating migration
+risk.
+
+The EML does not directly address post-quantum signature schemes, but
+its algorithm-independent verification is directly applicable to
+post-quantum hash transitions. An EML log that begins with SHA-256 can
+add a post-quantum hash algorithm (e.g., a SHA-3 variant or a
+hash-based construction) at any point without disrupting existing
+SHA-256 verification. MTC batching and EML epoch management are
+complementary: the former amortizes signature costs, the latter manages
+hash algorithm lifecycles.

@@ -1,0 +1,119 @@
+## Background and Threat Model {#sec-background}
+
+### RFC 9162 Merkle Trees
+
+The EML extends the append-only Merkle tree topology defined in
+RFC 9162 [@rfc9162], which formalizes the construction introduced by
+Crosby and Wallach [@crosby2009] and deployed at scale through
+Certificate Transparency [@rfc6962]. We summarize the relevant
+definitions.
+
+A log of $n$ leaf entries $D_n = \{d_0, d_1, \ldots, d_{n-1}\}$ is
+authenticated by a Merkle Tree Hash (MTH) computed recursively:
+
+$$
+\text{MTH}(\emptyset) = H(\text{""})
+$$ {#eq-mth-empty}
+
+$$
+\text{MTH}(\{d\}) = H(\mathtt{0x00} \concat d)
+$$ {#eq-mth-leaf}
+
+$$
+\text{MTH}(D_n) = H(\mathtt{0x01} \concat \text{MTH}(D_{[0:k]}) \concat \text{MTH}(D_{[k:n]}))
+$$ {#eq-mth-internal}
+
+where $k$ is the largest power of two less than $n$, and $\concat$
+denotes byte concatenation. The prefix bytes $\mathtt{0x00}$ and
+$\mathtt{0x01}$ provide domain separation between leaf and internal node
+hashes, preventing second-preimage attacks across tree levels
+[@merkle1989].
+
+Two proof types authenticate the log:
+
+- **Inclusion proof.** Given leaf index $m$ and tree size $n$, the
+  prover supplies the $\lceil \log_2 n \rceil$ sibling hashes along the
+  path from position $m$ to the root. The verifier recomputes the root
+  and checks equality with the published root hash.
+
+- **Consistency proof.** Given old tree size $m$ and new tree size $n >
+  m$, the prover demonstrates that the first $m$ entries of the $n$-leaf
+  tree produce the same root as the $m$-leaf tree. This enforces the
+  append-only property: no previously committed entry can be modified or
+  deleted without detection.
+
+Both proof types require $\mathcal{O}(\log n)$ hash operations for
+verification.
+
+### The Algorithm Binding Constraint
+
+In RFC 9162, the hash function $H$ is a global parameter of the log.
+Every leaf hash, internal node hash, and root hash is computed under a
+single algorithm. The specification permits algorithm selection via IANA
+registries, but this selection is fixed at log initialization. Changing
+the algorithm requires creating a new log instance---a structural
+constraint, not merely an operational policy [@rfc9162].
+
+This binding produces the upgrade trilemma described in
+§[I](#sec-introduction): any log whose identity is derived from its root
+hash is, by construction, married to the algorithm that produced that
+hash. The EML relaxes this binding by allowing multiple algorithms to
+coexist over a shared topology, each producing an independent root.
+
+### Random Oracle Constraint
+
+We operate under the Random Oracle Model (ROM) for all hash functions.
+Specifically, we require:
+
+- **Collision resistance.** It is computationally infeasible to find
+  distinct inputs $x \neq y$ such that $H(x) = H(y)$.
+
+- **Preimage resistance.** Given a hash output $h$, it is
+  computationally infeasible to find any input $x$ such that $H(x) = h$.
+
+- **Cross-algorithm independence.** For distinct algorithms $a \neq b$,
+  the output distributions of $H_a$ and $H_b$ are mutually
+  incompressible: knowledge of $H_a(x)$ provides no information about
+  $H_b(x)$. Under ROM, this follows from the independence of distinct
+  random oracles.
+
+The third property is the cryptographic foundation for \lawname{Alg-Ind}
+(§[IV](#sec-formal-model)): adding a weak algorithm to the EML cannot
+weaken a strong one, because the hash outputs of distinct algorithms are
+informationally independent.
+
+### Design Constraints
+
+The EML is designed under seven constraints, each motivated by the
+requirements of long-lived verifiable logs:
+
+::: {#tbl-constraints}
+| ID | Constraint | Rationale |
+|:---|:-----------|:----------|
+| C1 | Append-only. No mutation of committed data. | Foundational integrity property. |
+| C2 | Multiple algorithms over a shared topology. | Avoid per-algorithm tree duplication. |
+| C3 | Zero retroactive computation on algorithm addition. | $\mathcal{O}(N)$ rehashing is unacceptable for large logs. |
+| C4 | Algorithm-independent verification. | No weakest-link coupling between algorithms. |
+| C5 | Standard-compatible proofs. | EML proofs must verify under unmodified RFC 9162 verifiers. |
+| C6 | Algorithm lifecycle management. | Algorithms activate, deactivate, and resume over time. |
+| C7 | Deterministic state. | All values computable from the log's append history and algorithm metadata. |
+
+: Design constraints governing the EML construction. {#tbl-constraints}
+:::
+
+### Threat Model
+
+The adversary controls the network between the log server and verifying
+clients. They can delay, reorder, or drop messages but cannot forge hash
+preimages or collisions under any algorithm satisfying the ROM
+assumption. The adversary may also control the log server itself,
+attempting to present inconsistent views (equivocation) to different
+clients. The EML inherits the same consistency and equivocation
+guarantees as RFC 9162: any two clients that agree on a tree size and
+root hash are guaranteed to observe identical history for that
+algorithm's projection.
+
+The adversary *cannot* exploit the presence of multiple algorithms to
+weaken any single algorithm's guarantees. This is the content of
+\lawname{Alg-Ind}: each projection is informationally independent under
+ROM.

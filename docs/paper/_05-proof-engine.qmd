@@ -1,0 +1,144 @@
+## Proof Generation and Verification {#sec-proof-engine}
+
+The formal model (§[IV](#sec-formal-model)) defines the EML's
+mathematical structure. This section bridges from the algebraic
+specification to the operational proof engine: how proofs are generated
+in $\mathcal{O}(\log n)$ time without materializing the full projection.
+
+### The Subtree Root Query
+
+The projection $\pi_a(S)$ is a *specification oracle*---an
+$\mathcal{O}(n)$ construction used by the equational laws to establish
+correctness. Production proof generation never invokes it. Instead, each
+sibling hash in a proof path is resolved through the `subtree_root`
+query:
+
+::: {#def-subtree-root}
+**Definition 16** (Subtree root). The root hash of the subtree covering
+leaves $[lo, hi)$ for algorithm $a$, with $n = hi - lo$:
+
+$$
+\text{sr}(a, lo, hi) = \begin{cases}
+\text{empty}(a) & n = 0 \\
+V(a, lo) & n = 1 \\
+N_h(a) & \text{null range},\ n = 2^h \\
+\text{nodes}(a)[(lo,h)] & \text{stored},\ n = 2^h \\
+\text{node}(a,\ \text{sr}(\ldots, lo, lo{+}k), & \text{otherwise} \\
+\quad \text{sr}(\ldots, lo{+}k, hi))
+\end{cases}
+$$
+
+where $k = \text{largest\_pow2\_lt}(n)$ and $h = \log_2 n$.
+We abbreviate $\text{subtree\_root}(S, a, \ldots)$ as $\text{sr}(a, \ldots)$
+throughout.
+:::
+
+The cases, in order of priority:
+
+1. **Empty range**: returns the empty root.
+2. **Single leaf**: returns the leaf value directly (Definition 9).
+3. **Pure null subtree**: if no epoch of algorithm $a$ overlaps the
+   range $[lo, hi)$, the entire subtree consists of null constants. For
+   power-of-two ranges, this is a single NullTable lookup:
+   $\mathcal{O}(1)$. For non-power-of-two ranges, the subtree
+   decomposes into $\text{popcount}(hi - lo)$ NullTable lookups.
+4. **Stored node**: the CTO merge during `append` (Definition 10)
+   persists sealed internal nodes keyed by $(lo, h)$. A hash-map lookup
+   resolves the subtree root in $\mathcal{O}(1)$.
+5. **Recursive split**: the standard RFC 9162 decomposition into left
+   and right subtrees.
+
+::: {#def-active-range}
+**Definition 17** (Active range). Algorithm $a$ has active content in
+$[lo, hi)$ iff any epoch overlaps it:
+
+$$
+\text{active\_range}(a, lo, hi) \iff \exists (s_k, e_k) \in
+\text{act}(a).\ s_k < hi \wedge e_k > lo
+$$
+:::
+
+### Complexity Analysis
+
+Each recursive call to `subtree_root` either terminates via a stored
+node or NullTable lookup ($\mathcal{O}(1)$), or splits into two
+subproblems where at least one child terminates. The proof path requires
+at most $\lceil \log_2 n \rceil$ sibling resolutions, each requiring a
+single `subtree_root` invocation. Total: $\mathcal{O}(\log n)$ lookups
+$+$ $\mathcal{O}(\log n)$ hash operations.
+
+::: {#tbl-perf-bounds}
+| Operation | Complexity | Mechanism |
+|:----------|:-----------|:----------|
+| Append (per algorithm) | $\mathcal{O}(1)$ amortized | CTO merge + node persistence |
+| Append (total) | $\mathcal{O}(\lvert A(i) \rvert)$ amortized | Linear in active algorithm count |
+| Algorithm addition | $\mathcal{O}(\log K)$ | Null prefix peak computation |
+| Algorithm removal | $\mathcal{O}(1)$ | Frontier freeze |
+| Algorithm resumption | $\mathcal{O}(G)$ | Null gap extension |
+| Root extraction | $\mathcal{O}(\log n)$ | Frontier stack fold |
+| Inclusion proof | $\mathcal{O}(\log n)$ | `subtree_root` resolution |
+| Consistency proof | $\mathcal{O}(\log n)$ | `subtree_root` resolution |
+
+: Operational complexity bounds. $K$: tree size at algorithm addition.
+$G$: gap length for resumption. $n$: global tree size. {#tbl-perf-bounds}
+:::
+
+### Inclusion and Consistency Proofs
+
+Proofs follow the RFC 9162 `PATH` and `SUBPROOF` algorithms exactly,
+with `subtree_root` replacing materialized-array slicing at each sibling
+resolution. The recursive structure is unchanged; only the mechanism for
+obtaining sibling hashes differs.
+
+::: {#def-inclusion-proof}
+**Definition 18** (Inclusion proof). For algorithm $a$ and leaf index
+$m$:
+
+$$
+\text{inclusion\_proof}(S, a, m) = \text{path}(S, a, m, 0,
+\text{tree\_size}(a))
+$$
+
+where `path` recurses via $\text{largest\_pow2\_lt}$, collecting sibling
+hashes resolved through `subtree_root`.
+:::
+
+::: {#def-consistency-proof}
+**Definition 19** (Consistency proof). For algorithm $a$ and old tree
+size $m$:
+
+$$
+\text{consistency\_proof}(S, a, m) = \text{subproof}(S, a, m, 0,
+\text{tree\_size}(a), \text{true})
+$$
+
+where `subproof` follows RFC 9162 §2.1.4 with `subtree_root` sibling
+resolution.
+:::
+
+**Correctness bridge.** The operational definitions produce identical
+output to the specification oracle (batch construction over $\pi_a(S)$).
+Both decompose the tree identically via $\text{largest\_pow2\_lt}$; the
+only difference is how sibling roots are obtained. By Theorem 1 and
+\lawname{A-Equiv}, the proofs verify against the same root.
+
+### Node Caching and Frontier Architecture
+
+The EML persists sealed internal nodes during the CTO merge in
+`append`. Each merge of two frontier stack entries produces a parent hash
+that is the root of a complete power-of-two subtree. This parent is
+written to the node store keyed by (algorithm, left index, height).
+
+Null subtrees are *not* persisted (Observation 2 of the formal model):
+`subtree_root` reconstructs them via NullTable in $\mathcal{O}(1)$. Only
+subtrees containing at least one active leaf require storage.
+
+### Cold Reconstruction
+
+The `from_storage` constructor reconstructs the full EML state from a
+populated storage backend in $\mathcal{O}(\log n)$ per algorithm.
+Algorithm metadata (IDs, epoch boundaries) is loaded from storage.
+Frontier stacks are rebuilt by decomposing the tree size into its binary
+representation and resolving each complete subtree root through the node
+store. This enables process restarts without replaying the append
+history.
