@@ -32,16 +32,31 @@ exponentially increasing sizes ($n = 2^4$ through $2^{16}$), measures
 operation timing, and fits the empirical curve against the expected
 complexity class using the `bigoish` library.
 
-<!-- TODO: Figure 5 — Inclusion proof time vs tree size (log-log) -->
-<!-- TODO: Figure 6 — Consistency proof time vs tree size (log-log) -->
+```{=latex}
+\begin{figure*}[t]
+  \centering
+  \input{figures/fig-complexity.tex}
+  \caption{Empirical proof generation time vs.\ tree size. Tree sizes
+  range from $2^4$ to $2^{20}$ (${\sim}$1M) leaves; each point is the
+  median of 31~trials (5~warmup) via per-thread CPU time (IQR
+  $<$\,5\% of median in all cases).
+  (a)~Inclusion proof generation scales as $O(\log n)$ (dashed fit).
+  (b)~Consistency proof generation is bounded by a constant
+  (${\leq}1.2\,\mu$s) across five orders of magnitude.}
+  \label{fig:complexity}
+\end{figure*}
+```
 
 The fitted curves confirm:
 
 - **Inclusion proofs**: $\mathcal{O}(\log n)$. Proof generation time
-  scales logarithmically with tree size across all tested configurations.
-- **Consistency proofs**: $\mathcal{O}(\log n)$. The `subtree_root`
-  engine resolves sibling hashes via stored-node lookups, maintaining
-  logarithmic scaling even for trees with multiple active algorithms.
+  scales logarithmically with tree size across all tested
+  configurations (@fig:complexity(a)).
+- **Consistency proofs**: Theoretically $\mathcal{O}(\log n)$, but
+  empirically constant across four orders of magnitude
+  (@fig:complexity(b)). The `subtree_root` engine resolves each
+  sibling hash via a single stored-node lookup; the logarithmic number
+  of lookups is dominated by per-call overhead at these tree sizes.
 - **Append (per algorithm)**: $\mathcal{O}(1)$ amortized. The CTO merge
   produces at most one sealed node per bit position in the tree size's
   binary representation.
