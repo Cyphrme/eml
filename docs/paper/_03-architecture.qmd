@@ -111,6 +111,18 @@ Other algorithms are invisible. SHA-256's proofs never reference
 BLAKE3's hashes. BLAKE3's proofs never reference SHA-256's. The
 algorithms share topology but not trust.
 
-<!-- TODO: Figure 1 — EML topology with two algorithms and null positions -->
+```{=latex}
+\begin{figure*}[t]
+  \centering
+  \resizebox{\textwidth}{!}{\input{figures/fig-topology.tex}}
+  \caption{An 8-leaf EML with two algorithms. Algorithm~A (blue) is
+  active from genesis. Algorithm~B (amber) was added at position~4;
+  its pre-activation positions are filled with null constants (gray,
+  dashed). Each node computes independent hash values per algorithm
+  over a shared topology.}
+  \label{fig:topology}
+\end{figure*}
+```
+
 <!-- TODO: Figure 2 — Projection: same tree viewed through algo A vs algo B -->
 <!-- TODO: Figure 3 — Epoch timeline showing add/remove/resume lifecycle -->

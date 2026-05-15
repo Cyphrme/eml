@@ -1,0 +1,140 @@
+% Figure 1: EML topology with two algorithms and null positions.
+% 8-leaf binary tree. Algorithm A (blue) active from genesis.
+% Algorithm B (amber) added at position 4; positions 0–3 are null (gray).
+% Each node is a vertically-split rectangle: top = A, bottom = B.
+%
+% Designed for full-width (figure*) in USENIX two-column layout.
+
+\begin{tikzpicture}[x=2.0cm, y=1.6cm]
+
+% --- Shorthand ---
+\def\hw{0.42}   % half-width of each node cell
+\def\hh{0.18}   % half-height of each sub-cell (A or B)
+
+% =====================================================================
+% EDGES (drawn first so nodes sit on top)
+% =====================================================================
+
+% Level 0 → 1
+\foreach \l/\r/\p in {0/1/0.5, 2/3/2.5, 4/5/4.5, 6/7/6.5} {
+  \draw[black!30, line width=0.5pt] (\l, \hh) -- (\p, {1.0-\hh});
+  \draw[black!30, line width=0.5pt] (\r, \hh) -- (\p, {1.0-\hh});
+}
+% Level 1 → 2
+\foreach \l/\r/\p in {0.5/2.5/1.5, 4.5/6.5/5.5} {
+  \draw[black!30, line width=0.5pt] (\l, {1.0+\hh}) -- (\p, {2.0-\hh});
+  \draw[black!30, line width=0.5pt] (\r, {1.0+\hh}) -- (\p, {2.0-\hh});
+}
+% Level 2 → 3
+\draw[black!30, line width=0.5pt] (1.5, {2.0+\hh}) -- (3.5, {3.0-\hh});
+\draw[black!30, line width=0.5pt] (5.5, {2.0+\hh}) -- (3.5, {3.0-\hh});
+
+% =====================================================================
+% NODE DRAWING MACROS
+% =====================================================================
+
+% Active node: top=A (blue), bottom=B (amber)
+\newcommand{\activenode}[2]{% #1=x, #2=y
+  \fill[algA!15, draw=algA!65, line width=0.6pt]
+    ({#1-\hw}, #2) rectangle ({#1+\hw}, {#2+\hh});
+  \fill[algB!15, draw=algB!65, line width=0.6pt]
+    ({#1-\hw}, {#2-\hh}) rectangle ({#1+\hw}, #2);
+}
+
+% Null node: top=A (blue), bottom=null (gray dashed)
+\newcommand{\nullnode}[2]{% #1=x, #2=y
+  \fill[algA!15, draw=algA!65, line width=0.6pt]
+    ({#1-\hw}, #2) rectangle ({#1+\hw}, {#2+\hh});
+  \fill[nullc!10, draw=nullc!50, line width=0.5pt, dashed]
+    ({#1-\hw}, {#2-\hh}) rectangle ({#1+\hw}, #2);
+}
+
+% =====================================================================
+% LEVEL 0: LEAVES
+% =====================================================================
+
+% Positions 0–3: A active, B null
+\nullnode{0}{0}
+\nullnode{1}{0}
+\nullnode{2}{0}
+\nullnode{3}{0}
+
+% Positions 4–7: A active, B active
+\activenode{4}{0}
+\activenode{5}{0}
+\activenode{6}{0}
+\activenode{7}{0}
+
+% =====================================================================
+% LEVEL 1: INTERNAL
+% =====================================================================
+
+\nullnode{0.5}{1.0}
+\nullnode{2.5}{1.0}
+\activenode{4.5}{1.0}
+\activenode{6.5}{1.0}
+
+% =====================================================================
+% LEVEL 2: INTERNAL
+% =====================================================================
+
+\nullnode{1.5}{2.0}
+\activenode{5.5}{2.0}
+
+% =====================================================================
+% LEVEL 3: ROOT
+% =====================================================================
+
+% Root has a null left child and active right child for B.
+% B still computes a valid root, so we show it as active.
+\activenode{3.5}{3.0}
+
+% =====================================================================
+% LEAF INDEX LABELS
+% =====================================================================
+
+\foreach \i in {0,...,7} {
+  \node[font=\small, text=black!60, anchor=north] at (\i, {-\hh-0.1}) {$d_{\i}$};
+}
+
+% =====================================================================
+% EPOCH BOUNDARY (between positions 3 and 4)
+% =====================================================================
+
+\draw[densely dashed, red!55!black, line width=0.7pt]
+  (3.5, -0.55) -- (3.5, {3.0+\hh+0.2});
+
+\node[font=\footnotesize\itshape, text=red!55!black, anchor=south]
+  at (3.5, {3.0+\hh+0.2}) {B added at position 4};
+
+% =====================================================================
+% ANNOTATION: representative hash labels
+% =====================================================================
+
+% Label on d₀ (null for B)
+\draw[->, thin, black!50] (-0.9, -0.65) -- ({0-\hw+0.03}, {0-\hh+0.03});
+\node[font=\footnotesize, anchor=east, text=black!70, align=right]
+  at (-0.9, -0.65) {$H_a(d_0)$\\[-1pt]$N_0(b)$};
+
+% Label on d₇ (active for both)
+\draw[->, thin, black!50] (8.0, -0.65) -- ({7+\hw-0.03}, {0-\hh+0.03});
+\node[font=\footnotesize, anchor=west, text=black!70, align=left]
+  at (8.0, -0.65) {$H_a(d_7)$\\[-1pt]$H_b(d_7)$};
+
+% =====================================================================
+% LEGEND
+% =====================================================================
+
+\node[font=\footnotesize, anchor=center] at (3.5, -1.1) {%
+  \raisebox{1pt}{\tikz \fill[algA!15, draw=algA!65, line width=0.5pt]
+    (0,0) rectangle (0.3, 0.2);}
+  ~Algo~A \qquad
+  \raisebox{1pt}{\tikz \fill[algB!15, draw=algB!65, line width=0.5pt]
+    (0,0) rectangle (0.3, 0.2);}
+  ~Algo~B \qquad
+  \raisebox{1pt}{\tikz \fill[nullc!10, draw=nullc!50, line width=0.5pt, dashed]
+    (0,0) rectangle (0.3, 0.2);}
+  ~Null ($N_h$)%
+};
+
+\end{tikzpicture}
