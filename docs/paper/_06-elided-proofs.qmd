@@ -100,7 +100,6 @@ small relative to tree depth.
 
 : Wire proof size comparison. $n$: tree size. $n_a$: active entries for
 the queried algorithm. $N_{\text{items}}$: non-empty entries in SMT.
-{#tbl-wire-comparison}
 :::
 
 The EML's elided proofs achieve comparable compression to SMT bitmap

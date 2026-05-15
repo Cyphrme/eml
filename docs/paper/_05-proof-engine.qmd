@@ -80,7 +80,7 @@ $+$ $\mathcal{O}(\log n)$ hash operations.
 | Consistency proof | $\mathcal{O}(\log n)$ | `subtree_root` resolution |
 
 : Operational complexity bounds. $K$: tree size at algorithm addition.
-$G$: gap length for resumption. $n$: global tree size. {#tbl-perf-bounds}
+$G$: gap length for resumption. $n$: global tree size.
 :::
 
 ### Inclusion and Consistency Proofs

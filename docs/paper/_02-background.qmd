@@ -98,7 +98,7 @@ requirements of long-lived verifiable logs:
 | C6 | Algorithm lifecycle management. | Algorithms activate, deactivate, and resume over time. |
 | C7 | Deterministic state. | All values computable from the log's append history and algorithm metadata. |
 
-: Design constraints governing the EML construction. {#tbl-constraints}
+: Design constraints governing the EML construction.
 :::
 
 ### Threat Model

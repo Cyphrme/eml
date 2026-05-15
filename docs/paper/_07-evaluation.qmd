@@ -21,7 +21,7 @@ The implementation is validated by 74 tests across four categories:
 | Fault injection | 7 | Adversarial `CorruptingStorage` backends: bit-flip, truncation, hash drop; includes 2 property-based corruption tests |
 | Complexity regression | 6 | Empirical curve fitting against formal bounds ($\mathcal{O}(\log n)$ proofs, $\mathcal{O}(1)$ amortized append, $\mathcal{O}(\log K)$ addition, $\mathcal{O}(G)$ gap resumption) |
 
-: Test suite composition. {#tbl-test-categories}
+: Test suite composition.
 :::
 
 ### Complexity Regression
@@ -72,7 +72,7 @@ proof verification and elision surfaces:
 | `proof_mutation` | ~500K | 0 |
 | **Total** | **~2M** | **0** |
 
-: Fuzz target coverage summary. {#tbl-fuzz-targets}
+: Fuzz target coverage summary.
 :::
 
 The `proof_mutation` target is particularly notable: it takes valid
