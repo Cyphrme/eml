@@ -386,14 +386,28 @@ impl<S: Storage> Log<S> {
 
     /// Reactivate a frozen algorithm at the current tree size.
     ///
-    /// The frozen frontier stack is fast-forwarded through the null gap
-    /// (positions from deactivation to current size) by decomposing the
-    /// gap into `⌈log₂ G⌉` perfect null subtrees and merging them into
-    /// the frozen frontier via carry propagation. A new active epoch
+    /// The frozen frontier stack is reconstructed for the target tree size
+    /// `n` by decomposing `n` into its binary representation and resolving
+    /// each perfect subtree root via [`subtree_root`]: stored nodes for
+    /// active ranges, `NullTable` for null ranges, and recursive binary
+    /// splits for mixed boundary subtrees. A new active epoch
     /// `(current_size, ∞)` is appended.
     ///
-    /// Complexity: O(log G) hash operations and node stores, where
-    /// G = current_size - deactivation_point.
+    /// Complexity: O(log n) hash operations, where n = current tree size.
+    ///
+    /// # Performance Note
+    ///
+    /// Mixed internal nodes at the deactivation boundary (subtrees spanning
+    /// both real-data and null-gap positions) are computed on the fly during
+    /// frontier reconstruction but are **not persisted** to storage.
+    /// Subsequent proof generation that traverses these boundary nodes will
+    /// recompute them via `subtree_root`'s recursive binary split — at most
+    /// O(log n) extra hashes per proof, which does not change the asymptotic
+    /// proof cost.
+    ///
+    /// If profiling reveals this as a measurable overhead (e.g., with many
+    /// resume cycles creating multiple boundaries), a post-resume persistence
+    /// pass could walk the single mixed spine and store each internal node.
     ///
     /// # Errors
     ///
