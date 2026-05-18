@@ -1,0 +1,102 @@
+% Figure 2: Projection view — the same 8-leaf tree seen through
+% each algorithm's lens independently.
+%
+% Left:  Algorithm A's projection (all positions active — standard Merkle tree)
+% Right: Algorithm B's projection (positions 0–3 null, 4–7 active)
+
+\begin{tikzpicture}[x=0.95cm, y=1.2cm]
+
+% --- Dimensions ---
+\def\hw{0.28}
+\def\hh{0.15}
+
+% ===================================================================
+% Macro: draw a single-color node
+% #1=x, #2=y, #3=fill color, #4=draw color, #5=style extras
+% ===================================================================
+\newcommand{\snode}[5]{%
+  \fill[#3, draw=#4, line width=0.5pt, #5]
+    ({#1-\hw}, {#2-\hh}) rectangle ({#1+\hw}, {#2+\hh});%
+}
+
+% ===================================================================
+% LEFT TREE: Algorithm A projection (all active)
+% ===================================================================
+\begin{scope}[xshift=0cm]
+
+% Title
+\node[font=\small\bfseries, anchor=south] at (1.5, 3.4) {Projection $\pi_a$};
+
+% Edges
+\foreach \l/\r/\p in {0/1/0.5, 2/3/2.5} {
+  \draw[black!25, line width=0.4pt] (\l, \hh) -- (\p, {1.0-\hh});
+  \draw[black!25, line width=0.4pt] (\r, \hh) -- (\p, {1.0-\hh});
+}
+\draw[black!25, line width=0.4pt] (0.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+\draw[black!25, line width=0.4pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+
+% Nodes — all active (blue)
+\foreach \x in {0,1,2,3} { \snode{\x}{0}{algA!18}{algA!65}{} }
+\snode{0.5}{1.0}{algA!18}{algA!65}{}
+\snode{2.5}{1.0}{algA!18}{algA!65}{}
+\snode{1.5}{2.0}{algA!18}{algA!65}{}
+
+% Leaf labels
+\foreach \i in {0,...,3} {
+  \node[font=\tiny, text=black!55, anchor=north] at (\i, {-\hh-0.06}) {$d_{\i}$};
+}
+
+% Root label
+\node[font=\tiny, text=algA!80, anchor=south] at (1.5, {2.0+\hh+0.04}) {$R_a$};
+
+\end{scope}
+
+% ===================================================================
+% RIGHT TREE: Algorithm B projection (0–3 null, 4–7 active)
+% ===================================================================
+\begin{scope}[xshift=5.5cm]
+
+% Title
+\node[font=\small\bfseries, anchor=south] at (1.5, 3.4) {Projection $\pi_b$};
+
+% Edges
+\foreach \l/\r/\p in {0/1/0.5, 2/3/2.5} {
+  \draw[black!25, line width=0.4pt] (\l, \hh) -- (\p, {1.0-\hh});
+  \draw[black!25, line width=0.4pt] (\r, \hh) -- (\p, {1.0-\hh});
+}
+\draw[black!25, line width=0.4pt] (0.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+\draw[black!25, line width=0.4pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+
+% Nodes — positions 0–3 null (gray dashed)
+\foreach \x in {0,1,2,3} { \snode{\x}{0}{nullc!10}{nullc!50}{dashed} }
+\snode{0.5}{1.0}{nullc!10}{nullc!50}{dashed}
+\snode{2.5}{1.0}{algB!18}{algB!65}{}
+
+% Null label on left subtree root
+\node[font=\tiny, text=nullc, anchor=east] at ({0.5-\hw-0.08}, 1.0) {$N_1$};
+
+% Active leaves 4–7 mapped to positions 0–3 in this 4-leaf view:
+% positions 2,3 are active for B
+\snode{2}{0}{algB!18}{algB!65}{}
+\snode{3}{0}{algB!18}{algB!65}{}
+
+% Root — B computes over null left + active right
+\snode{1.5}{2.0}{algB!18}{algB!65}{}
+
+% Leaf labels
+\foreach \i in {0,...,3} {
+  \node[font=\tiny, text=black!55, anchor=north] at (\i, {-\hh-0.06}) {$d_{\i}$};
+}
+
+% Root label
+\node[font=\tiny, text=algB!80, anchor=south] at (1.5, {2.0+\hh+0.04}) {$R_b$};
+
+\end{scope}
+
+% ===================================================================
+% ANNOTATION: connecting arrow
+% ===================================================================
+\draw[<->, thick, black!40] (3.3, 1.0) -- (5.2, 1.0)
+  node[midway, above, font=\tiny, text=black!60] {same topology};
+
+\end{tikzpicture}

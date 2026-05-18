@@ -1,0 +1,147 @@
+% Figure 4: Elision — full proof vs. elided proof.
+%
+% Left:  Full inclusion proof path with all siblings (null ones highlighted).
+% Right: Elided proof — null siblings removed, shown as dotted outlines.
+% An 8-leaf tree with Algorithm B, proving leaf d₅.
+% Path: d₅ → sibling d₄ → sibling N(0–3) → root.
+% The sibling covering 0–3 is a null subtree root — it can be elided.
+
+\begin{tikzpicture}[x=0.95cm, y=1.2cm]
+
+% --- Dimensions ---
+\def\hw{0.28}
+\def\hh{0.15}
+
+% Node macros
+\newcommand{\anode}[3]{% #1=x, #2=y, #3=style
+  \fill[#3]
+    ({#1-\hw}, {#2-\hh}) rectangle ({#1+\hw}, {#2+\hh});%
+}
+
+% ===================================================================
+% LEFT: Full proof (all siblings shown)
+% ===================================================================
+\begin{scope}[xshift=0cm]
+
+\node[font=\small\bfseries, anchor=south] at (1.5, 3.5) {Full proof};
+
+% Edges
+\foreach \l/\r/\p in {0/1/0.5, 2/3/2.5} {
+  \draw[black!20, line width=0.4pt] (\l, \hh) -- (\p, {1.0-\hh});
+  \draw[black!20, line width=0.4pt] (\r, \hh) -- (\p, {1.0-\hh});
+}
+\draw[black!20, line width=0.4pt] (0.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+\draw[black!20, line width=0.4pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+
+% Highlight the proof path (d₅=position 2 in this 4-leaf subtree → root)
+\draw[algB!60, line width=1.2pt] (2, \hh) -- (2.5, {1.0-\hh});
+\draw[algB!60, line width=1.2pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+
+% All leaf nodes
+\anode{0}{0}{nullc!10, draw=nullc!50, line width=0.5pt, dashed}
+\anode{1}{0}{nullc!10, draw=nullc!50, line width=0.5pt, dashed}
+\anode{2}{0}{algB!20, draw=algB!65, line width=0.6pt}  % target leaf
+\anode{3}{0}{algB!20, draw=algB!65, line width=0.5pt}  % sibling (proof element)
+
+% Internal nodes
+\anode{0.5}{1.0}{nullc!10, draw=nullc!50, line width=0.5pt, dashed}  % null subtree root — SIBLING
+\anode{2.5}{1.0}{algB!20, draw=algB!65, line width=0.5pt}
+\anode{1.5}{2.0}{algB!20, draw=algB!65, line width=0.5pt}  % root
+
+% Proof element markers (circled siblings)
+% Sibling of target leaf (d₃)
+\draw[red!60!black, line width=0.7pt, rounded corners=1pt]
+  ({3-\hw-0.04}, {0-\hh-0.04}) rectangle ({3+\hw+0.04}, {0+\hh+0.04});
+\node[font=\tiny, text=red!60!black, anchor=west] at ({3+\hw+0.1}, 0) {sibling};
+
+% Null subtree sibling (positions 0–1)
+\draw[red!60!black, line width=0.7pt, rounded corners=1pt]
+  ({0.5-\hw-0.04}, {1.0-\hh-0.04}) rectangle ({0.5+\hw+0.04}, {1.0+\hh+0.04});
+\node[font=\tiny, text=red!60!black, anchor=east] at ({0.5-\hw-0.1}, 1.0) {null sibling};
+
+% Target leaf marker
+\node[font=\tiny\bfseries, text=algB!80, anchor=south] at (2, {0+\hh+0.06}) {target};
+
+% Leaf labels
+\node[font=\tiny, text=black!55, anchor=north] at (0, {-\hh-0.06}) {$d_0$};
+\node[font=\tiny, text=black!55, anchor=north] at (1, {-\hh-0.06}) {$d_1$};
+\node[font=\tiny, text=black!55, anchor=north] at (2, {-\hh-0.06}) {$d_2$};
+\node[font=\tiny, text=black!55, anchor=north] at (3, {-\hh-0.06}) {$d_3$};
+
+% Root label
+\node[font=\tiny, text=algB!80, anchor=south] at (1.5, {2.0+\hh+0.04}) {$R_b$};
+
+% Proof size annotation
+\node[font=\tiny, text=black!60, anchor=north, align=center] at (1.5, -0.55)
+  {2 siblings transmitted};
+
+\end{scope}
+
+% ===================================================================
+% ARROW between the two trees
+% ===================================================================
+\draw[->, thick, black!40] (4.0, 1.0) -- (5.3, 1.0)
+  node[midway, above, font=\tiny\itshape, text=black!60] {elide};
+\draw[<-, thick, black!40] (4.0, 0.7) -- (5.3, 0.7)
+  node[midway, below, font=\tiny\itshape, text=black!60] {rehydrate};
+
+% ===================================================================
+% RIGHT: Elided proof (null sibling removed)
+% ===================================================================
+\begin{scope}[xshift=5.8cm]
+
+\node[font=\small\bfseries, anchor=south] at (1.5, 3.5) {Elided proof};
+
+% Edges — same structure but left subtree edge is dotted
+\draw[black!15, line width=0.4pt, densely dotted] (0, \hh) -- (0.5, {1.0-\hh});
+\draw[black!15, line width=0.4pt, densely dotted] (1, \hh) -- (0.5, {1.0-\hh});
+\draw[black!20, line width=0.4pt] (2, \hh) -- (2.5, {1.0-\hh});
+\draw[black!20, line width=0.4pt] (3, \hh) -- (2.5, {1.0-\hh});
+\draw[black!15, line width=0.4pt, densely dotted] (0.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+\draw[black!20, line width=0.4pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+
+% Proof path highlight
+\draw[algB!60, line width=1.2pt] (2, \hh) -- (2.5, {1.0-\hh});
+\draw[algB!60, line width=1.2pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+
+% Leaf nodes — null ones shown as dotted outlines only
+\draw[nullc!30, line width=0.4pt, densely dotted]
+  ({0-\hw}, {0-\hh}) rectangle ({0+\hw}, {0+\hh});
+\draw[nullc!30, line width=0.4pt, densely dotted]
+  ({1-\hw}, {0-\hh}) rectangle ({1+\hw}, {0+\hh});
+\anode{2}{0}{algB!20, draw=algB!65, line width=0.6pt}  % target
+\anode{3}{0}{algB!20, draw=algB!65, line width=0.5pt}  % sibling (still sent)
+
+% Internal — null subtree shown as dotted outline
+\draw[nullc!30, line width=0.4pt, densely dotted]
+  ({0.5-\hw}, {1.0-\hh}) rectangle ({0.5+\hw}, {1.0+\hh});
+\node[font=\tiny, text=nullc, anchor=center] at (0.5, 1.0) {$N_1$};
+
+\anode{2.5}{1.0}{algB!20, draw=algB!65, line width=0.5pt}
+\anode{1.5}{2.0}{algB!20, draw=algB!65, line width=0.5pt}
+
+% Sibling marker (only d₃ — the null one is elided)
+\draw[red!60!black, line width=0.7pt, rounded corners=1pt]
+  ({3-\hw-0.04}, {0-\hh-0.04}) rectangle ({3+\hw+0.04}, {0+\hh+0.04});
+\node[font=\tiny, text=red!60!black, anchor=west] at ({3+\hw+0.1}, 0) {sibling};
+
+% Elided marker
+\node[font=\tiny\itshape, text=nullc, anchor=east] at ({0.5-\hw-0.08}, 1.0) {elided};
+
+% Target leaf marker
+\node[font=\tiny\bfseries, text=algB!80, anchor=south] at (2, {0+\hh+0.06}) {target};
+
+% Leaf labels
+\node[font=\tiny, text=black!55, anchor=north] at (2, {-\hh-0.06}) {$d_2$};
+\node[font=\tiny, text=black!55, anchor=north] at (3, {-\hh-0.06}) {$d_3$};
+
+% Root label
+\node[font=\tiny, text=algB!80, anchor=south] at (1.5, {2.0+\hh+0.04}) {$R_b$};
+
+% Proof size annotation
+\node[font=\tiny, text=black!60, anchor=north, align=center] at (1.5, -0.55)
+  {1 sibling transmitted\\verifier rehydrates $N_1$};
+
+\end{scope}
+
+\end{tikzpicture}

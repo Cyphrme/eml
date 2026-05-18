@@ -124,5 +124,28 @@ algorithms share topology but not trust.
 \end{figure*}
 ```
 
-<!-- TODO: Figure 2 — Projection: same tree viewed through algo A vs algo B -->
-<!-- TODO: Figure 3 — Epoch timeline showing add/remove/resume lifecycle -->
+```{=latex}
+\begin{figure*}[t]
+  \centering
+  \resizebox{0.85\textwidth}{!}{\input{figures/fig-projection.tex}}
+  \caption{Projection view of the EML from @fig:topology. Left:
+  Algorithm~A's projection --- a standard Merkle tree with all positions
+  active. Right: Algorithm~B's projection --- positions 0--3 are null
+  constants ($N_h$), positions 4--7 are active. Each projection is an
+  independently valid Merkle tree; proofs are generated per-projection.}
+  \label{fig:projection}
+\end{figure*}
+```
+
+```{=latex}
+\begin{figure*}[t]
+  \centering
+  \resizebox{0.9\textwidth}{!}{\input{figures/fig-epoch-timeline.tex}}
+  \caption{Algorithm lifecycle in the EML. Algorithm~A is active from
+  genesis. Algorithm~B is added at position~4, removed at position~10
+  (entering a frozen state where null hashing continues), and resumed at
+  position~15. Each active interval defines an \emph{epoch}; the frozen
+  gap preserves tree-wide append consistency.}
+  \label{fig:epochs}
+\end{figure*}
+```

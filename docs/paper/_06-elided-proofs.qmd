@@ -106,4 +106,15 @@ The EML's elided proofs achieve comparable compression to SMT bitmap
 techniques but without transmitting any metadata. The verifier's
 knowledge of the epoch boundaries is sufficient.
 
-<!-- TODO: Figure 4 — Audit path with null siblings highlighted and elided -->
+```{=latex}
+\begin{figure*}[t]
+  \centering
+  \resizebox{0.85\textwidth}{!}{\input{figures/fig-elision.tex}}
+  \caption{Proof elision. Left: a full inclusion proof for Algorithm~B
+  at position~$d_2$ requires two siblings, including a null subtree
+  root covering positions 0--1. Right: the elided proof omits the null
+  sibling entirely; the verifier rehydrates it from the precomputed null
+  table $N_h(b)$ using only the epoch boundary metadata.}
+  \label{fig:elision}
+\end{figure*}
+```

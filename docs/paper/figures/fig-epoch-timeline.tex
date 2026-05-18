@@ -1,0 +1,93 @@
+% Figure 3: Epoch timeline — algorithm lifecycle events.
+%
+% Horizontal timeline showing two algorithms' active/inactive periods.
+% Algorithm A: active for entire lifetime.
+% Algorithm B: added at position 4, removed at position 10, resumed at 15.
+
+\begin{tikzpicture}[x=0.55cm, y=0.9cm]
+
+% --- Timeline axis ---
+\def\tmin{0}
+\def\tmax{21}
+
+\draw[->, black!50, line width=0.5pt] (\tmin-0.3, 0) -- (\tmax+0.8, 0);
+\node[font=\small, anchor=west, text=black!60] at (\tmax+0.9, 0) {position};
+
+% Tick marks
+\foreach \t in {0,4,10,15,20} {
+  \draw[black!40, line width=0.4pt] (\t, -0.1) -- (\t, 0.1);
+  \node[font=\tiny, text=black!55, anchor=north] at (\t, -0.15) {\t};
+}
+
+% ===================================================================
+% Algorithm A: active entire lifetime (blue bar)
+% ===================================================================
+\fill[algA!20, draw=algA!60, line width=0.5pt]
+  (\tmin, 1.4) rectangle (\tmax, 1.8);
+\node[font=\small\bfseries, text=algA!80, anchor=east] at (-0.5, 1.6) {Algo A};
+\node[font=\tiny, text=algA!70, anchor=west] at (\tmax+0.2, 1.6) {active};
+
+% ===================================================================
+% Algorithm B: add at 4, remove at 10, resume at 15 (amber bar)
+% ===================================================================
+
+% Pre-activation: nothing (positions 0–3)
+
+% Active epoch 1: positions 4–9
+\fill[algB!20, draw=algB!60, line width=0.5pt]
+  (4, 0.5) rectangle (10, 0.9);
+
+% Frozen gap: positions 10–14 (dotted/dashed)
+\fill[nullc!8, draw=nullc!45, line width=0.4pt, densely dashed]
+  (10, 0.5) rectangle (15, 0.9);
+
+% Active epoch 2: positions 15–20
+\fill[algB!20, draw=algB!60, line width=0.5pt]
+  (15, 0.5) rectangle (\tmax, 0.9);
+
+\node[font=\small\bfseries, text=algB!80, anchor=east] at (-0.5, 0.7) {Algo B};
+
+% ===================================================================
+% Event annotations
+% ===================================================================
+
+% add_alg at position 4
+\draw[->, thick, black!60] (4, 0.3) -- (4, 0.48);
+\node[font=\tiny\itshape, text=black!70, anchor=north, align=center]
+  at (4, 0.22) {\texttt{add}};
+
+% remove_alg at position 10
+\draw[->, thick, black!60] (10, 0.3) -- (10, 0.48);
+\node[font=\tiny\itshape, text=black!70, anchor=north, align=center]
+  at (10, 0.22) {\texttt{remove}};
+
+% resume_alg at position 15
+\draw[->, thick, black!60] (15, 0.3) -- (15, 0.48);
+\node[font=\tiny\itshape, text=black!70, anchor=north, align=center]
+  at (15, 0.22) {\texttt{resume}};
+
+% ===================================================================
+% Epoch interval labels
+% ===================================================================
+\draw[<->, thin, algB!60] (4, -0.45) -- (10, -0.45);
+\node[font=\tiny, text=algB!70, anchor=north] at (7, -0.5) {epoch 1};
+
+\draw[<->, thin, nullc!60] (10, -0.45) -- (15, -0.45);
+\node[font=\tiny, text=nullc, anchor=north] at (12.5, -0.5) {frozen};
+
+\draw[<->, thin, algB!60] (15, -0.45) -- (\tmax, -0.45);
+\node[font=\tiny, text=algB!70, anchor=north] at (17.5, -0.5) {epoch 2};
+
+% ===================================================================
+% Legend
+% ===================================================================
+\node[font=\tiny, anchor=west] at (0.5, 2.3) {%
+  \raisebox{1pt}{\tikz \fill[algA!20, draw=algA!60, line width=0.4pt]
+    (0,0) rectangle (0.28, 0.18);}
+  ~Active \qquad
+  \raisebox{1pt}{\tikz \fill[nullc!8, draw=nullc!45, line width=0.4pt, densely dashed]
+    (0,0) rectangle (0.28, 0.18);}
+  ~Frozen (null hashing)%
+};
+
+\end{tikzpicture}
