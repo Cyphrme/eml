@@ -44,17 +44,26 @@ term the *upgrade trilemma*:
    violating the core invariant.
 
 We present the **Epoch Merkle Log (EML)**, a verifiable append-only data
-structure that escapes the trilemma entirely. The EML maintains a single
-RFC 9162 Merkle tree topology shared across all hash algorithms. Each
-algorithm occupies discrete chronological *epochs*---intervals during
-which it actively hashes appended data. Positions outside an algorithm's
-active epochs contain deterministic *null constants*: fixed-point values
-derived from the algorithm's own hash function, domain-separated from
-both real leaf hashes and internal node hashes. A new algorithm added at
-tree position $n$ computes $\mathcal{O}(\log n)$ null constants to
-establish its frontier over the existing tree, then immediately
-participates in subsequent appends. No historical data is re-hashed. No
-fork is created. No algorithm's security depends on any other's.
+structure that navigates the trilemma without forking or rehashing. The
+EML maintains a single RFC 9162 Merkle tree topology shared across all
+hash algorithms. Each algorithm occupies discrete chronological
+*epochs*---intervals during which it actively hashes appended data.
+Positions outside an algorithm's active epochs contain deterministic
+*null constants*: fixed-point values derived from the algorithm's own
+hash function, domain-separated from both real leaf hashes and internal
+node hashes. A new algorithm added at tree position $n$ computes
+$\mathcal{O}(\log n)$ null constants to establish its frontier over the
+existing tree, then immediately participates in subsequent appends. No
+historical data is re-hashed. No fork is created. Each algorithm's
+verification is independent of every other's.
+
+The trade-off is explicit: historical data remains bound to the
+algorithms that were active at the time of insertion. A newly added
+algorithm authenticates only the data appended during its active epochs;
+pre-epoch positions are committed as deterministic null constants that
+are unforgeable but carry no payload authentication. This is a principled
+choice---faithful representation of temporal reality---not an
+evasion of the retroactive computation cost.
 
 The key theoretical result is the *projection isomorphism*: for any
 algorithm $a$, the EML's per-algorithm projection $\pi_a$ yields a

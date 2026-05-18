@@ -1,13 +1,15 @@
 ## Conclusion {#sec-conclusion}
 
 We have presented the Epoch Merkle Log, a verifiable append-only data
-structure that resolves the upgrade trilemma for hash algorithm
+structure that addresses the upgrade trilemma for hash algorithm
 transitions in authenticated logs. By partitioning algorithm lifecycles
 into null-padded chronological epochs over a shared RFC 9162 topology,
 the EML achieves $\mathcal{O}(\log n)$ algorithm addition with zero
 retroactive computation, strictly algorithm-independent verification via
 the projection isomorphism, and zero-metadata proof compression through
-deterministic elision.
+deterministic elision. Historical data remains bound to the algorithms
+active at the time of insertion---a principled trade-off that preserves
+temporal fidelity while eliminating operational fragmentation.
 
 The formal algebraic model (9 equational laws over 18 definitions)
 reduces multi-algorithm correctness to the well-understood correctness of
@@ -20,9 +22,11 @@ Epoch boundaries transform what has historically been a global
 infrastructure crisis---coordinating hash algorithm deprecation across
 distributed systems---into a locally managed, formally verifiable
 structural operation. A log operator adds a post-quantum hash algorithm
-in $\mathcal{O}(\log n)$ time, and every existing verifier continues
-operating without modification, without awareness of the new algorithm,
-and without any degradation in the security of its own verification.
+in $\mathcal{O}(\log n)$ time. The cryptographic verification core
+remains standard RFC 9162: clients receiving unelided proofs verify
+without modification. Elision-aware clients perform a rehydration step
+before invoking the same verification core, requiring no degradation in
+the security of their own algorithm's verification.
 
 ### Future Work
 
