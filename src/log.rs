@@ -111,63 +111,6 @@ fn null_prefix_peaks(hasher: &dyn Hasher, null_table: &mut NullTable, k: u64) ->
     peaks
 }
 
-/// Extend a frozen frontier stack by appending null leaves.
-///
-/// The frozen stack represents a tree of `deact` leaves (positions `[0, deact)`).
-/// This function appends `gap_size` null leaves (positions `[deact, deact+gap_size)`)
-/// using the standard CTO-based frontier merge algorithm.
-///
-/// Sealed internal nodes are persisted into `storage` during CTO merges.
-/// By Observation 2, purely-null subtrees are derivable from NullTable
-/// and need not be stored; however, mixed nodes (combining previously-active
-/// content with null gap leaves) must be persisted.
-///
-/// The result is the correct frontier stack for `deact + gap_size` leaves,
-/// with real data in `[0, deact)` and null constants in `[deact, deact+gap_size)`.
-///
-/// Complexity: O(gap_size) total hash operations (amortized O(1) per append).
-fn extend_with_nulls<S: Storage>(
-    frozen: &[Vec<u8>],
-    hasher: &dyn Hasher,
-    storage: &mut S,
-    alg_id: u64,
-    deact: u64,
-    gap_size: u64,
-) -> Result<Vec<Vec<u8>>> {
-    if gap_size == 0 {
-        return Ok(frozen.to_vec());
-    }
-
-    let null_leaf = hasher.null();
-
-    // Stack is MSB-first, same convention as Log::append().
-    // push/pop operate on the end (LSB position).
-    let mut stack: Vec<Vec<u8>> = frozen.to_vec();
-
-    for i in 0..gap_size {
-        let n = deact + i; // tree size before this append
-        stack.push(null_leaf.clone());
-
-        // Standard frontier merge: count trailing ones determines merge depth.
-        let merges = n.trailing_ones();
-        for j in 1..=merges {
-            let right = stack.pop().expect("stack underflow during null extend");
-            let left = stack.pop().expect("stack underflow during null extend");
-            let parent = hasher.node(&left, &right);
-
-            let height = j as usize;
-            let left_pos = n + 1 - (1u64 << height);
-            storage
-                .store_node(alg_id, left_pos, height, &parent)
-                .map_err(|e| Error::Storage(Box::new(e)))?;
-
-            stack.push(parent);
-        }
-    }
-
-    Ok(stack)
-}
-
 // ============================================================================
 // TSML Log
 // ============================================================================
@@ -444,12 +387,13 @@ impl<S: Storage> Log<S> {
     /// Reactivate a frozen algorithm at the current tree size.
     ///
     /// The frozen frontier stack is fast-forwarded through the null gap
-    /// (positions from deactivation to current size) using the standard
-    /// CTO-based frontier algorithm. Sealed internal nodes are persisted
-    /// into storage during the gap extension. A new active epoch
+    /// (positions from deactivation to current size) by decomposing the
+    /// gap into `⌈log₂ G⌉` perfect null subtrees and merging them into
+    /// the frozen frontier via carry propagation. A new active epoch
     /// `(current_size, ∞)` is appended.
     ///
-    /// Complexity: O(gap) hash operations and node stores.
+    /// Complexity: O(log G) hash operations and node stores, where
+    /// G = current_size - deactivation_point.
     ///
     /// # Errors
     ///
@@ -480,19 +424,21 @@ impl<S: Storage> Log<S> {
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
         if gap > 0 {
-            // Split borrow: access self.algs (shared) and self.storage (mutable)
-            // as disjoint fields.
+            // Ensure null table covers the target tree height.
+            {
+                let state = self.algs.get_mut(&alg_id).unwrap();
+                let max_height = (64 - current_size.leading_zeros()) as usize;
+                state
+                    .null_table
+                    .ensure_height(state.hasher.as_ref(), max_height);
+            }
+
+            // Reconstruct the frontier from scratch for the target tree size.
+            // subtree_root resolves stored nodes for the real-data range [0, deact),
+            // NullTable for the null gap [deact, current_size), and recursive
+            // binary splits for mixed boundary subtrees.
             let state = &self.algs[&alg_id];
-            let frozen_stack = state.stack.clone();
-            let hasher = state.hasher.as_ref();
-            let new_stack = extend_with_nulls(
-                &frozen_stack,
-                hasher,
-                &mut self.storage,
-                alg_id,
-                deactivation,
-                gap,
-            )?;
+            let new_stack = Self::reconstruct_frontier(self, state, alg_id, current_size)?;
             self.algs.get_mut(&alg_id).unwrap().stack = new_stack;
         }
 
@@ -1783,6 +1729,52 @@ mod tests {
 
         assert_eq!(log.activation_index(0).unwrap(), 0);
         assert_eq!(log.deactivation_index(0).unwrap(), None); // currently active
+    }
+
+    #[test]
+    fn resume_large_gap_o_log_g() {
+        // Stress test: gap of 2^16 = 65536 null leaves.
+        // With O(G) this would require 65536 iterations; with O(log G)
+        // via reconstruct_frontier it completes in ~16 subtree_root calls.
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+
+        // Epoch 1: 8 active leaves.
+        for i in 0..8u8 {
+            log.append(&[i]).unwrap();
+        }
+        log.remove_algorithm(0).unwrap();
+
+        // Gap: 2^16 leaves appended while alg 0 is frozen.
+        // Need a second algorithm to accept appends.
+        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
+        let gap_size: u64 = 1 << 16;
+        for i in 0..gap_size {
+            log.append(&(i as u32).to_le_bytes()).unwrap();
+        }
+
+        // Resume alg 0 across the large gap.
+        log.resume_algorithm(0).unwrap();
+
+        // Epoch 2: 4 more active leaves.
+        for i in 0..4u8 {
+            log.append(&[200 + i]).unwrap();
+        }
+
+        // A-EQUIV: root must match projection oracle.
+        let root = log.root(0).unwrap();
+        let projected = log.project(0).unwrap();
+        let batch_root = crate::proof::mth(&Sha256Hasher, &projected);
+        assert_eq!(root, batch_root, "A-EQUIV violated after large-gap resume");
+
+        // A-STACK: stack length == popcount(tree_size).
+        let ts = log.tree_size(0).unwrap();
+        let expected_len = ts.count_ones() as usize;
+        assert_eq!(
+            log.stack_len(0).unwrap(),
+            expected_len,
+            "A-STACK violated after large-gap resume: tree_size={ts}"
+        );
     }
 
     #[test]
