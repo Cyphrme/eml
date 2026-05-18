@@ -49,9 +49,12 @@ The proof compression operates in three phases:
    client synthesizes $N_h(a)$ from its local NullTable. Otherwise, it
    consumes the next sibling from the elided proof's hash sequence.
 
-4. **Verification (client).** The rehydrated proof is passed to the
-   standard, unmodified RFC 9162 verification function. The verifier is
-   unaware that elision occurred.
+4. **Verification (client).** The rehydrated proof is a standard
+   RFC 9162 inclusion or consistency proof. It is passed to the
+   unmodified cryptographic verification function (the PATH/SUBPROOF
+   hash-chain walk); the verifier is unaware that elision occurred.
+   The client pipeline as a whole is elision-aware (step 3), but the
+   cryptographic core invoked at this step is not.
 
 ### Zero-Metadata Compression
 

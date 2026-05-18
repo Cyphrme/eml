@@ -43,3 +43,10 @@ the security of their own algorithm's verification.
   per-algorithm consistency proofs are natural building blocks for
   gossip-based log replication, but the replication protocol is an
   application-layer concern outside the scope of this work.
+
+- **STH signature agility.** The EML provides hash agility for the
+  tree's internal structure but does not address signature agility for
+  the Signed Tree Head. Extending the epoch lifecycle model to STH
+  signing keys---enabling key rotation and multi-algorithm STH
+  commitments---is an orthogonal concern that arises naturally once
+  epoch manifests must be committed by the tree head.
