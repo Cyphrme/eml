@@ -41,11 +41,13 @@
     ({#1-\hw}, {#2-\hh}) rectangle ({#1+\hw}, #2);
 }
 
-% Null node: top=A (blue), bottom=null (gray dashed)
+% Null node: top=A (blue), bottom=null (gray dashed + hatched)
 \newcommand{\nullnode}[2]{% #1=x, #2=y
   \fill[algA!15, draw=algA!65, line width=0.6pt]
     ({#1-\hw}, #2) rectangle ({#1+\hw}, {#2+\hh});
   \fill[nullc!10, draw=nullc!50, line width=0.5pt, dashed]
+    ({#1-\hw}, {#2-\hh}) rectangle ({#1+\hw}, #2);
+  \fill[pattern=north east lines, pattern color=nullc!35]
     ({#1-\hw}, {#2-\hh}) rectangle ({#1+\hw}, #2);
 }
 
@@ -132,8 +134,12 @@
   \raisebox{1pt}{\tikz \fill[algB!15, draw=algB!65, line width=0.5pt]
     (0,0) rectangle (0.3, 0.2);}
   ~Algo~B \qquad
-  \raisebox{1pt}{\tikz \fill[nullc!10, draw=nullc!50, line width=0.5pt, dashed]
-    (0,0) rectangle (0.3, 0.2);}
+  \raisebox{1pt}{\tikz{
+    \fill[nullc!10, draw=nullc!50, line width=0.5pt, dashed]
+      (0,0) rectangle (0.3, 0.2);
+    \fill[pattern=north east lines, pattern color=nullc!35]
+      (0,0) rectangle (0.3, 0.2);
+  }}
   ~Null ($N_h$)%
 };
 

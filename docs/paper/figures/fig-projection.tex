@@ -67,9 +67,15 @@
 \draw[black!25, line width=0.4pt] (0.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
 \draw[black!25, line width=0.4pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
 
-% Nodes — positions 0–3 null (gray dashed)
+% Nodes — positions 0–3 null (gray dashed + hatched)
 \foreach \x in {0,1,2,3} { \snode{\x}{0}{nullc!10}{nullc!50}{dashed} }
+\foreach \x in {0,1} {
+  \fill[pattern=north east lines, pattern color=nullc!35]
+    ({\x-\hw}, {0-\hh}) rectangle ({\x+\hw}, {0+\hh});
+}
 \snode{0.5}{1.0}{nullc!10}{nullc!50}{dashed}
+\fill[pattern=north east lines, pattern color=nullc!35]
+  ({0.5-\hw}, {1.0-\hh}) rectangle ({0.5+\hw}, {1.0+\hh});
 \snode{2.5}{1.0}{algB!18}{algB!65}{}
 
 % Null label on left subtree root

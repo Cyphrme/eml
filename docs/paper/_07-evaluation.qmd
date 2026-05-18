@@ -81,26 +81,28 @@ positive (a tampered proof that verified successfully).
 
 ### Fuzz Testing
 
-Four `cargo-fuzz` harnesses exercise adversarial inputs against the
-proof verification and elision surfaces:
+Four `cargo-fuzz` harnesses (powered by `libFuzzer`) exercise
+adversarial inputs against the proof verification and elision surfaces:
 
 ::: {#tbl-fuzz-targets}
-| Target | Runs | Panics |
-|:-------|-----:|-------:|
-| `verify_inclusion` | ~500K | 0 |
-| `verify_consistency` | ~500K | 0 |
-| `rehydrate_proof` | ~500K | 0 |
-| `proof_mutation` | ~500K | 0 |
-| **Total** | **~2M** | **0** |
+| Target | Corpus | Crashes |
+|:-------|-------:|--------:|
+| `verify_inclusion` | 134 | 0 |
+| `verify_consistency` | 172 | 0 |
+| `rehydrate_proof` | 184 | 0 |
+| `proof_mutation` | 202 | 0 |
+| **Total** | **692** | **0** |
 
-: Fuzz target coverage summary.
+: Fuzz target summary. Corpus size reflects the number of distinct
+  inputs retained by `libFuzzer`'s coverage-guided minimization after
+  approximately $2 \times 10^6$ total executions across all targets.
 :::
 
 The `proof_mutation` target is particularly notable: it takes valid
 proofs, applies single-bit mutations at random positions, and confirms
-that the mutated proof is rejected. Zero panics across approximately 2
-million combined runs demonstrate that the proof verification surface
-handles arbitrary malformed inputs gracefully.
+that the mutated proof is rejected. Zero crashes across 692
+coverage-guided corpus entries demonstrate that the proof verification
+surface handles arbitrary malformed inputs gracefully.
 
 ### Property-Based Testing
 

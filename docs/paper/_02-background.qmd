@@ -127,3 +127,15 @@ a given algorithm, producing divergent rehydration and verification
 outcomes. The mechanism for committing the manifest (e.g., as an STH
 extension field or by hashing the manifest into the tree head) is a
 deployment-layer concern outside the scope of this paper's formal model.
+
+Cross-algorithm equivocation---a malicious log forking algorithm $a$'s
+history while presenting a consistent history under algorithm $b$---is
+detectable because the tree topology is shared. The log maintains a
+single leaf sequence; any inconsistency in one projection's root hash
+is visible to a monitor operating on that projection, regardless of
+whether other projections appear consistent. Formally: equivocation on
+projection $\pi_a$ is detectable if and only if at least one honest
+monitor performs consistency checks on $\pi_a$. Cross-algorithm
+monitoring (where a monitor on $\pi_b$ detects equivocation in $\pi_a$)
+is not provided by the EML's guarantees, as the projections are
+informationally independent under \lawname{Alg-Ind}.

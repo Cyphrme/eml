@@ -39,12 +39,18 @@
 
 % All leaf nodes
 \anode{0}{0}{nullc!10, draw=nullc!50, line width=0.5pt, dashed}
+\fill[pattern=north east lines, pattern color=nullc!35]
+  ({0-\hw}, {0-\hh}) rectangle ({0+\hw}, {0+\hh});
 \anode{1}{0}{nullc!10, draw=nullc!50, line width=0.5pt, dashed}
+\fill[pattern=north east lines, pattern color=nullc!35]
+  ({1-\hw}, {0-\hh}) rectangle ({1+\hw}, {0+\hh});
 \anode{2}{0}{algB!20, draw=algB!65, line width=0.6pt}  % target leaf
 \anode{3}{0}{algB!20, draw=algB!65, line width=0.5pt}  % sibling (proof element)
 
 % Internal nodes
 \anode{0.5}{1.0}{nullc!10, draw=nullc!50, line width=0.5pt, dashed}  % null subtree root — SIBLING
+\fill[pattern=north east lines, pattern color=nullc!35]
+  ({0.5-\hw}, {1.0-\hh}) rectangle ({0.5+\hw}, {1.0+\hh});
 \anode{2.5}{1.0}{algB!20, draw=algB!65, line width=0.5pt}
 \anode{1.5}{2.0}{algB!20, draw=algB!65, line width=0.5pt}  % root
 
@@ -104,16 +110,22 @@
 \draw[algB!60, line width=1.2pt] (2, \hh) -- (2.5, {1.0-\hh});
 \draw[algB!60, line width=1.2pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
 
-% Leaf nodes — null ones shown as dotted outlines only
+% Leaf nodes — null ones shown as dotted outlines only (+ hatched)
 \draw[nullc!30, line width=0.4pt, densely dotted]
   ({0-\hw}, {0-\hh}) rectangle ({0+\hw}, {0+\hh});
+\fill[pattern=north east lines, pattern color=nullc!20]
+  ({0-\hw}, {0-\hh}) rectangle ({0+\hw}, {0+\hh});
 \draw[nullc!30, line width=0.4pt, densely dotted]
+  ({1-\hw}, {0-\hh}) rectangle ({1+\hw}, {0+\hh});
+\fill[pattern=north east lines, pattern color=nullc!20]
   ({1-\hw}, {0-\hh}) rectangle ({1+\hw}, {0+\hh});
 \anode{2}{0}{algB!20, draw=algB!65, line width=0.6pt}  % target
 \anode{3}{0}{algB!20, draw=algB!65, line width=0.5pt}  % sibling (still sent)
 
-% Internal — null subtree shown as dotted outline
+% Internal — null subtree shown as dotted outline (+ hatched)
 \draw[nullc!30, line width=0.4pt, densely dotted]
+  ({0.5-\hw}, {1.0-\hh}) rectangle ({0.5+\hw}, {1.0+\hh});
+\fill[pattern=north east lines, pattern color=nullc!20]
   ({0.5-\hw}, {1.0-\hh}) rectangle ({0.5+\hw}, {1.0+\hh});
 \node[font=\tiny, text=nullc, anchor=center] at (0.5, 1.0) {$N_1$};
 

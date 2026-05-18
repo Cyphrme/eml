@@ -37,8 +37,10 @@
 \fill[algB!20, draw=algB!60, line width=0.5pt]
   (4, 0.5) rectangle (10, 0.9);
 
-% Frozen gap: positions 10–14 (dotted/dashed)
+% Frozen gap: positions 10–14 (dotted/dashed + hatched)
 \fill[nullc!8, draw=nullc!45, line width=0.4pt, densely dashed]
+  (10, 0.5) rectangle (15, 0.9);
+\fill[pattern=north east lines, pattern color=nullc!30]
   (10, 0.5) rectangle (15, 0.9);
 
 % Active epoch 2: positions 15–20
@@ -85,8 +87,12 @@
   \raisebox{1pt}{\tikz \fill[algA!20, draw=algA!60, line width=0.4pt]
     (0,0) rectangle (0.28, 0.18);}
   ~Active \qquad
-  \raisebox{1pt}{\tikz \fill[nullc!8, draw=nullc!45, line width=0.4pt, densely dashed]
-    (0,0) rectangle (0.28, 0.18);}
+  \raisebox{1pt}{\tikz{
+    \fill[nullc!8, draw=nullc!45, line width=0.4pt, densely dashed]
+      (0,0) rectangle (0.28, 0.18);
+    \fill[pattern=north east lines, pattern color=nullc!30]
+      (0,0) rectangle (0.28, 0.18);
+  }}
   ~Frozen (null hashing)%
 };
 
