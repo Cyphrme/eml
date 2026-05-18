@@ -181,10 +181,13 @@ S.\text{size})$. The frontier is frozen.
 
 ::: {#def-resume-alg}
 **Definition 13** (Resume algorithm). $\text{resume\_alg}(S, a) \to S'$
-extends the frozen frontier through the null gap of length
-$G = S.\text{size} - e_k$ using the standard CTO append with
-$N_0(a)$ at each position, then appends a new epoch
-$[(S.\text{size}, \infty)]$. Cost: $\mathcal{O}(G)$.
+reconstructs the frontier stack for the target tree size
+$n = S.\text{size}$ by decomposing $n$ into its binary representation
+and resolving each perfect subtree root via stored nodes (for active
+ranges), $N_h(a)$ (for null ranges), or recursive binary splits (for
+mixed boundary subtrees). A new epoch $[(S.\text{size}, \infty)]$ is
+appended. Cost: $\mathcal{O}(\log n)$, where $n$ is the current
+tree size.
 :::
 
 ### Root Extraction and Projection
