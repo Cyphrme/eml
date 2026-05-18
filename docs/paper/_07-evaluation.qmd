@@ -28,21 +28,26 @@ The implementation is validated by 74 tests across four categories:
 
 The complexity regression suite empirically validates the performance
 bounds from @tbl-perf-bounds. Each test generates trees at
-exponentially increasing sizes ($n = 2^4$ through $2^{16}$), measures
+exponentially increasing sizes ($n = 2^4$ through $2^{24}$), measures
 operation timing, and fits the empirical curve against the expected
-complexity class using the `bigoish` library.
+complexity class using the `bigoish` library. Consistency proof
+benchmarks sample `old_size` from five split points
+$\{n/4, n/3, n/2, 2n/3, 3n/4\}$ per tree size to avoid biasing toward
+the favorable power-of-two bisection case.
 
 ```{=latex}
 \begin{figure*}[t]
   \centering
   \input{figures/fig-complexity.tex}
   \caption{Empirical proof generation time vs.\ tree size. Tree sizes
-  range from $2^4$ to $2^{20}$ (${\sim}$1M) leaves; each point is the
-  median of 31~trials (5~warmup) via per-thread CPU time (IQR
-  $<$\,5\% of median in all cases).
+  range from $2^4$ to $2^{24}$ (${\sim}$16M) leaves; each point is the
+  median of 31~trials (5~warmup) per configuration via per-thread CPU
+  time. Consistency proofs sample five split points per tree size
+  ($n/4$, $n/3$, $n/2$, $2n/3$, $3n/4$); the IQR reflects variation
+  across proof topologies, not measurement noise.
   (a)~Inclusion proof generation scales as $O(\log n)$ (dashed fit).
   (b)~Consistency proof generation is bounded by a constant
-  (${\leq}1.2\,\mu$s) across five orders of magnitude.}
+  independent of tree size across six orders of magnitude.}
   \label{fig:complexity}
 \end{figure*}
 ```
@@ -53,8 +58,9 @@ The fitted curves confirm:
   scales logarithmically with tree size across all tested
   configurations (@fig:complexity(a)).
 - **Consistency proofs**: Theoretically $\mathcal{O}(\log n)$, but
-  empirically constant across four orders of magnitude
-  (@fig:complexity(b)). The `subtree_root` engine resolves each
+  empirically constant across six orders of magnitude
+  (@fig:complexity(b)). Measured across diversified split points
+  ($n/4$ through $3n/4$), the `subtree_root` engine resolves each
   sibling hash via a single stored-node lookup; the logarithmic number
   of lookups is dominated by per-call overhead at these tree sizes.
 - **Append (per algorithm)**: $\mathcal{O}(1)$ amortized. The CTO merge

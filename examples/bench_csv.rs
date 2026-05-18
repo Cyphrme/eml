@@ -115,23 +115,40 @@ fn bench_inclusion(sizes: &[usize]) -> Vec<(usize, u128, u128, u128)> {
 }
 
 /// Measure consistency proof generation time across tree sizes.
+///
+/// For each tree size, samples `old_size` from five split points
+/// {n/4, n/3, n/2, 2n/3, 3n/4} to avoid biasing toward the easiest
+/// (power-of-two bisection) case. Reports the median across all
+/// split points and trials.
 fn bench_consistency(sizes: &[usize]) -> Vec<(usize, u128, u128, u128)> {
     let mut data = Vec::with_capacity(sizes.len());
     for &n in sizes {
         let log = make_log(n);
         let ts = log.tree_size(0).unwrap();
-        let old = ts / 2; // half-size for widest split
 
-        // Warmup
-        for _ in 0..WARMUP {
-            let _ = log.consistency_proof(0, old).unwrap();
+        // Diversified split points.
+        let splits: Vec<u64> = [4, 3, 2, 3, 4]
+            .iter()
+            .zip([1, 1, 1, 2, 3].iter())
+            .map(|(&denom, &numer)| (ts * numer) / denom)
+            .filter(|&s| s > 0 && s < ts)
+            .collect();
+
+        // Warmup across all splits.
+        for &old in &splits {
+            for _ in 0..WARMUP {
+                let _ = log.consistency_proof(0, old).unwrap();
+            }
         }
 
-        let mut times = Vec::with_capacity(TRIALS);
-        for _ in 0..TRIALS {
-            let start = ThreadTime::now();
-            let _ = log.consistency_proof(0, old).unwrap();
-            times.push(start.elapsed().as_nanos());
+        // Measure: TRIALS per split point, collect all timings.
+        let mut times = Vec::with_capacity(TRIALS * splits.len());
+        for &old in &splits {
+            for _ in 0..TRIALS {
+                let start = ThreadTime::now();
+                let _ = log.consistency_proof(0, old).unwrap();
+                times.push(start.elapsed().as_nanos());
+            }
         }
         times.sort_unstable();
 
@@ -140,7 +157,10 @@ fn bench_consistency(sizes: &[usize]) -> Vec<(usize, u128, u128, u128)> {
         let p75 = percentile(&times, 75.0);
 
         data.push((n, p25, p50, p75));
-        eprintln!("  consistency  n={n:>8}  p25={p25}  p50={p50}  p75={p75} ns");
+        eprintln!(
+            "  consistency  n={n:>8}  splits={}  p25={p25}  p50={p50}  p75={p75} ns",
+            splits.len()
+        );
     }
     data
 }
@@ -160,8 +180,8 @@ fn write_csv(path: &str, data: &[(usize, u128, u128, u128)]) {
 // ---------------------------------------------------------------------------
 
 fn main() {
-    // Tree sizes: powers of 2 from 2^4 to 2^20
-    let sizes: Vec<usize> = (4..=20).map(|e| 1 << e).collect();
+    // Tree sizes: powers of 2 from 2^4 to 2^24
+    let sizes: Vec<usize> = (4..=24).map(|e| 1 << e).collect();
 
     let out_dir = "docs/paper/figures/data";
     fs::create_dir_all(out_dir).expect("failed to create output directory");
