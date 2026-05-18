@@ -47,7 +47,10 @@ N_0(a) = H_a(\mathtt{0x02})
 $$
 
 The byte $\mathtt{0x02}$ is distinct from $\mathtt{0x00}$ (leaf) and
-$\mathtt{0x01}$ (node), establishing a third domain.
+$\mathtt{0x01}$ (node), establishing a third domain. Clients that
+inspect raw proof elements at the byte level must be projection-aware to
+distinguish null hashes from leaf or node hashes; standard RFC 9162
+verifiers, which treat proof elements as opaque digests, are unaffected.
 :::
 
 ::: {#def-null-subtree}
@@ -202,7 +205,9 @@ f_r(\text{stacks}(a)) & \text{otherwise}
 \end{cases}
 $$
 
-where $f_r = \text{fold\_right}(\lambda(\text{acc}, l).\ \text{node}(a, l, \text{acc}))$.
+where $f_r = \text{fold\_right}(\lambda(\text{acc}, \ell).\ \text{node}(a, \ell, \text{acc}))$.
+When the stack contains a single element, the fold returns that element
+unchanged as the root.
 :::
 
 ::: {#def-projection}

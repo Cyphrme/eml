@@ -113,7 +113,11 @@ $$
 $$
 
 where `subproof` follows RFC 9162 §2.1.4 with `subtree_root` sibling
-resolution.
+resolution. Consistency proofs operate correctly across epoch boundaries
+by construction: the `subproof` algorithm decomposes the tree by index
+ranges, and `subtree_root` resolves each range by dispatching to stored
+nodes, the NullTable, or recursive binary splitting---without awareness
+of epoch boundaries.
 :::
 
 **Correctness bridge.** The operational definitions produce identical
