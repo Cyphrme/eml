@@ -99,7 +99,7 @@ We make the following contributions:
    epoch boundaries, requiring no explicit markers or bitmaps.
 
 4. **A production Rust implementation with empirical evaluation**
-   (§[VII](#sec-evaluation)): 74 tests across unit, property-based,
+   (§[VII](#sec-evaluation)): 80 tests across unit, property-based,
    fault injection, and complexity regression categories; 4 fuzz targets
    with approximately 2 million runs and zero panics; and
    $\mathcal{O}(\log n)$ complexity confirmed via curve fitting against

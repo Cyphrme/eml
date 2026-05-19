@@ -33,3 +33,23 @@
 % ─── Misc ─────────────────────────────────────────────────────────
 \newcommand{\concat}{\mathbin{\Vert}}        % concatenation operator
 \newcommand{\eml}{\textsc{eml}}              % small-caps EML
+
+% ─── Suppress amsthm auto-numbering ──────────────────────────────
+% Quarto generates \newtheorem{definition}{Definition}[section] and
+% also writes "Definition N" in the prose body, causing duplication
+% (e.g. "Definition 4.3. Definition 3"). We define a headless theorem
+% style and redefine both environments to use it, so only Quarto's
+% own label appears.
+\newtheoremstyle{headless}%
+  {3pt}{3pt}{\itshape}{}{}{}{ }{\relax}%
+\AtBeginDocument{%
+  \theoremstyle{headless}%
+  \let\definition\relax
+  \let\enddefinition\relax
+  \let\c@definition\relax
+  \newtheorem*{definition}{}%
+  \let\theorem\relax
+  \let\endtheorem\relax
+  \let\c@theorem\relax
+  \newtheorem*{theorem}{}%
+}

@@ -134,11 +134,15 @@ manifest $\text{act}'(a)$ that omits an active epoch. During
 rehydration, the client synthesizes a null subtree $N_h(a)$ where the
 true tree contains a payload subtree $R$. For the client's computed root
 to match the gossiped $\text{root}(a)$, it must hold that $N_h(a) = R$.
-By \lawname{D-Sep} (Law 4), $N_h(a)$ is constructed exclusively from
-$\mathtt{0x02}$-prefixed hashes, while $R$ is constructed from
-$\mathtt{0x00}$ and $\mathtt{0x01}$ prefixes. Achieving $N_h(a) = R$
-therefore requires a domain separation collision, which reduces to
-breaking the underlying hash function. Explicit epoch manifest
+By \lawname{D-Sep} (Law 4), the null tree is domain-separated at every
+level. At the leaves, $N_0(a) = H_a(\mathtt{0x02})$ while real leaves
+use $H_a(\mathtt{0x00} \concat d)$; at internal nodes, both $N_h(a)$
+and $R$ use the $\mathtt{0x01}$ prefix, but $N_h(a)$ is built
+exclusively from null children while $R$ contains at least one active
+leaf. Achieving $N_h(a) = R$ therefore requires either a collision on
+the $\mathtt{0x01}$-domain (if $h > 0$) or a cross-domain collision
+between $\mathtt{0x02}$ and $\mathtt{0x00}$ (at $h = 0$), both of which
+reduce to breaking the underlying hash function. Explicit epoch manifest
 commitment in the STH remains valuable engineering practice---it
 prevents denial-of-service via malformed manifests, enables efficient
 parsing, and provides a liveness signal---but is not required for

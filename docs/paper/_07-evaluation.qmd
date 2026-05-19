@@ -11,7 +11,7 @@ runtime. The crate has zero runtime dependencies.
 
 ### Test Suite
 
-The implementation is validated by 74 tests across four categories:
+The implementation is validated by 80 tests across four categories:
 
 ::: {#tbl-test-categories}
 | Category | Tests | Coverage |
@@ -48,7 +48,7 @@ The empirical and theoretical results confirm:
 
 - **Inclusion proofs**: $\mathcal{O}(\log n)$. Proof generation time
   scales logarithmically with tree size across six orders of magnitude
-  (@fig:complexity).
+  (`Figure~\ref{fig:complexity}`{=latex}).
 - **Consistency proofs**: $\mathcal{O}(\log n)$ by construction. The
   `subproof` algorithm (Definition 19) decomposes the tree into a
   logarithmic number of subtree roots, each resolved via a single
@@ -59,6 +59,9 @@ The empirical and theoretical results confirm:
 - **Algorithm addition**: $\mathcal{O}(\log K)$. Null prefix peak
   computation requires one NullTable entry per set bit in the tree size
   at the point of addition.
+- **Algorithm resumption**: $\mathcal{O}(\log n)$. Frontier
+  reconstruction via `subtree_root` resolution over the binary
+  decomposition of the current tree size, confirmed via curve fitting.
 
 ### Fault Injection
 

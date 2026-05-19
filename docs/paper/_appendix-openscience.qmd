@@ -13,7 +13,7 @@ proof generation and verification functions, and the elision/rehydration
 engine. The crate has zero runtime dependencies; all hash algorithm
 implementations are injected by the caller via the `Hasher` trait.
 
-**Test suite.** 74 tests across four categories:
+**Test suite.** 80 tests across four categories:
 
 - 51 unit tests covering append semantics, algorithm lifecycle, proof
   generation, null-fill correctness, and cold reconstruction.
