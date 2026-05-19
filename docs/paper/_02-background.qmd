@@ -118,15 +118,31 @@ weaken any single algorithm's guarantees. This is the content of
 \lawname{Alg-Ind}: each projection is informationally independent under
 ROM.
 
-The epoch manifest $\text{act}(a)$ for each algorithm must be committed
-by the Signed Tree Head (STH). Without this commitment, a malicious log
-could serve different epoch boundaries to different clients, enabling a
-metadata-layer split-view attack: two clients with the same tree size
-and root hash could disagree on which positions are null versus real for
-a given algorithm, producing divergent rehydration and verification
-outcomes. The mechanism for committing the manifest (e.g., as an STH
-extension field or by hashing the manifest into the tree head) is a
-deployment-layer concern outside the scope of this paper's formal model.
+**Historical binding trade-off.** The EML does not retroactively
+authenticate historical data under newly added algorithms. A newly
+activated algorithm authenticates only the data appended during its
+active epochs; pre-epoch positions are committed as deterministic null
+constants that are unforgeable but carry no payload authentication
+(@def-null-leaf). This is a principled design choice: faithful
+representation of temporal reality, not an evasion of the
+$\mathcal{O}(N)$ retroactive computation cost.
+
+**Implicit epoch commitment via domain separation.** The per-algorithm
+root hash $\text{root}(a)$ implicitly commits to the exact temporal
+topology of the epochs. Suppose a malicious log serves a tampered
+manifest $\text{act}'(a)$ that omits an active epoch. During
+rehydration, the client synthesizes a null subtree $N_h(a)$ where the
+true tree contains a payload subtree $R$. For the client's computed root
+to match the gossiped $\text{root}(a)$, it must hold that $N_h(a) = R$.
+By \lawname{D-Sep} (Law 4), $N_h(a)$ is constructed exclusively from
+$\mathtt{0x02}$-prefixed hashes, while $R$ is constructed from
+$\mathtt{0x00}$ and $\mathtt{0x01}$ prefixes. Achieving $N_h(a) = R$
+therefore requires a domain separation collision, which reduces to
+breaking the underlying hash function. Explicit epoch manifest
+commitment in the STH remains valuable engineering practice---it
+prevents denial-of-service via malformed manifests, enables efficient
+parsing, and provides a liveness signal---but is not required for
+cryptographic integrity of the epoch topology.
 
 Cross-algorithm equivocation---a malicious log forking algorithm $a$'s
 history while presenting a consistent history under algorithm $b$---is
@@ -135,7 +151,13 @@ single leaf sequence; any inconsistency in one projection's root hash
 is visible to a monitor operating on that projection, regardless of
 whether other projections appear consistent. Formally: equivocation on
 projection $\pi_a$ is detectable if and only if at least one honest
-monitor performs consistency checks on $\pi_a$. Cross-algorithm
-monitoring (where a monitor on $\pi_b$ detects equivocation in $\pi_a$)
-is not provided by the EML's guarantees, as the projections are
-informationally independent under \lawname{Alg-Ind}.
+monitor performs consistency checks on $\pi_a$.
+
+The EML's formal model is agnostic to the STH signing architecture. If
+the deployment issues a single unified STH signing all per-algorithm
+roots, then forking $\pi_a$ forces forking the global STH, and monitors
+on any $\pi_b$ will detect the equivocation. If the deployment issues
+disjoint per-algorithm STHs, cross-algorithm monitoring is not provided
+and each projection requires independent monitoring. The choice between
+unified and disjoint STH architectures is a deployment-layer concern
+outside the scope of this paper's formal model.
