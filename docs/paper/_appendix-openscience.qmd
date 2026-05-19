@@ -4,6 +4,10 @@
 \section*{Open Science}
 ```
 
+```{=html}
+<h2>Open Science</h2>
+```
+
 We provide the following artifacts for evaluation. All materials are
 included in the supplementary archive accompanying this submission.
 

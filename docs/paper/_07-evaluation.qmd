@@ -44,11 +44,18 @@ complexity class using the `bigoish` library.
 \end{figure}
 ```
 
+```{=html}
+<figure id="fig-complexity">
+  <img src="figures/fig-complexity.svg" style="width:100%" alt="Log-log plot of inclusion proof generation time vs. tree size, confirming O(log n) scaling.">
+  <figcaption><strong>Figure 5.</strong> Inclusion proof generation time vs. tree size (log-log). Tree sizes range from 2⁴ to 2²⁴ (~16M) leaves; each point is the median of 31 trials (5 warmup) via per-thread CPU time. The dashed line is an O(log n) fit confirming logarithmic scaling.</figcaption>
+</figure>
+```
+
 The empirical and theoretical results confirm:
 
 - **Inclusion proofs**: $\mathcal{O}(\log n)$. Proof generation time
   scales logarithmically with tree size across six orders of magnitude
-  (`Figure~\ref{fig:complexity}`{=latex}).
+  (`Figure~\ref{fig:complexity}`{=latex}`<a href="#fig-complexity">Figure 5</a>`{=html}).
 - **Consistency proofs**: $\mathcal{O}(\log n)$ by construction. The
   `subproof` algorithm (Definition 19) decomposes the tree into a
   logarithmic number of subtree roots, each resolved via a single

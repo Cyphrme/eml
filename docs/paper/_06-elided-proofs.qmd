@@ -121,3 +121,11 @@ knowledge of the epoch boundaries is sufficient.
   \label{fig:elision}
 \end{figure*}
 ```
+
+```{=html}
+<figure id="fig-elision">
+  <img src="figures/fig-elision.svg" style="width:85%" alt="Proof elision: full proof with null sibling vs. elided proof where the verifier reconstructs the null sibling.">
+  <figcaption><strong>Figure 4.</strong> Proof elision. Left: a full inclusion proof for Algorithm B at position d₂ requires two siblings, including a null subtree root covering positions 0–1. Right: the elided proof omits the null sibling entirely; the verifier rehydrates it from the precomputed null table N<sub>h</sub>(b) using only the epoch boundary metadata.</figcaption>
+</figure>
+```
+

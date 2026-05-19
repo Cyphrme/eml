@@ -7,6 +7,10 @@
 \section*{Ethical Considerations}
 ```
 
+```{=html}
+<h2>Ethical Considerations</h2>
+```
+
 This work presents a verifiable data structure for managing hash
 algorithm lifecycles in append-only logs. It involves no human subjects,
 no collection of personal data, and no interaction with vulnerable

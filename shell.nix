@@ -22,7 +22,7 @@ mkShell {
     # Whitepaper rendering (docs/paper/)
     quarto
     (texlive.combine {
-      inherit (texlive) scheme-medium pgfplots;
+      inherit (texlive) scheme-medium pgfplots standalone tools;
     })
   ];
 }
