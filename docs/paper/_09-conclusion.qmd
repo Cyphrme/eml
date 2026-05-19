@@ -11,7 +11,7 @@ deterministic elision. Historical data remains bound to the algorithms
 active at the time of insertion---a principled trade-off that preserves
 temporal fidelity while eliminating operational fragmentation.
 
-The formal algebraic model (9 equational laws over 18 definitions)
+The formal algebraic model (9 equational laws over 19 definitions)
 reduces multi-algorithm correctness to the well-understood correctness of
 single-algorithm RFC 9162 verification. The production Rust
 implementation validates these properties empirically through

@@ -86,11 +86,11 @@ Three lifecycle operations govern epochs:
   not update them. Cost: $\mathcal{O}(1)$.
 
 - **`resume_alg`$(a)$**: Reopens a frozen algorithm by appending a new
-  epoch $[(n, \infty)]$. The gap between the previous epoch's end and
-  the current tree size is bridged by extending the frozen frontier with
-  null constants---the standard CTO-based append applied with $N_0(a)$
-  at each gap position. Cost: $\mathcal{O}(G)$, where $G$ is the gap
-  length.
+  epoch $[(n, \infty)]$. The frontier stack is reconstructed for the
+  current tree size $n$ by decomposing $n$ into its binary
+  representation and resolving each complete subtree root---via stored
+  nodes, the NullTable, or recursive binary splits for mixed-boundary
+  subtrees. Cost: $\mathcal{O}(\log n)$.
 
 ### One Tree, Many Projections
 

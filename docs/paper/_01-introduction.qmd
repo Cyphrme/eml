@@ -85,7 +85,7 @@ We make the following contributions:
    algorithm removal.
 
 2. **A formal algebraic model** (§[IV](#sec-formal-model)): an initial
-   algebra over 18 definitions with 9 equational laws establishing
+   algebra over 19 definitions with 9 equational laws establishing
    algorithm-independent correctness. The projection isomorphism
    ($\pi_a(\text{EML}) \cong \text{RFC 9162}(\text{leaves}_a)$) reduces
    multi-algorithm verification to standard single-algorithm
