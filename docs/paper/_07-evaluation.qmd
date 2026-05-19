@@ -30,39 +30,29 @@ The complexity regression suite empirically validates the performance
 bounds from @tbl-perf-bounds. Each test generates trees at
 exponentially increasing sizes ($n = 2^4$ through $2^{24}$), measures
 operation timing, and fits the empirical curve against the expected
-complexity class using the `bigoish` library. Consistency proof
-benchmarks sample `old_size` from five split points
-$\{n/4, n/3, n/2, 2n/3, 3n/4\}$ per tree size to avoid biasing toward
-the favorable power-of-two bisection case.
+complexity class using the `bigoish` library.
 
 ```{=latex}
-\begin{figure*}[t]
+\begin{figure}[t]
   \centering
   \input{figures/fig-complexity.tex}
-  \caption{Empirical proof generation time vs.\ tree size. Tree sizes
-  range from $2^4$ to $2^{24}$ (${\sim}$16M) leaves; each point is the
-  median of 31~trials (5~warmup) per configuration via per-thread CPU
-  time. Consistency proofs sample five split points per tree size
-  ($n/4$, $n/3$, $n/2$, $2n/3$, $3n/4$); the IQR reflects variation
-  across proof topologies, not measurement noise.
-  (a)~Inclusion proof generation scales as $O(\log n)$ (dashed fit).
-  (b)~Consistency proof generation is bounded by a constant
-  independent of tree size across six orders of magnitude.}
+  \caption{Inclusion proof generation time vs.\ tree size (log-log).
+  Tree sizes range from $2^4$ to $2^{24}$ (${\sim}$16M) leaves; each
+  point is the median of 31~trials (5~warmup) via per-thread CPU time.
+  The dashed line is an $O(\log n)$ fit confirming logarithmic scaling.}
   \label{fig:complexity}
-\end{figure*}
+\end{figure}
 ```
 
-The fitted curves confirm:
+The empirical and theoretical results confirm:
 
 - **Inclusion proofs**: $\mathcal{O}(\log n)$. Proof generation time
-  scales logarithmically with tree size across all tested
-  configurations (@fig:complexity(a)).
-- **Consistency proofs**: Theoretically $\mathcal{O}(\log n)$, but
-  empirically constant across six orders of magnitude
-  (@fig:complexity(b)). Measured across diversified split points
-  ($n/4$ through $3n/4$), the `subtree_root` engine resolves each
-  sibling hash via a single stored-node lookup; the logarithmic number
-  of lookups is dominated by per-call overhead at these tree sizes.
+  scales logarithmically with tree size across six orders of magnitude
+  (@fig:complexity).
+- **Consistency proofs**: $\mathcal{O}(\log n)$ by construction. The
+  `subproof` algorithm (Definition 19) decomposes the tree into a
+  logarithmic number of subtree roots, each resolved via a single
+  stored-node lookup.
 - **Append (per algorithm)**: $\mathcal{O}(1)$ amortized. The CTO merge
   produces at most one sealed node per bit position in the tree size's
   binary representation.

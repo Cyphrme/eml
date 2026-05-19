@@ -1,7 +1,7 @@
 //! Benchmark data exporter for whitepaper figures.
 //!
-//! Runs the same measurement loops as `tests/complexity.rs` but emits
-//! CSV data to `docs/paper/figures/data/` for pgfplots consumption.
+//! Measures inclusion proof generation time and emits CSV data to
+//! `docs/paper/figures/data/` for pgfplots consumption.
 //!
 //! # Usage
 //!
@@ -11,7 +11,6 @@
 //!
 //! Produces:
 //! - `docs/paper/figures/data/inclusion_proof.csv`
-//! - `docs/paper/figures/data/consistency_proof.csv`
 
 use std::fs;
 use std::io::Write;
@@ -77,7 +76,7 @@ fn make_log(n: usize) -> Arc<Log<MemoryStorage>> {
 }
 
 // ---------------------------------------------------------------------------
-// Benchmark runners
+// Benchmark runner
 // ---------------------------------------------------------------------------
 
 const TRIALS: usize = 31; // odd for clean median
@@ -114,57 +113,6 @@ fn bench_inclusion(sizes: &[usize]) -> Vec<(usize, u128, u128, u128)> {
     data
 }
 
-/// Measure consistency proof generation time across tree sizes.
-///
-/// For each tree size, samples `old_size` from five split points
-/// {n/4, n/3, n/2, 2n/3, 3n/4} to avoid biasing toward the easiest
-/// (power-of-two bisection) case. Reports the median across all
-/// split points and trials.
-fn bench_consistency(sizes: &[usize]) -> Vec<(usize, u128, u128, u128)> {
-    let mut data = Vec::with_capacity(sizes.len());
-    for &n in sizes {
-        let log = make_log(n);
-        let ts = log.tree_size(0).unwrap();
-
-        // Diversified split points.
-        let splits: Vec<u64> = [4, 3, 2, 3, 4]
-            .iter()
-            .zip([1, 1, 1, 2, 3].iter())
-            .map(|(&denom, &numer)| (ts * numer) / denom)
-            .filter(|&s| s > 0 && s < ts)
-            .collect();
-
-        // Warmup across all splits.
-        for &old in &splits {
-            for _ in 0..WARMUP {
-                let _ = log.consistency_proof(0, old).unwrap();
-            }
-        }
-
-        // Measure: TRIALS per split point, collect all timings.
-        let mut times = Vec::with_capacity(TRIALS * splits.len());
-        for &old in &splits {
-            for _ in 0..TRIALS {
-                let start = ThreadTime::now();
-                let _ = log.consistency_proof(0, old).unwrap();
-                times.push(start.elapsed().as_nanos());
-            }
-        }
-        times.sort_unstable();
-
-        let p25 = percentile(&times, 25.0);
-        let p50 = percentile(&times, 50.0);
-        let p75 = percentile(&times, 75.0);
-
-        data.push((n, p25, p50, p75));
-        eprintln!(
-            "  consistency  n={n:>8}  splits={}  p25={p25}  p50={p50}  p75={p75} ns",
-            splits.len()
-        );
-    }
-    data
-}
-
 /// Write data to CSV with error bar columns.
 fn write_csv(path: &str, data: &[(usize, u128, u128, u128)]) {
     let mut f = fs::File::create(path).expect("failed to create CSV");
@@ -189,10 +137,6 @@ fn main() {
     eprintln!("Benchmarking inclusion proofs ({TRIALS} trials, {WARMUP} warmup)...");
     let inclusion = bench_inclusion(&sizes);
     write_csv(&format!("{out_dir}/inclusion_proof.csv"), &inclusion);
-
-    eprintln!("Benchmarking consistency proofs ({TRIALS} trials, {WARMUP} warmup)...");
-    let consistency = bench_consistency(&sizes);
-    write_csv(&format!("{out_dir}/consistency_proof.csv"), &consistency);
 
     eprintln!("Done.");
 }
