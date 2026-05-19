@@ -227,7 +227,7 @@ The following laws govern the EML. Each extends the standard RFC 9162
 invariants to the multi-algorithm setting.
 
 ::: {#law-aequiv}
-**Law 1** (\lawname{A-Equiv}). *Incremental equals batch.* For all
+**Law 1** ([A-Equiv]{.smallcaps}). *Incremental equals batch.* For all
 $a \in \text{dom}(\text{act})$:
 
 $$
@@ -236,7 +236,7 @@ $$
 :::
 
 ::: {#law-astack}
-**Law 2** (\lawname{A-Stack}). *Frontier stack size invariant.* For all
+**Law 2** ([A-Stack]{.smallcaps}). *Frontier stack size invariant.* For all
 $a$:
 
 $$
@@ -245,12 +245,12 @@ $$
 :::
 
 ::: {#law-ndet}
-**Law 3** (\lawname{N-Det}). *Null determinism.* For all $a, h$:
+**Law 3** ([N-Det]{.smallcaps}). *Null determinism.* For all $a, h$:
 $N_h(a)$ is uniquely determined by $(a, h)$.
 :::
 
 ::: {#law-dsep}
-**Law 4** (\lawname{D-Sep}). *Domain separation.* Three-way separation
+**Law 4** ([D-Sep]{.smallcaps}). *Domain separation.* Three-way separation
 across all tree domains:
 
 $$
@@ -263,7 +263,7 @@ $$
 :::
 
 ::: {#law-isound}
-**Law 5** (\lawname{I-Sound}). *Inclusion proof soundness.* For all
+**Law 5** ([I-Sound]{.smallcaps}). *Inclusion proof soundness.* For all
 active $(a, i)$:
 
 $$
@@ -283,7 +283,7 @@ $$
 \begin{samepage}
 ```
 
-**Law 6** (\lawname{K-Sound}). *Consistency proof soundness.* For all
+**Law 6** ([K-Sound]{.smallcaps}). *Consistency proof soundness.* For all
 $a$ and $\text{old\_size} < \text{tree\_size}(a)$:
 
 $$
@@ -302,7 +302,7 @@ $$
 :::
 
 ::: {#law-tbound}
-**Law 7** (\lawname{T-Bound}). *Temporal binding.* For all $a$ and $i$
+**Law 7** ([T-Bound]{.smallcaps}). *Temporal binding.* For all $a$ and $i$
 where $\neg\text{active}(a, i) \wedge i < \text{tree\_size}(a)$:
 
 $$
@@ -319,7 +319,7 @@ No payload can produce a valid inclusion proof at an inactive position.
 :::
 
 ::: {#law-algind}
-**Law 8** (\lawname{Alg-Ind}). *Algorithm independence.* Under ROM, for
+**Law 8** ([Alg-Ind]{.smallcaps}). *Algorithm independence.* Under ROM, for
 all $a \neq b$:
 
 $$
@@ -328,7 +328,7 @@ $$
 :::
 
 ::: {#law-projvalid}
-**Law 9** (\lawname{Proj-Valid}). *Projection validity.* For all
+**Law 9** ([Proj-Valid]{.smallcaps}). *Projection validity.* For all
 $a \in \text{dom}(\text{act})$:
 
 $$
@@ -348,11 +348,11 @@ $$
 \text{root}(a) = \text{MTH}(H_a, \pi_a(S))
 $$
 
-*Proof sketch.* By \lawname{A-Equiv}, the incremental and batch roots
+*Proof sketch.* By [A-Equiv]{.smallcaps}, the incremental and batch roots
 agree. By Definition 9, the projected sequence consists of standard leaf
 hashes at active positions and null constants at inactive positions. By
-\lawname{D-Sep}, null constants are valid---but unforgeable---leaf
-values. By \lawname{Proj-Valid}, the projected sequence satisfies all
+[D-Sep]{.smallcaps}, null constants are valid---but unforgeable---leaf
+values. By [Proj-Valid]{.smallcaps}, the projected sequence satisfies all
 RFC 9162 invariants. The EML's per-algorithm root is therefore
 indistinguishable from a standard single-algorithm Merkle tree root over
 $\pi_a(S)$. $\square$

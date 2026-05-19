@@ -33,6 +33,7 @@ for fig in "${FIGURES[@]}"; do
 \\definecolor{nullc}{HTML}{9CA3AF}
 \\usepackage{pgfplots}
 \\pgfplotsset{compat=1.18}
+\\setlength{\\columnwidth}{242pt}  % USENIX two-column width
 \\begin{document}
 \\input{$SCRIPT_DIR/$fig.tex}
 \\end{document}

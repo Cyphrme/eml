@@ -71,7 +71,7 @@ standard RFC 9162 Merkle tree whose leaves are the null-or-real values at
 each position. This projection is a valid input to unmodified RFC 9162
 verification. Correctness of the multi-algorithm EML thus *reduces* to
 correctness of the single-algorithm standard, a property we formalize as
-\lawname{Proj-Valid}.
+[Proj-Valid]{.smallcaps}.
 
 ### Contributions
 

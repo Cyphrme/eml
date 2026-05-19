@@ -46,7 +46,7 @@ complexity class using the `bigoish` library.
 
 ```{=html}
 <figure id="fig-complexity">
-  <img src="figures/fig-complexity.svg" style="width:100%" alt="Log-log plot of inclusion proof generation time vs. tree size, confirming O(log n) scaling.">
+  <img src="figures/fig-complexity.svg" style="max-width:600px; width:100%" alt="Log-log plot of inclusion proof generation time vs. tree size, confirming O(log n) scaling.">
   <figcaption><strong>Figure 5.</strong> Inclusion proof generation time vs. tree size (log-log). Tree sizes range from 2⁴ to 2²⁴ (~16M) leaves; each point is the median of 31 trials (5 warmup) via per-thread CPU time. The dashed line is an O(log n) fit confirming logarithmic scaling.</figcaption>
 </figure>
 ```
@@ -109,9 +109,9 @@ surface handles arbitrary malformed inputs gracefully.
 The 16 proptest-driven tests verify equational laws over randomly
 generated configurations. The state machine proptest exercises arbitrary
 interleavings of `append`, `add_alg`, `remove_alg`, and `resume_alg`
-operations, checking all invariants (\lawname{A-Equiv},
-\lawname{A-Stack}, \lawname{I-Sound}, \lawname{K-Sound},
-\lawname{T-Bound}, \lawname{Proj-Valid}) after each operation. The
+operations, checking all invariants ([A-Equiv]{.smallcaps},
+[A-Stack]{.smallcaps}, [I-Sound]{.smallcaps}, [K-Sound]{.smallcaps},
+[T-Bound]{.smallcaps}, [Proj-Valid]{.smallcaps}) after each operation. The
 default configuration runs 256 cases per test with tree sizes up to
 $2^{12}$ and up to 4 concurrent algorithms.
 

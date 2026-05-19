@@ -48,6 +48,13 @@ symmetric. The entire table $\{N_0(a), N_1(a), \ldots, N_H(a)\}$ is
 precomputable in $\mathcal{O}(H)$ hash operations, where
 $H = \lceil \log_2 n \rceil$.
 
+```{=html}
+<figure id="fig-topology">
+  <img src="figures/fig-topology.svg" style="width:100%" alt="An 8-leaf EML with two algorithms showing shared topology with independent hash values per algorithm.">
+  <figcaption><strong>Figure 1.</strong> An 8-leaf EML with two algorithms. Algorithm A (blue) is active from genesis. Algorithm B (amber) was added at position 4; its pre-activation positions are filled with null constants (gray, dashed). Each node computes independent hash values per algorithm over a shared topology.</figcaption>
+</figure>
+```
+
 ### Leaf Value Function
 
 The value at tree position $i$ for algorithm $a$ is:
@@ -92,6 +99,13 @@ Three lifecycle operations govern epochs:
   nodes, the NullTable, or recursive binary splits for mixed-boundary
   subtrees. Cost: $\mathcal{O}(\log n)$.
 
+```{=html}
+<figure id="fig-epochs">
+  <img src="figures/fig-epoch-timeline.svg" style="width:90%" alt="Algorithm lifecycle timeline showing add, remove, and resume events across two algorithms.">
+  <figcaption><strong>Figure 3.</strong> Algorithm lifecycle in the EML. Algorithm A is active from genesis. Algorithm B is added at position 4, removed at position 10 (entering a frozen state where null hashing continues), and resumed at position 15. Each active interval defines an <em>epoch</em>; the frozen gap preserves tree-wide append consistency.</figcaption>
+</figure>
+```
+
 ### One Tree, Many Projections
 
 The *projection* of the EML onto algorithm $a$ yields a sequence of
@@ -111,6 +125,13 @@ Other algorithms are invisible. SHA-256's proofs never reference
 BLAKE3's hashes. BLAKE3's proofs never reference SHA-256's. The
 algorithms share topology but not trust.
 
+```{=html}
+<figure id="fig-projection">
+  <img src="figures/fig-projection.svg" style="width:85%" alt="Projection view: Algorithm A sees a standard Merkle tree; Algorithm B sees null constants at positions 0–3 and active entries at 4–7.">
+  <figcaption><strong>Figure 2.</strong> Projection view of the EML from Figure 1. Left: Algorithm A's projection — a standard Merkle tree with all positions active. Right: Algorithm B's projection — positions 0–3 are null constants (N<sub>h</sub>), positions 4–7 are active. Each projection is an independently valid Merkle tree; proofs are generated per-projection.</figcaption>
+</figure>
+```
+
 ```{=latex}
 \begin{figure*}[t]
   \centering
@@ -122,13 +143,6 @@ algorithms share topology but not trust.
   over a shared topology.}
   \label{fig:topology}
 \end{figure*}
-```
-
-```{=html}
-<figure id="fig-topology">
-  <img src="figures/fig-topology.svg" style="width:100%" alt="An 8-leaf EML with two algorithms showing shared topology with independent hash values per algorithm.">
-  <figcaption><strong>Figure 1.</strong> An 8-leaf EML with two algorithms. Algorithm A (blue) is active from genesis. Algorithm B (amber) was added at position 4; its pre-activation positions are filled with null constants (gray, dashed). Each node computes independent hash values per algorithm over a shared topology.</figcaption>
-</figure>
 ```
 
 ```{=latex}
@@ -144,13 +158,6 @@ algorithms share topology but not trust.
 \end{figure*}
 ```
 
-```{=html}
-<figure id="fig-projection">
-  <img src="figures/fig-projection.svg" style="width:85%" alt="Projection view: Algorithm A sees a standard Merkle tree; Algorithm B sees null constants at positions 0–3 and active entries at 4–7.">
-  <figcaption><strong>Figure 2.</strong> Projection view of the EML from Figure 1. Left: Algorithm A's projection — a standard Merkle tree with all positions active. Right: Algorithm B's projection — positions 0–3 are null constants (N<sub>h</sub>), positions 4–7 are active. Each projection is an independently valid Merkle tree; proofs are generated per-projection.</figcaption>
-</figure>
-```
-
 ```{=latex}
 \begin{figure*}[t]
   \centering
@@ -164,9 +171,3 @@ algorithms share topology but not trust.
 \end{figure*}
 ```
 
-```{=html}
-<figure id="fig-epochs">
-  <img src="figures/fig-epoch-timeline.svg" style="width:90%" alt="Algorithm lifecycle timeline showing add, remove, and resume events across two algorithms.">
-  <figcaption><strong>Figure 3.</strong> Algorithm lifecycle in the EML. Algorithm A is active from genesis. Algorithm B is added at position 4, removed at position 10 (entering a frozen state where null hashing continues), and resumed at position 15. Each active interval defines an <em>epoch</em>; the frozen gap preserves tree-wide append consistency.</figcaption>
-</figure>
-```

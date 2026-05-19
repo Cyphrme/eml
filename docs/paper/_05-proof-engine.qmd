@@ -124,7 +124,7 @@ of epoch boundaries.
 output to the specification oracle (batch construction over $\pi_a(S)$).
 Both decompose the tree identically via $\text{largest\_pow2\_lt}$; the
 only difference is how sibling roots are obtained. By Theorem 1 and
-\lawname{A-Equiv}, the proofs verify against the same root.
+[A-Equiv]{.smallcaps}, the proofs verify against the same root.
 
 ### Node Caching and Frontier Architecture
 

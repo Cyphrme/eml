@@ -77,7 +77,7 @@ Specifically, we require:
   $H_b(x)$. Under ROM, this follows from the independence of distinct
   random oracles.
 
-The third property is the cryptographic foundation for \lawname{Alg-Ind}
+The third property is the cryptographic foundation for [Alg-Ind]{.smallcaps}
 (§[IV](#sec-formal-model)): adding a weak algorithm to the EML cannot
 weaken a strong one, because the hash outputs of distinct algorithms are
 informationally independent.
@@ -115,7 +115,7 @@ algorithm's projection.
 
 The adversary *cannot* exploit the presence of multiple algorithms to
 weaken any single algorithm's guarantees. This is the content of
-\lawname{Alg-Ind}: each projection is informationally independent under
+[Alg-Ind]{.smallcaps}: each projection is informationally independent under
 ROM.
 
 **Historical binding trade-off.** The EML does not retroactively
@@ -134,7 +134,7 @@ manifest $\text{act}'(a)$ that omits an active epoch. During
 rehydration, the client synthesizes a null subtree $N_h(a)$ where the
 true tree contains a payload subtree $R$. For the client's computed root
 to match the gossiped $\text{root}(a)$, it must hold that $N_h(a) = R$.
-By \lawname{D-Sep} (Law 4), the null tree is domain-separated at every
+By [D-Sep]{.smallcaps} (Law 4), the null tree is domain-separated at every
 level. At the leaves, $N_0(a) = H_a(\mathtt{0x02})$ while real leaves
 use $H_a(\mathtt{0x00} \concat d)$; at internal nodes, both $N_h(a)$
 and $R$ use the $\mathtt{0x01}$ prefix, but $N_h(a)$ is built
