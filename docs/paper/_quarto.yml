@@ -26,5 +26,6 @@ format:
     theme: cosmo
     code-fold: true
     html-math-method: katex
+    embed-resources: true
 
 bibliography: references.bib

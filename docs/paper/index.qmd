@@ -1,5 +1,5 @@
 ---
-title: "$\\mathcal{O}(\\log N)$ Hash Transitions: Algorithm-Independent Verification in Append-Only Logs"
+title: '$\mathcal{O}(\log N)$ Hash Transitions: Algorithm-Independent Verification in Append-Only Logs'
 author:
   - name: Timothy DeHerrera
     affiliations:
@@ -29,6 +29,27 @@ abstract: |
   deterministic proof elision.
 date: 2026-05-15
 ---
+
+<!-- Math macros — shared across HTML (KaTeX) and PDF (pdflatex).
+     Bare \newcommand lines are parsed by Pandoc itself, so they
+     reach KaTeX for math rendering AND expand in prose for HTML. -->
+
+\newcommand{\Ha}{H_a}
+\newcommand{\nulla}{\bot_a}
+\newcommand{\nulltable}{\mathit{NullTable}}
+\newcommand{\proj}{\pi_a}
+\newcommand{\act}{\mathit{act}}
+\newcommand{\leafval}{V}
+\newcommand{\treesz}[1]{\mathit{tree\_size}(#1)}
+\newcommand{\Nh}[1]{N_{#1}}
+\newcommand{\lawname}[1]{\textsc{#1}}
+\newcommand{\Ologn}{\mathcal{O}(\log n)}
+\newcommand{\Oone}{\mathcal{O}(1)}
+\newcommand{\leafpfx}{\mathtt{0x00}}
+\newcommand{\nodepfx}{\mathtt{0x01}}
+\newcommand{\nullpfx}{\mathtt{0x02}}
+\newcommand{\concat}{\mathbin{\Vert}}
+\newcommand{\eml}{\textsc{eml}}
 
 <!-- Section files are included via the Quarto include shorthand.
      Each section is authored as a standalone partial (_-prefixed)
