@@ -278,6 +278,11 @@ $$
 :::
 
 ::: {#law-ksound}
+
+```{=latex}
+\begin{samepage}
+```
+
 **Law 6** (\lawname{K-Sound}). *Consistency proof soundness.* For all
 $a$ and $\text{old\_size} < \text{tree\_size}(a)$:
 
@@ -289,6 +294,11 @@ $$
 &= \text{true}
 \end{aligned}
 $$
+
+```{=latex}
+\end{samepage}
+```
+
 :::
 
 ::: {#law-tbound}

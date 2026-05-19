@@ -37,19 +37,15 @@
 % ─── Suppress amsthm auto-numbering ──────────────────────────────
 % Quarto generates \newtheorem{definition}{Definition}[section] and
 % also writes "Definition N" in the prose body, causing duplication
-% (e.g. "Definition 4.3. Definition 3"). We define a headless theorem
-% style and redefine both environments to use it, so only Quarto's
-% own label appears.
-\newtheoremstyle{headless}%
-  {3pt}{3pt}{\itshape}{}{}{}{ }{\relax}%
+% (e.g. "Definition 4.3. Definition 3"). We override both environments
+% at \begin{document} with minimal pass-through wrappers that emit no
+% header text. Using \renewenvironment avoids the text leakage caused
+% by calling \newtheorem* after \begin{document}.
 \AtBeginDocument{%
-  \theoremstyle{headless}%
-  \let\definition\relax
-  \let\enddefinition\relax
-  \let\c@definition\relax
-  \newtheorem*{definition}{}%
-  \let\theorem\relax
-  \let\endtheorem\relax
-  \let\c@theorem\relax
-  \newtheorem*{theorem}{}%
+  \renewenvironment{definition}[1][]%
+    {\par\vspace{3pt}\itshape\ignorespaces}%
+    {\par\vspace{3pt}}%
+  \renewenvironment{theorem}[1][]%
+    {\par\vspace{3pt}\itshape\ignorespaces}%
+    {\par\vspace{3pt}}%
 }
