@@ -267,18 +267,18 @@
 <use x='265.968443' y='-164.84916' xlink:href='#g0-8'/>
 <use x='271.278674' y='-164.84916' xlink:href='#g0-5'/>
 </g>
-<path d='M205.28364 132.74881L218.74833 108.93712' stroke='#d9d9d9' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
-<path d='M232.21304 132.74881L218.74833 108.93712' stroke='#d9d9d9' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
+<path d='M205.28364 132.74881L218.74833 108.93712' stroke='#a6a6a6' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
+<path d='M232.21304 132.74881L218.74833 108.93712' stroke='#a6a6a6' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
 <path d='M259.14242 132.74881L272.60713 108.93712' stroke='#ccc' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
 <path d='M286.07182 132.74881L272.60713 108.93712' stroke='#ccc' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
-<path d='M218.74833 98.73271L245.67773 74.92102' stroke='#d9d9d9' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
+<path d='M218.74833 98.73271L245.67773 74.92102' stroke='#a6a6a6' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
 <path d='M272.60713 98.73271L245.67773 74.92102' stroke='#ccc' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
 <path d='M259.14242 132.74881L272.60713 108.93712' stroke='#e8ad6a' fill='none' stroke-width='1.19553' stroke-miterlimit='10'/>
 <path d='M272.60713 98.73271L245.67773 74.92102' stroke='#e8ad6a' fill='none' stroke-width='1.19553' stroke-miterlimit='10'/>
-<path d='M197.74345 142.95319V132.74881H212.82383V142.95319Z' stroke='#e1e3e7' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
+<path d='M197.74345 142.95319V132.74881H212.82383V142.95319Z' stroke='#c9ccd3' fill='none' stroke-width='.49814' stroke-miterlimit='10' stroke-dasharray='.49814 .99628'/>
 <g clip-path='url(#cp3)'>
 <symbol id='tile3' style='overflow:visible'>
-<path d='M0 178.316L3.08846 175.22754' stroke='#ebedef' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
+<path d='M0 178.316L3.08846 175.22754' stroke='#dcdfe3' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
 </symbol>
 <pattern id='pat3' x='0' y='0' width='2.98883' height='2.98883' patternUnits='userSpaceOnUse'>
 <clipPath id='patcp3'>
@@ -295,10 +295,10 @@
 </pattern>
 <path d='M197.74344 35.36281H212.82382V45.567186H197.74344Z' fill='url(#pat3)' transform='matrix(1 0 0 -1 0 178.316)'/>
 </g>
-<path d='M224.67283 142.95319V132.74881H239.75323V142.95319Z' stroke='#e1e3e7' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
+<path d='M224.67283 142.95319V132.74881H239.75323V142.95319Z' stroke='#c9ccd3' fill='none' stroke-width='.49814' stroke-miterlimit='10' stroke-dasharray='.49814 .99628'/>
 <g clip-path='url(#cp4)'>
 <symbol id='tile4' style='overflow:visible'>
-<path d='M0 178.316L3.08846 175.22754' stroke='#ebedef' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
+<path d='M0 178.316L3.08846 175.22754' stroke='#dcdfe3' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
 </symbol>
 <pattern id='pat4' x='0' y='0' width='2.98883' height='2.98883' patternUnits='userSpaceOnUse'>
 <clipPath id='patcp4'>
@@ -319,10 +319,10 @@
 <path d='M251.60221 142.95319V132.74881H266.68263V142.95319Z' stroke='#e6a75d' fill='none' stroke-width='.59776' stroke-miterlimit='10'/>
 <path d='M278.5316 142.95319V132.74881H293.612V142.95319Z' fill='#f7e4cd'/>
 <path d='M278.5316 142.95319V132.74881H293.612V142.95319Z' stroke='#e6a75d' fill='none' stroke-width='.49814' stroke-miterlimit='10'/>
-<path d='M211.20812 108.93712V98.73271H226.28854V108.93712Z' stroke='#e1e3e7' fill='none' stroke-width='.3985' stroke-miterlimit='10' stroke-dasharray='.3985 .99628'/>
+<path d='M211.20812 108.93712V98.73271H226.28854V108.93712Z' stroke='#c9ccd3' fill='none' stroke-width='.49814' stroke-miterlimit='10' stroke-dasharray='.49814 .99628'/>
 <g clip-path='url(#cp5)'>
 <symbol id='tile5' style='overflow:visible'>
-<path d='M0 178.316L3.08846 175.22754' stroke='#ebedef' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
+<path d='M0 178.316L3.08846 175.22754' stroke='#dcdfe3' fill='none' stroke-width='.3985' stroke-miterlimit='10'/>
 </symbol>
 <pattern id='pat5' x='0' y='0' width='2.98883' height='2.98883' patternUnits='userSpaceOnUse'>
 <clipPath id='patcp5'>
@@ -339,7 +339,7 @@
 </pattern>
 <path d='M211.20813 69.378879H226.28855V79.58328H211.20813Z' fill='url(#pat5)' transform='matrix(1 0 0 -1 0 178.316)'/>
 </g>
-<g fill='#9ca3af' transform='matrix(.999739 0 0 .999739 .000015 178.316)'>
+<g fill='#858b95' transform='matrix(.999739 0 0 .999739 .000015 178.316)'>
 <use x='214.067119' y='-73.506811' xlink:href='#g3-1'/>
 <use x='219.42472' y='-72.013201' xlink:href='#g1-2'/>
 </g>
@@ -357,7 +357,7 @@
 <use x='312.233623' y='-39.209765' xlink:href='#g1-15'/>
 <use x='315.968618' y='-39.209765' xlink:href='#g1-10'/>
 </g>
-<g fill='#9ca3af' transform='matrix(.999739 0 0 .999739 .000015 178.31601)'>
+<g fill='#858b95' transform='matrix(.999739 0 0 .999739 .000015 178.31601)'>
 <use x='190.96515' y='-72.732014' xlink:href='#g4-3'/>
 <use x='193.679261' y='-72.732014' xlink:href='#g4-6'/>
 <use x='195.223058' y='-72.732014' xlink:href='#g4-5'/>

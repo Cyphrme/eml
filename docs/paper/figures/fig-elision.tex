@@ -99,11 +99,11 @@
 \node[font=\small\bfseries, anchor=south] at (1.5, 3.5) {Elided proof};
 
 % Edges — same structure but left subtree edge is dotted
-\draw[black!15, line width=0.4pt, densely dotted] (0, \hh) -- (0.5, {1.0-\hh});
-\draw[black!15, line width=0.4pt, densely dotted] (1, \hh) -- (0.5, {1.0-\hh});
+\draw[black!35, line width=0.4pt, densely dotted] (0, \hh) -- (0.5, {1.0-\hh});
+\draw[black!35, line width=0.4pt, densely dotted] (1, \hh) -- (0.5, {1.0-\hh});
 \draw[black!20, line width=0.4pt] (2, \hh) -- (2.5, {1.0-\hh});
 \draw[black!20, line width=0.4pt] (3, \hh) -- (2.5, {1.0-\hh});
-\draw[black!15, line width=0.4pt, densely dotted] (0.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
+\draw[black!35, line width=0.4pt, densely dotted] (0.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
 \draw[black!20, line width=0.4pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
 
 % Proof path highlight
@@ -111,23 +111,23 @@
 \draw[algB!60, line width=1.2pt] (2.5, {1.0+\hh}) -- (1.5, {2.0-\hh});
 
 % Leaf nodes — null ones shown as dotted outlines only (+ hatched)
-\draw[nullc!30, line width=0.4pt, densely dotted]
+\draw[nullc!55, line width=0.5pt, densely dotted]
   ({0-\hw}, {0-\hh}) rectangle ({0+\hw}, {0+\hh});
-\fill[pattern=north east lines, pattern color=nullc!20]
+\fill[pattern=north east lines, pattern color=nullc!35]
   ({0-\hw}, {0-\hh}) rectangle ({0+\hw}, {0+\hh});
-\draw[nullc!30, line width=0.4pt, densely dotted]
+\draw[nullc!55, line width=0.5pt, densely dotted]
   ({1-\hw}, {0-\hh}) rectangle ({1+\hw}, {0+\hh});
-\fill[pattern=north east lines, pattern color=nullc!20]
+\fill[pattern=north east lines, pattern color=nullc!35]
   ({1-\hw}, {0-\hh}) rectangle ({1+\hw}, {0+\hh});
 \anode{2}{0}{algB!20, draw=algB!65, line width=0.6pt}  % target
 \anode{3}{0}{algB!20, draw=algB!65, line width=0.5pt}  % sibling (still sent)
 
 % Internal — null subtree shown as dotted outline (+ hatched)
-\draw[nullc!30, line width=0.4pt, densely dotted]
+\draw[nullc!55, line width=0.5pt, densely dotted]
   ({0.5-\hw}, {1.0-\hh}) rectangle ({0.5+\hw}, {1.0+\hh});
-\fill[pattern=north east lines, pattern color=nullc!20]
+\fill[pattern=north east lines, pattern color=nullc!35]
   ({0.5-\hw}, {1.0-\hh}) rectangle ({0.5+\hw}, {1.0+\hh});
-\node[font=\tiny, text=nullc, anchor=center] at (0.5, 1.0) {$N_1$};
+\node[font=\tiny, text=nullc!85!black, anchor=center] at (0.5, 1.0) {$N_1$};
 
 \anode{2.5}{1.0}{algB!20, draw=algB!65, line width=0.5pt}
 \anode{1.5}{2.0}{algB!20, draw=algB!65, line width=0.5pt}
@@ -138,7 +138,7 @@
 \node[font=\tiny, text=red!60!black, anchor=west] at ({3+\hw+0.1}, 0) {sibling};
 
 % Elided marker
-\node[font=\tiny\itshape, text=nullc, anchor=east] at ({0.5-\hw-0.08}, 1.0) {elided};
+\node[font=\tiny\itshape, text=nullc!85!black, anchor=east] at ({0.5-\hw-0.08}, 1.0) {elided};
 
 % Target leaf marker
 \node[font=\tiny\bfseries, text=algB!80, anchor=south] at (2, {0+\hh+0.06}) {target};
