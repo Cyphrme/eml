@@ -95,10 +95,6 @@ mod tests {
         fn null(&self) -> Vec<u8> {
             vec![0x02]
         }
-
-        fn digest_len(&self) -> usize {
-            0 // variable for concat hasher
-        }
     }
 
     #[test]

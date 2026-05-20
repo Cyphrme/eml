@@ -1012,81 +1012,9 @@ impl Default for Log<crate::storage::MemoryStorage> {
 
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
-
     use super::*;
     use crate::storage::MemoryStorage;
-
-    /// SHA-256 implementation of the EML Hasher trait.
-    #[derive(Debug)]
-    struct Sha256Hasher;
-
-    impl Hasher for Sha256Hasher {
-        fn leaf(&self, data: &[u8]) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0x00]);
-            h.update(data);
-            h.finalize().to_vec()
-        }
-
-        fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0x01]);
-            h.update(left);
-            h.update(right);
-            h.finalize().to_vec()
-        }
-
-        fn empty(&self) -> Vec<u8> {
-            Sha256::digest(b"").to_vec()
-        }
-
-        fn null(&self) -> Vec<u8> {
-            Sha256::digest([0x02]).to_vec()
-        }
-
-        fn digest_len(&self) -> usize {
-            32
-        }
-    }
-
-    /// Second hasher for multi-algorithm tests (uses a different prefix to
-    /// produce distinct outputs — simulates SHA-384 without importing it).
-    #[derive(Debug)]
-    struct AltHasher;
-
-    impl Hasher for AltHasher {
-        fn leaf(&self, data: &[u8]) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0x00, 0xFF]); // extra byte distinguishes from Sha256Hasher
-            h.update(data);
-            h.finalize().to_vec()
-        }
-
-        fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0x01, 0xFF]);
-            h.update(left);
-            h.update(right);
-            h.finalize().to_vec()
-        }
-
-        fn empty(&self) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0xFF]);
-            h.finalize().to_vec()
-        }
-
-        fn null(&self) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0x02, 0xFF]);
-            h.finalize().to_vec()
-        }
-
-        fn digest_len(&self) -> usize {
-            32
-        }
-    }
+    use crate::test_hashers::{AltHasher, Sha256Hasher};
 
     /// Batch-compute the Merkle tree root via the canonical RFC 9162 mth.
     fn batch_root(hasher: &dyn Hasher, leaf_hashes: &[Vec<u8>]) -> Vec<u8> {

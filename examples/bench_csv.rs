@@ -50,10 +50,6 @@ impl Hasher for Sha256Hasher {
     fn null(&self) -> Vec<u8> {
         Sha256::digest([0x02]).to_vec()
     }
-
-    fn digest_len(&self) -> usize {
-        32
-    }
 }
 
 // ---------------------------------------------------------------------------

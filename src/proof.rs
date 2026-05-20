@@ -419,41 +419,8 @@ pub fn rehydrate_inclusion_proof(
 
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
-
     use super::*;
-
-    #[derive(Debug)]
-    struct Sha256Hasher;
-
-    impl Hasher for Sha256Hasher {
-        fn leaf(&self, data: &[u8]) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0x00]);
-            h.update(data);
-            h.finalize().to_vec()
-        }
-
-        fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
-            let mut h = Sha256::new();
-            h.update([0x01]);
-            h.update(left);
-            h.update(right);
-            h.finalize().to_vec()
-        }
-
-        fn empty(&self) -> Vec<u8> {
-            Sha256::digest(b"").to_vec()
-        }
-
-        fn null(&self) -> Vec<u8> {
-            Sha256::digest([0x02]).to_vec()
-        }
-
-        fn digest_len(&self) -> usize {
-            32
-        }
-    }
+    use crate::test_hashers::Sha256Hasher;
 
     #[test]
     fn largest_pow2_lt_cases() {

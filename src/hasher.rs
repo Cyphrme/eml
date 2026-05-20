@@ -48,7 +48,4 @@ pub trait Hasher: Debug + Send + Sync {
     /// This is Definition 1 (§3) of the formal model. The single byte `0x02`
     /// is domain-separated from leaf (`0x00`) and node (`0x01`) prefixes.
     fn null(&self) -> Vec<u8>;
-
-    /// Digest output length in bytes.
-    fn digest_len(&self) -> usize;
 }

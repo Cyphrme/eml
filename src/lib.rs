@@ -3,7 +3,7 @@
 //! A single RFC 9162 append-only Merkle tree supporting dynamic sets of hash
 //! algorithms over a shared topology. Algorithms activate and deactivate
 //! between appends. A new algorithm's view of pre-activation positions
-//! consists of deterministic null constants, enabling O(1) algorithm addition
+//! consists of deterministic null constants, enabling O(log n) algorithm addition
 //! without retroactive computation.
 //!
 //! See `docs/models/epoch-merkle-log.md` for the formal model.
@@ -47,7 +47,10 @@ mod null;
 mod proof;
 mod storage;
 
-pub use error::Error;
+#[cfg(test)]
+mod test_hashers;
+
+pub use error::{Error, Result};
 pub use hasher::Hasher;
 pub use log::{AlgorithmInfo, Log};
 pub use null::NullTable;

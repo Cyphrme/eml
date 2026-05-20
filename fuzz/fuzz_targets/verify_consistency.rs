@@ -33,9 +33,6 @@ impl eml::Hasher for FuzzHasher {
     fn null(&self) -> Vec<u8> {
         Sha256::digest([0x02]).to_vec()
     }
-    fn digest_len(&self) -> usize {
-        32
-    }
 }
 
 #[derive(Debug, Arbitrary)]

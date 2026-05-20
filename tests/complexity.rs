@@ -35,48 +35,14 @@
 
 #![cfg(not(debug_assertions))]
 
+mod common;
+
 use std::sync::Arc;
 
 use bigoish::{Log as LogModel, N, assert_best_fit, growing_inputs};
+use common::Sha256Hasher;
 use cpu_time::ThreadTime;
-use eml::{Hasher, Log, MemoryStorage};
-use sha2::{Digest, Sha256};
-
-// ---------------------------------------------------------------------------
-// Test hasher — domain-separated SHA-256 per the Hasher trait contract.
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-struct Sha256Hasher;
-
-impl Hasher for Sha256Hasher {
-    fn leaf(&self, data: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([0x00]);
-        h.update(data);
-        h.finalize().to_vec()
-    }
-
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([0x01]);
-        h.update(left);
-        h.update(right);
-        h.finalize().to_vec()
-    }
-
-    fn empty(&self) -> Vec<u8> {
-        Sha256::digest(b"").to_vec()
-    }
-
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02]).to_vec()
-    }
-
-    fn digest_len(&self) -> usize {
-        32
-    }
-}
+use eml::{Log, MemoryStorage};
 
 // ---------------------------------------------------------------------------
 // Input factory — builds a log of `n` leaves with a single algorithm,

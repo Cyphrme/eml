@@ -3,7 +3,7 @@
 A single [RFC 9162][rfc9162] append-only Merkle tree that supports multiple hash
 algorithms over a shared topology. Algorithms activate and deactivate between
 appends. A new algorithm's view of pre-activation positions consists of
-deterministic null constants, enabling O(1) algorithm addition without
+deterministic null constants, enabling O(log n) algorithm addition without
 retroactive computation.
 
 Zero runtime dependencies. Algorithm-agnostic: callers inject hash
@@ -208,6 +208,15 @@ via `Log::from_storage(storage, hashers)`.
 | `Log::new`                  | Create an empty log with a fresh storage backend.                                  |
 | `Log::from_storage`         | Reconstruct log state from a populated storage backend (cold start).               |
 | `Log::into_storage`         | Consume the log and reclaim the underlying storage backend.                        |
+| `Log::add_algorithm`        | Register a new hash algorithm, activating it at the current tree size.             |
+| `Log::remove_algorithm`     | Deactivate (freeze) an algorithm at the current tree size.                         |
+| `Log::resume_algorithm`     | Reactivate a frozen algorithm, null-filling the gap since deactivation.            |
+| `Log::append`               | Append a leaf payload; updates all active algorithms' frontier stacks.             |
+| `Log::root`                 | Extract the current root hash for a given algorithm.                               |
+| `Log::inclusion_proof`      | Generate an RFC 9162 inclusion proof for a leaf at a given index.                  |
+| `Log::consistency_proof`    | Generate an RFC 9162 consistency proof between two tree sizes.                     |
+| `Log::size`                 | Return the current number of appended leaves (global tree size).                   |
+| `Log::algorithms`           | Return per-algorithm metadata snapshots (manifest data).                           |
 | `Storage`                   | Trait for persistence backends (leaves, sealed nodes, algorithm metadata).         |
 | `MemoryStorage`             | In-memory `Storage` implementation for testing and small logs.                     |
 | `MemoryStorageError`        | Error type for `MemoryStorage` (out-of-bounds leaf reads).                         |
@@ -222,10 +231,11 @@ via `Log::from_storage(storage, hashers)`.
 | `elide_inclusion_proof`     | Strip null siblings from a proof (epoch-aware).                                    |
 | `rehydrate_inclusion_proof` | Restore elided siblings using the algorithm's `Hasher`.                            |
 | `Error`                     | Structured error type for all fallible operations.                                 |
+| `Result<T>`                 | Convenience alias for `std::result::Result<T, Error>`.                             |
 
 ## Formal Model
 
-The implementation follows an 18-definition algebraic model with 9 equational
+The implementation follows a 21-definition algebraic model with 9 equational
 laws. The full specification is in
 [`docs/models/epoch-merkle-log.md`](docs/models/epoch-merkle-log.md).
 
@@ -248,9 +258,9 @@ Key laws verified by the test suite:
 
 ## Testing
 
-74 tests across four categories:
+75 tests across four categories:
 
-- **Unit tests (51):** Targeted tests for individual operations — append
+- **Unit tests (52):** Targeted tests for individual operations — append
   semantics, algorithm lifecycle, proof generation, null-fill, and cold
   reconstruction via `from_storage`.
 - **Property-based tests (16):** [proptest]-driven verification of equational

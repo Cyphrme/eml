@@ -15,7 +15,7 @@
 A single RFC 9162 append-only Merkle log supporting dynamic sets of hash
 algorithms over a shared topology. Algorithms activate and deactivate
 between appends. A new algorithm's view of pre-activation positions
-consists of deterministic null constants, enabling O(1) algorithm addition
+consists of deterministic null constants, enabling O(log n) algorithm addition
 without retroactive computation while preserving algorithm-independent
 verification. Deactivated algorithms freeze at their removal point.
 
@@ -709,9 +709,9 @@ theoretical overhead while preserving verifier independence.
   consumer concern (candidate: deterministic canonical serialization
   keyed by algorithm IDs).
 
-### Remaining Open Questions
+### Resolved Design Questions
 
-1. Manifest wire format (JSON vs. CBOR vs. other canonical form)
+1. **Manifest wire format** (JSON vs. CBOR vs. other canonical form) — deferred to consumer.
 
 **Resolved:** Elided proof wire encoding requires no explicit metadata.
 The client deterministically identifies omitted siblings via interval
