@@ -1,6 +1,6 @@
 //! Storage abstraction for leaf and node persistence.
 //!
-//! The [`Storage`] trait decouples the TSML log from its persistence
+//! The [`Storage`] trait decouples the EML log from its persistence
 //! strategy. The log retains only frontier stacks in memory (O(log n)
 //! per algorithm); raw leaf payloads and sealed internal node hashes
 //! are persisted through this trait.

@@ -8,12 +8,12 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use tsml::rehydrate_inclusion_proof;
+use eml::rehydrate_inclusion_proof;
 
 #[derive(Debug)]
 struct FuzzHasher;
 
-impl tsml::Hasher for FuzzHasher {
+impl eml::Hasher for FuzzHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x00]);
@@ -47,7 +47,7 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    let elided = tsml::ElidedInclusionProof {
+    let elided = eml::ElidedInclusionProof {
         index: input.index,
         tree_size: input.tree_size,
         path: input.path,

@@ -17,8 +17,8 @@ use std::io::Write;
 use std::sync::Arc;
 
 use cpu_time::ThreadTime;
+use eml::{Hasher, Log, MemoryStorage};
 use sha2::{Digest, Sha256};
-use tsml::{Hasher, Log, MemoryStorage};
 
 // ---------------------------------------------------------------------------
 // Test hasher — identical to tests/complexity.rs

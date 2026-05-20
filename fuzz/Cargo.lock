@@ -79,6 +79,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml"
+version = "0.1.0"
+
+[[package]]
+name = "eml-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "eml",
+ "libfuzzer-sys",
+ "sha2",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -182,20 +196,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "tsml"
-version = "0.1.0"
-
-[[package]]
-name = "tsml-fuzz"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "libfuzzer-sys",
- "sha2",
- "tsml",
 ]
 
 [[package]]

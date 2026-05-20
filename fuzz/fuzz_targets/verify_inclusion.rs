@@ -8,13 +8,13 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use tsml::verify_inclusion;
+use eml::verify_inclusion;
 
 /// Hasher for fuzz context — SHA-256 with RFC 9162 domain separation.
 #[derive(Debug)]
 struct FuzzHasher;
 
-impl tsml::Hasher for FuzzHasher {
+impl eml::Hasher for FuzzHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x00]);
@@ -50,7 +50,7 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    let proof = tsml::InclusionProof {
+    let proof = eml::InclusionProof {
         index: input.index,
         tree_size: input.tree_size,
         path: input.path,

@@ -8,12 +8,12 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use tsml::verify_consistency;
+use eml::verify_consistency;
 
 #[derive(Debug)]
 struct FuzzHasher;
 
-impl tsml::Hasher for FuzzHasher {
+impl eml::Hasher for FuzzHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x00]);
@@ -48,7 +48,7 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    let proof = tsml::ConsistencyProof {
+    let proof = eml::ConsistencyProof {
         old_size: input.old_size,
         new_size: input.new_size,
         path: input.path,

@@ -1,6 +1,6 @@
 //! Fuzz target: proof mutation oracle.
 //!
-//! Builds a real TSML log from fuzzer-controlled parameters, generates
+//! Builds a real EML log from fuzzer-controlled parameters, generates
 //! valid proofs, then mutates a single byte in the proof path. Asserts:
 //! - Valid proofs verify (false-negative detection)
 //! - Mutated proofs do NOT verify (false-positive detection)
@@ -12,7 +12,7 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use tsml::{Hasher, Log, MemoryStorage, verify_consistency, verify_inclusion};
+use eml::{Hasher, Log, MemoryStorage, verify_consistency, verify_inclusion};
 
 #[derive(Debug)]
 struct FuzzHasher;

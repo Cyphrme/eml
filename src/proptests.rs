@@ -1,6 +1,6 @@
-//! Property-based tests for TSML equational laws.
+//! Property-based tests for EML equational laws.
 //!
-//! Each test maps to a named law from `docs/models/temporally-sparse-merkle-log.md`.
+//! Each test maps to a named law from `docs/models/epoch-merkle-log.md`.
 //! Properties are universally quantified over tree sizes, activation points,
 //! and leaf data — proptest explores the input space adversarially.
 
@@ -168,14 +168,14 @@ fn build_log(size: usize, activation: usize) -> Log<MemoryStorage> {
 }
 
 // ============================================================================
-// A-EQUIV-TSML: incremental root == batch root over projection
+// A-EQUIV-EML: incremental root == batch root over projection
 // ============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
-    fn a_equiv_tsml(size in 1usize..128, act_frac in 0.0f64..1.0) {
+    fn a_equiv_eml(size in 1usize..128, act_frac in 0.0f64..1.0) {
         let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
         let log = build_log(size, activation);
 
@@ -185,7 +185,7 @@ proptest! {
 
         prop_assert!(
             incremental == batch,
-            "A-EQUIV-TSML failed: size={}, activation={}", size, activation
+            "A-EQUIV-EML failed: size={}, activation={}", size, activation
         );
     }
 }
@@ -218,14 +218,14 @@ proptest! {
 }
 
 // ============================================================================
-// A-STACK-TSML: popcount invariant (indirect via A-EQUIV)
+// A-STACK-EML: popcount invariant (indirect via A-EQUIV)
 // ============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
-    fn a_stack_tsml(size in 1usize..128) {
+    fn a_stack_eml(size in 1usize..128) {
         let log = build_log(size, 0);
 
         // A-EQUIV is the structural consequence of correct stack operations.
@@ -247,14 +247,14 @@ proptest! {
 }
 
 // ============================================================================
-// I-SOUND-TSML: inclusion proof soundness
+// I-SOUND-EML: inclusion proof soundness
 // ============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
-    fn i_sound_tsml(
+    fn i_sound_eml(
         size in 2usize..64,
         act_frac in 0.0f64..1.0,
         idx_frac in 0.0f64..1.0,
@@ -272,27 +272,27 @@ proptest! {
 
         prop_assert!(
             crate::verify_inclusion(&Sha256Hasher, &projected[index], &proof, &root),
-            "I-SOUND-TSML failed: size={}, activation={}, index={}", size, activation, index
+            "I-SOUND-EML failed: size={}, activation={}, index={}", size, activation, index
         );
 
         // Wrong leaf must NOT verify (soundness, not just completeness).
         let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA_FOR_PROPTEST");
         prop_assert!(
             !crate::verify_inclusion(&Sha256Hasher, &wrong, &proof, &root),
-            "I-SOUND-TSML false positive: size={}, activation={}, index={}", size, activation, index
+            "I-SOUND-EML false positive: size={}, activation={}, index={}", size, activation, index
         );
     }
 }
 
 // ============================================================================
-// K-SOUND-TSML: consistency proof soundness
+// K-SOUND-EML: consistency proof soundness
 // ============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
-    fn k_sound_tsml(
+    fn k_sound_eml(
         size in 3usize..64,
         old_frac in 0.0f64..1.0,
     ) {
@@ -312,7 +312,7 @@ proptest! {
 
         prop_assert!(
             crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
-            "K-SOUND-TSML failed: size={}, old_size={}", size, old_size
+            "K-SOUND-EML failed: size={}, old_size={}", size, old_size
         );
     }
 

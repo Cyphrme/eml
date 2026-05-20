@@ -1,6 +1,6 @@
 //! Empirical computational complexity regression tests.
 //!
-//! Verifies that TSML operations maintain the performance bounds stated
+//! Verifies that EML operations maintain the performance bounds stated
 //! in the formal model (§Performance Bounds):
 //!
 //! - **Read-only proofs** (O(log n)): `bigoish` curve-fitting via closure-based measurement (proofs
@@ -39,8 +39,8 @@ use std::sync::Arc;
 
 use bigoish::{Log as LogModel, N, assert_best_fit, growing_inputs};
 use cpu_time::ThreadTime;
+use eml::{Hasher, Log, MemoryStorage};
 use sha2::{Digest, Sha256};
-use tsml::{Hasher, Log, MemoryStorage};
 
 // ---------------------------------------------------------------------------
 // Test hasher — domain-separated SHA-256 per the Hasher trait contract.

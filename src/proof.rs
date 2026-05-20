@@ -1,4 +1,4 @@
-//! RFC 9162 proof generation and verification for TSML.
+//! RFC 9162 proof generation and verification for EML.
 //!
 //! Implements the standard Merkle tree proof algorithms adapted for
 //! `Vec<u8>` digests and `dyn Hasher`. These are free functions — they
@@ -232,13 +232,12 @@ pub fn verify_consistency(
     sn == 0 && fr == old_root && sr == new_root
 }
 
-// ============================================================================
-// Elided proofs — wire-optimized inclusion proofs for TSML
+// Elided proofs — wire-optimized inclusion proofs for EML
 // ============================================================================
 
 /// An inclusion proof with null subtree siblings elided.
 ///
-/// Wire-optimized proof for TSML: siblings covering ranges entirely
+/// Wire-optimized proof for EML: siblings covering ranges entirely
 /// within the null prefix are omitted (represented as `None`). The
 /// client rehydrates them deterministically using interval arithmetic
 /// and the algorithm's [`NullTable`](crate::NullTable).

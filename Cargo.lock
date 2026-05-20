@@ -160,6 +160,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml"
+version = "0.1.0"
+dependencies = [
+ "big_o",
+ "bigoish",
+ "blake2",
+ "cpu-time",
+ "proptest",
+ "sha2",
+ "sha3",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -746,19 +759,6 @@ checksum = "8f7657a0066c9f9663659db0665319adff8b0943305fc73eddf1010e5a2072b1"
 dependencies = [
  "drawille",
  "rgb",
-]
-
-[[package]]
-name = "tsml"
-version = "0.1.0"
-dependencies = [
- "big_o",
- "bigoish",
- "blake2",
- "cpu-time",
- "proptest",
- "sha2",
- "sha3",
 ]
 
 [[package]]

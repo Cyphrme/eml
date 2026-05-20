@@ -1,4 +1,4 @@
-//! Fault injection tests for TSML.
+//! Fault injection tests for EML.
 //!
 //! Verifies that storage-layer corruption (bit flips, missing nodes) is
 //! always detected — either as a verification failure (wrong root / proof
@@ -9,8 +9,8 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use eml::{Hasher, Log, Storage, verify_inclusion};
 use sha2::{Digest, Sha256};
-use tsml::{Hasher, Log, Storage, verify_inclusion};
 
 // ============================================================================
 // Test hasher
@@ -378,7 +378,7 @@ fn bit_flip_corrupts_consistency_proof() {
     let proof = log.consistency_proof(0, 16).unwrap();
 
     assert!(
-        !tsml::verify_consistency(&Sha256Hasher, &proof, &old_root, &root),
+        !eml::verify_consistency(&Sha256Hasher, &proof, &old_root, &root),
         "bit-flipped consistency proof should NOT verify"
     );
 }

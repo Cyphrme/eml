@@ -1,4 +1,4 @@
-# TSML — Temporally-Sparse Merkle Log
+# EML — Epoch Merkle Log
 
 A single [RFC 9162][rfc9162] append-only Merkle tree that supports multiple hash
 algorithms over a shared topology. Algorithms activate and deactivate between
@@ -16,7 +16,7 @@ post-quantum transition) face a choice: maintain one tree per algorithm
 (duplicating structure), or recompute history when adding a new algorithm
 (expensive and sometimes impossible for append-only logs).
 
-TSML eliminates both costs. A single tree topology is shared across all
+EML eliminates both costs. A single tree topology is shared across all
 algorithms. When a new algorithm activates at position _n_, its projection of
 positions 0..*n*−1 yields a deterministic null constant: a fixed-point value
 derived from the algorithm's own hash function, domain-separated from real
@@ -28,7 +28,7 @@ remain immutable.
 
 ## How It Works
 
-A TSML log is a single data structure. Not one tree per algorithm — one shared
+An EML log is a single data structure. Not one tree per algorithm — one shared
 structure with one list of raw data entries:
 
 ```
@@ -176,7 +176,7 @@ append history.
 Implement `Hasher` for your algorithm, then:
 
 ```rust
-use tsml::{Log, Hasher, MemoryStorage};
+use eml::{Log, Hasher, MemoryStorage};
 
 let mut log = Log::new(MemoryStorage::new());
 log.add_algorithm(0, Box::new(my_sha256_hasher))?;
@@ -227,7 +227,7 @@ via `Log::from_storage(storage, hashers)`.
 
 The implementation follows an 18-definition algebraic model with 9 equational
 laws. The full specification is in
-[`docs/models/temporally-sparse-merkle-log.md`](docs/models/temporally-sparse-merkle-log.md).
+[`docs/models/epoch-merkle-log.md`](docs/models/epoch-merkle-log.md).
 
 Key laws verified by the test suite:
 

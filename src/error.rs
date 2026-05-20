@@ -1,8 +1,8 @@
-//! Error types for the TSML crate.
+//! Error types for the EML crate.
 
 use std::fmt;
 
-/// Errors that can occur during TSML operations.
+/// Errors that can occur during EML operations.
 #[derive(Debug)]
 pub enum Error {
     /// Algorithm not found in the activation map.

@@ -1,4 +1,4 @@
-//! # TSML — Temporally-Sparse Merkle Log
+//! # EML — Epoch Merkle Log
 //!
 //! A single RFC 9162 append-only Merkle tree supporting dynamic sets of hash
 //! algorithms over a shared topology. Algorithms activate and deactivate
@@ -6,17 +6,17 @@
 //! consists of deterministic null constants, enabling O(1) algorithm addition
 //! without retroactive computation.
 //!
-//! See `docs/models/temporally-sparse-merkle-log.md` for the formal model.
+//! See `docs/models/epoch-merkle-log.md` for the formal model.
 //!
 //! # Architecture
 //!
-//! TSML is algorithm-agnostic. Callers provide hash implementations via the
+//! EML is algorithm-agnostic. Callers provide hash implementations via the
 //! [`Hasher`] trait. Leaf storage is decoupled via the [`Storage`] trait.
 //! The crate has zero runtime dependencies.
 //!
 //! # Proofs
 //!
-//! TSML generates standard RFC 9162 inclusion and consistency proofs per
+//! EML generates standard RFC 9162 inclusion and consistency proofs per
 //! algorithm. Proofs verify against the standard [`verify_inclusion`] and
 //! [`verify_consistency`] functions — no modified verifier is needed.
 //!
@@ -31,7 +31,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use tsml::{Log, Hasher, MemoryStorage};
+//! use eml::{Log, Hasher, MemoryStorage};
 //!
 //! // Implement Hasher for your algorithm, then:
 //! let mut log = Log::new(MemoryStorage::new());

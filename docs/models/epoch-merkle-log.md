@@ -1,7 +1,7 @@
-# MODEL: Temporally-Sparse Merkle Log (TSML)
+# MODEL: Epoch Merkle Log (EML)
 
 <!--
-  Formal domain model for the Temporally-Sparse Merkle Log data structure.
+  Formal domain model for the Epoch Merkle Log data structure.
   Extends the malt verifiable-log model with multi-algorithm support,
   null-fill semantics, and epoch-aware proof generation.
 
@@ -124,9 +124,9 @@ leaf index `i`:
 A(i) = { a ∈ dom(act) | active(a, i) }
 ```
 
-### §5. TSML State
+### §5. EML State
 
-**Definition 6** (TSML state). A TSML state is a tuple:
+**Definition 6** (EML state). An EML state is a tuple:
 
 ```
 S = (leaves, size, act, stacks, nodes)
@@ -267,7 +267,7 @@ resume_alg(S, a) → S' where:
   Let act(a) = [..., (startₖ, endₖ)]    — last epoch must be closed (endₖ ≠ ∞)
   Let gap = S.size - endₖ               — null positions since deactivation
   S'.stacks(a) = merge_stacks(S.stacks(a), null_prefix_peaks(a, gap),
-                               hasher_a, endₖ, gap)
+                                hasher_a, endₖ, gap)
   S'.act(a) = act(a) ++ [(S.size, ∞)]   — append new open epoch
   — all other fields unchanged
 ```
@@ -322,7 +322,7 @@ root(a) = empty(a)                                         if stacks(a) = []
 
 This is identical to malt's root extraction, applied per algorithm.
 
-**Definition 13** (TSML Manifest). The state manifest is a structured snapshot:
+**Definition 13** (EML Manifest). The state manifest is a structured snapshot:
 
 ```
 Manifest = {
@@ -345,7 +345,7 @@ where `tree_size(a) = last(act(a)).end` if deactivated, else
 
 ### §11. Projection (Specification Oracle)
 
-**Definition 14** (Single-algorithm projection). The projection of a TSML
+**Definition 14** (Single-algorithm projection). The projection of an EML
 onto algorithm `a` yields a sequence of digests:
 
 ```
@@ -363,7 +363,7 @@ uses `subtree_root` (Definition 14c), which achieves `O(log n)` by
 querying the `nodes` store directly.
 
 **Theorem 1** (Projection equivalence). For any algorithm `a`, the root
-computed by `root(a)` from the TSML frontier stack equals the root of a
+computed by `root(a)` from the EML frontier stack equals the root of a
 batch-constructed malt::Log over the projected leaf sequence:
 
 ```
@@ -392,10 +392,10 @@ subtree_root(S, a, lo, hi) =
   empty(a)                                       if hi - lo = 0
   V(a, lo)                                       if hi - lo = 1
   Nₕ(a) where h = log₂(hi - lo)                 if ¬active_range(a, lo, hi)
-                                                    ∧ hi - lo is a power of 2
+                                                     ∧ hi - lo is a power of 2
   null_range_root(a, hi - lo)                    if ¬active_range(a, lo, hi)
   nodes(a)[(lo, log₂(hi - lo))]                  if hi - lo is a power of 2
-                                                    ∧ (lo, log₂(hi - lo)) ∈ nodes(a)
+                                                     ∧ (lo, log₂(hi - lo)) ∈ nodes(a)
   node(a,                                        otherwise (RFC 9162 split)
     subtree_root(S, a, lo, lo + k),
     subtree_root(S, a, lo + k, hi))
@@ -479,7 +479,7 @@ via `largest_pow2_lt`; the only difference is how sibling roots are obtained
 
 The following laws extend malt's invariants to the multi-algorithm setting.
 
-#### A-EQUIV-TSML — Incremental equals batch
+#### A-EQUIV-EML — Incremental equals batch
 
 For all algorithms in the activation map, the incrementally maintained
 root equals the batch-computed root over the projected leaf sequence:
@@ -497,7 +497,7 @@ algorithms, `extend_with_nulls` (Definition 11c) fast-forwards the stack through
 the null gap, preserving the invariant. This is Theorem 1, restated as a
 universal invariant.
 
-#### A-STACK-TSML — Frontier stack size invariant
+#### A-STACK-EML — Frontier stack size invariant
 
 For all algorithms in the activation map:
 
@@ -530,7 +530,7 @@ from first principles.
 
 Three-way domain separation across all tree domains.
 
-#### I-SOUND-TSML — Inclusion proof soundness
+#### I-SOUND-EML — Inclusion proof soundness
 
 For all active `(a, i)` where `active(a, i)`:
 
@@ -540,7 +540,7 @@ let leaf_hash = leaf(a, leaves[i])
 ⟹  verify_inclusion(hasher_a, leaf_hash, proof, root(a)) = true
 ```
 
-#### K-SOUND-TSML — Consistency proof soundness
+#### K-SOUND-EML — Consistency proof soundness
 
 For all `a` and `old_size < tree_size(a)`:
 
@@ -555,9 +555,10 @@ let old_root = root_at(a, old_size)
 For all `a` and `i` in any inactive gap (outside all epochs):
 
 ```
+let proof = inclusion_proof(S, a, i)
 ∀ a, i where ¬active(a, i) ∧ i < tree_size(a):
   ∄ d ∈ Bytes.
-    verify_inclusion(hasher_a, leaf(a, d), inclusion_proof(S, a, i), root(a)) = true
+    verify_inclusion(hasher_a, leaf(a, d), proof, root(a)) = true
 ```
 
 No payload can produce a valid inclusion proof at an inactive position,
@@ -586,23 +587,23 @@ other algorithm's digest tree.
   for the projected tree.
 ```
 
-This is the composition law: TSML correctness reduces to malt correctness
+This is the composition law: EML correctness reduces to malt correctness
 per algorithm, plus the multi-algorithm extension laws above.
 
 ## Validation
 
 | Check                    | Result | Detail                                                                                                                                                                                              |
 | :----------------------- | :----- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A-EQUIV-TSML             | PASS   | Follows from malt's A-EQUIV applied per-algorithm over the projected sequence. The null constants are just another leaf value.                                                                      |
-| A-STACK-TSML             | PASS   | Active algorithms track `popcount(global_tree_size)`, frozen algorithms track `popcount(last(act(a)).end)`. Resume via `merge_stacks` preserves the invariant. Unified by `popcount(tree_size(a))`. |
+| A-EQUIV-EML              | PASS   | Follows from malt's A-EQUIV applied per-algorithm over the projected sequence. The null constants are just another leaf value.                                                                      |
+| A-STACK-EML              | PASS   | Active algorithms track `popcount(global_tree_size)`, frozen algorithms track `popcount(last(act(a)).end)`. Resume via `merge_stacks` preserves the invariant. Unified by `popcount(tree_size(a))`. |
 | N-DET                    | PASS   | By construction: `Nₕ(a)` is a pure function of `(a, h)`.                                                                                                                                            |
 | D-SEP                    | PASS   | Three distinct prefix bytes (0x00, 0x01, 0x02) under cryptographic hash. Collision requires breaking preimage resistance.                                                                           |
-| I-SOUND-TSML             | PASS   | Reduces to malt's I-SOUND over the projected leaf sequence. Null leaves verify as `N₀(a)`, not as real data.                                                                                        |
-| K-SOUND-TSML             | PASS   | Reduces to malt's K-SOUND. Null subtrees are valid tree nodes.                                                                                                                                      |
+| I-SOUND-EML              | PASS   | Reduces to malt's I-SOUND over the projected leaf sequence. Null leaves verify as `N₀(a)`, not as real data.                                                                                        |
+| K-SOUND-EML              | PASS   | Reduces to malt's K-SOUND. Null subtrees are valid tree nodes.                                                                                                                                      |
 | T-BOUND                  | PASS   | All inactive positions (pre-activation, inter-epoch gaps, post-deactivation): D-SEP prevents forgery. Beyond `tree_size(a)`: projection bounds prevent proof generation.                            |
 | ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                                                                  |
 | PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                                                                 |
-| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-TSML → PROJ-VALID, ALG-IND standalone.                                                                        |
+| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-EML → PROJ-VALID, ALG-IND standalone.                                                                        |
 | **External adequacy**    | PASS   | The model captures all design constraints from the original exploration.                                                                                                                            |
 | **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                                                                     |
 
@@ -626,8 +627,8 @@ per algorithm, plus the multi-algorithm extension laws above.
 ### Proof Size Trade-off (Resolved: Elided Proofs)
 
 In independent MALTs, algorithm `a` active for `nₐ` appends has proof depth
-`O(log nₐ)`. In TSML, proof depth is `O(log n)` where `n` is global tree
-size. If `nₐ ≪ n`, TSML proofs are deeper.
+`O(log nₐ)`. In EML, proof depth is `O(log n)` where `n` is global tree
+size. If `nₐ ≪ n`, EML proofs are deeper.
 
 **Resolution — Elided proofs.** Null subtree siblings are deterministic and
 need not be transmitted. The proof flow is:
@@ -635,27 +636,27 @@ need not be transmitted. The proof flow is:
 1. **Server (prover):** Generates the full `malt` proof. Siblings whose
    entire leaf-coverage range falls outside all active epochs are null
    subtrees. The server omits them from the wire payload.
-2. **TSML client envelope:** The client knows `tree_size`, `index`, and
+2. **EML client envelope:** The client knows `tree_size`, `index`, and
    the epoch list. It walks the virtual tree path, detects positions fully
    inside an inactive gap, synthesizes `Nₕ(a)` locally, and injects them
    into the proof array.
 3. **Core verifier:** The envelope hands the rehydrated, full proof to the
    unmodified `malt::verify_*` function.
 
-Wire proof size collapses to `O(log nₐ)`, neutralizing TSML's only
+Wire proof size collapses to `O(log nₐ)`, neutralizing EML's only
 theoretical overhead while preserving verifier independence.
 
 ## Implications
 
 ### Implementation Guidance
 
-1. **New crate, not malt modification.** TSML extends malt's model but
+1. **New crate, not malt modification.** EML extends malt's model but
    changes the fundamental abstraction from single-algorithm to multi-algorithm.
    The `TreeHasher` trait doesn't accommodate multi-algorithm operations.
-   Create a `tsml` crate that depends on `malt` for proof primitives
+   Create an `eml` crate that depends on `malt` for proof primitives
    (`gen_path`, `gen_subproof`, `verify_inclusion`, `verify_consistency`).
 
-2. **Core data structure.** The TSML state maps directly to:
+2. **Core data structure.** The EML state maps directly to:
 
    ```rust
    struct Log {
@@ -684,14 +685,14 @@ theoretical overhead while preserving verifier independence.
 
 ### Testing Strategy
 
-- **A-EQUIV-TSML:** For each algorithm, verify incremental root equals batch.
+- **A-EQUIV-EML:** For each algorithm, verify incremental root equals batch.
 - **T-BOUND:** Attempt inclusion proof at null position with arbitrary data;
   verify it fails.
 - **Cross-algorithm independence:** Verify that changing data in one algorithm's
   active range doesn't affect another algorithm's root.
 - **Algorithm addition:** Add algorithm mid-stream, verify null prefix peaks
   are correct by comparing against batch construction.
-- **Parity:** TSML proofs must verify against standard `malt::verify_*`
+- **Parity:** EML proofs must verify against standard `malt::verify_*`
   functions — the verifier is unmodified.
 
 ### Architecture Decisions
@@ -700,7 +701,7 @@ theoretical overhead while preserving verifier independence.
   removal point. Zero ongoing maintenance cost. The manifest records
   the terminal `tree_size(a)` explicitly.
 
-- **Proof transmission: elide null siblings.** The TSML client envelope
+- **Proof transmission: elide null siblings.** The EML client envelope
   rehydrates deterministic null subtree siblings before handing to the
   standard `malt` verifier. Wire size is `O(log nₐ)`, not `O(log n)`.
 

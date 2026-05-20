@@ -1,11 +1,11 @@
-//! Hash abstraction for TSML.
+//! Hash abstraction for EML.
 //!
 //! Extends the RFC 9162 leaf/node/empty operations with a null constant
 //! (Definition 1, §3 of the formal model).
 
 use std::fmt::Debug;
 
-/// Hash operations required by the TSML tree.
+/// Hash operations required by the EML tree.
 ///
 /// Each algorithm registered with the [`Log`](crate::Log) provides an
 /// implementation of this trait. The trait is object-safe to permit

@@ -1,6 +1,6 @@
-//! TSML Log — the core state machine.
+//! EML Log — the core state machine.
 //!
-//! Implements Definitions 6-14c of the formal model: the TSML state tuple,
+//! Implements Definitions 6-14c of the formal model: the EML state tuple,
 //! leaf value function, append (with node persistence), algorithm
 //! add/remove/resume, root extraction, projection, and proof generation.
 
@@ -15,7 +15,7 @@ use crate::storage::Storage;
 // Algorithm state
 // ============================================================================
 
-/// Per-algorithm state within the TSML log.
+/// Per-algorithm state within the EML log.
 #[derive(Debug)]
 struct AlgState {
     /// The hasher instance for this algorithm.
@@ -111,8 +111,7 @@ fn null_prefix_peaks(hasher: &dyn Hasher, null_table: &mut NullTable, k: u64) ->
     peaks
 }
 
-// ============================================================================
-// TSML Log
+// EML Log
 // ============================================================================
 
 /// Per-algorithm metadata snapshot (Definition 13).
@@ -137,7 +136,7 @@ pub struct AlgorithmInfo {
     pub epochs: Vec<(u64, Option<u64>)>,
 }
 
-/// A Temporally-Sparse Merkle Log.
+/// An Epoch Merkle Log.
 ///
 /// Maintains a single shared topology across multiple hash algorithms.
 /// Each algorithm sees the global tree, but positions outside its active
@@ -145,7 +144,7 @@ pub struct AlgorithmInfo {
 ///
 /// # Model Mapping
 ///
-/// This struct implements Definition 6 (TSML state):
+/// This struct implements Definition 6 (EML state):
 /// `S = (storage, size, act, stacks, nodes)`
 ///
 /// Raw leaf payloads and sealed internal node hashes are persisted
@@ -160,7 +159,7 @@ pub struct Log<S: Storage> {
 }
 
 impl<S: Storage> Log<S> {
-    /// Create a new empty TSML log with the given storage backend.
+    /// Create a new empty EML log with the given storage backend.
     pub fn new(storage: S) -> Self {
         Self {
             storage,
@@ -168,7 +167,7 @@ impl<S: Storage> Log<S> {
         }
     }
 
-    /// Reconstruct a TSML log from a populated storage backend.
+    /// Reconstruct an EML log from a populated storage backend.
     ///
     /// Reads algorithm metadata (IDs, epoch boundaries) from storage and
     /// rebuilds frontier stacks in O(log n) per algorithm by resolving
@@ -662,16 +661,16 @@ impl<S: Storage> Log<S> {
     }
 
     // ========================================================================
-    // TSML Manifest (Definition 13)
+    // EML Manifest (Definition 13)
     // ========================================================================
 
     /// Produce a snapshot of all registered algorithms' state.
     ///
-    /// Definition 13 (TSML Manifest): returns the data needed to construct
+    /// Definition 13 (EML Manifest): returns the data needed to construct
     /// a state manifest. Each [`AlgorithmInfo`] contains the algorithm's
     /// root hash, activation/deactivation boundaries, and tree size.
     ///
-    /// The serialization format is left to the implementor — TSML provides
+    /// The serialization format is left to the implementor — EML provides
     /// the raw data; the consumer chooses the wire encoding.
     pub fn algorithms(&self) -> Vec<AlgorithmInfo> {
         let global_size = self.size();
@@ -1018,7 +1017,7 @@ mod tests {
     use super::*;
     use crate::storage::MemoryStorage;
 
-    /// SHA-256 implementation of the TSML Hasher trait.
+    /// SHA-256 implementation of the EML Hasher trait.
     #[derive(Debug)]
     struct Sha256Hasher;
 
@@ -1094,7 +1093,7 @@ mod tests {
         crate::proof::mth(hasher, leaf_hashes)
     }
 
-    // ---- A-EQUIV-TSML: incremental equals batch ----
+    // ---- A-EQUIV-EML: incremental equals batch ----
 
     #[test]
     fn a_equiv_single_algorithm() {
@@ -1107,7 +1106,7 @@ mod tests {
             let incremental = log.root(0).unwrap();
             let projected = log.project(0).unwrap();
             let batch = batch_root(&Sha256Hasher, &projected);
-            assert_eq!(incremental, batch, "A-EQUIV-TSML failed at size {}", i + 1);
+            assert_eq!(incremental, batch, "A-EQUIV-EML failed at size {}", i + 1);
         }
     }
 
@@ -1139,11 +1138,11 @@ mod tests {
                 &AltHasher
             };
             let batch = batch_root(hasher, &projected);
-            assert_eq!(incremental, batch, "A-EQUIV-TSML failed for alg {alg_id}");
+            assert_eq!(incremental, batch, "A-EQUIV-EML failed for alg {alg_id}");
         }
     }
 
-    // ---- A-STACK-TSML: popcount invariant ----
+    // ---- A-STACK-EML: popcount invariant ----
 
     #[test]
     fn a_stack_popcount_invariant() {
@@ -1156,7 +1155,7 @@ mod tests {
             assert_eq!(
                 log.stack_len(0).unwrap(),
                 expected,
-                "A-STACK-TSML failed at size {}",
+                "A-STACK-EML failed at size {}",
                 log.size()
             );
         }
@@ -1308,7 +1307,7 @@ mod tests {
         assert_eq!(root_before, root_still, "frozen root must remain stable");
     }
 
-    // ---- A-EQUIV-TSML for non-power-of-two sizes ----
+    // ---- A-EQUIV-EML for non-power-of-two sizes ----
 
     #[test]
     fn a_equiv_non_power_of_two() {
@@ -1328,7 +1327,7 @@ mod tests {
         }
     }
 
-    // ---- I-SOUND-TSML: inclusion proof soundness ----
+    // ---- I-SOUND-EML: inclusion proof soundness ----
 
     #[test]
     fn i_sound_single_algorithm() {
@@ -1347,7 +1346,7 @@ mod tests {
             let leaf_hash = &projected[idx as usize];
             assert!(
                 crate::proof::verify_inclusion(&Sha256Hasher, leaf_hash, &proof, &root),
-                "I-SOUND-TSML failed at index {idx}"
+                "I-SOUND-EML failed at index {idx}"
             );
         }
     }
@@ -1377,12 +1376,12 @@ mod tests {
             let leaf_hash = &projected[idx as usize];
             assert!(
                 crate::proof::verify_inclusion(&AltHasher, leaf_hash, &proof, &root),
-                "I-SOUND-TSML (mid-stream) failed at index {idx}"
+                "I-SOUND-EML (mid-stream) failed at index {idx}"
             );
         }
     }
 
-    // ---- K-SOUND-TSML: consistency proof soundness ----
+    // ---- K-SOUND-EML: consistency proof soundness ----
 
     #[test]
     fn k_sound_single_algorithm() {
@@ -1403,7 +1402,7 @@ mod tests {
             let old_root = &roots[(old_size - 1) as usize];
             assert!(
                 crate::proof::verify_consistency(&Sha256Hasher, &proof, old_root, &current_root),
-                "K-SOUND-TSML failed for old_size={old_size}"
+                "K-SOUND-EML failed for old_size={old_size}"
             );
         }
     }
@@ -1498,7 +1497,7 @@ mod tests {
         );
     }
 
-    // ---- TSML Manifest (Definition 13) ----
+    // ---- EML Manifest (Definition 13) ----
 
     #[test]
     fn algorithms_returns_manifest_data() {
