@@ -23,12 +23,12 @@ $$
 V(a, lo) & n = 1 \\
 N_h(a) & \text{null range},\ n = 2^h \\
 \text{nodes}(a)[(lo,h)] & \text{stored},\ n = 2^h \\
-\text{node}(a,\ \text{sr}(\ldots, lo, lo{+}k), & \text{otherwise} \\
-\quad \text{sr}(\ldots, lo{+}k, hi))
+\text{node}(a, \text{sr}(a, lo, l'), & \text{otherwise} \\
+\quad \text{sr}(a, l', hi))
 \end{cases}
 $$
 
-where $k = \text{largest\_pow2\_lt}(n)$ and $h = \log_2 n$.
+where $l' = lo + k$, $k = \text{largest\_pow2\_lt}(n)$, and $h = \log_2 n$.
 We abbreviate $\text{subtree\_root}(S, a, \ldots)$ as $\text{sr}(a, \ldots)$
 throughout.
 :::
@@ -53,8 +53,10 @@ The cases, in order of priority:
 $[lo, hi)$ iff any epoch overlaps it:
 
 $$
-\text{active\_range}(a, lo, hi) \iff \exists (s_k, e_k) \in
-\text{act}(a).\ s_k < hi \wedge e_k > lo
+\begin{aligned}
+&\text{active\_range}(a, lo, hi) \iff \\
+&\quad \exists (s_k, e_k) \in \text{act}(a).\ s_k < hi \wedge e_k > lo
+\end{aligned}
 $$
 :::
 
@@ -108,8 +110,10 @@ hashes resolved through `subtree_root`.
 size $m$:
 
 $$
-\text{consistency\_proof}(S, a, m) = \text{subproof}(S, a, m, 0,
-\text{tree\_size}(a), \text{true})
+\begin{aligned}
+&\text{consistency\_proof}(S, a, m) = \\
+&\quad \text{subproof}(S, a, m, 0, \text{tree\_size}(a), \text{true})
+\end{aligned}
 $$
 
 where `subproof` follows RFC 9162 §2.1.4 with `subtree_root` sibling

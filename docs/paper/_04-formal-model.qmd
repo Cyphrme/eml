@@ -87,8 +87,10 @@ algorithm whose final epoch has $e_k = \infty$ is currently active.
 index $i$ iff:
 
 $$
-\text{active}(a, i) \iff \text{act}(a) \text{ is defined} \wedge \exists
-(s_k, e_k) \in \text{act}(a).\ s_k \leq i < e_k
+\begin{aligned}
+\text{active}(a, i) \iff &\text{act}(a) \text{ is defined} \ \wedge \\
+&\exists (s_k, e_k) \in \text{act}(a).\ s_k \leq i < e_k
+\end{aligned}
 $$
 :::
 
@@ -320,21 +322,13 @@ No payload can produce a valid inclusion proof at an inactive position.
 
 ::: {#law-algind}
 **Law 8** ([Alg-Ind]{.smallcaps}). *Algorithm independence.* Under ROM, for
-all $a \neq b$:
-
-$$
-\pi_a(S) \text{ and } \pi_b(S) \text{ are mutually incompressible}
-$$
+all $a \neq b$, $\pi_a(S)$ and $\pi_b(S)$ are mutually incompressible.
 :::
 
 ::: {#law-projvalid}
 **Law 9** ([Proj-Valid]{.smallcaps}). *Projection validity.* For all
-$a \in \text{dom}(\text{act})$:
-
-$$
-\pi_a(S) \text{ is a valid RFC 9162 leaf sequence; all standard
-invariants hold for the projected tree.}
-$$
+$a \in \text{dom}(\text{act})$, $\pi_a(S)$ is a valid RFC 9162 leaf sequence;
+all standard invariants hold for the projected tree.
 :::
 
 ### Projection Isomorphism
@@ -347,6 +341,7 @@ batch-constructed RFC 9162 tree over the projected leaf sequence:
 $$
 \text{root}(a) = \text{MTH}(H_a, \pi_a(S))
 $$
+:::
 
 *Proof sketch.* By [A-Equiv]{.smallcaps}, the incremental and batch roots
 agree. By Definition 9, the projected sequence consists of standard leaf
@@ -356,7 +351,6 @@ values. By [Proj-Valid]{.smallcaps}, the projected sequence satisfies all
 RFC 9162 invariants. The EML's per-algorithm root is therefore
 indistinguishable from a standard single-algorithm Merkle tree root over
 $\pi_a(S)$. $\square$
-:::
 
 This theorem is the paper's central result. It reduces the correctness
 of multi-algorithm verification to the well-understood correctness of

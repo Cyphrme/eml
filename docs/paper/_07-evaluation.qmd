@@ -15,10 +15,10 @@ The implementation is validated by 80 tests across four categories:
 
 ::: {#tbl-test-categories}
 | Category | Tests | Coverage |
-|:---------|------:|:---------|
-| Unit tests | 51 | Append semantics, algorithm lifecycle (`add`/`remove`/`resume`), proof generation, null-fill correctness, cold reconstruction via `from_storage`, manifest extraction |
+|:-------|--:|:--------------|
+| Unit tests | 51 | Append semantics, algorithm lifecycle (`add`, `remove`, or `resume`), proof generation, null-fill correctness, cold reconstruction via `from_storage`, manifest extraction |
 | Property-based (proptest) | 16 | Equational law verification over thousands of randomly generated tree configurations; state machine test exercising arbitrary interleavings of operations |
-| Fault injection | 7 | Adversarial `CorruptingStorage` backends: bit-flip, truncation, hash drop; includes 2 property-based corruption tests |
+| Fault injection | 7 | Adversarial storage corruption adapters: bit-flip, truncation, hash drop; includes 2 property-based tests |
 | Complexity regression | 6 | Empirical curve fitting against formal bounds ($\mathcal{O}(\log n)$ proofs, $\mathcal{O}(1)$ amortized append, $\mathcal{O}(\log K)$ addition, $\mathcal{O}(\log n)$ algorithm resumption) |
 
 : Test suite composition.

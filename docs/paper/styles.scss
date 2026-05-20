@@ -1,0 +1,284 @@
+/*-- scss:defaults --*/
+
+// Import premium web fonts
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+// Bootstrap typography overrides
+$font-family-serif: 'Lora', Georgia, serif;
+$font-family-sans-serif: 'Inter', system-ui, -apple-system, sans-serif;
+$font-family-monospace: 'JetBrains Mono', 'Fira Code', monospace;
+
+$font-family-base: $font-family-serif;
+$font-family-headings: $font-family-sans-serif;
+$font-size-root: 17px;
+
+// Premium Color System (sleek warm slate/teal accents)
+$body-bg: #fdfdfc;
+$body-color: #1e293b;
+$heading-color: #0f172a;
+$link-color: #0f766e;
+$link-hover-color: #0d9488;
+
+$toc-color: #475569;
+$border-color: #e2e8f0;
+
+// Spacing & Geometry
+$line-height-base: 1.75;
+$paragraph-margin-bottom: 1.35rem;
+
+/*-- scss:rules --*/
+
+// Body layout
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+// Line width restriction for highly comfortable reading
+#quarto-document-content,
+main.content {
+  max-width: 72ch !important;
+  margin: 0 auto !important;
+}
+
+// Crisp margins and layout
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+}
+
+.title {
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin-bottom: 1.5rem;
+  color: $heading-color;
+}
+
+// Glassmorphism and premium formatting for Callout boxes
+.callout {
+  background: rgba(248, 250, 252, 0.7) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+  border-left: 4px solid $link-color !important;
+  border-radius: 6px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  padding: 1.25rem;
+  margin: 1.5rem 0;
+}
+
+// Elegant design for Code blocks
+pre, code {
+  font-size: 0.9em;
+}
+
+div.sourceCode {
+  border-radius: 6px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+  background: #f8fafc !important;
+  padding: 0.5rem 0;
+}
+
+// Smooth transitions on links
+a {
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(15, 118, 110, 0.3);
+  transition: all 0.2s ease-in-out;
+  
+  &:hover {
+    border-bottom: 1px solid $link-hover-color;
+    background-color: rgba(13, 148, 136, 0.04);
+  }
+}
+
+// Table styling adjustments
+table.table {
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  width: 100%;
+  
+  thead th {
+    border-top: 2px solid $heading-color !important;
+    border-bottom: 1px solid $border-color !important;
+    font-family: $font-family-sans-serif;
+    font-weight: 600;
+    color: $heading-color;
+    padding: 0.75rem;
+  }
+  
+  tbody td {
+    border-bottom: 1px solid $border-color !important;
+    padding: 0.75rem;
+    font-size: 0.95em;
+  }
+  
+  tbody tr:last-child td {
+    border-bottom: 2px solid $heading-color !important;
+  }
+}
+
+// Prevent formulas from stretching or breaking container layouts
+.math, .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5rem 0;
+  
+  // Custom scrollbar for math containers
+  &::-webkit-scrollbar {
+    height: 4px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 2px;
+  }
+}
+
+// Layout for print format
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt !important;
+  }
+  
+  #quarto-sidebar,
+  .quarto-secondary-nav,
+  .toc-actions,
+  #toc-toggle,
+  .navbar,
+  footer {
+    display: none !important;
+  }
+  
+  #quarto-document-content,
+  main.content {
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  
+  a {
+    border-bottom: none !important;
+    color: #000000 !important;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Premium HTML Elements Styling
+// -----------------------------------------------------------------------------
+
+// Abstract Card Styling
+.abstract,
+.quarto-abstract,
+.quarto-title-block-abstract {
+  font-family: $font-family-serif;
+  font-size: 1.02rem;
+  line-height: 1.7;
+  color: #334155; // Slate-700
+  background: rgba(248, 250, 252, 0.7); // Light Slate-50 tint
+  border-left: 3px solid $link-color;
+  padding: 1.25rem 1.5rem;
+  border-radius: 0 8px 8px 0;
+  margin: 2rem 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  
+  p {
+    margin-bottom: 0 !important;
+  }
+}
+
+// Centered Figures and Elegant Captions
+figure {
+  text-align: center;
+  margin: 2rem 0;
+  
+  img {
+    display: inline-block;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+    border: 1px solid rgba(226, 232, 240, 0.5);
+    background: #ffffff;
+    padding: 0.25rem;
+  }
+  
+  figcaption {
+    font-family: $font-family-sans-serif;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #64748b; // Slate-500
+    margin-top: 0.75rem;
+    padding: 0 1rem;
+    text-align: left;
+    
+    strong {
+      color: $heading-color;
+      font-weight: 600;
+    }
+  }
+}
+
+// Author list & Metadata Layout
+.quarto-title-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+  padding: 1.5rem 0;
+  border-top: 1px solid $border-color;
+  border-bottom: 1px solid $border-color;
+  font-family: $font-family-sans-serif;
+  font-size: 0.9rem;
+  
+  .quarto-title-meta-heading {
+    font-weight: 600;
+    color: $heading-color;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.72rem;
+    margin-bottom: 0.25rem;
+  }
+  
+  .quarto-title-meta-contents {
+    color: #475569; // Slate-600
+  }
+}
+
+// Sidebar & TOC Refinements
+#TOC {
+  font-family: $font-family-sans-serif;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: $toc-color;
+  
+  ul {
+    padding-left: 0.75rem;
+    
+    li {
+      margin-bottom: 0.4rem;
+    }
+  }
+  
+  a {
+    border-bottom: none !important;
+    color: $toc-color;
+    padding: 0.15rem 0.25rem;
+    border-radius: 4px;
+    
+    &:hover {
+      color: $link-hover-color;
+      background-color: rgba(13, 148, 136, 0.04) !important;
+    }
+  }
+  
+  .active {
+    color: $link-color !important;
+    font-weight: 500;
+    background-color: rgba(15, 118, 110, 0.03) !important;
+  }
+}
+

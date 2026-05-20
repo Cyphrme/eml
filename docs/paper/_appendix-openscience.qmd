@@ -24,7 +24,7 @@ implementations are injected by the caller via the `Hasher` trait.
 - 16 property-based tests (proptest) verifying equational laws over
   randomized tree configurations, including a comprehensive state
   machine test.
-- 7 fault injection tests using adversarial `CorruptingStorage` backends.
+- 7 fault injection tests using adversarial storage adapters.
 - 6 complexity regression tests validating asymptotic bounds via curve
   fitting.
 

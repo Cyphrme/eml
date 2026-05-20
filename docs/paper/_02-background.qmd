@@ -89,7 +89,7 @@ requirements of long-lived verifiable logs:
 
 ::: {#tbl-constraints}
 | ID | Constraint | Rationale |
-|:---|:-----------|:----------|
+|:--|:--------|:---------------|
 | C1 | Append-only. No mutation of committed data. | Foundational integrity property. |
 | C2 | Multiple algorithms over a shared topology. | Avoid per-algorithm tree duplication. |
 | C3 | Zero retroactive computation on algorithm addition. | $\mathcal{O}(N)$ rehashing is unacceptable for large logs. |
