@@ -229,21 +229,39 @@ The following laws govern the EML. Each extends the standard RFC 9162
 invariants to the multi-algorithm setting.
 
 ::: {#law-aequiv}
+
+```{=latex}
+\begin{minipage}{\columnwidth}
+```
+
 **Law 1** ([A-Equiv]{.smallcaps}). *Incremental equals batch.* For all
 $a \in \text{dom}(\text{act})$:
 
 $$
 \text{root}(a) = \text{MTH}(H_a, \pi_a(S))
 $$
+
+```{=latex}
+\end{minipage}
+```
 :::
 
 ::: {#law-astack}
+
+```{=latex}
+\begin{minipage}{\columnwidth}
+```
+
 **Law 2** ([A-Stack]{.smallcaps}). *Frontier stack size invariant.* For all
 $a$:
 
 $$
 |\text{stacks}(a)| = \text{popcount}(\text{tree\_size}(a))
 $$
+
+```{=latex}
+\end{minipage}
+```
 :::
 
 ::: {#law-ndet}
@@ -252,6 +270,11 @@ $N_h(a)$ is uniquely determined by $(a, h)$.
 :::
 
 ::: {#law-dsep}
+
+```{=latex}
+\begin{minipage}{\columnwidth}
+```
+
 **Law 4** ([D-Sep]{.smallcaps}). *Domain separation.* Three-way separation
 across all tree domains:
 
@@ -262,9 +285,18 @@ $$
 \forall a, d, l, r:    &\quad \text{leaf}(a, d) \neq \text{node}(a, l, r)
 \end{aligned}
 $$
+
+```{=latex}
+\end{minipage}
+```
 :::
 
 ::: {#law-isound}
+
+```{=latex}
+\begin{minipage}{\columnwidth}
+```
+
 **Law 5** ([I-Sound]{.smallcaps}). *Inclusion proof soundness.* For all
 active $(a, i)$:
 
@@ -277,12 +309,16 @@ $$
 &= \text{true}
 \end{aligned}
 $$
+
+```{=latex}
+\end{minipage}
+```
 :::
 
 ::: {#law-ksound}
 
 ```{=latex}
-\begin{samepage}
+\begin{minipage}{\columnwidth}
 ```
 
 **Law 6** ([K-Sound]{.smallcaps}). *Consistency proof soundness.* For all
@@ -298,12 +334,17 @@ $$
 $$
 
 ```{=latex}
-\end{samepage}
+\end{minipage}
 ```
 
 :::
 
 ::: {#law-tbound}
+
+```{=latex}
+\begin{minipage}{\columnwidth}
+```
+
 **Law 7** ([T-Bound]{.smallcaps}). *Temporal binding.* For all $a$ and $i$
 where $\neg\text{active}(a, i) \wedge i < \text{tree\_size}(a)$:
 
@@ -318,6 +359,10 @@ $$
 $$
 
 No payload can produce a valid inclusion proof at an inactive position.
+
+```{=latex}
+\end{minipage}
+```
 :::
 
 ::: {#law-algind}
@@ -334,6 +379,11 @@ all standard invariants hold for the projected tree.
 ### Projection Isomorphism
 
 ::: {#thm-projection-iso}
+
+```{=latex}
+\begin{minipage}{\columnwidth}
+```
+
 **Theorem 1** (Projection isomorphism). For any algorithm $a$, the root
 computed by $\text{root}(a)$ from the EML frontier equals the root of a
 batch-constructed RFC 9162 tree over the projected leaf sequence:
@@ -341,6 +391,10 @@ batch-constructed RFC 9162 tree over the projected leaf sequence:
 $$
 \text{root}(a) = \text{MTH}(H_a, \pi_a(S))
 $$
+
+```{=latex}
+\end{minipage}
+```
 :::
 
 *Proof sketch.* By [A-Equiv]{.smallcaps}, the incremental and batch roots
