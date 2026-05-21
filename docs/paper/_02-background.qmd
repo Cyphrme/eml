@@ -29,21 +29,12 @@ $\mathtt{0x01}$ provide domain separation between leaf and internal node
 hashes, preventing second-preimage attacks across tree levels
 [@merkle1989].
 
-Two proof types verify the log:
-
-- **Inclusion proof.** Given leaf index $m$ and tree size $n$, the
-  prover supplies the $\lceil \log_2 n \rceil$ sibling hashes along the
-  path from position $m$ to the root. The verifier recomputes the root
-  and checks equality with the published root hash.
-
-- **Consistency proof.** Given old tree size $m$ and new tree size $n >
-  m$, the prover demonstrates that the first $m$ entries of the $n$-leaf
-  tree produce the same root as the $m$-leaf tree. This enforces the
-  append-only property: no previously committed entry can be modified or
-  deleted without detection.
-
-Both proof types require $\mathcal{O}(\log n)$ hash operations for
-verification.
+Two proof types verify the log: an **inclusion proof** demonstrates
+membership of leaf $m$ via $\lceil \log_2 n \rceil$ sibling hashes,
+and a **consistency proof** demonstrates that the first $m$ entries of
+an $n$-leaf tree share the same root as the $m$-leaf tree, enforcing
+append-only integrity. Both require $\mathcal{O}(\log n)$ hash
+operations.
 
 ### The Algorithm Binding Constraint
 
@@ -118,6 +109,42 @@ weaken any single algorithm's guarantees. This is the content of
 [Alg-Ind]{.smallcaps}: each projection is informationally independent under
 ROM.
 
+**Why not independent trees?** An alternative design maintains entirely
+separate Merkle trees per algorithm, binding their roots via a composite
+STH. This avoids null padding but sacrifices the fundamental property of
+a Merkle append-only log: a single, cryptographically committed
+chronological ordering. In the EML, position $i$ is position $i$ for
+every algorithm---some contribute a leaf hash, some contribute a null
+constant, but the temporal ordering is universal and structurally
+committed. Independent trees fragment this chronology into
+$|\mathcal{A}|$ separate orderings. A composite STH snapshots the state
+of each tree at signing time but commits nothing about the temporal
+interleaving between trees: it cannot express that entry $j$ in tree $a$
+and entry $k$ in tree $b$ were contemporaneous, nor can it represent the
+absence of algorithm $a$ at a particular point in the system's history.
+
+The EML's null constants are not inert padding; they are **unforgeable
+witnesses of algorithm inactivity**. A null at position $i$ for
+algorithm $a$ is a committed statement---embedded in the Merkle hash
+chain, reflected in $\text{root}(a)$, signed by the STH---that no key
+using algorithm $a$ was active at the $i$-th event. To forge activity at
+a position where none existed, an attacker must replace $N_0(a)$ with
+$\text{leaf}(a, d)$, altering $\text{root}(a)$ and therefore the
+STH---a detectable equivocation. Independent trees provide no structural
+representation of inactivity and thus no mechanism to cryptographically
+prove it. This temporal witness operates at algorithm granularity; when
+multiple keys share a hash algorithm, the tree commits which
+*algorithm* was active at each position, while key identity is resolved
+by the leaf payload.
+
+Operationally, the shared topology also yields unified consistency
+proofs (a single check vs. $|\mathcal{A}|$ independent checks) and
+shared proof paths for multi-algorithm verification. The null-padding
+storage overhead is $\mathcal{O}(|\mathcal{A}| \cdot \log n)$ in
+NullTable entries, not $\mathcal{O}(|\mathcal{A}| \cdot n)$: null
+subtree hashes are computed on the fly from the precomputed NullTable,
+not stored per-position.
+
 **Historical verification and security tradeoffs.** The EML does not retroactively
 verify historical data under newly added algorithms. A newly activated algorithm
 verifies only the data appended during its active epochs; pre-epoch positions are
@@ -127,7 +154,7 @@ operational tradeoffs:
 
 1. *Preimage vs. Collision Asymmetry:* Cryptographic hash functions typically succumb to collision attacks (enabling future forgeries) decades before they succumb to preimage attacks (enabling modification of past history). The EML protects future appends by immediately transitioning to a collision-resistant algorithm, while relying on the remaining preimage resistance of the deprecated algorithm to protect the past.
 2. *Operational Viability:* The alternative is an $\mathcal{O}(N)$ retroactive rehashing migration, which is computationally prohibitive and structurally impossible for live immutable logs without downtime or violating write invariants. EML enables $\mathcal{O}(1)$ instant algorithm additions.
-3. *Social Consensus Checkpointing:* Transparency logs are heavily monitored by independent witnesses who archive Signed Tree Heads (STHs). Modifying historical data in a deprecated epoch requires not only a preimage collision on the old hash function but also rewriting history across a decentralized network of independent monitors.
+3. *Monitor Ecosystem Defense-in-Depth:* In deployed transparency ecosystems, independent monitors archive Signed Tree Heads and periodically verify consistency. Retroactive modification of historical data in a deprecated epoch would require not only a second-preimage attack on the old hash function but also equivocation against all monitors that have recorded prior STHs---an independently detectable event.
 
 **Epoch manifest commitment via the Signed Tree Head.** The EML binds
 the activation manifest directly to the log's root of trust. The Signed
@@ -140,7 +167,7 @@ classical equivocation detectable by standard client-gossip and witness
 protocols. The manifest commitment also closes the shared-state
 assumption underlying proof elision (§[VI](#sec-elided-proofs)):
 agreement on the STH implies agreement on the epoch topology
-([M-Commit]{.smallcaps}, Law 10), so verifiers need not trust any
+([M-Commit]{.smallcaps}, Corollary 1), so verifiers need not trust any
 out-of-band channel for epoch metadata.
 
 **Equivocation detection.** Cross-algorithm equivocation---a malicious

@@ -6,12 +6,12 @@ transitions in verifiable logs. By partitioning algorithm lifecycles
 into null-padded chronological epochs over a shared RFC 9162 topology,
 the EML achieves $\mathcal{O}(\log n)$ algorithm addition with zero
 retroactive computation, strictly algorithm-independent verification via
-the projection isomorphism, and zero-metadata proof compression through
+the projection isomorphism, and zero per-proof-metadata compression through
 deterministic elision. Historical data remains bound to the algorithms
 active at the time of insertion---a principled trade-off that preserves
 temporal fidelity while eliminating operational fragmentation.
 
-The formal algebraic model (10 equational laws over 20 definitions)
+The formal algebraic model (9 equational laws over 20 definitions)
 reduces multi-algorithm correctness to the well-understood correctness of
 single-algorithm RFC 9162 verification. The production Rust
 implementation validates these properties empirically through

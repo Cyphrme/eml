@@ -75,7 +75,7 @@ correctness of the single-algorithm standard, a property we formalize as
 
 ### Motivating Case Study: Long-Lived Key Directories
 
-Our work is directly motivated by the deployment requirements of long-lived key directories and decentralized identity registries (such as Cyphr). These systems face a practical conflict between client device heterogeneity and decade-scale log lifespans. On one hand, resource-constrained IoT devices or embedded hardware often possess hardware-acceleration engines restricted to SHA-256, making support for newer primitives computationally prohibitive. On the other hand, high-performance server clients require modern primitives like SHA3 or BLAKE2 for throughput, and compliance mandates eventually dictate algorithm transitions over 10- to 20-year horizons. Running parallel Merkle logs for each algorithm multiplies write I/O and storage overhead, while forcing a single algorithm compromises either interoperability or security. The EML addresses this operational tension by allowing a single shared-topology log to natively support concurrent, heterogeneous cryptographic algorithms.
+Our work is directly motivated by the deployment requirements of long-lived key directories and decentralized identity registries (such as Cyphr [@cyphr-spec]). These systems face a practical conflict between client device heterogeneity and decade-scale log lifespans. On one hand, resource-constrained IoT devices or embedded hardware often possess hardware-acceleration engines restricted to SHA-256, making support for newer primitives computationally prohibitive. On the other hand, high-performance server clients require modern primitives like SHA3 or BLAKE2 for throughput, and compliance mandates eventually dictate algorithm transitions over 10- to 20-year horizons. Running parallel Merkle logs for each algorithm multiplies write I/O and storage overhead, while forcing a single algorithm compromises either interoperability or security. The EML addresses this operational tension by allowing a single shared-topology log to natively support concurrent, heterogeneous cryptographic algorithms.
 
 ### Contributions
 
@@ -89,14 +89,14 @@ We make the following contributions:
    algorithm removal.
 
 2. **A formal algebraic model** (§[IV](#sec-formal-model)): an initial
-   algebra over 20 definitions with 10 equational laws establishing
+   algebra over 20 definitions with 9 equational laws establishing
    algorithm-independent correctness. The projection isomorphism
    ($\pi_a(\text{EML}) \cong \text{RFC 9162}(\text{leaves}_a)$) reduces
    multi-algorithm verification to standard single-algorithm
    verification.
 
 3. **Deterministic proof elision** (§[VI](#sec-elided-proofs)): a
-   zero-metadata wire optimization that compresses inclusion proofs from
+   zero per-proof-metadata wire optimization that compresses inclusion proofs from
    $\mathcal{O}(\log n)$ to $\mathcal{O}(\log n_a)$ siblings, where
    $n_a$ is the algorithm's active entry count. The verifier
    reconstructs elided null siblings via interval arithmetic over the

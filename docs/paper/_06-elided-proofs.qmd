@@ -56,16 +56,16 @@ The proof compression operates in three phases:
    The client pipeline as a whole is elision-aware (step 3), but the
    cryptographic core invoked at this step is not.
 
-### Zero-Metadata Compression
+### Zero Per-Proof Metadata
 
-The critical property of EML proof elision is that **no explicit
-markers, bitmaps, or metadata are transmitted** to signal which siblings
+The critical property of EML proof elision is that **no per-proof
+markers, bitmaps, or elision metadata are transmitted** to signal which siblings
 were elided. Both the prover and verifier share:
 
 - The global tree size $n$ (committed by the STH, Definition 15)
 - The leaf index $m$
 - The algorithm's epoch list $\text{act}(a)$ (committed by the STH via
-  $H(\text{act})$; agreement guaranteed by [M-Commit]{.smallcaps}, Law 10)
+  $H(\text{act})$; agreement guaranteed by [M-Commit]{.smallcaps}, Corollary 1)
 
 These three values fully determine the tree path and, for each sibling
 position, whether its coverage range intersects an active epoch. The

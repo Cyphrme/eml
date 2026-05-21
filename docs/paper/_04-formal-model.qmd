@@ -416,15 +416,15 @@ all standard invariants hold for the projected tree.
 \begin{minipage}{\columnwidth}
 ```
 
-**Law 10** ([M-Commit]{.smallcaps}). *Manifest commitment.* For any two
+**Corollary 1** ([M-Commit]{.smallcaps}). *Manifest commitment.* For any two
 clients $C_1, C_2$ that accept the same STH (Definition 15):
 
 $$
 \text{act}_{C_1} = \text{act}_{C_2}
 $$
 
-Agreement on the STH implies agreement on the epoch topology. This law
-closes the manifest authentication loop: the shared knowledge of
+Agreement on the STH implies agreement on the epoch topology. This
+corollary closes the manifest authentication loop: the shared knowledge of
 $\text{act}(a)$ required by the elision protocol
 (§[VI](#sec-elided-proofs)) is not an out-of-band trust assumption but a
 cryptographic consequence of STH verification.
@@ -455,14 +455,40 @@ $$
 ```
 :::
 
-*Proof sketch.* By [A-Equiv]{.smallcaps}, the incremental and batch roots
-agree. By Definition 9, the projected sequence consists of standard leaf
-hashes at active positions and null constants at inactive positions. By
-[D-Sep]{.smallcaps}, null constants are valid---but unforgeable---leaf
-values. By [Proj-Valid]{.smallcaps}, the projected sequence satisfies all
-RFC 9162 invariants. The EML's per-algorithm root is therefore
-indistinguishable from a standard single-algorithm Merkle tree root over
-$\pi_a(S)$. $\square$
+*Proof.* By structural induction on the projected tree.
+
+*Base case ($\text{tree\_size}(a) = 0$).* The projection is empty;
+$\text{root}(a) = \text{empty}(a) = \text{MTH}(H_a, \emptyset)$ by
+Definition 14.
+
+*Base case ($\text{tree\_size}(a) = 1$).* A single leaf at index $i$. If
+$\text{active}(a, i)$, then $V(a, i) = \text{leaf}(a, d_i)$, which is
+precisely $\text{MTH}(H_a, \{d_i\})$. If $\neg\text{active}(a, i)$, then
+$V(a, i) = N_0(a)$; by [D-Sep]{.smallcaps}, $N_0(a)$ is a valid leaf hash
+distinct from any $\text{leaf}(a, d)$, so the single-element MTH is
+well-defined.
+
+*Inductive step.* Assume the property holds for all projected trees of
+size $< n$. For size $n$, let $k$ be the largest power of two less than
+$n$. The projected sequence splits into left ($[0, k)$) and right
+($[k, n)$) subsequences. By the inductive hypothesis, the EML's
+frontier-based root computation over each half equals the batch MTH over
+that half's projection. The EML combines these via
+$\text{node}(a, \text{left}, \text{right})$, which is identical to the
+MTH recursive case (@eq-mth-internal). The combination is correct
+regardless of whether positions within each half are active or
+null-filled, because by [D-Sep]{.smallcaps} null constants occupy a
+disjoint domain from leaf and node hashes, and by [N-Det]{.smallcaps}
+the null hash at each position is uniquely determined.
+
+*Injectivity.* By [D-Sep]{.smallcaps}, no payload $d$ exists such that
+$\text{leaf}(a, d) = N_0(a)$, so an inclusion proof at an inactive
+position cannot be forged to verify against any real payload. Null
+positions are structurally present but semantically unforgeable.
+
+By [A-Equiv]{.smallcaps}, the EML's incremental root equals the batch
+root at every append. By [Proj-Valid]{.smallcaps}, the full projected
+sequence satisfies all RFC 9162 invariants. $\square$
 
 This theorem is the paper's central result. It reduces the correctness
 of multi-algorithm verification to the well-understood correctness of

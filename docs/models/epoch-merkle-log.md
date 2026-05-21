@@ -618,7 +618,7 @@ other algorithm's digest tree.
 This is the composition law: EML correctness reduces to malt correctness
 per algorithm, plus the multi-algorithm extension laws above.
 
-#### M-COMMIT — Manifest commitment
+#### M-COMMIT — Manifest commitment (Corollary)
 
 For any two clients C₁, C₂ that accept the same STH (Definition 13b):
 
@@ -626,8 +626,8 @@ For any two clients C₁, C₂ that accept the same STH (Definition 13b):
 act_C₁ = act_C₂
 ```
 
-Agreement on the STH implies agreement on the epoch topology. This law
-closes the manifest authentication loop: the shared knowledge of `act(a)`
+This follows directly from Definition 13b: agreement on the STH implies
+agreement on the epoch topology. The shared knowledge of `act(a)`
 required by the elision protocol is not an out-of-band trust assumption
 but a cryptographic consequence of STH verification.
 

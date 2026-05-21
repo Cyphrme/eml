@@ -14,7 +14,7 @@ abstract: |
   immutability. However, executing a hash transition on a live log
   traditionally forces a trilemma: fracturing the ledger into incompatible
   forks, accepting weakest-link algorithmic dependencies through chimeric
-  constructions, or incurring a catastrophic $\mathcal{O}(N)$ retroactive
+  constructions, or incurring a prohibitive $\mathcal{O}(N)$ retroactive
   compute penalty. We introduce the *Epoch Merkle Log* (EML), an append-only
   data structure that partitions algorithm lifecycles into discrete,
   null-padded chronological epochs over a shared RFC 9162 topology. The EML
@@ -22,7 +22,7 @@ abstract: |
   algorithm's projection yields a complete, independently verifiable standard
   Merkle tree---while enabling $\mathcal{O}(\log N)$ hash transitions with
   zero retroactive computation. We formalize the EML via an initial algebra
-  with 10 equational laws and provide a production Rust implementation
+  with 9 equational laws and provide a production Rust implementation
   validated by property-based testing, fault injection, and complexity
   regression, demonstrating $\mathcal{O}(1)$ amortized appends,
   $\mathcal{O}(\log N)$ proofs, and zero-overhead bandwidth compression via

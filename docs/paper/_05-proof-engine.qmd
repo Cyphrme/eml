@@ -15,20 +15,20 @@ query:
 
 ::: {#def-subtree-root}
 **Definition 17** (Subtree root). The root hash of the subtree covering
-leaves $[lo, hi)$ for algorithm $a$, with $n = hi - lo$:
+leaves $[lo, hi)$ for algorithm $a$:
 
 $$
 \text{sr}(a, lo, hi) = \begin{cases}
-\text{empty}(a) & n = 0 \\
-V(a, lo) & n = 1 \\
-N_h(a) & \text{null range},\ n = 2^h \\
-\text{nodes}(a)[(lo,h)] & \text{stored},\ n = 2^h \\
+\text{empty}(a) & w = 0 \\
+V(a, lo) & w = 1 \\
+N_h(a) & \text{null range},\ w = 2^h \\
+\text{nodes}(a)[(lo,h)] & \text{stored},\ w = 2^h \\
 \text{node}(a, \text{sr}(a, lo, l'), & \text{otherwise} \\
 \quad \text{sr}(a, l', hi))
 \end{cases}
 $$
 
-where $l' = lo + k$, $k = \text{largest\_pow2\_lt}(n)$, and $h = \log_2 n$.
+where $w = hi - lo$, $l' = lo + k$, $k = \text{largest\_pow2\_lt}(w)$, and $h = \log_2 w$.
 We abbreviate $\text{subtree\_root}(S, a, \ldots)$ as $\text{sr}(a, \ldots)$
 throughout.
 :::
@@ -75,7 +75,6 @@ $+$ $\mathcal{O}(\log n)$ hash operations.
 | Append (per algorithm) | $\mathcal{O}(1)$ amortized | CTO merge + node persistence |
 | Append (total) | $\mathcal{O}(\lvert A(i) \rvert)$ amortized | Linear in active algorithm count |
 | Algorithm addition | $\mathcal{O}(\log K)$ | Null prefix peak computation |
-| Algorithm removal | $\mathcal{O}(1)$ | Frontier freeze |
 | Algorithm resumption | $\mathcal{O}(\log n)$ | Frontier reconstruction via `subtree_root` |
 | Root extraction | $\mathcal{O}(\log n)$ | Frontier stack fold |
 | STH construction | $\mathcal{O}(\lvert\mathcal{A}\rvert \cdot \log n)$ | Root extraction per algorithm $+$ manifest hash |
