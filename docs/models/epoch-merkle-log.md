@@ -364,10 +364,12 @@ Canonicality requires that the serialization function is injective:
 distinct logical activation maps must produce distinct byte sequences.
 The concrete serialization format is implementation-defined.
 
-The per-algorithm entries include both `root(a)` and `tree_size(a)`,
-enabling clients to detect silent algorithm omission: if an algorithm
-present in the gossiped manifest is absent from the STH's root set, or
-vice versa, the client rejects the STH.
+The per-algorithm entries include `tree_size(a)` alongside `root(a)`.
+Although `tree_size(a)` is derivable from `act` (it equals `n` for
+active algorithms and `e_k` for frozen ones), its inclusion in the
+signed tuple enables epoch-unaware clients to verify standard RFC 9162
+proofs using only the STH, without possessing or parsing the activation
+map.
 
 ### §11. Projection (Specification Oracle)
 
