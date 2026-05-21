@@ -282,3 +282,9 @@ figure {
   }
 }
 
+// Hide Quarto's auto-generated theorem/definition labels.
+// The paper uses manual "Definition N" / "Theorem N" text in each div body;
+// Quarto's #def- / #thm- prefix recognition produces a duplicate label.
+.theorem-title {
+  display: none;
+}
