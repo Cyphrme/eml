@@ -12,9 +12,11 @@ differs across algorithms is the *value* computed at each node: each
 algorithm hashes every position independently using its own hash
 function.
 
-This is not one tree per algorithm. It is one tree with multiple
-projections. The topology is shared; the hash computations are
-independent.
+This is not one tree per algorithm. It is a single, unified data structure with multiple projections. While storing distinct internal node hashes for each algorithm is storage-equivalent to parallel logs, this shared-topology model yields three crucial advantages over running disjoint logs:
+
+1. **Timeline Continuity and Shared Sequencing:** The log enforces a single, globally ordered index space. Index $n$ under algorithm $a$ represents the exact same entry and transaction timeline as index $n$ under algorithm $b$. This eliminates coordinate fragmentation, allowing applications to reason about strict, chronological ordering across different cryptographic epoch transitions.
+2. **Atomic Write Coordination:** A single append operation updates the logical state of the log atomically across all active projections, ensuring they can never diverge or drift out of sync.
+3. **Consolidated Auditing Complexity:** Auditors and monitors watch a single log identity. Equivocation on any projection is immediately detectable as a split-view of the same shared logical sequence, bypassing the distributed systems nightmare of reconciling separate, asynchronous log timelines.
 
 ### Null Constants
 

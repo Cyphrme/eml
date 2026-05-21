@@ -36,7 +36,7 @@ regression).
 against proof verification and elision surfaces. Reproduction:
 `cargo +nightly fuzz run <target>`.
 
-**Formal model.** The algebraic specification (19 definitions, 9
+**Formal model.** The algebraic specification (20 definitions, 10
 equational laws) is provided as a standalone Markdown document in
 `docs/models/`.
 

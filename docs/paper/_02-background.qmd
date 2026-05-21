@@ -2,14 +2,14 @@
 
 ### RFC 9162 Merkle Trees
 
-The EML extends the append-only Merkle tree topology defined in
-RFC 9162 [@rfc9162], which formalizes the construction introduced by
+The EML extends the standard single-algorithm append-only Merkle tree topology defined in
+RFC 9162 [@rfc9162] (which we refer to as a **Merkle append-only Log Tree (MALT)** for comparative shorthand), formalizing the construction introduced by
 Crosby and Wallach [@crosby2009] and deployed at scale through
 Certificate Transparency [@rfc6962]. We summarize the relevant
 definitions.
 
 A log of $n$ leaf entries $D_n = \{d_0, d_1, \ldots, d_{n-1}\}$ is
-authenticated by a Merkle Tree Hash (MTH) computed recursively:
+represented by a Merkle Tree Hash (MTH) computed recursively:
 
 $$
 \text{MTH}(\emptyset) = H(\text{""})
@@ -29,7 +29,7 @@ $\mathtt{0x01}$ provide domain separation between leaf and internal node
 hashes, preventing second-preimage attacks across tree levels
 [@merkle1989].
 
-Two proof types authenticate the log:
+Two proof types verify the log:
 
 - **Inclusion proof.** Given leaf index $m$ and tree size $n$, the
   prover supplies the $\lceil \log_2 n \rceil$ sibling hashes along the
@@ -118,50 +118,36 @@ weaken any single algorithm's guarantees. This is the content of
 [Alg-Ind]{.smallcaps}: each projection is informationally independent under
 ROM.
 
-**Historical binding trade-off.** The EML does not retroactively
-authenticate historical data under newly added algorithms. A newly
-activated algorithm authenticates only the data appended during its
-active epochs; pre-epoch positions are committed as deterministic null
-constants that are unforgeable but carry no payload authentication
-(@def-null-leaf). This is a principled design choice: faithful
-representation of temporal reality, not an evasion of the
-$\mathcal{O}(N)$ retroactive computation cost.
+**Historical verification and security tradeoffs.** The EML does not retroactively
+verify historical data under newly added algorithms. A newly activated algorithm
+verifies only the data appended during its active epochs; pre-epoch positions are
+committed as deterministic null constants that are unforgeable but carry no payload
+verification (@def-null-leaf). This design reflects three fundamental security and
+operational tradeoffs:
 
-**Implicit epoch commitment via domain separation.** The per-algorithm
-root hash $\text{root}(a)$ implicitly commits to the exact temporal
-topology of the epochs. Suppose a malicious log serves a tampered
-manifest $\text{act}'(a)$ that omits an active epoch. During
-rehydration, the client synthesizes a null subtree $N_h(a)$ where the
-true tree contains a payload subtree $R$. For the client's computed root
-to match the gossiped $\text{root}(a)$, it must hold that $N_h(a) = R$.
-By [D-Sep]{.smallcaps} (Law 4), the null tree is domain-separated at every
-level. At the leaves, $N_0(a) = H_a(\mathtt{0x02})$ while real leaves
-use $H_a(\mathtt{0x00} \concat d)$; at internal nodes, both $N_h(a)$
-and $R$ use the $\mathtt{0x01}$ prefix, but $N_h(a)$ is built
-exclusively from null children while $R$ contains at least one active
-leaf. Achieving $N_h(a) = R$ therefore requires either a collision on
-the $\mathtt{0x01}$-domain (if $h > 0$) or a cross-domain collision
-between $\mathtt{0x02}$ and $\mathtt{0x00}$ (at $h = 0$), both of which
-reduce to breaking the underlying hash function. Explicit epoch manifest
-commitment in the STH remains valuable engineering practice---it
-prevents denial-of-service via malformed manifests, enables efficient
-parsing, and provides a liveness signal---but is not required for
-cryptographic integrity of the epoch topology.
+1. *Preimage vs. Collision Asymmetry:* Cryptographic hash functions typically succumb to collision attacks (enabling future forgeries) decades before they succumb to preimage attacks (enabling modification of past history). The EML protects future appends by immediately transitioning to a collision-resistant algorithm, while relying on the remaining preimage resistance of the deprecated algorithm to protect the past.
+2. *Operational Viability:* The alternative is an $\mathcal{O}(N)$ retroactive rehashing migration, which is computationally prohibitive and structurally impossible for live immutable logs without downtime or violating write invariants. EML enables $\mathcal{O}(1)$ instant algorithm additions.
+3. *Social Consensus Checkpointing:* Transparency logs are heavily monitored by independent witnesses who archive Signed Tree Heads (STHs). Modifying historical data in a deprecated epoch requires not only a preimage collision on the old hash function but also rewriting history across a decentralized network of independent monitors.
 
-Cross-algorithm equivocation---a malicious log forking algorithm $a$'s
-history while presenting a consistent history under algorithm $b$---is
-detectable because the tree topology is shared. The log maintains a
-single leaf sequence; any inconsistency in one projection's root hash
-is visible to a monitor operating on that projection, regardless of
-whether other projections appear consistent. Formally: equivocation on
-projection $\pi_a$ is detectable if and only if at least one honest
-monitor performs consistency checks on $\pi_a$.
+**Epoch manifest commitment via the Signed Tree Head.** The EML binds
+the activation manifest directly to the log's root of trust. The Signed
+Tree Head (STH) commits the global tree size, per-algorithm roots and
+tree sizes, and a cryptographic digest of the canonical activation map
+(formalized as Definition 15 in §[IV](#sec-formal-model)). This binding
+guarantees that any attempt by a malicious log to present conflicting
+manifests to different clients requires signing distinct STHs---a
+classical equivocation detectable by standard client-gossip and witness
+protocols. The manifest commitment also closes the shared-state
+assumption underlying proof elision (§[VI](#sec-elided-proofs)):
+agreement on the STH implies agreement on the epoch topology
+([M-Commit]{.smallcaps}, Law 10), so verifiers need not trust any
+out-of-band channel for epoch metadata.
 
-The EML's formal model is agnostic to the STH signing architecture. If
-the deployment issues a single unified STH signing all per-algorithm
-roots, then forking $\pi_a$ forces forking the global STH, and monitors
-on any $\pi_b$ will detect the equivocation. If the deployment issues
-disjoint per-algorithm STHs, cross-algorithm monitoring is not provided
-and each projection requires independent monitoring. The choice between
-unified and disjoint STH architectures is a deployment-layer concern
-outside the scope of this paper's formal model.
+**Equivocation detection.** Cross-algorithm equivocation---a malicious
+log forking algorithm $a$'s history while presenting a consistent
+history under algorithm $b$---is detectable because the STH signs all
+per-algorithm roots atomically. Forking $\pi_a$ forces forking the
+global STH, and monitors on any $\pi_b$ will detect the equivocation.
+Formally: equivocation on any projection $\pi_a$ is detectable if at
+least one honest monitor performs consistency checks on the unified STH.
+

@@ -62,17 +62,21 @@ The critical property of EML proof elision is that **no explicit
 markers, bitmaps, or metadata are transmitted** to signal which siblings
 were elided. Both the prover and verifier share:
 
-- The global tree size $n$
+- The global tree size $n$ (committed by the STH, Definition 15)
 - The leaf index $m$
-- The algorithm's epoch list $\text{act}(a)$
+- The algorithm's epoch list $\text{act}(a)$ (committed by the STH via
+  $H(\text{act})$; agreement guaranteed by [M-Commit]{.smallcaps}, Law 10)
 
 These three values fully determine the tree path and, for each sibling
 position, whether its coverage range intersects an active epoch. The
 prover and verifier independently arrive at the same elision/rehydration
-decisions. This stands in contrast to Sparse Merkle Tree proof
-compression, which requires an explicit bitmap (typically 32 bytes) to
-indicate which siblings in a 256-level proof are default values
-[@laurie2012; @tari2018].
+decisions. Crucially, the epoch list is not an out-of-band trust
+assumption: it is cryptographically bound to the same Signed Tree Head
+that commits the tree roots, so any client that has verified the STH
+possesses the authoritative epoch topology. This stands in contrast to
+Sparse Merkle Tree proof compression, which requires an explicit bitmap
+(typically 32 bytes) to indicate which siblings in a 256-level proof are
+default values [@laurie2012; @tari2018].
 
 ### Wire Size Analysis
 

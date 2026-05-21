@@ -3,14 +3,14 @@
 Cryptographic hash functions have finite lifetimes. MD5 was deprecated
 after practical collision attacks in 2004; SHA-1 fell to the SHAttered
 attack in 2017 [@crosby2009]. The current ubiquitous standard, SHA-256,
-faces an accelerating deprecation horizon as post-quantum cryptographic
-transitions move from theoretical concern to active standardization
-[@mtc-draft; @chopra2026]. For authenticated append-only
-logs---Certificate Transparency [@rfc6962; @rfc9162], software supply
-chain attestation, and identity state trees---this obsolescence poses a
-structural crisis. The log's historical immutability derives from its
-hash function. When the hash function must change, the log's integrity
-guarantee is at risk.
+remains computationally secure, but long-term audit logs must navigate
+migration readiness. Standardizing bodies (such as NIST) have begun active
+transitions to post-quantum and larger-output primitives [@mtc-draft; @chopra2026].
+For verifiable append-only logs---Certificate Transparency [@rfc6962; @rfc9162],
+software supply chain attestation, and identity state trees---this
+obsolescence poses a structural crisis. The log's historical immutability
+derives from its hash function. When the hash function must change, the
+log's integrity guarantee is at risk.
 
 Existing systems resolve this tension by accepting one horn of what we
 term the *upgrade trilemma*:
@@ -59,9 +59,9 @@ verification is independent of every other's.
 
 The trade-off is explicit: historical data remains bound to the
 algorithms that were active at the time of insertion. A newly added
-algorithm authenticates only the data appended during its active epochs;
+algorithm verifies only the data appended during its active epochs;
 pre-epoch positions are committed as deterministic null constants that
-are unforgeable but carry no payload authentication. This is a principled
+are unforgeable but carry no payload verification. This is a principled
 choice---faithful representation of temporal reality---not an
 evasion of the retroactive computation cost.
 
@@ -72,6 +72,10 @@ each position. This projection is a valid input to unmodified RFC 9162
 verification. Correctness of the multi-algorithm EML thus *reduces* to
 correctness of the single-algorithm standard, a property we formalize as
 [Proj-Valid]{.smallcaps}.
+
+### Motivating Case Study: Long-Lived Key Directories
+
+Our work is directly motivated by the deployment requirements of long-lived key directories and decentralized identity registries (such as Cyphr). These systems face a practical conflict between client device heterogeneity and decade-scale log lifespans. On one hand, resource-constrained IoT devices or embedded hardware often possess hardware-acceleration engines restricted to SHA-256, making support for newer primitives computationally prohibitive. On the other hand, high-performance server clients require modern primitives like SHA3 or BLAKE2 for throughput, and compliance mandates eventually dictate algorithm transitions over 10- to 20-year horizons. Running parallel Merkle logs for each algorithm multiplies write I/O and storage overhead, while forcing a single algorithm compromises either interoperability or security. The EML addresses this operational tension by allowing a single shared-topology log to natively support concurrent, heterogeneous cryptographic algorithms.
 
 ### Contributions
 
@@ -85,7 +89,7 @@ We make the following contributions:
    algorithm removal.
 
 2. **A formal algebraic model** (§[IV](#sec-formal-model)): an initial
-   algebra over 19 definitions with 9 equational laws establishing
+   algebra over 20 definitions with 10 equational laws establishing
    algorithm-independent correctness. The projection isomorphism
    ($\pi_a(\text{EML}) \cong \text{RFC 9162}(\text{leaves}_a)$) reduces
    multi-algorithm verification to standard single-algorithm

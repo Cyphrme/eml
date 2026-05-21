@@ -57,7 +57,7 @@ The empirical and theoretical results confirm:
   scales logarithmically with tree size across six orders of magnitude
   (`Figure~\ref{fig:complexity}`{=latex}`<a href="#fig-complexity">Figure 5</a>`{=html}).
 - **Consistency proofs**: $\mathcal{O}(\log n)$ by construction. The
-  `subproof` algorithm (Definition 19) decomposes the tree into a
+  `subproof` algorithm (Definition 20) decomposes the tree into a
   logarithmic number of subtree roots, each resolved via a single
   stored-node lookup.
 - **Append (per algorithm)**: $\mathcal{O}(1)$ amortized. The CTO merge

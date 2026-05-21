@@ -2,7 +2,7 @@
 
 We have presented the Epoch Merkle Log, a verifiable append-only data
 structure that addresses the upgrade trilemma for hash algorithm
-transitions in authenticated logs. By partitioning algorithm lifecycles
+transitions in verifiable logs. By partitioning algorithm lifecycles
 into null-padded chronological epochs over a shared RFC 9162 topology,
 the EML achieves $\mathcal{O}(\log n)$ algorithm addition with zero
 retroactive computation, strictly algorithm-independent verification via
@@ -11,7 +11,7 @@ deterministic elision. Historical data remains bound to the algorithms
 active at the time of insertion---a principled trade-off that preserves
 temporal fidelity while eliminating operational fragmentation.
 
-The formal algebraic model (9 equational laws over 19 definitions)
+The formal algebraic model (10 equational laws over 20 definitions)
 reduces multi-algorithm correctness to the well-understood correctness of
 single-algorithm RFC 9162 verification. The production Rust
 implementation validates these properties empirically through
@@ -44,9 +44,10 @@ the security of their own algorithm's verification.
   gossip-based log replication, but the replication protocol is an
   application-layer concern outside the scope of this work.
 
-- **STH signature agility.** The EML provides hash agility for the
-  tree's internal structure but does not address signature agility for
-  the Signed Tree Head. Extending the epoch lifecycle model to STH
+- **STH signature agility.** The EML specifies the STH payload
+  structure (Definition 15) but does not address signature agility for
+  the signing key $\sigma$. Extending the epoch lifecycle model to STH
   signing keys---enabling key rotation and multi-algorithm STH
-  commitments---is an orthogonal concern that arises naturally once
-  epoch manifests must be committed by the tree head.
+  signatures---is an orthogonal concern. The manifest commitment
+  ([M-Commit]{.smallcaps}) is independent of the signature scheme used
+  to authenticate the STH itself.

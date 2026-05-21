@@ -343,6 +343,32 @@ Manifest = {
 where `tree_size(a) = last(act(a)).end` if deactivated, else
 `global_tree_size`.
 
+**Definition 13b** (Signed Tree Head). The EML's externally published
+commitment is:
+
+```
+STH = Sign_σ(
+  n,
+  t,
+  { (a, root(a), tree_size(a)) | a ∈ dom(act) },
+  H(act)
+)
+```
+
+where `n` is the global tree size, `t` is a timestamp, `σ` is the log's
+signing key, and `H(act)` is a cryptographic digest of a canonical,
+deterministic serialization of the activation map (Definition 3).
+The hash function `H` used for manifest commitment is independent of the
+tree's per-algorithm hash functions.
+Canonicality requires that the serialization function is injective:
+distinct logical activation maps must produce distinct byte sequences.
+The concrete serialization format is implementation-defined.
+
+The per-algorithm entries include both `root(a)` and `tree_size(a)`,
+enabling clients to detect silent algorithm omission: if an algorithm
+present in the gossiped manifest is absent from the STH's root set, or
+vice versa, the client rejects the STH.
+
 ### §11. Projection (Specification Oracle)
 
 **Definition 14** (Single-algorithm projection). The projection of an EML
@@ -590,6 +616,19 @@ other algorithm's digest tree.
 This is the composition law: EML correctness reduces to malt correctness
 per algorithm, plus the multi-algorithm extension laws above.
 
+#### M-COMMIT — Manifest commitment
+
+For any two clients C₁, C₂ that accept the same STH (Definition 13b):
+
+```
+act_C₁ = act_C₂
+```
+
+Agreement on the STH implies agreement on the epoch topology. This law
+closes the manifest authentication loop: the shared knowledge of `act(a)`
+required by the elision protocol is not an out-of-band trust assumption
+but a cryptographic consequence of STH verification.
+
 ## Validation
 
 | Check                    | Result | Detail                                                                                                                                                                                              |
@@ -603,7 +642,8 @@ per algorithm, plus the multi-algorithm extension laws above.
 | T-BOUND                  | PASS   | All inactive positions (pre-activation, inter-epoch gaps, post-deactivation): D-SEP prevents forgery. Beyond `tree_size(a)`: projection bounds prevent proof generation.                            |
 | ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                                                                  |
 | PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                                                                 |
-| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-EML → PROJ-VALID, ALG-IND standalone.                                                                        |
+| M-COMMIT                 | PASS   | By construction: H(act) is committed by the STH signature. Agreement on the STH implies agreement on the activation map.                                                                           |
+| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-EML → PROJ-VALID, M-COMMIT → elision shared-state, ALG-IND standalone.                                      |
 | **External adequacy**    | PASS   | The model captures all design constraints from the original exploration.                                                                                                                            |
 | **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                                                                     |
 
@@ -618,6 +658,7 @@ per algorithm, plus the multi-algorithm extension laws above.
 | Algorithm removal           | O(1)                  | Freeze frontier stack                                        |
 | Algorithm resumption        | O(G)                  | Null gap extension + node storage                            |
 | Root extraction (per alg)   | O(log n)              | Frontier stack fold                                          |
+| STH construction            | O(|A| · log n)        | Root extraction per algorithm + manifest hash                |
 | Inclusion proof (per alg)   | O(log n)              | Via subtree_root (Def. 14c); stored node + NullTable lookups |
 | Consistency proof (per alg) | O(log n)              | Via subtree_root (Def. 14c); stored node + NullTable lookups |
 | Null constant table         | O(log n) precompute   | Per algorithm, once                                          |

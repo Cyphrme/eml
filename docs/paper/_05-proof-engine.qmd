@@ -14,7 +14,7 @@ sibling hash in a proof path is resolved through the `subtree_root`
 query:
 
 ::: {#def-subtree-root}
-**Definition 16** (Subtree root). The root hash of the subtree covering
+**Definition 17** (Subtree root). The root hash of the subtree covering
 leaves $[lo, hi)$ for algorithm $a$, with $n = hi - lo$:
 
 $$
@@ -49,7 +49,7 @@ The cases, in order of priority:
    and right subtrees.
 
 ::: {#def-active-range}
-**Definition 17** (Active range). Algorithm $a$ has active content in
+**Definition 18** (Active range). Algorithm $a$ has active content in
 $[lo, hi)$ iff any epoch overlaps it:
 
 $$
@@ -78,11 +78,13 @@ $+$ $\mathcal{O}(\log n)$ hash operations.
 | Algorithm removal | $\mathcal{O}(1)$ | Frontier freeze |
 | Algorithm resumption | $\mathcal{O}(\log n)$ | Frontier reconstruction via `subtree_root` |
 | Root extraction | $\mathcal{O}(\log n)$ | Frontier stack fold |
+| STH construction | $\mathcal{O}(\lvert\mathcal{A}\rvert \cdot \log n)$ | Root extraction per algorithm $+$ manifest hash |
 | Inclusion proof | $\mathcal{O}(\log n)$ | `subtree_root` resolution |
 | Consistency proof | $\mathcal{O}(\log n)$ | `subtree_root` resolution |
 
 : Operational complexity bounds. $K$: tree size at algorithm addition.
-$n$: global tree size.
+$n$: global tree size. $\lvert\mathcal{A}\rvert$: number of registered
+algorithms.
 :::
 
 ### Inclusion and Consistency Proofs
@@ -93,7 +95,7 @@ resolution. The recursive structure is unchanged; only the mechanism for
 obtaining sibling hashes differs.
 
 ::: {#def-inclusion-proof}
-**Definition 18** (Inclusion proof). For algorithm $a$ and leaf index
+**Definition 19** (Inclusion proof). For algorithm $a$ and leaf index
 $m$:
 
 $$
@@ -106,7 +108,7 @@ hashes resolved through `subtree_root`.
 :::
 
 ::: {#def-consistency-proof}
-**Definition 19** (Consistency proof). For algorithm $a$ and old tree
+**Definition 20** (Consistency proof). For algorithm $a$ and old tree
 size $m$:
 
 $$
