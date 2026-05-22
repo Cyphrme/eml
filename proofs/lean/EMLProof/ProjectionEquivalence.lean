@@ -265,13 +265,7 @@ noncomputable def stackInvariant (pfx : List Digest) (stack : List Digest) : Pro
 theorem mth_pair (a b : Digest) : mth [a, b] = nodeHash a b := by
   simp [mth, largestPow2Lt, List.take, List.drop]
 
-/-- When two segments have equal power-of-2 size, merging their mth's
-    produces the mth of the concatenated segment.
-    Depends on mth_split (defined later); will be proved after rearrangement. -/
-theorem mth_merge (L R : List Digest) (k : Nat)
-    (hL : L.length = 2 ^ k) (hR : R.length = 2 ^ k) :
-    nodeHash (mth L) (mth R) = mth (L ++ R) := by
-  sorry
+
 
 /-- If segment sizes are strictly descending powers of 2 summing to idx,
     and cto(idx) = 0, then no segment has size 1. -/
@@ -303,79 +297,49 @@ theorem no_size_one_when_cto_zero (sizes : List Nat)
         _ = 2 := by norm_num
     omega
   subst hk; subst h_k_zero
-  -- s = 1 = 2^0, and s ∈ sizes
-  -- Since sizes are strictly descending, all other elements > 1
-  -- All other elements are 2^j with j ≥ 1, hence even
-  -- So sum = 1 + (even terms) = odd, contradicting h_even
-  sorry
+  -- 1 ∈ sizes with strictly descending pow2s → sum is odd
+  -- Prove by induction: if 1 ∈ l, desc, all pow2, then l.sum % 2 = 1
+  suffices h_odd : ∀ (l : List Nat),
+      List.Pairwise (· > ·) l → (∀ s ∈ l, ∃ k, s = 2 ^ k) → 1 ∈ l →
+      l.sum % 2 = 1 by
+    have := h_odd sizes h_desc h_pow2 hs
+    omega
+  intro l
+  induction l with
+  | nil => intro _ _ h_mem; nomatch h_mem
+  | cons hd tl ih =>
+    intro h_d h_p h_mem
+    simp only [List.sum_cons]
+    rcases List.mem_cons.mp h_mem with h_eq | h_in_tl
+    · -- hd = 1: all tl elements < 1, but all are pow2 ≥ 1, so tl = []
+      subst h_eq
+      have h_tl_empty : tl = [] := by
+        by_contra h_ne
+        obtain ⟨x, hx⟩ := List.exists_mem_of_ne_nil tl h_ne
+        have h_gt := (List.pairwise_cons.mp h_d).1 x hx  -- 1 > x
+        obtain ⟨j, hj⟩ := h_p x (List.Mem.tail _ hx)
+        have := Nat.one_le_two_pow (n := j); omega
+      subst h_tl_empty; simp
+    · -- 1 ∈ tl: hd > 1, hd is pow2, so hd even; tl.sum odd by IH
+      have h_hd_gt : hd > 1 :=
+        (List.pairwise_cons.mp h_d).1 1 h_in_tl
+      obtain ⟨j, hj⟩ := h_p hd (List.Mem.head _)
+      subst hj
+      have h_j_pos : j ≥ 1 := by
+        by_contra h
+        push_neg at h
+        interval_cases j
+        simp at h_hd_gt
+      have h_tl_odd : tl.sum % 2 = 1 :=
+        ih (List.Pairwise.of_cons h_d)
+          (fun s hs => h_p s (List.Mem.tail _ hs)) h_in_tl
+      -- 2^j with j ≥ 1 is even: 2^j = 2 * 2^(j-1)
+      have h_hd_even : 2 ^ j % 2 = 0 := by
+        have : j = j - 1 + 1 := by omega
+        rw [this, pow_succ]
+        omega
+      omega
 
-/-- Appending a single leaf preserves the stack invariant.
-    This is the key single-step lemma for the loop invariant. -/
-private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List Digest)
-    (leaf : Digest) (idx : Nat)
-    (h_inv : stackInvariant pfx₀ stack₀)
-    (h_idx : idx = pfx₀.length) :
-    stackInvariant (pfx₀ ++ [leaf]) (appendToStack stack₀ leaf idx) := by
-  obtain ⟨segments, h_flat, h_pow2, h_desc, h_stack⟩ := h_inv
-  simp only [appendToStack]
-  by_cases h_cto : cto idx = 0
-  · -- Case: no merges. mergeStack (leaf :: stack₀) 0 = leaf :: stack₀
-    rw [h_cto]; simp [mergeStack]
-    -- Witness: segments ++ [[leaf]]
-    refine ⟨segments ++ [[leaf]], ?_, ?_, ?_, ?_⟩
-    · -- flatten = pfx₀ ++ [leaf]
-      simp [List.flatten_append, h_flat]
-    · -- all segments have power-of-2 length
-      intro s hs
-      simp [List.mem_append] at hs
-      rcases hs with hs | hs
-      · exact h_pow2 s hs
-      · exact ⟨0, by simp [hs]⟩
-    · -- segment sizes strictly descending
-      simp [List.map_append]
-      -- Need: Pairwise (· > ·) (segments.map length ++ [1])
-      -- This requires: last element of segments.map length > 1
-      -- which follows from no_size_one_when_cto_zero
-      sorry
-    · -- stack = reversed map of mth
-      simp [List.map_append, List.reverse_append, h_stack]
-      -- Need: leaf :: (segments.map mth).reverse
-      --      = mth [leaf] :: (segments.map mth).reverse
-      -- mth [leaf] = leaf by definition
-      congr 1
-      simp [mth]
-  · -- Case: cto idx ≥ 1, merge cascade
-    sorry
-
-/-- The core invariant theorem: buildStack maintains the stack invariant. -/
-theorem buildStack_invariant (leaves : List Digest) :
-    stackInvariant leaves (buildStack leaves) := by
-  suffices h : ∀ (pfx₀ : List Digest) (stack₀ : List Digest)
-      (remaining : List Digest) (idx : Nat),
-      stackInvariant pfx₀ stack₀ → idx = pfx₀.length →
-      stackInvariant (pfx₀ ++ remaining)
-        (buildStackAux stack₀ remaining idx) by
-    have h_empty : stackInvariant [] [] :=
-      ⟨[], by simp [List.flatten], by simp, by simp, by simp⟩
-    specialize h [] [] leaves 0 h_empty (by simp)
-    simpa using h
-  intro pfx₀ stack₀ remaining
-  induction remaining generalizing pfx₀ stack₀ with
-  | nil =>
-    intro idx h_inv h_idx
-    simp [buildStackAux, List.append_nil]
-    exact h_inv
-  | cons leaf rest ih =>
-    intro idx h_inv h_idx
-    simp only [buildStackAux]
-    -- Goal: stackInvariant (pfx₀ ++ leaf :: rest)
-    --         (buildStackAux (appendToStack stack₀ leaf idx) rest (idx+1))
-    -- Rewrite pfx₀ ++ (leaf :: rest) = (pfx₀ ++ [leaf]) ++ rest
-    conv_lhs => rw [show pfx₀ ++ leaf :: rest = (pfx₀ ++ [leaf]) ++ rest
-      from by simp]
-    apply ih
-    · exact appendToStack_invariant pfx₀ stack₀ leaf idx h_inv h_idx
-    · simp [h_idx]
 
 -- ============================================================================
 -- From invariant to bridge lemma — helper lemmas
@@ -487,6 +451,200 @@ theorem mth_split (L₁ L₂ : List Digest)
   rw [mth_unfold _ h_len]
   simp [List.length_append, h_split, List.take_append, List.drop_append]
 
+/-- When two segments have equal power-of-2 size, merging their mth's
+    produces the mth of the concatenated segment. -/
+theorem mth_merge (L R : List Digest) (k : Nat)
+    (hL : L.length = 2 ^ k) (hR : R.length = 2 ^ k) :
+    nodeHash (mth L) (mth R) = mth (L ++ R) := by
+  symm
+  apply mth_split L R
+  · intro h; simp [h] at hL; have := Nat.one_le_two_pow (n := k); omega
+  · intro h; simp [h] at hR; have := Nat.one_le_two_pow (n := k); omega
+  · simp [List.length_append, hL, hR]
+    have h_sum : 2 ^ k + 2 ^ k = 2 ^ (k + 1) := by ring
+    rw [h_sum]
+    simp [largestPow2Lt]
+    have h_gt : 2 ^ (k + 1) > 1 := by
+      have := Nat.one_le_two_pow (n := k + 1); omega
+    have h_bound_lo : 2 ^ k ≤ 2 ^ (k + 1) - 1 := by omega
+    have h_bound_hi : 2 ^ (k + 1) - 1 < 2 ^ (k + 1) := by omega
+    rw [Nat.log_eq_of_pow_le_of_lt_pow h_bound_lo h_bound_hi]
+
+
+/-- The merge cascade: k merges on a stack correctly combine equal-size
+    power-of-2 segments in a geometric doubling run.
+
+    Stack layout: `mth(acc) :: mth(run[0]) :: mth(run[1]) :: ... :: tail`
+    where `|acc| = |run[0]| = 2^j` and `|run[i]| = 2^(j+i)`.
+    After |run| merges, produces `mth(run[k-1] ++ ... ++ run[0] ++ acc) :: tail`.
+
+    The run is ordered from stack-top outward: run[0] is adjacent to acc,
+    run[k-1] is deepest in the cascade. -/
+private theorem merge_cascade
+    (acc_content : List Digest)    -- leaves whose mth is the accumulator
+    (run : List (List Digest))     -- segments in cascade order (head = top)
+    (tail : List Digest)           -- remaining stack below cascade
+    (j : Nat)                      -- |acc_content| = 2^j
+    (h_acc_len : acc_content.length = 2 ^ j)
+    (h_run_geo : ∀ (i : Nat) (h : i < run.length),
+      (run.get ⟨i, h⟩).length = 2 ^ (j + i)) :
+    mergeStack (mth acc_content :: run.map mth ++ tail) run.length =
+      mth (run.reverse.flatten ++ acc_content) :: tail := by
+  induction run generalizing acc_content j with
+  | nil =>
+    simp [mergeStack]
+  | cons seg tl ih =>
+    -- mergeStack (mth acc :: mth seg :: rest) (tl.length + 1)
+    --   = mergeStack (nodeHash (mth seg) (mth acc) :: rest) tl.length
+    -- mergeStack pattern matches on count (Nat.succ), then on stack (:: :: rest)
+    show mergeStack (nodeHash (mth seg) (mth acc_content) :: (List.map mth tl ++ tail)) tl.length =
+      mth ((seg :: tl).reverse.flatten ++ acc_content) :: tail
+    -- After merge: nodeHash (mth seg) (mth acc_content) :: (tl.map mth ++ tail)
+    have h_seg_len : seg.length = 2 ^ j := by
+      have := h_run_geo 0 (Nat.zero_lt_succ _)
+      simp at this; exact this
+    -- nodeHash (mth seg) (mth acc_content) = mth (seg ++ acc_content)
+    rw [mth_merge seg acc_content j h_seg_len h_acc_len]
+    -- Apply IH with accumulated content = seg ++ acc_content, j' = j + 1
+    have h_new_len : (seg ++ acc_content).length = 2 ^ (j + 1) := by
+      simp [List.length_append, h_seg_len, h_acc_len]; ring
+    have h_tl_geo : ∀ (i : Nat) (h : i < tl.length),
+        (tl.get ⟨i, h⟩).length = 2 ^ ((j + 1) + i) := by
+      intro i hi
+      have h_bound : i + 1 < (seg :: tl).length := by simp; omega
+      have := h_run_geo (i + 1) h_bound
+      simp [List.get_cons_succ] at this
+      convert this using 2
+      omega
+    have h_ih := ih (seg ++ acc_content) (j + 1) h_new_len h_tl_geo
+    -- The IH talks about (mth x :: map) ++ tail, goal has mth x :: (map ++ tail)
+    -- These are equal by List.cons_append
+    simp only [List.cons_append] at h_ih
+    rw [h_ih]
+    congr 1
+    simp [List.reverse_cons, List.flatten_append, List.append_assoc]
+
+/-- Appending a single leaf preserves the stack invariant.
+    This is the key single-step lemma for the loop invariant. -/
+private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List Digest)
+    (leaf : Digest) (idx : Nat)
+    (h_inv : stackInvariant pfx₀ stack₀)
+    (h_idx : idx = pfx₀.length) :
+    stackInvariant (pfx₀ ++ [leaf]) (appendToStack stack₀ leaf idx) := by
+  obtain ⟨segments, h_flat, h_pow2, h_desc, h_stack⟩ := h_inv
+  simp only [appendToStack]
+  by_cases h_cto : cto idx = 0
+  · -- Case: no merges. mergeStack (leaf :: stack₀) 0 = leaf :: stack₀
+    rw [h_cto]; simp [mergeStack]
+    -- Witness: segments ++ [[leaf]]
+    refine ⟨segments ++ [[leaf]], ?_, ?_, ?_, ?_⟩
+    · -- flatten = pfx₀ ++ [leaf]
+      simp [List.flatten_append, h_flat]
+    · -- all segments have power-of-2 length
+      intro s hs
+      simp [List.mem_append] at hs
+      rcases hs with hs | hs
+      · exact h_pow2 s hs
+      · exact ⟨0, by simp [hs]⟩
+    · -- segment sizes strictly descending
+      -- Need: Pairwise (· > ·) (segments.map length ++ [[leaf].length])
+      simp only [List.map_append, List.map_cons, List.map_nil, List.length_cons,
+        List.length_nil]
+      -- Now goal: Pairwise (· > ·) (segments.map List.length ++ [1])
+      -- All existing segments have size ≥ 2 (from no_size_one_when_cto_zero)
+      have h_seg_lens := segments.map List.length
+      have h_sizes_ge_2 := no_size_one_when_cto_zero
+        (segments.map List.length) (by simpa using h_desc)
+        (by intro s hs; simp [List.mem_map] at hs
+            obtain ⟨seg, h_mem, h_eq⟩ := hs
+            obtain ⟨k, hk⟩ := h_pow2 seg h_mem
+            exact ⟨k, by rw [← h_eq, hk]⟩)
+        (by -- sum of segment lengths = pfx₀.length = idx
+            have : (segments.map List.length).sum = pfx₀.length := by
+              rw [← h_flat]; simp [List.length_flatten]
+            rw [this, ← h_idx]; exact h_cto)
+      rw [List.pairwise_append]
+      refine ⟨h_desc, ?_, fun a ha b hb => ?_⟩
+      · -- Pairwise (· > ·) on the singleton tail
+        exact List.pairwise_singleton _ _
+      · -- every element in segments.map length > every element in tail
+        simp at hb
+        have := h_sizes_ge_2 a ha
+        omega
+    · -- stack = reversed map of mth
+      simp [List.map_append, List.reverse_append, h_stack]
+      -- Need: leaf :: (segments.map mth).reverse
+      --      = mth [leaf] :: (segments.map mth).reverse
+      -- mth [leaf] = leaf by definition
+      congr 1
+      simp [mth]
+  · -- Case: cto idx ≥ 1, merge cascade
+    -- Strategy: prove by induction on cto idx.
+    -- Extract cto idx = k + 1 for some k.
+    obtain ⟨k, h_cto_eq⟩ : ∃ k, cto idx = k + 1 := by
+      exact ⟨cto idx - 1, by omega⟩
+    -- idx is odd (from cto definition)
+    have h_odd : idx % 2 = 1 := by
+      by_contra h_even
+      push_neg at h_even
+      have : idx % 2 = 0 := by omega
+      rw [cto, if_neg (by omega)] at h_cto_eq
+      omega
+    -- Since sum of segment sizes = idx (odd), last segment has size 1
+    -- (if no segment had size 1, sum would be even — contradicts odd)
+    -- The last segment must be [x] for some x.
+    -- segments is nonempty (idx ≥ 1 means there's at least one segment)
+    have h_segs_ne : segments ≠ [] := by
+      intro h_empty; subst h_empty
+      simp [List.flatten] at h_flat
+      rw [h_flat] at h_idx; simp at h_idx; omega
+    -- The segments encode idx in binary. The last cto(idx) segments
+    -- form a geometric run: sizes 2^0, 2^1, ..., 2^(cto(idx)-1).
+    -- After pushing leaf (size 1) and merging cto(idx) times,
+    -- these combine into a single segment of size 2^(cto(idx)).
+    --
+    -- Split segments = above ++ run where |run| = cto(idx)
+    -- and run has the geometric property needed by merge_cascade.
+    -- The new segments are above ++ [merged_content].
+    --
+    -- This requires a lemma connecting cto to the binary structure
+    -- of strictly descending power-of-2 sums. This lemma is:
+    -- "if sizes sum to n with cto(n) = k+1, the last k+1 sizes
+    --  are 2^k, 2^(k-1), ..., 2^0" — equivalent to saying the
+    --  segment sizes ARE the unique binary decomposition of n.
+    --
+    -- Full proof of this structural lemma is deferred.
+    sorry
+
+/-- The core invariant theorem: buildStack maintains the stack invariant. -/
+theorem buildStack_invariant (leaves : List Digest) :
+    stackInvariant leaves (buildStack leaves) := by
+  suffices h : ∀ (pfx₀ : List Digest) (stack₀ : List Digest)
+      (remaining : List Digest) (idx : Nat),
+      stackInvariant pfx₀ stack₀ → idx = pfx₀.length →
+      stackInvariant (pfx₀ ++ remaining)
+        (buildStackAux stack₀ remaining idx) by
+    have h_empty : stackInvariant [] [] :=
+      ⟨[], by simp [List.flatten], by simp, by simp, by simp⟩
+    specialize h [] [] leaves 0 h_empty (by simp)
+    simpa using h
+  intro pfx₀ stack₀ remaining
+  induction remaining generalizing pfx₀ stack₀ with
+  | nil =>
+    intro idx h_inv h_idx
+    simp [buildStackAux, List.append_nil]
+    exact h_inv
+  | cons leaf rest ih =>
+    intro idx h_inv h_idx
+    simp only [buildStackAux]
+    -- Goal: stackInvariant (pfx₀ ++ leaf :: rest)
+    --         (buildStackAux (appendToStack stack₀ leaf idx) rest (idx+1))
+    -- Rewrite pfx₀ ++ (leaf :: rest) = (pfx₀ ++ [leaf]) ++ rest
+    conv_lhs => rw [show pfx₀ ++ leaf :: rest = (pfx₀ ++ [leaf]) ++ rest
+      from by simp]
+    apply ih
+    · exact appendToStack_invariant pfx₀ stack₀ leaf idx h_inv h_idx
+    · simp [h_idx]
 -- ============================================================================
 -- From invariant to bridge lemma
 -- ============================================================================
