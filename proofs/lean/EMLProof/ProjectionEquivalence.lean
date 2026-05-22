@@ -470,6 +470,62 @@ theorem mth_merge (L R : List Digest) (k : Nat)
     have h_bound_hi : 2 ^ (k + 1) - 1 < 2 ^ (k + 1) := by omega
     rw [Nat.log_eq_of_pow_le_of_lt_pow h_bound_lo h_bound_hi]
 
+/-- If sizes are strictly descending powers of 2 summing to n,
+    and cto(n) = k+1, then:
+    1. sizes has at least k+1 elements, and
+    2. sizes.reverse[i] = 2^i for i < k+1.
+    This connects CTO (trailing ones in binary) to the segment sizes
+    (unique binary representation). -/
+private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
+    (h_desc : List.Pairwise (· > ·) sizes)
+    (h_pow2 : ∀ s ∈ sizes, ∃ j, s = 2 ^ j)
+    (h_cto : cto sizes.sum = k + 1)
+    (h_len : k + 1 ≤ sizes.length) :
+    ∀ (i : Nat) (hi : i < k + 1),
+      sizes.get ⟨sizes.length - 1 - i, by omega⟩ = 2 ^ i := by
+  sorry
+
+private theorem cto_trailing_geo_len (sizes : List Nat) (k : Nat)
+    (h_desc : List.Pairwise (· > ·) sizes)
+    (h_pow2 : ∀ s ∈ sizes, ∃ j, s = 2 ^ j)
+    (h_cto : cto sizes.sum = k + 1) :
+    k + 1 ≤ sizes.length := by
+  -- The sum must be ≥ 2^(k+1) - 1 (at least k+1 distinct powers of 2),
+  -- and each distinct power of 2 needs one element, so length ≥ k+1.
+  -- Alternatively: strictly descending pow2s form the binary representation.
+  -- cto(n)=k+1 means n has at least k+1 set bits, so sizes has ≥ k+1 elements.
+  -- Prove by induction on sizes.
+  induction sizes with
+  | nil => simp at h_cto
+  | cons hd tl ih =>
+    simp only [List.length_cons]
+    by_cases h_tl : tl = []
+    · -- sizes = [hd], sum = hd. cto(hd) = k+1.
+      subst h_tl
+      simp only [List.length_cons, List.length_nil] at *
+      -- Need k + 1 ≤ 1, i.e., k = 0.
+      -- hd = 2^j. cto(2^j) = 1 iff j = 0; 0 otherwise.
+      obtain ⟨j, hj⟩ := h_pow2 hd (by simp)
+      subst hj
+      simp only [List.sum_cons, List.sum_nil, Nat.add_zero] at h_cto
+      by_cases hj0 : j = 0
+      · subst hj0
+        -- cto(2^0) = cto 1 = 1 + cto 0 = 1
+        simp only [pow_zero, List.sum_cons, List.sum_nil, Nat.add_zero] at h_cto
+        -- Manually evaluate cto 1
+        unfold cto at h_cto; simp at h_cto ⊢
+        -- h_cto should now be k = 0 or equivalent
+        omega
+      · exfalso
+        have hj1 : j ≥ 1 := by omega
+        have : 2 ^ j % 2 = 0 := (Nat.two_pow_mod_two_eq_zero).mpr (by omega)
+        rw [cto] at h_cto; simp [this] at h_cto
+    · -- sizes = hd :: tl with tl nonempty.
+      -- length = 1 + tl.length. Need k + 1 ≤ 1 + tl.length.
+      -- Use IH if possible: need cto(tl.sum) relationship.
+      -- This is complex; skip for now.
+      sorry
+
 
 /-- The merge cascade: k merges on a stack correctly combine equal-size
     power-of-2 segments in a geometric doubling run.
@@ -598,22 +654,57 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
       intro h_empty; subst h_empty
       simp [List.flatten] at h_flat
       rw [h_flat] at h_idx; simp at h_idx; omega
-    -- The segments encode idx in binary. The last cto(idx) segments
-    -- form a geometric run: sizes 2^0, 2^1, ..., 2^(cto(idx)-1).
-    -- After pushing leaf (size 1) and merging cto(idx) times,
-    -- these combine into a single segment of size 2^(cto(idx)).
+    -- Use merge_cascade. We need to show:
+    -- 1. The stack has the right shape for merge_cascade
+    -- 2. The last (cto idx) segments form a geometric run
+    -- 3. The result satisfies the invariant
     --
-    -- Split segments = above ++ run where |run| = cto(idx)
-    -- and run has the geometric property needed by merge_cascade.
-    -- The new segments are above ++ [merged_content].
+    -- Step 1: The stack is (segments.map mth).reverse.
+    -- After pushing leaf, it's leaf :: (segments.map mth).reverse.
+    -- mergeStack operates on this with count = cto idx.
     --
-    -- This requires a lemma connecting cto to the binary structure
-    -- of strictly descending power-of-2 sums. This lemma is:
-    -- "if sizes sum to n with cto(n) = k+1, the last k+1 sizes
-    --  are 2^k, 2^(k-1), ..., 2^0" — equivalent to saying the
-    --  segment sizes ARE the unique binary decomposition of n.
+    -- Step 2: Since segments are strictly descending pow2s summing to idx,
+    -- and idx is odd, the last segment has size 1. The last cto(idx)
+    -- segments form the consecutive trailing 1-bits run.
     --
-    -- Full proof of this structural lemma is deferred.
+    -- For now, we take a direct approach: unfold one merge step,
+    -- show it reduces to a smaller problem, and induct.
+    -- The last segment has size 1 (from parity argument).
+    -- After one merge with leaf, we get a size-2 segment.
+    -- The new segments are init ++ [merged], with cto reduced.
+    --
+    -- Direct construction: prove the invariant by providing witness segments.
+    -- The witness is: take (segments.length - cto idx) segments
+    --   ++ [segments.reverse[0..cto(idx)-1].flatten ++ [leaf]]
+    -- (i.e., merge the last cto(idx) segments with leaf into one).
+
+    -- Rewrite stack and unfold appendToStack
+    rw [h_cto_eq, h_stack]
+    -- Goal: stackInvariant (pfx₀ ++ [leaf])
+    --         (mergeStack (leaf :: (segments.map mth).reverse) (k + 1))
+
+    -- The reversed segment list puts smallest (last) segments first.
+    -- segments.reverse = [Sₘ, Sₘ₋₁, ..., S₁] (smallest to largest)
+    -- The stack is mth Sₘ :: mth Sₘ₋₁ :: ... :: mth S₁
+    -- After pushing leaf: leaf :: mth Sₘ :: mth Sₘ₋₁ :: ...
+
+    -- We need to show leaf = mth [leaf] for merge_cascade
+    have h_leaf_mth : leaf = mth [leaf] := by simp [mth]
+
+    -- Split segments.reverse into run (first k+1 elements) and above (rest)
+    -- run = segments.reverse.take (k+1), above = segments.reverse.drop (k+1)
+    -- The stack after leaf push is:
+    --   leaf :: (run.map mth ++ above.map mth)
+    -- = mth [leaf] :: (run.map mth ++ above.map mth)
+
+    -- Apply merge_cascade with:
+    --   acc_content = [leaf], j = 0
+    --   run = segments.reverse.take (k+1)
+    --   tail = (segments.reverse.drop (k+1)).map mth
+
+    -- But we need run to have the geometric property.
+    -- This requires the structural binary decomposition lemma.
+    -- For now, sorry.
     sorry
 
 /-- The core invariant theorem: buildStack maintains the stack invariant. -/
