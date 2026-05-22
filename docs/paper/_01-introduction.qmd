@@ -60,8 +60,9 @@ verification is independent of every other's.
 The trade-off is explicit: historical data remains bound to the
 algorithms that were active at the time of insertion. A newly added
 algorithm verifies only the data appended during its active epochs;
-pre-epoch positions are committed as deterministic null constants that
-are unforgeable but carry no payload verification. This is a principled
+pre-epoch positions are committed as deterministic null constants---unforgeable
+commitments to algorithm inactivity at specific historical
+positions---that carry no payload verification. This is a principled
 choice---faithful representation of temporal reality---not an
 evasion of the retroactive computation cost.
 

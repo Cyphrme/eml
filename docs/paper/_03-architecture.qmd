@@ -99,7 +99,10 @@ Three lifecycle operations govern epochs:
   current tree size $n$ by decomposing $n$ into its binary
   representation and resolving each complete subtree root---via stored
   nodes, the NullTable, or recursive binary splits for mixed-boundary
-  subtrees. Cost: $\mathcal{O}(\log n)$.
+  subtrees. Cost: $\mathcal{O}(\log n)$. Resume is structurally
+  necessary for deployments where algorithm activation is coupled to
+  key lifecycle (e.g., a key using a previously removed algorithm is
+  reactivated) rather than governed by a global deprecation policy.
 
 ```{=html}
 <figure id="fig-epochs">
