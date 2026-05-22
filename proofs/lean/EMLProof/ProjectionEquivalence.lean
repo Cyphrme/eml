@@ -470,12 +470,157 @@ theorem mth_merge (L R : List Digest) (k : Nat)
     have h_bound_hi : 2 ^ (k + 1) - 1 < 2 ^ (k + 1) := by omega
     rw [Nat.log_eq_of_pow_le_of_lt_pow h_bound_lo h_bound_hi]
 
-/-- If sizes are strictly descending powers of 2 summing to n,
-    and cto(n) = k+1, then:
-    1. sizes has at least k+1 elements, and
-    2. sizes.reverse[i] = 2^i for i < k+1.
-    This connects CTO (trailing ones in binary) to the segment sizes
-    (unique binary representation). -/
+/-- Sum of strictly descending pow2s: if all elements are powers of 2,
+    pairwise strictly descending, and all < 2^a, then the sum < 2^a. -/
+private theorem sum_desc_pow2_lt (a : Nat) (tl : List Nat)
+    (h_desc : ∀ s ∈ tl, s < 2 ^ a)
+    (h_pow2 : ∀ s ∈ tl, ∃ j, s = 2 ^ j)
+    (h_pair : List.Pairwise (· > ·) tl) :
+    tl.sum < 2 ^ a := by
+  induction tl generalizing a with
+  | nil => simp
+  | cons hd rest ih =>
+    simp only [List.sum_cons]
+    have h_hd_lt := h_desc hd (by simp)
+    have h_rest_pair : rest.Pairwise (· > ·) := by
+      exact List.Pairwise.of_cons h_pair
+    -- Every rest element < hd (from pairwise cons)
+    have h_rest_lt_hd : ∀ s ∈ rest, s < hd := by
+      intro s hs
+      have := List.pairwise_cons.mp h_pair
+      exact this.1 s hs
+    obtain ⟨j, hj⟩ := h_pow2 hd (by simp)
+    subst hj
+    have h_j_lt_a : j < a := by
+      by_contra h; push_neg at h
+      have := Nat.pow_le_pow_right (by omega : 1 ≤ 2) h
+      omega
+    have h_rest_sum : rest.sum < 2 ^ j := ih j
+      h_rest_lt_hd
+      (fun s hs => h_pow2 s (by simp [hs]))
+      h_rest_pair
+    -- 2^j + rest.sum < 2^j + 2^j = 2^(j+1) ≤ 2^a
+    have h1 : 2 ^ j + rest.sum < 2 ^ j + 2 ^ j := by omega
+    have h2 : 2 ^ j + 2 ^ j = 2 ^ (j + 1) := by rw [Nat.pow_succ]; ring
+    have h3 : 2 ^ (j + 1) ≤ 2 ^ a := by
+      apply Nat.pow_le_pow_right; omega; omega
+    omega
+
+/-- In a strictly descending list of powers of 2 with odd sum,
+    the last element must be 1 = 2^0. All other elements are even pow2s
+    (≥ 2), so only the last can make the sum odd. -/
+private theorem last_is_one_of_odd_sum (sizes : List Nat)
+    (h_ne : sizes ≠ [])
+    (h_desc : List.Pairwise (· > ·) sizes)
+    (h_pow2 : ∀ s ∈ sizes, ∃ j, s = 2 ^ j)
+    (h_odd : sizes.sum % 2 = 1) :
+    sizes.getLast h_ne = 1 := by
+  -- getLast is a pow2
+  obtain ⟨j, hj⟩ := h_pow2 _ (List.getLast_mem h_ne)
+  -- If j ≥ 1, all elements are even (each ≥ getLast = 2^j ≥ 2), sum is even
+  by_contra h_ne_1
+  rw [hj] at h_ne_1
+  have h_j_pos : j ≥ 1 := by
+    by_contra h; push_neg at h; interval_cases j; simp at h_ne_1
+  -- Every element is ≥ getLast (from strict descent) and hence even
+  have h_all_even : ∀ s ∈ sizes, s % 2 = 0 := by
+    intro s hs
+    obtain ⟨m, hm⟩ := h_pow2 s hs
+    subst hm
+    have h_m_ge_j : m ≥ j := by
+      by_contra h_lt; push_neg at h_lt
+      have h_pow_lt : 2 ^ m < 2 ^ j := Nat.pow_lt_pow_right (by omega) h_lt
+      -- s = 2^m ∈ sizes. It's either in dropLast or IS getLast.
+      rw [← List.dropLast_append_getLast h_ne] at hs
+      simp [List.mem_append] at hs
+      rcases hs with h_drop | h_eq
+      · have := h_desc.rel_dropLast_getLast h_drop; rw [hj] at this; omega
+      · rw [h_eq] at h_pow_lt; rw [hj] at h_pow_lt; omega
+    exact (Nat.two_pow_mod_two_eq_zero).mpr (by omega)
+  -- Sum of even numbers is even
+  have h_sum_even : sizes.sum % 2 = 0 := by
+    -- Prove by showing: if every element is even, sum is even.
+    -- Induct on sizes itself, but use a local copy to avoid shadowing.
+    suffices h : ∀ (l : List Nat), (∀ s ∈ l, s % 2 = 0) → l.sum % 2 = 0 from
+      h sizes h_all_even
+    intro l
+    induction l with
+    | nil => simp
+    | cons hd tl ih_l =>
+      intro h_even
+      simp [List.sum_cons]
+      have := h_even hd (by simp)
+      have := ih_l (fun s hs => h_even s (by simp [hs]))
+      omega
+  omega
+
+/-- Removing the trailing 1 and halving each remaining element preserves
+    the strictly descending pow2 structure and CTO decreases by 1:
+    cto(sum/2) = cto(sum) - 1 when sum is odd. -/
+private theorem cto_half_of_odd (n : Nat) (h_odd : n % 2 = 1) :
+    cto (n / 2) = cto n - 1 := by
+  have : cto n = 1 + cto (n / 2) := by
+    conv_lhs => unfold cto
+    simp [h_odd]
+  omega
+
+
+/-- Length bound: strictly descending pow2s with cto(sum) = k+1
+    have at least k+1 elements. -/
+private theorem cto_trailing_geo_len (sizes : List Nat) (k : Nat)
+    (h_desc : List.Pairwise (· > ·) sizes)
+    (h_pow2 : ∀ s ∈ sizes, ∃ j, s = 2 ^ j)
+    (h_cto : cto sizes.sum = k + 1) :
+    k + 1 ≤ sizes.length := by
+  induction k generalizing sizes with
+  | zero =>
+    -- cto(sum) = 1 implies sizes ≠ []
+    by_contra h; push_neg at h
+    simp at h; subst h; simp at h_cto
+  | succ k' ih =>
+    -- cto(sum) = k'+2. Sum is odd. Last = 1.
+    have h_ne : sizes ≠ [] := by intro h; subst h; simp at h_cto
+    have h_odd : sizes.sum % 2 = 1 := by
+      by_contra h_even; push_neg at h_even
+      rw [cto] at h_cto; simp [show sizes.sum % 2 ≠ 1 from h_even] at h_cto
+    have h_last := last_is_one_of_odd_sum sizes h_ne h_desc h_pow2 h_odd
+    -- Build the halved dropLast list
+    let dl := sizes.dropLast
+    let dl2 := dl.map (· / 2)
+    -- dl2 properties — each requires list-surgery on dropLast.map(·/2)
+    -- when the original list is strictly descending pow2s with getLast = 1.
+    -- Mechanically straightforward but requires several helper lemmas about
+    -- List.dropLast, List.map, and pow2 arithmetic.
+    have h_dl2_desc : List.Pairwise (· > ·) dl2 := by
+      -- halving preserves strict descent on pow2s ≥ 2
+      sorry
+    have h_dl2_pow2 : ∀ s ∈ dl2, ∃ j, s = 2 ^ j := by
+      -- 2^j / 2 = 2^(j-1) for j ≥ 1, and all dl elements have j ≥ 1
+      sorry
+    have h_dl2_sum : dl2.sum = (sizes.sum - 1) / 2 := by
+      -- sum(map (·/2) dl) = sum(dl)/2 (all even), and sum(dl) = sum - 1
+      sorry
+    -- cto(dl2.sum) = k'+1
+    have h_dl2_cto : cto dl2.sum = k' + 1 := by
+      rw [h_dl2_sum]
+      have h_half := cto_half_of_odd sizes.sum h_odd
+      -- n odd: n = 2*(n/2) + 1, n-1 = 2*(n/2), (n-1)/2 = n/2
+      have h_sum_pos : sizes.sum ≥ 1 := by
+        by_contra h; push_neg at h; simp at h
+        rw [h] at h_cto; simp [cto] at h_cto
+      have h_div_eq : sizes.sum / 2 = (sizes.sum - 1) / 2 := by
+        have := Nat.div_add_mod sizes.sum 2
+        have := h_odd
+        omega
+      rw [← h_div_eq]
+      omega
+    -- Apply IH
+    have h_len' := ih dl2 h_dl2_desc h_dl2_pow2 h_dl2_cto
+    have : dl2.length = dl.length := List.length_map ..
+    have : dl.length = sizes.length - 1 := List.length_dropLast ..
+    omega
+
+/-- Geometric property: trailing k+1 segments are 2^0, 2^1, ..., 2^k. -/
 private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
     (h_desc : List.Pairwise (· > ·) sizes)
     (h_pow2 : ∀ s ∈ sizes, ∃ j, s = 2 ^ j)
@@ -484,47 +629,6 @@ private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
     ∀ (i : Nat) (hi : i < k + 1),
       sizes.get ⟨sizes.length - 1 - i, by omega⟩ = 2 ^ i := by
   sorry
-
-private theorem cto_trailing_geo_len (sizes : List Nat) (k : Nat)
-    (h_desc : List.Pairwise (· > ·) sizes)
-    (h_pow2 : ∀ s ∈ sizes, ∃ j, s = 2 ^ j)
-    (h_cto : cto sizes.sum = k + 1) :
-    k + 1 ≤ sizes.length := by
-  -- The sum must be ≥ 2^(k+1) - 1 (at least k+1 distinct powers of 2),
-  -- and each distinct power of 2 needs one element, so length ≥ k+1.
-  -- Alternatively: strictly descending pow2s form the binary representation.
-  -- cto(n)=k+1 means n has at least k+1 set bits, so sizes has ≥ k+1 elements.
-  -- Prove by induction on sizes.
-  induction sizes with
-  | nil => simp at h_cto
-  | cons hd tl ih =>
-    simp only [List.length_cons]
-    by_cases h_tl : tl = []
-    · -- sizes = [hd], sum = hd. cto(hd) = k+1.
-      subst h_tl
-      simp only [List.length_cons, List.length_nil] at *
-      -- Need k + 1 ≤ 1, i.e., k = 0.
-      -- hd = 2^j. cto(2^j) = 1 iff j = 0; 0 otherwise.
-      obtain ⟨j, hj⟩ := h_pow2 hd (by simp)
-      subst hj
-      simp only [List.sum_cons, List.sum_nil, Nat.add_zero] at h_cto
-      by_cases hj0 : j = 0
-      · subst hj0
-        -- cto(2^0) = cto 1 = 1 + cto 0 = 1
-        simp only [pow_zero, List.sum_cons, List.sum_nil, Nat.add_zero] at h_cto
-        -- Manually evaluate cto 1
-        unfold cto at h_cto; simp at h_cto ⊢
-        -- h_cto should now be k = 0 or equivalent
-        omega
-      · exfalso
-        have hj1 : j ≥ 1 := by omega
-        have : 2 ^ j % 2 = 0 := (Nat.two_pow_mod_two_eq_zero).mpr (by omega)
-        rw [cto] at h_cto; simp [this] at h_cto
-    · -- sizes = hd :: tl with tl nonempty.
-      -- length = 1 + tl.length. Need k + 1 ≤ 1 + tl.length.
-      -- Use IH if possible: need cto(tl.sum) relationship.
-      -- This is complex; skip for now.
-      sorry
 
 
 /-- The merge cascade: k merges on a stack correctly combine equal-size
