@@ -107,7 +107,7 @@ and the paper gains a contribution no reviewer anticipated.
 - [x] Prove Temporal Binding (Theorem 2) — `temporal_binding`
   - [x] Reduce to domain separation + Projection Equivalence
   - [x] Inactive positions have null-padded digests; no payload `d` satisfies `leafHash d = nullHash`
-- [ ] Cross-validate: run Lean4 proof alongside Rust test suite to confirm alignment
+- [ ] Definitional correspondence audit: document side-by-side mapping of each Lean definition to its Rust counterpart (`mth`, `cto`, `buildStackAux`, `leafValue`, `project`)
 - [ ] Write companion prose document at `docs/proofs/projection-equivalence.md` explaining the proof structure for paper integration
 
 **Proof statistics**: ~1565 lines, 30 theorems, 0 sorry. Build: 3288 jobs, clean.

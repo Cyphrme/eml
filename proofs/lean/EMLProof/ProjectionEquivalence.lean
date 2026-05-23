@@ -12,6 +12,10 @@ import Mathlib.Data.Nat.Bits
 import Mathlib.Data.List.Basic
 import Mathlib.Tactic
 
+-- Suppress stylistic lint: `simp` calls could be narrowed to `simp only [...]`
+-- but this is a presentation preference, not a semantic concern.
+set_option linter.flexible false
+
 -- ============================================================================
 -- §1. Abstract Hash and Core Types
 -- ============================================================================
@@ -156,7 +160,9 @@ noncomputable def appendToStack (stack : List Digest) (leaf : Digest) (idx : Nat
 
 /-- Build the frontier stack by processing leaves with explicit index tracking.
     Uses a recursive auxiliary for proof friendliness (vs foldl). -/
-noncomputable def buildStackAux (stack : List Digest) (remaining : List Digest) (idx : Nat) : List Digest :=
+noncomputable def buildStackAux
+    (stack : List Digest) (remaining : List Digest) (idx : Nat) :
+    List Digest :=
   match remaining with
   | [] => stack
   | leaf :: rest => buildStackAux (appendToStack stack leaf idx) rest (idx + 1)
@@ -263,7 +269,7 @@ noncomputable def stackInvariant (pfx : List Digest) (stack : List Digest) : Pro
 
 /-- mth of a two-element list -/
 theorem mth_pair (a b : Digest) : mth [a, b] = nodeHash a b := by
-  simp [mth, largestPow2Lt, List.take, List.drop]
+  simp [mth, largestPow2Lt, List.take]
 
 
 
@@ -286,12 +292,12 @@ theorem no_size_one_when_cto_zero (sizes : List Nat)
   -- (1 = 2^0; strictly descending pow2s with a 1 make the sum odd)
   intro s hs
   by_contra h_lt
-  push_neg at h_lt
+  push Not at h_lt
   -- s is a power of 2 and s < 2, so s = 1 = 2^0
   obtain ⟨k, hk⟩ := h_pow2 s hs
   have h_k_zero : k = 0 := by
     by_contra h_k_pos
-    push_neg at h_k_pos
+    push Not at h_k_pos
     have : 2 ^ k ≥ 2 := by
       calc 2 ^ k ≥ 2 ^ 1 := Nat.pow_le_pow_right (by norm_num) (by omega)
         _ = 2 := by norm_num
@@ -327,7 +333,7 @@ theorem no_size_one_when_cto_zero (sizes : List Nat)
       subst hj
       have h_j_pos : j ≥ 1 := by
         by_contra h
-        push_neg at h
+        push Not at h
         interval_cases j
         simp at h_hd_gt
       have h_tl_odd : tl.sum % 2 = 1 :=
@@ -389,7 +395,7 @@ theorem sum_rest_lt_first (first : Nat) (rest : List Nat)
     subst hj; subst hk
     have h_j_lt_k : j < k := by
       by_contra h_ge
-      push_neg at h_ge
+      push Not at h_ge
       have := Nat.pow_le_pow_right (by norm_num : 1 ≤ 2) h_ge
       omega
     have h_two_j_le : 2 * 2 ^ j ≤ 2 ^ k := by
@@ -449,7 +455,7 @@ theorem mth_split (L₁ L₂ : List Digest)
       match L₂ with | [] => contradiction | _ :: _ => simp
     omega
   rw [mth_unfold _ h_len]
-  simp [List.length_append, h_split, List.take_append, List.drop_append]
+  simp [List.length_append, h_split]
 
 /-- When two segments have equal power-of-2 size, merging their mth's
     produces the mth of the concatenated segment. -/
@@ -460,7 +466,7 @@ theorem mth_merge (L R : List Digest) (k : Nat)
   apply mth_split L R
   · intro h; simp [h] at hL; have := Nat.one_le_two_pow (n := k); omega
   · intro h; simp [h] at hR; have := Nat.one_le_two_pow (n := k); omega
-  · simp [List.length_append, hL, hR]
+  · simp [hL, hR]
     have h_sum : 2 ^ k + 2 ^ k = 2 ^ (k + 1) := by ring
     rw [h_sum]
     simp [largestPow2Lt]
@@ -492,7 +498,7 @@ private theorem sum_desc_pow2_lt (a : Nat) (tl : List Nat)
     obtain ⟨j, hj⟩ := h_pow2 hd (by simp)
     subst hj
     have h_j_lt_a : j < a := by
-      by_contra h; push_neg at h
+      by_contra h; push Not at h
       have := Nat.pow_le_pow_right (by omega : 1 ≤ 2) h
       omega
     have h_rest_sum : rest.sum < 2 ^ j := ih j
@@ -521,14 +527,14 @@ private theorem last_is_one_of_odd_sum (sizes : List Nat)
   by_contra h_ne_1
   rw [hj] at h_ne_1
   have h_j_pos : j ≥ 1 := by
-    by_contra h; push_neg at h; interval_cases j; simp at h_ne_1
+    by_contra h; push Not at h; interval_cases j; simp at h_ne_1
   -- Every element is ≥ getLast (from strict descent) and hence even
   have h_all_even : ∀ s ∈ sizes, s % 2 = 0 := by
     intro s hs
     obtain ⟨m, hm⟩ := h_pow2 s hs
     subst hm
     have h_m_ge_j : m ≥ j := by
-      by_contra h_lt; push_neg at h_lt
+      by_contra h_lt; push Not at h_lt
       have h_pow_lt : 2 ^ m < 2 ^ j := Nat.pow_lt_pow_right (by omega) h_lt
       -- s = 2^m ∈ sizes. It's either in dropLast or IS getLast.
       rw [← List.dropLast_append_getLast h_ne] at hs
@@ -646,7 +652,7 @@ private theorem halved_dropLast_props (sizes : List Nat) (k' : Nat)
     intro s hs
     obtain ⟨j, hj⟩ := h_pow2 s (List.dropLast_subset sizes hs)
     refine ⟨j, ?_, hj⟩
-    by_contra hlt; push_neg at hlt
+    by_contra hlt; push Not at hlt
     interval_cases j; simp at hj
     have := h_dl_gt1 s hs; omega
   have h_dl2_desc : List.Pairwise (· > ·) dl2 := by
@@ -676,7 +682,7 @@ private theorem halved_dropLast_props (sizes : List Nat) (k' : Nat)
       exact Nat.mul_div_cancel _ (by omega)]
     apply Nat.pow_lt_pow_right (by omega)
     rw [h_ei, h_ej] at h_ij
-    by_contra h_le; push_neg at h_le
+    by_contra h_le; push Not at h_le
     have h_ei_le_ej : ei ≤ ej := by omega
     have := Nat.pow_le_pow_right (by omega : 1 ≤ 2) h_ei_le_ej
     omega
@@ -715,8 +721,8 @@ private theorem halved_dropLast_props (sizes : List Nat) (k' : Nat)
     rw [h_dl2_sum]
     have h_half := cto_half_of_odd sizes.sum h_odd
     have h_sum_pos : sizes.sum ≥ 1 := by
-      by_contra h; push_neg at h; simp at h
-      rw [h] at h_cto; simp [cto] at h_cto
+      by_contra h; push Not at h; simp at h
+      rw [h] at h_cto; simp at h_cto
     have h_div_eq : sizes.sum / 2 = (sizes.sum - 1) / 2 := by
       have := Nat.div_add_mod sizes.sum 2
       have := h_odd; omega
@@ -736,12 +742,12 @@ private theorem cto_trailing_geo_len (sizes : List Nat) (k : Nat)
     k + 1 ≤ sizes.length := by
   induction k generalizing sizes with
   | zero =>
-    by_contra h; push_neg at h
+    by_contra h; push Not at h
     simp at h; subst h; simp at h_cto
   | succ k' ih =>
     have h_ne : sizes ≠ [] := by intro h; subst h; simp at h_cto
     have h_odd : sizes.sum % 2 = 1 := by
-      by_contra h_even; push_neg at h_even
+      by_contra h_even; push Not at h_even
       rw [cto] at h_cto; simp [show sizes.sum % 2 ≠ 1 from h_even] at h_cto
     have h_last := last_is_one_of_odd_sum sizes h_ne h_desc h_pow2 h_odd
     obtain ⟨h_dl2_desc, h_dl2_pow2, h_dl2_cto, h_dl2_len, _⟩ :=
@@ -768,7 +774,7 @@ private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
     -- sizes.getLast = 1 (from last_is_one_of_odd_sum)
     have h_ne : sizes ≠ [] := by intro h; subst h; simp at h_cto
     have h_odd : sizes.sum % 2 = 1 := by
-      by_contra h; push_neg at h; rw [cto] at h_cto; simp [show sizes.sum % 2 ≠ 1 from h] at h_cto
+      by_contra h; push Not at h; rw [cto] at h_cto; simp [show sizes.sum % 2 ≠ 1 from h] at h_cto
     have h_last := last_is_one_of_odd_sum sizes h_ne h_desc h_pow2 h_odd
     simp only [List.get_eq_getElem, Nat.sub_zero]
     rw [← List.getLast_eq_getElem h_ne]
@@ -777,7 +783,7 @@ private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
     -- cto(sum) = k'+2. Build the halved dropLast list as in cto_trailing_geo_len.
     have h_ne : sizes ≠ [] := by intro h; subst h; simp at h_cto
     have h_odd : sizes.sum % 2 = 1 := by
-      by_contra h; push_neg at h; rw [cto] at h_cto; simp [show sizes.sum % 2 ≠ 1 from h] at h_cto
+      by_contra h; push Not at h; rw [cto] at h_cto; simp [show sizes.sum % 2 ≠ 1 from h] at h_cto
     have h_last := last_is_one_of_odd_sum sizes h_ne h_desc h_pow2 h_odd
     intro i hi
     by_cases h_i0 : i = 0
@@ -791,58 +797,38 @@ private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
       -- IH: dl2 has the geometric property for k'
       have h_ih_len := cto_trailing_geo_len _ k' h_dl2_desc h_dl2_pow2 h_dl2_cto
       have h_ih := ih _ h_dl2_desc h_dl2_pow2 h_dl2_cto (by omega)
-      -- h_ih : ∀ i' < k'+1, dl2.get ⟨dl2.length-1-i', _⟩ = 2^i'
-      -- We need: sizes.get ⟨sizes.length-1-i, _⟩ = 2^i
-      -- Since i ≥ 1: sizes.length - 1 - i < sizes.length - 1 = dl.length
-      -- So sizes[sizes.length-1-i] = dl[sizes.length-1-i] (it's in dropLast range)
-      -- And dl[j] = 2 * dl2[j] (since dl[j] is an even pow2)
-      -- dl2[j] = dl[j] / 2 (by definition of dl2 = dl.map (·/2))
-      -- By IH: dl2[dl2.length-1-(i-1)] = 2^(i-1)
-      -- dl2.length = sizes.length - 1, so dl2.length-1-(i-1) = sizes.length-2-i+1 = sizes.length-1-i
-      -- So dl2[sizes.length-1-i] = 2^(i-1)
-      -- And dl[sizes.length-1-i] = 2 * 2^(i-1) = 2^i
-      -- And sizes[sizes.length-1-i] = dl[sizes.length-1-i] = 2^i ✓
       have h_i_pos : i ≥ 1 := by omega
-      -- Index arithmetic
       have h_idx : sizes.length - 1 - i < sizes.length - 1 := by omega
       have h_dl_len : (sizes.dropLast).length = sizes.length - 1 := List.length_dropLast ..
-      -- sizes[n-1-i] = dl[n-1-i] (in dropLast range)
-      have h_sizes_eq_dl : sizes[sizes.length - 1 - i] = (sizes.dropLast)[sizes.length - 1 - i]'(by omega) := by
+      have h_sizes_eq_dl :
+           sizes[sizes.length - 1 - i] =
+           (sizes.dropLast)[sizes.length - 1 - i]'(by omega) := by
         simp [List.getElem_dropLast]
-      -- dl2[n-1-i] = dl[n-1-i] / 2 (by map)
-      have h_dl2_eq : (sizes.dropLast.map (· / 2))[sizes.length - 1 - i]'(by simp; omega) =
+      have h_dl2_eq :
+           (sizes.dropLast.map (· / 2))[sizes.length - 1 - i]'
+           (by simp; omega) =
           (sizes.dropLast)[sizes.length - 1 - i]'(by omega) / 2 := by
         simp [List.getElem_map]
-      -- IH: dl2[dl2.length-1-(i-1)] = 2^(i-1)
-      -- dl2.length - 1 - (i-1) = (sizes.length - 1) - 1 - (i - 1) = sizes.length - 1 - i
       have h_idx_eq : (sizes.dropLast.map (· / 2)).length - 1 - (i - 1) = sizes.length - 1 - i := by
         simp; omega
       have h_ih_val := h_ih (i - 1) (by omega)
       simp only [List.get_eq_getElem] at h_ih_val
-      -- h_ih_val: dl2.getElem (dl2.length-1-(i-1)) _ = 2^(i-1)
-      -- The key index fact: dl2.length-1-(i-1) = sizes.length-1-i
-      -- Avoid rewriting inside getElem. Instead, directly show what we need.
-      -- Step 1: sizes[n-1-i] = dl[n-1-i]
       simp only [List.get_eq_getElem]
       rw [h_sizes_eq_dl]
-      -- Step 2: Get pow2 info about dl[n-1-i]
       obtain ⟨ej, hej, h_ej⟩ := h_dl_pow2 ((sizes.dropLast)[sizes.length - 1 - i]'(by omega))
         (List.getElem_mem ..)
       rw [h_ej]
-      -- Step 3: Show ej = i by using the halved list
-      -- dl2[n-1-i] = dl[n-1-i] / 2 = 2^ej / 2 = 2^(ej-1)
-      -- dl2[n-1-i] = dl2[dl2.length-1-(i-1)] = 2^(i-1) (by IH)
-      -- So 2^(ej-1) = 2^(i-1), hence ej = i
-      have h_dl2_val : (sizes.dropLast.map (· / 2))[sizes.length - 1 - i]'(by simp; omega) = 2 ^ ej / 2 := by
+      have h_dl2_val :
+           (sizes.dropLast.map (· / 2))[sizes.length - 1 - i]'
+           (by simp; omega) = 2 ^ ej / 2 := by
         simp only [List.getElem_map]; rw [h_ej]
       have h_ej_div : 2 ^ ej / 2 = 2 ^ (ej - 1) := by
         conv_lhs => rw [show ej = (ej - 1) + 1 from by omega, pow_succ]
         exact Nat.mul_div_cancel _ (by omega)
       rw [h_ej_div] at h_dl2_val
-      -- h_dl2_val: dl2[sizes.length-1-i] = 2^(ej-1)
-      -- h_ih_val: dl2[dl2.length-1-(i-1)] = 2^(i-1)
-      -- These are the same index, so 2^(ej-1) = 2^(i-1)
-      have h_same_idx : (sizes.dropLast.map (· / 2)).length - 1 - (i - 1) = sizes.length - 1 - i := by
+      have h_same_idx :
+           (sizes.dropLast.map (· / 2)).length - 1 - (i - 1) =
+           sizes.length - 1 - i := by
         simp; omega
       have h_eq_pow : 2 ^ (ej - 1) = 2 ^ (i - 1) := by
         rw [← h_dl2_val, ← h_ih_val]
@@ -852,21 +838,13 @@ private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
         omega
       rw [h_ej_eq]
 
-
 /-- The merge cascade: k merges on a stack correctly combine equal-size
-    power-of-2 segments in a geometric doubling run.
-
-    Stack layout: `mth(acc) :: mth(run[0]) :: mth(run[1]) :: ... :: tail`
-    where `|acc| = |run[0]| = 2^j` and `|run[i]| = 2^(j+i)`.
-    After |run| merges, produces `mth(run[k-1] ++ ... ++ run[0] ++ acc) :: tail`.
-
-    The run is ordered from stack-top outward: run[0] is adjacent to acc,
-    run[k-1] is deepest in the cascade. -/
+    power-of-2 segments in a geometric doubling run. -/
 private theorem merge_cascade
-    (acc_content : List Digest)    -- leaves whose mth is the accumulator
-    (run : List (List Digest))     -- segments in cascade order (head = top)
-    (tail : List Digest)           -- remaining stack below cascade
-    (j : Nat)                      -- |acc_content| = 2^j
+    (acc_content : List Digest)
+    (run : List (List Digest))
+    (tail : List Digest)
+    (j : Nat)
     (h_acc_len : acc_content.length = 2 ^ j)
     (h_run_geo : ∀ (i : Nat) (h : i < run.length),
       (run.get ⟨i, h⟩).length = 2 ^ (j + i)) :
@@ -876,18 +854,12 @@ private theorem merge_cascade
   | nil =>
     simp [mergeStack]
   | cons seg tl ih =>
-    -- mergeStack (mth acc :: mth seg :: rest) (tl.length + 1)
-    --   = mergeStack (nodeHash (mth seg) (mth acc) :: rest) tl.length
-    -- mergeStack pattern matches on count (Nat.succ), then on stack (:: :: rest)
     show mergeStack (nodeHash (mth seg) (mth acc_content) :: (List.map mth tl ++ tail)) tl.length =
       mth ((seg :: tl).reverse.flatten ++ acc_content) :: tail
-    -- After merge: nodeHash (mth seg) (mth acc_content) :: (tl.map mth ++ tail)
     have h_seg_len : seg.length = 2 ^ j := by
       have := h_run_geo 0 (Nat.zero_lt_succ _)
       simp at this; exact this
-    -- nodeHash (mth seg) (mth acc_content) = mth (seg ++ acc_content)
     rw [mth_merge seg acc_content j h_seg_len h_acc_len]
-    -- Apply IH with accumulated content = seg ++ acc_content, j' = j + 1
     have h_new_len : (seg ++ acc_content).length = 2 ^ (j + 1) := by
       simp [List.length_append, h_seg_len, h_acc_len]; ring
     have h_tl_geo : ∀ (i : Nat) (h : i < tl.length),
@@ -895,19 +867,16 @@ private theorem merge_cascade
       intro i hi
       have h_bound : i + 1 < (seg :: tl).length := by simp; omega
       have := h_run_geo (i + 1) h_bound
-      simp [List.get_cons_succ] at this
+      simp at this
       convert this using 2
       omega
     have h_ih := ih (seg ++ acc_content) (j + 1) h_new_len h_tl_geo
-    -- The IH talks about (mth x :: map) ++ tail, goal has mth x :: (map ++ tail)
-    -- These are equal by List.cons_append
     simp only [List.cons_append] at h_ih
     rw [h_ih]
     congr 1
     simp [List.reverse_cons, List.flatten_append, List.append_assoc]
 
-/-- Appending a single leaf preserves the stack invariant.
-    This is the key single-step lemma for the loop invariant. -/
+/-- Appending a single leaf preserves the stack invariant. -/
 private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List Digest)
     (leaf : Digest) (idx : Nat)
     (h_inv : stackInvariant pfx₀ stack₀)
@@ -916,24 +885,16 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
   obtain ⟨segments, h_flat, h_pow2, h_desc, h_stack⟩ := h_inv
   simp only [appendToStack]
   by_cases h_cto : cto idx = 0
-  · -- Case: no merges. mergeStack (leaf :: stack₀) 0 = leaf :: stack₀
-    rw [h_cto]; simp [mergeStack]
-    -- Witness: segments ++ [[leaf]]
+  · rw [h_cto]; simp [mergeStack]
     refine ⟨segments ++ [[leaf]], ?_, ?_, ?_, ?_⟩
-    · -- flatten = pfx₀ ++ [leaf]
-      simp [List.flatten_append, h_flat]
-    · -- all segments have power-of-2 length
-      intro s hs
+    · simp [List.flatten_append, h_flat]
+    · intro s hs
       simp [List.mem_append] at hs
       rcases hs with hs | hs
       · exact h_pow2 s hs
       · exact ⟨0, by simp [hs]⟩
-    · -- segment sizes strictly descending
-      -- Need: Pairwise (· > ·) (segments.map length ++ [[leaf].length])
-      simp only [List.map_append, List.map_cons, List.map_nil, List.length_cons,
+    · simp only [List.map_append, List.map_cons, List.map_nil, List.length_cons,
         List.length_nil]
-      -- Now goal: Pairwise (· > ·) (segments.map List.length ++ [1])
-      -- All existing segments have size ≥ 2 (from no_size_one_when_cto_zero)
       have h_seg_lens := segments.map List.length
       have h_sizes_ge_2 := no_size_one_when_cto_zero
         (segments.map List.length) (by simpa using h_desc)
@@ -941,83 +902,31 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
             obtain ⟨seg, h_mem, h_eq⟩ := hs
             obtain ⟨k, hk⟩ := h_pow2 seg h_mem
             exact ⟨k, by rw [← h_eq, hk]⟩)
-        (by -- sum of segment lengths = pfx₀.length = idx
-            have : (segments.map List.length).sum = pfx₀.length := by
+        (by have : (segments.map List.length).sum = pfx₀.length := by
               rw [← h_flat]; simp [List.length_flatten]
             rw [this, ← h_idx]; exact h_cto)
       rw [List.pairwise_append]
       refine ⟨h_desc, ?_, fun a ha b hb => ?_⟩
-      · -- Pairwise (· > ·) on the singleton tail
-        exact List.pairwise_singleton _ _
-      · -- every element in segments.map length > every element in tail
-        simp at hb
+      · exact List.pairwise_singleton _ _
+      · simp at hb
         have := h_sizes_ge_2 a ha
         omega
-    · -- stack = reversed map of mth
-      simp [List.map_append, List.reverse_append, h_stack]
-      -- Need: leaf :: (segments.map mth).reverse
-      --      = mth [leaf] :: (segments.map mth).reverse
-      -- mth [leaf] = leaf by definition
-      congr 1
+    · simp [List.map_append, List.reverse_append, h_stack]
       simp [mth]
-  · -- Case: cto idx ≥ 1, merge cascade
-    -- Strategy: prove by induction on cto idx.
-    -- Extract cto idx = k + 1 for some k.
-    obtain ⟨k, h_cto_eq⟩ : ∃ k, cto idx = k + 1 := by
+  · obtain ⟨k, h_cto_eq⟩ : ∃ k, cto idx = k + 1 := by
       exact ⟨cto idx - 1, by omega⟩
-    -- idx is odd (from cto definition)
     have h_odd : idx % 2 = 1 := by
       by_contra h_even
-      push_neg at h_even
+      push Not at h_even
       have : idx % 2 = 0 := by omega
       rw [cto, if_neg (by omega)] at h_cto_eq
       omega
-    -- Since sum of segment sizes = idx (odd), last segment has size 1
-    -- (if no segment had size 1, sum would be even — contradicts odd)
-    -- The last segment must be [x] for some x.
-    -- segments is nonempty (idx ≥ 1 means there's at least one segment)
     have h_segs_ne : segments ≠ [] := by
       intro h_empty; subst h_empty
       simp [List.flatten] at h_flat
       rw [h_flat] at h_idx; simp at h_idx; omega
-    -- Use merge_cascade. We need to show:
-    -- 1. The stack has the right shape for merge_cascade
-    -- 2. The last (cto idx) segments form a geometric run
-    -- 3. The result satisfies the invariant
-    --
-    -- Step 1: The stack is (segments.map mth).reverse.
-    -- After pushing leaf, it's leaf :: (segments.map mth).reverse.
-    -- mergeStack operates on this with count = cto idx.
-    --
-    -- Step 2: Since segments are strictly descending pow2s summing to idx,
-    -- and idx is odd, the last segment has size 1. The last cto(idx)
-    -- segments form the consecutive trailing 1-bits run.
-    --
-    -- For now, we take a direct approach: unfold one merge step,
-    -- show it reduces to a smaller problem, and induct.
-    -- The last segment has size 1 (from parity argument).
-    -- After one merge with leaf, we get a size-2 segment.
-    -- The new segments are init ++ [merged], with cto reduced.
-    --
-    -- Direct construction: prove the invariant by providing witness segments.
-    -- The witness is: take (segments.length - cto idx) segments
-    --   ++ [segments.reverse[0..cto(idx)-1].flatten ++ [leaf]]
-    -- (i.e., merge the last cto(idx) segments with leaf into one).
-
-    -- Rewrite stack and unfold appendToStack
     rw [h_cto_eq, h_stack]
-    -- Goal: stackInvariant (pfx₀ ++ [leaf])
-    --         (mergeStack (leaf :: (segments.map mth).reverse) (k + 1))
-
-    -- The reversed segment list puts smallest (last) segments first.
-    -- segments.reverse = [Sₘ, Sₘ₋₁, ..., S₁] (smallest to largest)
-    -- The stack is mth Sₘ :: mth Sₘ₋₁ :: ... :: mth S₁
-    -- After pushing leaf: leaf :: mth Sₘ :: mth Sₘ₋₁ :: ...
-
-    -- We need to show leaf = mth [leaf] for merge_cascade
     have h_leaf_mth : leaf = mth [leaf] := by simp [mth]
-
-    -- Key sizes list for cto_trailing_geo
     let sz := segments.map List.length
     have h_sz_desc : sz.Pairwise (· > ·) := h_desc
     have h_sz_pow2 : ∀ s ∈ sz, ∃ j, s = 2 ^ j := by
@@ -1028,36 +937,20 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
         rw [← h_flat]; simp [sz, List.length_flatten]
       rw [this, ← h_idx]
     have h_sz_cto : cto sz.sum = k + 1 := by rw [h_sz_sum, h_cto_eq]
-
-    -- Length bound from cto_trailing_geo_len
     have h_sz_len : k + 1 ≤ sz.length := cto_trailing_geo_len sz k h_sz_desc h_sz_pow2 h_sz_cto
     have h_sz_len' : k + 1 ≤ segments.length := by simp [sz] at h_sz_len; exact h_sz_len
-
-    -- Geometric property: the last k+1 segments have sizes 2^0, 2^1, ..., 2^k
     have h_geo := cto_trailing_geo sz k h_sz_desc h_sz_pow2 h_sz_cto h_sz_len
-
-    -- Split segments into above (first n-k-1) and run_segs (last k+1)
     set n := segments.length
     set above := segments.take (n - (k + 1)) with h_above_def
     set run_segs := segments.drop (n - (k + 1)) with h_run_def
-
     have h_split : segments = above ++ run_segs :=
       (List.take_append_drop (n - (k + 1)) segments).symm
     have h_run_len : run_segs.length = k + 1 := by
       simp [h_run_def, List.length_drop]; omega
-
-    -- The stack in merge_cascade form:
-    -- leaf :: (segments.map mth).reverse
-    -- = leaf :: (run_segs.map mth).reverse ++ (above.map mth).reverse
     have h_stack_rw : (segments.map mth).reverse =
         (run_segs.map mth).reverse ++ (above.map mth).reverse := by
       rw [h_split]; simp [List.map_append, List.reverse_append]
-
-    -- For merge_cascade, the "run" parameter is run_segs.reverse (stack order)
-    -- run_segs.reverse[i] has size 2^i (from cto_trailing_geo)
     set mc_run := run_segs.reverse with h_mc_def
-
-    -- Geometric run property for merge_cascade
     have h_mc_geo : ∀ (i : Nat) (hi : i < mc_run.length),
         (mc_run.get ⟨i, hi⟩).length = 2 ^ (0 + i) := by
       intro i hi
@@ -1065,77 +958,42 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
       rw [h_run_len] at hi
       simp only [h_mc_def, List.get_eq_getElem, List.getElem_reverse, Nat.zero_add]
       simp only [h_run_def, List.getElem_drop]
-      -- Need: segments[n-(k+1) + (run_segs.length-1-i)].length = 2^i
-      -- run_segs.length - 1 - i = k - i, and n-(k+1)+(k-i) = n-1-i
-      -- From h_geo: sz[sz.length-1-i] = 2^i, i.e., segments[n-1-i].length = 2^i
       have h_geo_i := h_geo i (by omega)
       simp only [sz, List.get_eq_getElem, List.getElem_map, List.length_map] at h_geo_i
-      -- The indices are equal: n-(k+1) + (run_segs.length-1-i) = n-1-i
       have h_idx_eq : n - (k + 1) + (run_segs.length - 1 - i) = n - 1 - i := by
         rw [h_run_len]; omega
       have : segments[n - (k + 1) + (run_segs.length - 1 - i)] =
              segments[n - 1 - i] := by
         simp only [h_idx_eq]
       rw [this]; exact h_geo_i
-
-    -- Apply merge_cascade
     rw [h_leaf_mth, h_stack_rw]
     have h_mc_len : mc_run.length = k + 1 := by simp [h_mc_def, h_run_len]
-    -- Convert the goal to use mc_run directly
-    -- Goal: stackInvariant ... (mergeStack (mth [leaf] :: (run_segs.map mth).reverse ++ ...) (k+1))
-    -- merge_cascade applies to: mergeStack (mth [leaf] :: mc_run.map mth ++ ...) mc_run.length
-    -- We need to show the goal matches merge_cascade's LHS
     have h_mc := merge_cascade [leaf] mc_run ((above.map mth).reverse) 0
       (by simp) h_mc_geo
-    simp only [Nat.zero_add] at h_mc
-    -- h_mc: mergeStack (mth [leaf] :: mc_run.map mth ++ ...) mc_run.length = ...
-    -- Goal has (run_segs.map mth).reverse and (k+1)
-    -- Convert goal to mc_run terms:
+    simp only [] at h_mc
     rw [show (List.map mth run_segs).reverse = List.map mth mc_run from by
       simp [h_mc_def, List.map_reverse]]
     rw [← h_mc_len]
-    -- Now both goal and h_mc use mc_run.length and mc_run.map mth
-    -- But goal has `a :: (b ++ c)` while h_mc has `a :: b ++ c` (same definitionally)
     conv at h_mc => lhs; rw [List.cons_append]
     rw [h_mc]
-
-    -- After merge_cascade:
-    -- Goal: stackInvariant (pfx₀ ++ [leaf])
-    --         (mth (mc_run.reverse.flatten ++ [leaf]) :: (above.map mth).reverse)
-    -- mc_run.reverse = run_segs.reverse.reverse = run_segs
     simp only [h_mc_def, List.reverse_reverse]
-
-    -- Witness: above ++ [run_segs.flatten ++ [leaf]]
     set merged := run_segs.flatten ++ [leaf]
     refine ⟨above ++ [merged], ?_, ?_, ?_, ?_⟩
-
-    · -- Flatten: (above ++ [merged]).flatten = pfx₀ ++ [leaf]
-      simp only [List.flatten_append, List.flatten_cons, List.flatten_nil,
+    · simp only [List.flatten_append, List.flatten_cons, List.flatten_nil,
                   List.append_nil, merged]
-      -- Goal: above.flatten ++ (run_segs.flatten ++ [leaf]) = pfx₀ ++ [mth [leaf]]
-      -- leaf = mth [leaf] from h_leaf_mth, so mth [leaf] = leaf
       rw [← h_leaf_mth]
       rw [← List.append_assoc, ← List.flatten_append, ← h_split, h_flat]
-
-    · -- Pow2: each segment has pow2 length
-      intro seg h_mem
+    · intro seg h_mem
       simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at h_mem
       rcases h_mem with h_above | h_eq
-      · -- seg ∈ above = segments.take(n-k-1) ⊆ segments
-        have : seg ∈ segments := List.mem_of_mem_take h_above
+      · have : seg ∈ segments := List.mem_of_mem_take h_above
         exact h_pow2 seg this
       · subst h_eq
-        -- merged.length = run_segs.flatten.length + 1 = (2^(k+1) - 1) + 1 = 2^(k+1)
         refine ⟨k + 1, ?_⟩
         simp only [merged, List.length_append, List.length_flatten,
                     List.length_cons, List.length_nil]
-        -- Goal should now be: (run_segs.map List.length).sum + 1 = 2 ^ (k + 1)
         suffices h_sum : (run_segs.map List.length).sum = 2 ^ (k + 1) - 1 by
           have : 2 ^ (k + 1) ≥ 1 := Nat.one_le_two_pow; omega
-        -- run_segs = segments.drop(n-(k+1)), length = k+1
-        -- run_segs[j] = segments[n-(k+1)+j], length = 2^(k-j) from h_geo
-        -- sum = 2^k + 2^(k-1) + ... + 2^0 = 2^(k+1) - 1
-        -- Prove: for any m ≤ k+1, (segments.drop(n-m)).map(length).sum = 2^m - 1
         suffices ∀ m, m ≤ k + 1 →
           ((segments.drop (n - m)).map List.length).sum = 2 ^ m - 1 by
           exact this (k + 1) le_rfl
@@ -1143,26 +1001,19 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
         induction m with
         | zero =>
           simp only [Nat.sub_zero, pow_zero, Nat.sub_self]
-          -- n = segments.length, so drop n segments = []
           have h_drop_all : List.drop n segments = [] := by
             change List.drop segments.length segments = []; exact List.drop_length
           rw [h_drop_all]; simp
         | succ m' ih =>
-          -- segments.drop(n-(m'+1)) = segments[n-(m'+1)] :: segments.drop(n-m')
           have h_drop : n - (m' + 1) < segments.length := by omega
           rw [List.drop_eq_getElem_cons h_drop]
           simp only [List.map, List.sum_cons]
-          -- The tail is segments.drop(n-(m'+1)+1) = segments.drop(n-m')
           have h_tail_idx : n - (m' + 1) + 1 = n - m' := by omega
           rw [show List.drop (n - (m' + 1) + 1) segments = List.drop (n - m') segments from by
             congr 1]
-          -- Goal: segments[n-(m'+1)].length + (segments.drop(n-m')).map(...).sum = 2^(m'+1)-1
           rw [ih (by omega)]
-          -- Goal: segments[n-(m'+1)].length + (2^m' - 1) = 2^(m'+1) - 1
-          -- segments[n-(m'+1)].length = 2^m' from h_geo
           have h_geo_m' := h_geo m' (by omega)
           simp only [sz, List.get_eq_getElem, List.getElem_map, List.length_map] at h_geo_m'
-          -- n-(m'+1) = n-1-m'
           have : segments[n - (m' + 1)] = segments[n - 1 - m'] := by
             simp only [show n - (m' + 1) = n - 1 - m' from by omega]
           rw [show segments[n - (m' + 1)].length = 2 ^ m' from by
@@ -1170,23 +1021,17 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
           have : 2 ^ (m' + 1) = 2 * 2 ^ m' := by ring
           have : 2 ^ m' ≥ 1 := Nat.one_le_two_pow
           omega
-
-    · -- Desc: Pairwise (·>·) on sizes of (above ++ [merged])
-      rw [List.map_append, List.map_cons, List.map_nil]
+    · rw [List.map_append, List.map_cons, List.map_nil]
       rw [List.pairwise_append]
-      -- Helper: pairwise descent on segments as getElem
       have h_pw := List.pairwise_iff_getElem.mp h_desc
       simp only [List.length_map, List.getElem_map] at h_pw
       refine ⟨?_, List.pairwise_singleton _ _, fun a ha b hb => ?_⟩
-      · -- (1) above.map length is Pairwise (inherited from segments)
-        rw [show above.map List.length = (segments.map List.length).take (n - (k + 1)) from by
+      · rw [show above.map List.length = (segments.map List.length).take (n - (k + 1)) from by
           simp [above, List.map_take]]
         exact h_desc.take
-      · -- (2) Every above element's length > merged.length
-        simp only [List.mem_cons, List.mem_nil_iff, or_false] at hb; subst hb
+      · simp only [List.mem_cons, List.mem_nil_iff, or_false] at hb; subst hb
         simp only [List.mem_map] at ha
         obtain ⟨seg, h_seg_mem, rfl⟩ := ha
-        -- Establish merged.length = 2^(k+1)
         have h_merged_len : merged.length = 2 ^ (k + 1) := by
           simp only [merged, List.length_append, List.length_flatten,
                       List.length_cons, List.length_nil]
@@ -1218,41 +1063,31 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
             have : 2 ^ m' ≥ 1 := Nat.one_le_two_pow
             omega
         rw [h_merged_len]
-        -- seg ∈ above ⊆ segments
         have h_seg_in : seg ∈ segments := List.mem_of_mem_take h_seg_mem
         obtain ⟨e, h_seg_len⟩ := h_pow2 seg h_seg_in
         rw [h_seg_len]
-        -- Get seg's index j in above
         obtain ⟨j, hj_lt, hj_eq⟩ := List.getElem_of_mem h_seg_mem
         have h_above_len : above.length = n - (k + 1) := by
           simp [above, List.length_take]; omega
         rw [h_above_len] at hj_lt
-        -- above[j] = segments[j]
         have h_seg_is : seg = segments[j] := by
           rw [← hj_eq]; simp [above, List.getElem_take]
-        -- segments[n-(k+1)].length = 2^k
         have h_first_run : segments[n - (k + 1)].length = 2 ^ k := by
           have h_g := h_geo k (by omega)
           simp only [sz, List.get_eq_getElem, List.getElem_map, List.length_map] at h_g
-          -- h_g uses segments.length - 1 - k; goal uses n - (k + 1)
-          -- Both n = segments.length and n-(k+1) = n-1-k arithmetically
           have : n - (k + 1) = segments.length - 1 - k := by omega
           simp only [this]; exact h_g
-        -- By pairwise descent: segments[j].length > 2^k
         have h_seg_gt : seg.length > 2 ^ k := by
           have := h_pw j (n - (k + 1)) (by omega) (by omega) hj_lt
           rw [h_first_run] at this; rw [h_seg_is]; exact this
-        -- 2^e > 2^k → e ≥ k+1
         rw [h_seg_len] at h_seg_gt
         have h_e_ge : e ≥ k + 1 := by
-          by_contra hc; push_neg at hc
+          by_contra hc; push Not at hc
           exact Nat.not_lt.mpr (Nat.pow_le_pow_right (by omega : 1 ≤ 2) (by omega : e ≤ k)) h_seg_gt
-        -- Need: 2^e > 2^(k+1). Assume not, derive contradiction.
-        by_contra h_not_gt; push_neg at h_not_gt
-        -- e ≥ k+1 and 2^e ≤ 2^(k+1) → e = k+1
+        by_contra h_not_gt; push Not at h_not_gt
         have h_e_eq : e = k + 1 := by
           have : e ≤ k + 1 := by
-            by_contra hc; push_neg at hc
+            by_contra hc; push Not at hc
             have h1 := Nat.pow_le_pow_right (by omega : 1 ≤ 2) (by omega : k + 2 ≤ e)
             have : 2 ^ (k + 1) < 2 ^ (k + 2) := by
               have : 2 ^ (k + 2) = 2 * 2 ^ (k + 1) := by ring
@@ -1260,32 +1095,24 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
             omega
           omega
         subst h_e_eq
-        -- j = n-(k+2): if j < n-k-2, segments[j+1] would be a pow2 strictly
-        -- between 2^k and 2^(k+1), which is impossible.
         have hj_eq_nk2 : j = n - (k + 2) := by
           by_contra hj_ne
           have hj_lt' : j + 1 < n - (k + 1) := by omega
-          -- segments[j+1].length < segments[j].length = 2^(k+1)
           have h_lt := h_pw j (j + 1) (by omega) (by omega) (by omega)
-          simp only [List.getElem_map] at h_lt
+          simp only [] at h_lt
           rw [← h_seg_is, h_seg_len] at h_lt
-          -- segments[j+1].length > segments[n-(k+1)].length = 2^k
           have h_gt := h_pw (j + 1) (n - (k + 1)) (by omega) (by omega) hj_lt'
-          simp only [List.getElem_map] at h_gt
+          simp only [] at h_gt
           rw [h_first_run] at h_gt
-          -- segments[j+1].length is a pow2 strictly between 2^k and 2^(k+1)
           obtain ⟨f, hf⟩ := h_pow2 (segments[j + 1]) (List.getElem_mem ..)
           rw [hf] at h_lt h_gt
           have : f ≥ k + 1 := by
-            by_contra hc; push_neg at hc
+            by_contra hc; push Not at hc
             exact Nat.not_lt.mpr (Nat.pow_le_pow_right (by omega : 1 ≤ 2) (by omega)) h_gt
           have : f ≤ k := by
-            by_contra hc; push_neg at hc
+            by_contra hc; push Not at hc
             exact Nat.not_lt.mpr (Nat.pow_le_pow_right (by omega : 1 ≤ 2) this) h_lt
           omega
-        -- idx = head_sum + tail_sum, where:
-        --   tail_sum = 2^(k+1) + (2^(k+1)-1) = 2^(k+2)-1
-        --   head_sum ≡ 0 (mod 2^(k+2))
         have h_drop_j : segments.drop j = segments[j] :: segments.drop (j + 1) :=
           List.drop_eq_getElem_cons (by omega)
         have h_drop_j1 : segments.drop (j + 1) = run_segs := by
@@ -1294,7 +1121,7 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
             ((segments.take j).map List.length).sum +
             ((segments.drop j).map List.length).sum := by
           rw [← h_sz_sum]
-          simp [sz, ← List.sum_append, ← List.map_append, List.take_append_drop]
+          simp [sz, ← List.sum_append, List.take_append_drop]
         have h_tail_sum : ((segments.drop j).map List.length).sum = 2 ^ (k + 2) - 1 := by
           rw [h_drop_j]; simp only [List.map, List.sum_cons]
           rw [h_drop_j1, ← h_seg_is, h_seg_len]
@@ -1305,9 +1132,7 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
             have : 2 ^ (k + 1) ≥ 1 := Nat.one_le_two_pow; omega
           rw [h_rs]; have : 2 ^ (k + 2) = 2 * 2 ^ (k + 1) := by ring
           have : 2 ^ (k + 1) ≥ 1 := Nat.one_le_two_pow; omega
-        -- Each segment before j has size divisible by 2^(k+2)
         have h_head_dvd : 2 ^ (k + 2) ∣ ((segments.take j).map List.length).sum := by
-          -- Prove by induction on the list
           suffices ∀ x ∈ (segments.take j).map List.length, 2 ^ (k + 2) ∣ x by
             exact List.dvd_sum this
           intro x hx
@@ -1320,15 +1145,14 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
             rw [List.length_take] at hi_lt
             exact lt_of_lt_of_le hi_lt (Nat.min_le_left j n)
           have := h_pw i j (by omega) (by omega) hi_lt'
-          simp only [List.getElem_map] at this
+          simp only [] at this
           rw [show segments[i] = s from by
             rw [← hi_eq]; exact (List.getElem_take ..).symm] at this
           rw [← h_seg_is, h_seg_len, hf] at this
           have : f ≥ k + 2 := by
-            by_contra hc; push_neg at hc
+            by_contra hc; push Not at hc
             exact Nat.not_lt.mpr (Nat.pow_le_pow_right (by omega : 1 ≤ 2) (by omega)) this
           exact Nat.pow_dvd_pow 2 this
-        -- Combine: idx % 2^(k+2) = (0 + 2^(k+2)-1) % 2^(k+2) = 2^(k+2)-1
         have h_mod : idx % 2 ^ (k + 2) = 2 ^ (k + 2) - 1 := by
           rw [h_idx_split]
           obtain ⟨q, hq⟩ := h_head_dvd
@@ -1336,11 +1160,8 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
           rw [Nat.mul_add_mod]
           exact Nat.mod_eq_of_lt (by have := Nat.one_le_two_pow (n := k + 2); omega)
         exact absurd (cto_ge_of_mod idx (k + 2) h_mod) (by omega)
+    · simp [List.map_append, List.reverse_append]
 
-    · -- Stack: the result stack matches (above ++ [merged]).map mth).reverse
-      simp [List.map_append, List.reverse_append]
-
-/-- The core invariant theorem: buildStack maintains the stack invariant. -/
 theorem buildStack_invariant (leaves : List Digest) :
     stackInvariant leaves (buildStack leaves) := by
   suffices h : ∀ (pfx₀ : List Digest) (stack₀ : List Digest)
@@ -1361,75 +1182,44 @@ theorem buildStack_invariant (leaves : List Digest) :
   | cons leaf rest ih =>
     intro idx h_inv h_idx
     simp only [buildStackAux]
-    -- Goal: stackInvariant (pfx₀ ++ leaf :: rest)
-    --         (buildStackAux (appendToStack stack₀ leaf idx) rest (idx+1))
-    -- Rewrite pfx₀ ++ (leaf :: rest) = (pfx₀ ++ [leaf]) ++ rest
     conv_lhs => rw [show pfx₀ ++ leaf :: rest = (pfx₀ ++ [leaf]) ++ rest
       from by simp]
     apply ih
     · exact appendToStack_invariant pfx₀ stack₀ leaf idx h_inv h_idx
     · simp [h_idx]
--- ============================================================================
--- From invariant to bridge lemma
--- ============================================================================
 
-/-- stackRoot over a decomposition in strictly descending size order
-    yields the same result as mth over the flattened sequence.
-
-    This is because mth splits at largestPow2Lt, which is the first
-    (largest) segment, and recurses on the rest — exactly matching
-    the stackRoot fold from head (smallest) to tail (largest). -/
 theorem stackRoot_segments_eq_mth (segments : List (List Digest))
     (h_pow2 : ∀ s ∈ segments, ∃ k, s.length = 2 ^ k)
     (h_desc : List.Pairwise (· > ·) (segments.map List.length)) :
     stackRoot ((segments.map mth).reverse) = mth segments.flatten := by
   match segments with
   | [] =>
-    -- stackRoot [] = emptyHash = mth []
     simp [stackRoot, mth, emptyHash]
   | [s] =>
-    -- stackRoot [mth s] = mth s, and [s].flatten = s ++ [] = s
-    simp [stackRoot, mth, List.flatten]
+    simp [stackRoot, List.flatten]
   | first :: second :: rest =>
-    -- Inductive step: segments = first :: second :: rest
-    -- Need: stackRoot((segments.map mth).reverse) = mth(segments.flatten)
-    --
-    -- (segments.map mth).reverse = (rest.map mth ++ [mth second, mth first]).reverse
-    -- Actually: (first :: second :: rest).map mth = mth first :: (second :: rest).map mth
-    -- reversed: ((second :: rest).map mth).reverse ++ [mth first]
-    --
-    -- stackRoot of this = nodeHash(mth first, stackRoot(((second :: rest).map mth).reverse))
-    --   by stackRoot_snoc
-    --
-    -- By IH: stackRoot(((second :: rest).map mth).reverse) = mth((second :: rest).flatten)
-    -- So: nodeHash(mth first, mth((second :: rest).flatten))
-    --
-    -- Need to show: mth(first ++ (second :: rest).flatten) = nodeHash(mth first, mth((second :: rest).flatten))
-    -- This holds when largestPow2Lt(|first ++ (second :: rest).flatten|) = |first|
-
-    -- Step 1: rewrite the reversed map as snoc
     have h_map : (first :: second :: rest).map mth =
         mth first :: (second :: rest).map mth := by rfl
     rw [h_map, List.reverse_cons]
-
+    --
     -- Step 2: apply stackRoot_snoc
     have h_nonempty : ((second :: rest).map mth).reverse ≠ [] := by
       simp [List.reverse_eq_nil_iff]
     rw [stackRoot_snoc _ _ h_nonempty]
-
+    --
     -- Step 3: apply IH on (second :: rest)
     have h_pow2_rest : ∀ s ∈ (second :: rest), ∃ k, s.length = 2 ^ k := by
       intro s hs
       exact h_pow2 s (List.mem_cons_of_mem first hs)
     have h_desc_rest : List.Pairwise (· > ·) ((second :: rest).map List.length) := by
       have := h_desc
-      simp [List.map_cons, List.Pairwise] at this ⊢
+      simp [List.map_cons] at this ⊢
       exact this.2
     rw [stackRoot_segments_eq_mth (second :: rest) h_pow2_rest h_desc_rest]
-
+    --
     -- Step 4: rewrite flatten
     simp only [flatten_cons]
-
+    --
     -- Goal: nodeHash (mth first) (mth ((second :: rest).flatten))
     --      = mth (first ++ (second :: rest).flatten)
     -- Apply mth_split symmetrically
