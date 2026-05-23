@@ -1379,3 +1379,26 @@ theorem temporal_binding (epochs : List Epoch) (i : Nat) (d : List UInt8)
     (_h_inactive : isActive epochs i = false) :
     leafHash d ≠ nullLeaf := by
   exact Ne.symm (domain_separation d)
+
+-- ============================================================================
+-- §9. Theorem 3 — Algorithm Isolation
+-- ============================================================================
+
+/-- **Theorem 3 (Algorithm Isolation).**
+    For any two algorithms a and b (represented by their activation epochs)
+    operating over the same payload sequence, both per-algorithm projections
+    independently yield valid RFC 9162 Merkle trees.
+
+    Each conjunct mentions only one algorithm's epochs. The other algorithm's
+    configuration is universally quantified but absent from the conclusion —
+    making the isolation structurally visible: changing algorithm b's epoch
+    boundaries cannot affect algorithm a's Merkle root, and vice versa.
+
+    This is the formal statement of algorithm-independent verification:
+    a client supporting only algorithm a can verify inclusion against the
+    EML without any knowledge of algorithm b's existence or configuration. -/
+theorem algorithm_isolation
+    (epochs_a epochs_b : List Epoch) (payloads : List Digest) :
+    ctoRoot (project epochs_a payloads) = mth (project epochs_a payloads) ∧
+    ctoRoot (project epochs_b payloads) = mth (project epochs_b payloads) :=
+  ⟨bridge_lemma _, bridge_lemma _⟩

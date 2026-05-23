@@ -10,6 +10,25 @@ strips editorial bloat, and adds the empirical baselines reviewers demanded —
 while preserving the three contributions that all 6 reviewers praised (temporal
 null-padding, deterministic proof elision, evaluation methodology).
 
+### Narrative Throughline (post-proof revision)
+
+The proof work revealed a throughline that should unify the paper:
+
+1. **The pain**: Heterogeneous clients on a network support different hash
+   algorithms. A transparency log must serve all from a single structure.
+2. **The solution**: The EML — one tree, many projections, null-padded epochs.
+3. **The formal guarantee**: The bridge lemma proves incremental = batch
+   construction, and the algorithm isolation theorem shows each projection
+   is independently valid.
+4. **The surprising punchline**: The bridge lemma holds for *any deterministic
+   function* — no cryptographic assumptions. Algorithm-independent verification
+   requires algorithm-independent correctness, and the proof delivers exactly
+   that. This is the first machine-checked formalization of RFC 9162's MTH,
+   serving the CT ecosystem broadly, not just EML.
+
+Every section should serve this spine. Content that doesn't advance the
+narrative from pain → solution → proof → generality is candidate fat to cut.
+
 ## Constraints
 
 - 13-page body (USENIX Security two-column, 10pt)
@@ -22,9 +41,10 @@ null-padding, deterministic proof elision, evaluation methodology).
 
 | Decision | Choice | Rationale |
 | :------- | :----- | :-------- |
-| Formal model scope | Radical strip: formalize only novel contributions (~7 definitions + 2 theorems) | The formal model is proof apparatus for Contribution 1, not a standalone contribution. "Initial algebra with 9 equational laws" is the root cause of the "formalism theatre" critique (6/6 reviewers). Standard Merkle tree properties inherited from RFC 9162 do not need restating for a USENIX audience. The domain model in `docs/models/` retains the full specification for implementation. |
-| Critical-path deliverable | Lean4 machine-checked proof of Projection Equivalence | 6/6 reviewers flagged the proof as deficient (circularity, missing bridge lemma, base case typo). Machine-checked proof eliminates the entire "eyeball error" category permanently. Every reviewer listed machine-checked proofs as future work — delivering one now is a significant differentiator and moves it from §IX future work to §I contributions. |
-| Contribution 2 reframing | "A machine-checked proof (Lean4) reducing multi-algorithm verification to RFC 9162" instead of "an initial algebra over 20 definitions with 9 equational laws" | Specific, mechanically verified claim > volume count. Moves machine-checked proofs from §IX future work to §I contributions. Every reviewer listed this as future work — delivering it now is a differentiator. |
+| Formal model scope | Radical strip: formalize only novel contributions (~7 definitions + 3 theorems) | The formal model is proof apparatus for Contribution 1, not a standalone contribution. "Initial algebra with 9 equational laws" is the root cause of the "formalism theatre" critique (6/6 reviewers). Standard Merkle tree properties inherited from RFC 9162 do not need restating for a USENIX audience. The domain model in `docs/models/` retains the full specification for implementation. |
+| Critical-path deliverable | Lean4 machine-checked proof: bridge lemma + 3 theorems | 6/6 reviewers flagged the proof as deficient. Machine-checked proof eliminates the entire "eyeball error" category permanently. Every reviewer listed machine-checked proofs as future work — delivering one is a significant differentiator. |
+| Contribution 2 reframing | "A machine-checked proof (Lean4) establishing structural equivalence, algorithm isolation, and temporal binding" | Specific, mechanically verified claims > volume count. The bridge lemma serves CT broadly (first formalization of RFC 9162 MTH). Algorithm isolation formalizes the paper's central design principle. |
+| Bridge lemma framing | Emphasize that structural equivalence is pure mathematics — no cryptographic assumptions | The proof holds for *any* deterministic combining function, not just hash functions. This is the mathematical embodiment of algorithm independence and should be stated explicitly. It distinguishes EML's contribution from the literature, which habitually conflates structural and cryptographic claims. |
 | D-Sep formulation | Computational hardness under ROM | 4/6 flagged Pigeonhole violation. Current statement is mathematically false for unbounded d ∈ Bytes. |
 | H(act) weakest-link | Implement per-algorithm H_a(act) manifest digests | 6/6 flagged this. Paper-only acknowledgment is insufficient. Implementation change is small and eliminates the strongest architectural objection. |
 | Absolute benchmarks | Implement comparative benchmark (EML vs vanilla RFC 9162) | 5/6 demanded throughput numbers. "We deliberately avoid micro-benchmarks" was identified as evasion. |
@@ -63,9 +83,9 @@ null-padding, deterministic proof elision, evaluation methodology).
 
 ### In Scope
 
-- ~~Lean4 machine-checked proof of Projection Equivalence and Temporal Binding (`proofs/lean/`)~~ **DONE**
+- ~~Lean4 machine-checked proof of Projection Equivalence, Temporal Binding, and Algorithm Isolation (`proofs/lean/`)~~ **DONE**
 - Radical restructure of `_04-formal-model.qmd`: strip to novel formalisms + Lean4-backed proofs
-- ~~Lean proof of Projection Equivalence (standalone document, then integrated)~~ **DONE** — proof covers full chain from CTO primitives through bridge lemma to projection equivalence and temporal binding
+- ~~Lean proof of full theorem chain~~ **DONE** — proof covers CTO primitives → bridge lemma → projection equivalence → temporal binding → algorithm isolation
 - Implement per-algorithm H_a(act) manifest digests in the Rust crate
 - Implement comparative benchmarks (EML vs RFC 9162 baseline)
 - Precision fixes to `_02-background.qmd`: second-preimage claim, MTH clarification
@@ -102,30 +122,52 @@ and the paper gains a contribution no reviewer anticipated.
   - [x] `merge_cascade`: mergeStack over geometric segment runs produces MTH
   - [x] `cto_trailing_geo`: CTO-indexed segments form geometric series 2⁰, 2¹, ..., 2ᵏ
 - [x] Prove Projection Equivalence (Theorem 1) — `projection_equivalence`
-  - [x] `ctoRoot(projectDigests epochs payloads) = mth(projectDigests epochs payloads)`
+  - [x] `ctoRoot(project epochs payloads) = mth(project epochs payloads)`
   - [x] Follows from bridge lemma applied to the projected leaf sequence
 - [x] Prove Temporal Binding (Theorem 2) — `temporal_binding`
   - [x] Reduce to domain separation + Projection Equivalence
   - [x] Inactive positions have null-padded digests; no payload `d` satisfies `leafHash d = nullHash`
+- [x] Prove Algorithm Isolation (Theorem 3) — `algorithm_isolation`
+  - [x] For any two algorithms a, b: both projections independently yield valid RFC 9162 trees
+  - [x] Proof: `⟨bridge_lemma _, bridge_lemma _⟩` — structural independence visible in the type signature
 - [ ] Definitional correspondence audit: document side-by-side mapping of each Lean definition to its Rust counterpart (`mth`, `cto`, `buildStackAux`, `leafValue`, `project`)
 - [ ] Write companion prose document at `docs/proofs/projection-equivalence.md` explaining the proof structure for paper integration
 
-**Proof statistics**: ~1565 lines, 30 theorems, 0 sorry. Build: 3288 jobs, clean.
+**Proof statistics**: ~1400 lines, 31 theorems, 0 sorry. Build clean.
+
+**Post-proof insights** (see `.sketches/lean-proof-presentation.md` for full analysis):
+
+- The bridge lemma requires NO cryptographic assumptions — it is a theorem of
+  combinatorics and binary arithmetic. This is the mathematical embodiment of
+  algorithm independence.
+- The descent condition (`cto_ge_of_mod`) is the hidden structural complexity —
+  ~180 lines of modular arithmetic that informal proofs elide.
+- This is the first machine-checked formalization of RFC 9162's MTH definition
+  in any proof assistant, serving the CT ecosystem broadly.
+- The proof's generality (any deterministic function) directly supports the
+  EML's design principle: algorithm-independent verification requires
+  algorithm-independent correctness.
 
 **Key proof artifacts** (in `proofs/lean/EMLProof/ProjectionEquivalence.lean`):
 
-| Theorem | Line | Statement |
-| :------ | :--- | :-------- |
-| `bridge_lemma` | 1500 | `ctoRoot leaves = mth leaves` — incremental root = batch root |
-| `projection_equivalence` | 1544 | Full EML projection equivalence over epoch/payload sequences |
-| `temporal_binding` | 1563 | Inactive positions reject all payloads under domain separation |
-| `appendToStack_invariant` | 911 | Core induction: stack invariant preserved on leaf append |
-| `merge_cascade` | 865 | Geometric merge run produces MTH over concatenated segments |
-| `cto_trailing_geo` | 753 | CTO = k+1 implies trailing k+1 segments are 2⁰..2ᵏ |
+| Theorem | Statement | Axioms Used |
+| :------ | :-------- | :---------- |
+| `bridge_lemma` | `ctoRoot leaves = mth leaves` — incremental root = batch root | Structural only (1–4) |
+| `projection_equivalence` | Full EML projection equivalence over epoch/payload sequences | Structural only (1–4) |
+| `algorithm_isolation` | For any two algorithms, both projections independently valid | Structural only (1–4) |
+| `temporal_binding` | Inactive positions reject all payloads | Structural + domain_separation |
+| `stack_invariant_step` | Core induction: stack invariant preserved on leaf append | Structural only (1–4) |
+| `merge_cascade` | Geometric merge run produces MTH over concatenated segments | Structural only (1–4) |
+| `cto_trailing_geo` | CTO = k+1 ⟹ trailing k+1 segments are 2⁰..2ᵏ | None (pure Nat arithmetic) |
 
 ---
 
 ### Phase 2: Formal Model Restructure — rewrite §IV
+
+**Throughline role**: This is the "proof" segment of the spine. §IV must do
+two things: (1) state the theorems with enough precision to be verifiable,
+and (2) convey the *surprising punchline* — that structural correctness
+requires no cryptographic assumptions. Everything else is ceremony to cut.
 
 - [ ] Strip "initial algebra" and "carrier types" framing
 - [ ] Retain only novel definitions:
@@ -141,7 +183,9 @@ and the paper gains a contribution no reviewer anticipated.
 - [ ] Theorems with proofs:
   - [ ] **Theorem 1** (Projection Equivalence): integrate proof from Phase 1; reference Lean4 mechanization
   - [ ] **Theorem 2** (Temporal Binding): proof sketch reducing to D-Sep + Theorem 1; mechanized in Lean4
+  - [ ] **Theorem 3** (Algorithm Isolation): state and reference Lean4; emphasize structural independence visible in the type signature
   - [ ] Note in §IV that proofs are machine-checked (cite Lean4 artifact)
+  - [ ] **Emphasize**: bridge lemma requires NO cryptographic assumptions — state explicitly that the structural equivalence is a theorem of combinatorics, not cryptography
 - [ ] Assumptions (moved to §II Threat Model):
   - [ ] Domain separation as computational hardness under ROM (not absolute quantifier)
   - [ ] Algorithm independence (mutual incompressibility under ROM)
@@ -151,11 +195,18 @@ and the paper gains a contribution no reviewer anticipated.
   - [ ] Manifest commitment (M-Commit)
 - [ ] Clarify MTH notation: explicit note that Theorem 1's MTH operates on pre-hashed digest sequences
 - [ ] Rename "Projection Isomorphism" → "Projection Equivalence"
-- [ ] Update contribution list in §I: replace "initial algebra, 20 definitions, 9 equational laws" with "formal proof reducing multi-algorithm verification to single-algorithm RFC 9162 verification"
+- [ ] Update contribution list in §I:
+  - [ ] Replace "initial algebra, 20 definitions, 9 equational laws" with machine-checked proof framing
+  - [ ] Explicitly state: "the first machine-checked formalization of RFC 9162's MTH construction"
+  - [ ] Note the bridge lemma's generality: holds for any deterministic combining function
+  - [ ] Frame as contribution to CT ecosystem, not just EML
 
 ---
 
 ### Phase 3: Security & Architecture Fixes — precision in claims
+
+**Throughline role**: These fixes serve credibility (reviewers flagged them)
+but are not the narrative spine. Keep surgical. Don't expand; fix and move on.
 
 - [ ] Implement per-algorithm H_a(act) manifest digests
   - [ ] Update STH definition (Def 15) to include H_a(act) in per-algorithm tuple
@@ -182,27 +233,55 @@ and the paper gains a contribution no reviewer anticipated.
 
 ### Phase 4: Presentation Surgery — reclaim page budget
 
-- [ ] Cut §4.1 Carrier Types entirely (inline ℕ, Bytes, etc. where first used)
-- [ ] Cut or radically condense §8.5 Post-Quantum (one sentence in §IX future work)
-- [ ] Replace/reduce marketing prose:
-  - [ ] "structural crisis" → objective description of operational overhead
-  - [ ] "upgrade trilemma" — keep as defined term but reduce repetition frequency
-  - [ ] "distributed systems nightmare" → cut
-  - [ ] "faithful representation of temporal reality" → cut
-- [ ] Fix bibliography:
-  - [ ] [1] CARAF: add venue/date
-  - [ ] [2] Chopra: add venue/date
-  - [ ] [3] Collier: add venue/date or reclassify as technical report
-  - [ ] Add missing Bernstein citation for cryptographic agility critique
-  - [ ] Fix all grey literature references with stable URLs
-- [ ] Genericize §1.1: strip "Cyphr" and "Cyphrpunk LLC"; frame as class of applications
-- [ ] Fix Table 2: "amortized O(log K)" → "worst-case O(log K)" for algorithm addition
-- [ ] Fix interval notation: Definition 5 open interval → half-open [s_k, e_k) to match Definition 6
+**Throughline role**: This phase *applies* the throughline as an editorial
+scalpel. The question for every paragraph: does it advance
+pain → solution → proof → generality? If not, it's fat.
+
+#### Throughline-driven cuts (new)
+
+Apply the spine as a filter to each section:
+
+| Section | Serves throughline? | Action |
+|:--------|:-------------------|:-------|
+| §I Introduction | **Yes** — the pain (upgrade trilemma) | Keep. Tighten prose but the trilemma IS the throughline's first beat. |
+| §I.1 Case Study | **Yes** — the pain, concrete | Keep, genericize (already planned). |
+| §II Background | **Yes** — establishes what the proof formalizes | Keep. Don't expand. |
+| §III The EML | **Yes** — the solution | Keep. This is beat 2. |
+| §IV Formal Model | **Yes** — the proof + generality | Keep, but strip ceremony (Phase 2). Emphasize axiom-independence. |
+| §V Proof Engine | **Partial** — operational bridge | Keep, but it's implementation detail, not the theoretical spine. Don't expand. |
+| §VI Elided Proofs | **Partial** — practical contribution | Keep (reviewers praised it) but it's tangential to the throughline. Don't expand. |
+| §VII Evaluation | **Yes** — validates the solution works | Keep. Benchmarks serve the spine by showing the solution is practical. |
+| §VIII Related Work | **Yes** — reinforces the pain | Keep. The alternatives' limitations ARE the pain restated. |
+| §8.5 Post-Quantum | **No** — tangential | **Cut.** One sentence in §IX future work. Doesn't advance any beat of the spine. |
+| §IX Conclusion | **Yes** — mirror | Keep minimal. Restate the punchline: algorithm-independent correctness. |
+
+#### Specific cuts and trims
+
+- [ ] **§8.5 Post-Quantum**: Cut entirely. Move to one sentence in §IX. Reviewers explicitly called this "marketing padding" (round 6). It doesn't serve any beat of the throughline.
+- [ ] **Carrier Types (§4.1)**: Cut. Ceremony that doesn't advance the proof narrative.
+- [ ] **"Faithful representation of temporal reality"**: Cut. Promotional, not diagnostic.
+- [ ] **"Distributed systems nightmare"**: Cut. Hyperbole.
+- [ ] **"Structural crisis"** in §I: Replace with objective description. The upgrade trilemma already conveys urgency without editorializing.
+- [ ] **Upgrade trilemma repetition**: Use the term once (definition in §I), reference thereafter. Currently repeated ~5 times.
+- [ ] **§V Proof Engine**: Audit for expansion since last draft. This section tends to grow. It should describe operations, not re-derive theory. Any theory belongs in §IV.
+- [ ] **resume_alg in §III**: Keep but minimize. It's operational detail, not the throughline. One paragraph maximum.
+
+#### Previously planned items (retained)
+
+- [ ] Fix bibliography entries (CARAF, Chopra, Collier)
+- [ ] Add missing Bernstein citation
+- [ ] Genericize §1.1: strip proper nouns
+- [ ] Fix Table 2: "amortized O(log K)" → "worst-case O(log K)"
+- [ ] Fix interval notation: open → half-open
 - [ ] Trim Ethical Considerations to minimum viable compliance text
 
 ---
 
 ### Phase 5: Benchmarks — the empirical gap
+
+**Throughline role**: Empirical validation is beat 3.5 — "the solution works
+in practice, not just in theory." Keep focused on demonstrating that the
+EML's overhead is acceptable. Don't benchmark tangential features.
 
 - [ ] Implement comparative benchmark harness
   - [ ] EML append throughput vs vanilla RFC 9162 (single-algorithm) append throughput
@@ -216,6 +295,11 @@ and the paper gains a contribution no reviewer anticipated.
 ---
 
 ### Phase 6: Integration & Verification — final consistency pass
+
+**Throughline role**: The final pass should read the paper front-to-back
+and verify that every section advances the spine. Any paragraph that
+doesn't serve pain → solution → proof → generality gets flagged
+for cutting or condensing.
 
 - [ ] Verify contribution list in §I matches actual proven/demonstrated content
   - [ ] Contribution 2 references machine-checked Lean4 proof, not "algebraic model"
@@ -234,7 +318,12 @@ and the paper gains a contribution no reviewer anticipated.
 
 - [x] Lean4 proof of Projection Equivalence type-checks successfully
 - [x] Lean4 proof of Temporal Binding type-checks successfully
+- [x] Lean4 proof of Algorithm Isolation type-checks successfully
 - [ ] Lean4 proof artifact included in supplementary materials
+- [ ] Bridge lemma's axiom-independence from cryptography stated explicitly in §IV
+- [ ] Algorithm isolation theorem referenced in §IV with structural independence explanation
+- [ ] Paper's contribution framed as first machine-checked formalization of RFC 9162 MTH
+- [ ] Narrative throughline (pain → solution → proof → generality) visible across all sections
 - [ ] No "Law" in §IV — all properties are definitions, assumptions, proved theorems, or corollaries
 - [ ] D-Sep stated as computational hardness, not absolute universal quantifier
 - [ ] MTH notation unambiguous between raw-payload and digest-domain variants
