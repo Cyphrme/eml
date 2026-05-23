@@ -1,28 +1,16 @@
 ## Formal Model {#sec-formal-model}
 
-We formalize the EML as an initial algebra over carrier types with
-equational laws. The formalism extends the standard RFC 9162 model with
-algorithm-indexed products and null-fill semantics. All definitions are
-numbered for unambiguous reference.
-
-### Carrier Types
-
-::: {#def-carriers}
-**Definition 1** (Carrier types).
-
-- $\textit{Alg}$ --- a finite, totally ordered set of hash algorithm
-  identifiers.
-- $\textit{Digest}$ --- the type of hash outputs (fixed-width byte
-  sequences per algorithm).
-- $\textit{Bytes}$ --- arbitrary byte sequences (leaf payloads).
-- $\mathbb{N}$ --- natural numbers (leaf indices, tree sizes, heights).
-- $\textit{AlgSet}$ --- finite subsets of $\textit{Alg}$.
-:::
+We formalize the novel constructs of the EML and state three
+machine-checked theorems establishing its correctness. Definitions
+inherited from RFC 9162---MTH construction, domain separation, inclusion
+and consistency proofs---are summarized in §[II](#sec-background) and
+referenced inline. The full proof artifact (Lean4, ~1400 lines, 31
+theorems, zero `sorry`) accompanies this paper as supplementary material.
 
 ### Hash Operations
 
 ::: {#def-hash-ops}
-**Definition 2** (Hash operations). For each algorithm $a \in
+**Definition 1** (Hash operations). For each algorithm $a \in
 \textit{Alg}$:
 
 $$
@@ -40,7 +28,7 @@ $\text{leaf}(a, d) \neq \text{node}(a, l, r)$ for all inputs.
 ### Null Constants
 
 ::: {#def-null-leaf}
-**Definition 3** (Null leaf constant). For each algorithm $a$:
+**Definition 2** (Null leaf constant). For each algorithm $a$:
 
 $$
 N_0(a) = H_a(\mathtt{0x02})
@@ -54,7 +42,7 @@ verifiers, which treat proof elements as opaque digests, are unaffected.
 :::
 
 ::: {#def-null-subtree}
-**Definition 4** (Null subtree constant). For each $a$ and height
+**Definition 3** (Null subtree constant). For each $a$ and height
 $h \geq 1$:
 
 $$
@@ -69,7 +57,7 @@ operations.
 ### Algorithm Activation
 
 ::: {#def-activation-map}
-**Definition 5** (Activation map). An activation map is a partial
+**Definition 4** (Activation map). An activation map is a partial
 function:
 
 $$
@@ -83,7 +71,7 @@ algorithm whose final epoch has $e_k = \infty$ is currently active.
 :::
 
 ::: {#def-active-pred}
-**Definition 6** (Active predicate). Algorithm $a$ is active at leaf
+**Definition 5** (Active predicate). Algorithm $a$ is active at leaf
 index $i$ iff:
 
 $$
@@ -95,7 +83,7 @@ $$
 :::
 
 ::: {#def-active-set}
-**Definition 7** (Active set). The set of algorithms active at index
+**Definition 6** (Active set). The set of algorithms active at index
 $i$:
 
 $$
@@ -106,7 +94,7 @@ $$
 ### EML State
 
 ::: {#def-state}
-**Definition 8** (EML state). An EML state is a tuple:
+**Definition 7** (EML state). An EML state is a tuple:
 
 $$
 S = (\text{leaves}, \text{size}, \text{act}, \text{stacks}, \text{nodes})
@@ -117,7 +105,7 @@ where:
 - $\text{leaves}: \text{Vec}\langle\textit{Bytes}\rangle$ --- raw leaf
   payloads (shared across algorithms);
 - $\text{size}: \mathbb{N}$ --- number of appended leaves;
-- $\text{act}$ --- activation map (Definition 5);
+- $\text{act}$ --- activation map (Definition 4);
 - $\text{stacks}: \textit{Alg} \to \text{Vec}\langle\textit{Digest}\rangle$ ---
   per-algorithm frontier stacks;
 - $\text{nodes}: \textit{Alg} \rightharpoonup ((\mathbb{N}, \mathbb{N})
@@ -128,7 +116,7 @@ where:
 ### Leaf Value Function
 
 ::: {#def-leaf-value}
-**Definition 9** (Leaf value). The digest at position $i$ for
+**Definition 8** (Leaf value). The digest at position $i$ for
 algorithm $a$:
 
 $$
@@ -142,7 +130,7 @@ $$
 ### Append
 
 ::: {#def-append}
-**Definition 10** (Append). Given state $S$ and payload $d$:
+**Definition 9** (Append). Given state $S$ and payload $d$:
 
 $$
 \text{append}(S, d) \to S'
@@ -161,7 +149,7 @@ algorithm per append. Frozen algorithms are not updated.
 ### Algorithm Lifecycle
 
 ::: {#def-add-alg}
-**Definition 11** (Add algorithm). $\text{add\_alg}(S, a) \to S'$ sets
+**Definition 10** (Add algorithm). $\text{add\_alg}(S, a) \to S'$ sets
 $\text{act}(a) = [(S.\text{size}, \infty)]$ and initializes the frontier
 stack to the *null prefix peaks*: the MMR peaks of $S.\text{size}$ null
 leaves.
@@ -179,13 +167,13 @@ computation.
 :::
 
 ::: {#def-remove-alg}
-**Definition 12** (Remove algorithm). $\text{remove\_alg}(S, a) \to S'$
+**Definition 11** (Remove algorithm). $\text{remove\_alg}(S, a) \to S'$
 closes the last epoch: $\text{act}(a)[\text{last}] = (s_k,
 S.\text{size})$. The frontier is frozen.
 :::
 
 ::: {#def-resume-alg}
-**Definition 13** (Resume algorithm). $\text{resume\_alg}(S, a) \to S'$
+**Definition 12** (Resume algorithm). $\text{resume\_alg}(S, a) \to S'$
 reconstructs the frontier stack for the target tree size
 $n = S.\text{size}$ by decomposing $n$ into its binary representation
 and resolving each perfect subtree root via stored nodes (for active
@@ -198,7 +186,7 @@ tree size.
 ### Root Extraction and Projection
 
 ::: {#def-root}
-**Definition 14** (Per-algorithm root).
+**Definition 13** (Per-algorithm root).
 
 $$
 \text{root}(a) = \begin{cases}
@@ -218,7 +206,7 @@ unchanged as the root.
 \begin{minipage}{\columnwidth}
 ```
 
-**Definition 15** (Signed Tree Head). The EML's externally published
+**Definition 14** (Signed Tree Head). The EML's externally published
 commitment is:
 
 $$
@@ -228,7 +216,7 @@ $$
 where $n$ is the global tree size, $t$ is a timestamp, $\sigma$ is the
 log's signing key, and $H(\text{act})$ is a cryptographic digest
 of a canonical, deterministic serialization of the activation map
-(Definition 5). The hash function $H$ used for manifest commitment is
+(Definition 4). The hash function $H$ used for manifest commitment is
 independent of the tree's per-algorithm hash functions $H_a$.
 Canonicality requires that the serialization function is
 injective: distinct logical activation maps must produce distinct byte
@@ -247,7 +235,7 @@ possessing or parsing the activation map.
 :::
 
 ::: {#def-projection}
-**Definition 16** (Projection). The projection of the EML onto
+**Definition 15** (Projection). The projection of the EML onto
 algorithm $a$:
 
 $$
@@ -257,19 +245,30 @@ $$
 This sequence constitutes a valid RFC 9162 leaf set.
 :::
 
-### Equational Laws
+### Theorems
 
-The following laws govern the EML. Each extends the standard RFC 9162
-invariants to the multi-algorithm setting.
+The following theorems are machine-checked in Lean4. The full proof
+artifact accompanies this paper as supplementary material.
 
-::: {#law-aequiv}
+A notational clarification: the MTH construction defined in
+§[II](#sec-background) (@eq-mth-leaf) operates on raw payloads.
+Throughout this section, we write $\text{MTH}(H_a, \pi_a(S))$ to
+denote the RFC 9162 batch construction applied to the *digest sequence*
+$\pi_a(S)$, where each element is already a leaf hash $V(a, i)$
+(Definition 8). The single-element case reduces to the identity:
+$\text{MTH}(H_a, \{v\}) = v$ when $v$ is itself a digest. This
+follows directly from the definition---the leaf-hashing step has already
+been performed by the leaf value function.
+
+::: {#thm-projection-equiv}
 
 ```{=latex}
 \begin{minipage}{\columnwidth}
 ```
 
-**Law 1** ([A-Equiv]{.smallcaps}). *Incremental equals batch.* For all
-$a \in \text{dom}(\text{act})$:
+**Theorem 1** (Projection Equivalence). For any algorithm $a$, the root
+computed by the CTO frontier stack equals the root of a
+batch-constructed RFC 9162 tree over the projected leaf sequence:
 
 $$
 \text{root}(a) = \text{MTH}(H_a, \pi_a(S))
@@ -280,144 +279,134 @@ $$
 ```
 :::
 
-::: {#law-astack}
+*Proof sketch.* The engine of this theorem is the *bridge lemma*:
+$\text{ctoRoot}(\ell) = \text{MTH}(\ell)$ for any list of digests
+$\ell$, proved by strong induction on list length.
+
+The CTO frontier stack maintains an invariant: after processing $n$
+leaves, the stack decomposes the leaf sequence into contiguous segments
+whose sizes are the set bits of $n$'s binary representation, in strictly
+descending order. Each stack element holds the MTH of its segment. A
+right-fold over the stack combines these segments in the same order that
+MTH's recursive bisection at the largest-power-of-two boundary produces.
+
+The core difficulty is the *descent condition*: when a new leaf triggers
+$\text{cto}(n) = k+1$ merges, the trailing $k+1$ stack segments must
+form a geometric series $2^0, 2^1, \ldots, 2^k$. Ruling out degenerate
+configurations where a larger segment ($2^{k+1}$) could appear above
+this run requires a modular arithmetic argument: such a configuration
+forces $n \equiv 2^{k+2} - 1 \pmod{2^{k+2}}$, implying
+$\text{cto}(n) \geq k+2$---a contradiction. This argument spans ~180
+lines of the mechanized proof, exemplifying the category of reasoning
+that informal proofs elide and where hand-waving fails silently.
+
+Projection Equivalence follows as a direct corollary: the projection
+$\pi_a(S)$ produces the digest sequence; the bridge lemma establishes
+that incremental and batch construction over that sequence yield the
+same root. $\square$
+
+**Axiom independence.** The bridge lemma requires no cryptographic
+assumptions. It is a theorem of combinatorics and binary arithmetic,
+holding for any deterministic combining function---including trivial
+ones such as $\text{const}(0)$. The proof declares four structural
+axioms (a digest type exists, it is nonempty, a deterministic function
+from bytes to digests exists, and digests can be serialized to bytes)
+and one cryptographic axiom (domain separation, used only by Theorem 2).
+Structural correctness is independent of hash function
+properties---collision resistance, preimage resistance, and output
+distribution are irrelevant.
+
+This separation is not incidental. Algorithm-independent verification
+requires algorithm-independent correctness: if the structural
+equivalence depended on properties of SHA-256, it would not transfer to
+SHA3, BLAKE2, or a post-quantum hash. The bridge lemma's generality is
+the mathematical embodiment of the EML's design principle.
+
+::: {#thm-temporal-binding}
 
 ```{=latex}
 \begin{minipage}{\columnwidth}
 ```
 
-**Law 2** ([A-Stack]{.smallcaps}). *Frontier stack size invariant.* For all
-$a$:
-
-$$
-|\text{stacks}(a)| = \text{popcount}(\text{tree\_size}(a))
-$$
-
-```{=latex}
-\end{minipage}
-```
-:::
-
-::: {#law-ndet}
-**Law 3** ([N-Det]{.smallcaps}). *Null determinism.* For all $a, h$:
-$N_h(a)$ is uniquely determined by $(a, h)$.
-:::
-
-::: {#law-dsep}
-
-```{=latex}
-\begin{minipage}{\columnwidth}
-```
-
-**Law 4** ([D-Sep]{.smallcaps}). *Domain separation.* Three-way separation
-across all tree domains:
-
-$$
-\begin{aligned}
-\forall a, d:          &\quad N_0(a) \neq \text{leaf}(a, d) \\
-\forall a, l, r:       &\quad N_0(a) \neq \text{node}(a, l, r) \\
-\forall a, d, l, r:    &\quad \text{leaf}(a, d) \neq \text{node}(a, l, r)
-\end{aligned}
-$$
-
-```{=latex}
-\end{minipage}
-```
-:::
-
-::: {#law-isound}
-
-```{=latex}
-\begin{minipage}{\columnwidth}
-```
-
-**Law 5** ([I-Sound]{.smallcaps}). *Inclusion proof soundness.* For all
-active $(a, i)$:
-
-$$
-\begin{aligned}
-&\text{verify\_inclusion}(H_a,\
-  \text{leaf}(a, \text{leaves}[i]), \\
-&\quad \text{inclusion\_proof}(S, a, i),\
-  \text{root}(a)) \\
-&= \text{true}
-\end{aligned}
-$$
-
-```{=latex}
-\end{minipage}
-```
-:::
-
-::: {#law-ksound}
-
-```{=latex}
-\begin{minipage}{\columnwidth}
-```
-
-**Law 6** ([K-Sound]{.smallcaps}). *Consistency proof soundness.* For all
-$a$ and $\text{old\_size} < \text{tree\_size}(a)$:
-
-$$
-\begin{aligned}
-&\text{verify\_consistency}(H_a,\ \text{proof}, \\
-&\quad \text{root\_at}(a, \text{old\_size}),\
-  \text{root}(a)) \\
-&= \text{true}
-\end{aligned}
-$$
-
-```{=latex}
-\end{minipage}
-```
-
-:::
-
-::: {#law-tbound}
-
-```{=latex}
-\begin{minipage}{\columnwidth}
-```
-
-**Law 7** ([T-Bound]{.smallcaps}). *Temporal binding.* For all $a$ and $i$
+**Theorem 2** (Temporal Binding). For any algorithm $a$ and position $i$
 where $\neg\text{active}(a, i) \wedge i < \text{tree\_size}(a)$:
 
 $$
-\begin{aligned}
-&\nexists\, d \in \textit{Bytes}:\
-  \text{verify\_inclusion}(H_a, \\
-&\quad \text{leaf}(a, d),\
-  \text{incl\_proof}(S, a, i), \\
-&\quad \text{root}(a)) = \text{true}
-\end{aligned}
+\nexists\, d \in \textit{Bytes}:\ V(a, i) = \text{leaf}(a, d)
 $$
 
-No payload can produce a valid inclusion proof at an inactive position.
+No payload produces a leaf hash equal to the null constant at an
+inactive position.
 
 ```{=latex}
 \end{minipage}
 ```
 :::
 
-::: {#law-algind}
-**Law 8** ([Alg-Ind]{.smallcaps}). *Algorithm independence.* Under ROM, for
-all $a \neq b$, $\pi_a(S)$ and $\pi_b(S)$ are mutually incompressible.
-:::
+*Proof.* Direct consequence of the domain separation assumption
+(§[II](#sec-background)): $N_0(a) = H_a(\mathtt{0x02})$ and
+$\text{leaf}(a, d) = H_a(\mathtt{0x00} \concat d)$ occupy
+tag-separated input domains. Under ROM, finding a collision between
+these domains requires breaking preimage resistance of $H_a$. The
+mechanized proof is one line: `Ne.symm (domain_separation d)`.
+$\square$
 
-::: {#law-projvalid}
-**Law 9** ([Proj-Valid]{.smallcaps}). *Projection validity.* For all
-$a \in \text{dom}(\text{act})$, $\pi_a(S)$ is a valid RFC 9162 leaf sequence;
-all standard invariants hold for the projected tree.
-:::
-
-::: {#law-mcommit}
+::: {#thm-algorithm-isolation}
 
 ```{=latex}
 \begin{minipage}{\columnwidth}
 ```
 
-**Corollary 1** ([M-Commit]{.smallcaps}). *Manifest commitment.* For any two
-clients $C_1, C_2$ that accept the same STH (Definition 15):
+**Theorem 3** (Algorithm Isolation). For any two algorithms $a, b \in
+\text{dom}(\text{act})$ operating over the same payload sequence, both
+per-algorithm projections independently yield valid RFC 9162 Merkle
+trees:
+
+$$
+\text{root}(a) = \text{MTH}(H_a, \pi_a(S)) \ \wedge \
+\text{root}(b) = \text{MTH}(H_b, \pi_b(S))
+$$
+
+```{=latex}
+\end{minipage}
+```
+:::
+
+*Proof.* Each conjunct is an instance of Theorem 1. The mechanized
+proof is: `⟨bridge_lemma _, bridge_lemma _⟩`. Neither conjunct
+references the other algorithm's epochs or hash function---structural
+independence is visible in the type signature. $\square$
+
+### Corollaries
+
+The following properties reduce to Theorem 1 combined with the standard
+RFC 9162 guarantees from §[II](#sec-background).
+
+**Inclusion soundness.** For any active $(a, i)$, the standard RFC 9162
+inclusion verification algorithm accepts the proof generated by the
+EML's proof engine. This follows from Theorem 1: the EML's root equals
+the batch MTH over the projected sequence, and RFC 9162 inclusion proofs
+are sound for any valid MTH-constructed tree.
+
+**Consistency soundness.** For any $a$ and
+$\text{old\_size} < \text{tree\_size}(a)$, the standard RFC 9162
+consistency verification algorithm accepts the proof generated by the
+EML. Again, Theorem 1 ensures the EML maintains a valid MTH structure
+for each projection.
+
+**Projection validity.** For any $a \in \text{dom}(\text{act})$,
+$\pi_a(S)$ is a valid RFC 9162 leaf sequence and all standard invariants
+hold for the projected tree. This is the content of Theorem 1 restated
+without reference to the CTO mechanism.
+
+::: {#cor-mcommit}
+
+```{=latex}
+\begin{minipage}{\columnwidth}
+```
+
+**Corollary** (Manifest commitment). For any two
+clients $C_1, C_2$ that accept the same STH (Definition 14):
 
 $$
 \text{act}_{C_1} = \text{act}_{C_2}
@@ -434,62 +423,15 @@ cryptographic consequence of STH verification.
 ```
 :::
 
-### Projection Isomorphism
+### Proof Artifact
 
-::: {#thm-projection-iso}
-
-```{=latex}
-\begin{minipage}{\columnwidth}
-```
-
-**Theorem 1** (Projection isomorphism). For any algorithm $a$, the root
-computed by $\text{root}(a)$ from the EML frontier equals the root of a
-batch-constructed RFC 9162 tree over the projected leaf sequence:
-
-$$
-\text{root}(a) = \text{MTH}(H_a, \pi_a(S))
-$$
-
-```{=latex}
-\end{minipage}
-```
-:::
-
-*Proof.* By structural induction on the projected tree.
-
-*Base case ($\text{tree\_size}(a) = 0$).* The projection is empty;
-$\text{root}(a) = \text{empty}(a) = \text{MTH}(H_a, \emptyset)$ by
-Definition 14.
-
-*Base case ($\text{tree\_size}(a) = 1$).* A single leaf at index $i$. If
-$\text{active}(a, i)$, then $V(a, i) = \text{leaf}(a, d_i)$, which is
-precisely $\text{MTH}(H_a, \{d_i\})$. If $\neg\text{active}(a, i)$, then
-$V(a, i) = N_0(a)$; by [D-Sep]{.smallcaps}, $N_0(a)$ is a valid leaf hash
-distinct from any $\text{leaf}(a, d)$, so the single-element MTH is
-well-defined.
-
-*Inductive step.* Assume the property holds for all projected trees of
-size $< n$. For size $n$, let $k$ be the largest power of two less than
-$n$. The projected sequence splits into left ($[0, k)$) and right
-($[k, n)$) subsequences. By the inductive hypothesis, the EML's
-frontier-based root computation over each half equals the batch MTH over
-that half's projection. The EML combines these via
-$\text{node}(a, \text{left}, \text{right})$, which is identical to the
-MTH recursive case (@eq-mth-internal). The combination is correct
-regardless of whether positions within each half are active or
-null-filled, because by [D-Sep]{.smallcaps} null constants occupy a
-disjoint domain from leaf and node hashes, and by [N-Det]{.smallcaps}
-the null hash at each position is uniquely determined.
-
-*Injectivity.* By [D-Sep]{.smallcaps}, no payload $d$ exists such that
-$\text{leaf}(a, d) = N_0(a)$, so an inclusion proof at an inactive
-position cannot be forged to verify against any real payload. Null
-positions are structurally present but semantically unforgeable.
-
-By [A-Equiv]{.smallcaps}, the EML's incremental root equals the batch
-root at every append. By [Proj-Valid]{.smallcaps}, the full projected
-sequence satisfies all RFC 9162 invariants. $\square$
-
-This theorem is the paper's central result. It reduces the correctness
-of multi-algorithm verification to the well-understood correctness of
-single-algorithm RFC 9162 verification.
+The Lean4 proof artifact contains ~1400 lines, 31 theorems, and zero
+uses of `sorry` (Lean's axiom of trust). The build completes cleanly
+with 3288 jobs. To our knowledge, this is the first machine-checked
+formalization of RFC 9162's MTH construction in any proof assistant,
+serving the Certificate Transparency ecosystem broadly---not only the
+EML. The definitional stack (MTH, CTO, frontier stack operations) was
+built from first principles against the RFC 9162 specification; a
+side-by-side definitional correspondence audit mapping each Lean
+definition to its Rust implementation counterpart accompanies the
+artifact.
