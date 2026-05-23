@@ -187,6 +187,10 @@ noncomputable def ctoRoot (leaves : List Digest) : Digest :=
 -- §6. The Bridge Lemma
 -- ============================================================================
 
+-- ----------------------------------------------------------------------------
+-- §6.1 Base Cases
+-- ----------------------------------------------------------------------------
+
 /-
   Proof Strategy:
 
@@ -230,9 +234,9 @@ theorem buildStackAux_append (stack₀ : List Digest) (L₁ L₂ : List Digest)
     congr 1
     omega
 
--- ============================================================================
--- Stack Invariant — the core structural property
--- ============================================================================
+-- ----------------------------------------------------------------------------
+-- §6.2 Stack Invariant — the core structural property
+-- ----------------------------------------------------------------------------
 
 /-
   The CTO algorithm maintains the following invariant:
@@ -347,9 +351,9 @@ theorem no_size_one_when_cto_zero (sizes : List Nat)
       omega
 
 
--- ============================================================================
--- From invariant to bridge lemma — helper lemmas
--- ============================================================================
+-- ----------------------------------------------------------------------------
+-- §6.3 Structural Lemmas (MTH splitting, segment arithmetic)
+-- ----------------------------------------------------------------------------
 
 -- stackRoot snoc: folding with a base element at the tail.
 theorem stackRoot_snoc (s : List Digest) (base : Digest) (hs : s ≠ []) :
@@ -475,6 +479,12 @@ theorem mth_merge (L R : List Digest) (k : Nat)
     have h_bound_lo : 2 ^ k ≤ 2 ^ (k + 1) - 1 := by omega
     have h_bound_hi : 2 ^ (k + 1) - 1 < 2 ^ (k + 1) := by omega
     rw [Nat.log_eq_of_pow_le_of_lt_pow h_bound_lo h_bound_hi]
+
+-- ----------------------------------------------------------------------------
+-- §6.4 CTO–Segment Correspondence
+-- The key insight: cto(n) = k+1 implies the trailing k+1 stack segments
+-- form a geometric series 2⁰, 2¹, ..., 2ᵏ.
+-- ----------------------------------------------------------------------------
 
 /-- Sum of strictly descending pow2s: if all elements are powers of 2,
     pairwise strictly descending, and all < 2^a, then the sum < 2^a. -/
@@ -838,6 +848,13 @@ private theorem cto_trailing_geo (sizes : List Nat) (k : Nat)
         omega
       rw [h_ej_eq]
 
+
+-- ----------------------------------------------------------------------------
+-- §6.5 Merge Cascade & Invariant Step
+-- merge_cascade: geometric merge run produces MTH over concatenated segments
+-- stack_invariant_step: the inductive step preserving the stack invariant
+-- ----------------------------------------------------------------------------
+
 /-- The merge cascade: k merges on a stack correctly combine equal-size
     power-of-2 segments in a geometric doubling run. -/
 private theorem merge_cascade
@@ -877,7 +894,7 @@ private theorem merge_cascade
     simp [List.reverse_cons, List.flatten_append, List.append_assoc]
 
 /-- Appending a single leaf preserves the stack invariant. -/
-private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List Digest)
+private theorem stack_invariant_step (pfx₀ : List Digest) (stack₀ : List Digest)
     (leaf : Digest) (idx : Nat)
     (h_inv : stackInvariant pfx₀ stack₀)
     (h_idx : idx = pfx₀.length) :
@@ -1162,6 +1179,14 @@ private theorem appendToStack_invariant (pfx₀ : List Digest) (stack₀ : List 
         exact absurd (cto_ge_of_mod idx (k + 2) h_mod) (by omega)
     · simp [List.map_append, List.reverse_append]
 
+
+-- ----------------------------------------------------------------------------
+-- §6.6 Bridge Lemma Assembly
+-- buildStack_invariant: the loop invariant over all leaves
+-- stackRoot_segments_eq_mth: right-fold over segments = MTH
+-- bridge_lemma: ctoRoot = mth (the central result)
+-- ----------------------------------------------------------------------------
+
 theorem buildStack_invariant (leaves : List Digest) :
     stackInvariant leaves (buildStack leaves) := by
   suffices h : ∀ (pfx₀ : List Digest) (stack₀ : List Digest)
@@ -1185,7 +1210,7 @@ theorem buildStack_invariant (leaves : List Digest) :
     conv_lhs => rw [show pfx₀ ++ leaf :: rest = (pfx₀ ++ [leaf]) ++ rest
       from by simp]
     apply ih
-    · exact appendToStack_invariant pfx₀ stack₀ leaf idx h_inv h_idx
+    · exact stack_invariant_step pfx₀ stack₀ leaf idx h_inv h_idx
     · simp [h_idx]
 
 theorem stackRoot_segments_eq_mth (segments : List (List Digest))
