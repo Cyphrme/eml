@@ -233,11 +233,15 @@ via `Log::from_storage(storage, hashers)`.
 | `Error`                     | Structured error type for all fallible operations.                                 |
 | `Result<T>`                 | Convenience alias for `std::result::Result<T, Error>`.                             |
 
-## Formal Model
+## Formal Verification & Model
 
-The implementation follows a 21-definition algebraic model with 9 equational
-laws. The full specification is in
-[`docs/models/epoch-merkle-log.md`](docs/models/epoch-merkle-log.md).
+The core algebraic correctness of EML is formally verified using the **Lean 4 interactive theorem prover**. The machine-checked proofs are located in the [`proofs/lean/`](proofs/lean/) directory (see the [Reviewer's Guide](proofs/lean/README.md) for details).
+
+Specifically, the proofs verify:
+- **Theorem 1: Projection Equivalence** (`projection_equivalence`): An incremental bottom-up frontier stack fold is structurally equivalent to a top-down bisection of the full algorithm projection (RFC 9162 Merkle Tree Hash), establishing correctness of the $O(\log n)$ append/reconstruction state transitions.
+- **Theorem 2: Temporal Binding** (`temporal_binding`): For any algorithm $a$, inactive tree positions before first activation, in inter-epoch gaps, or after final deactivation are bound to a domain-separated null constant $N_0(a) = H_a(0x02)$, preventing adversarial forgeries at inactive positions.
+- **Theorem 3: Algorithm Isolation** (`algorithm_isolation`): Independent algorithms operating on the shared topology maintain strict state separation, preventing cross-algorithm collisions or security degradation.
+- **Duality Theorem** (`generalized_bridge_lemma`): The shift-reduce duality holds in a generalized algebraic framework over free magmas, proving topology equivalence for *any* append-consistent Merkle tree layout.
 
 Key laws verified by the test suite:
 
@@ -297,16 +301,13 @@ cargo +nightly fuzz run <target>
 
 ## Status
 
-Pre-alpha. The data structure specification is experimental. Backwards
-compatibility is not a concern until the formal model stabilizes.
+The logical model and in-memory implementation of EML are stable and formally verified. The data structure specification is mathematically complete and stable. However, the persistence API (`Storage` trait) and its storage backends remain experimental until persistent database implementations are integrated and production-tested.
 
 ## License
 
 Copyright © 2026 [Cyphrme](https://github.com/Cyphrme). All rights reserved.
 
-This source code is published for review and reference. No license is granted
-for use, modification, or distribution. A formal license will be adopted when
-the project reaches stability.
+This source code is distributed under an interim license that permits non-commercial, personal, academic, or research use. Commercial use is strictly prohibited. See the [LICENSE](file:///var/home/nrd/git/github.com/Cyphrme/eml/LICENSE) file for the complete terms.
 
 [rfc9162]: https://datatracker.ietf.org/doc/html/rfc9162
 [proptest]: https://crates.io/crates/proptest

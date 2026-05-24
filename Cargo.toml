@@ -1,9 +1,16 @@
 [package]
-name        = "eml"
-version     = "0.1.0"
-description = "Epoch Merkle Log — multi-algorithm append-only log with epoch semantics"
-edition      = "2024"
-rust-version = "1.85"
+name          = "eml"
+version       = "0.9.0"
+description   = "Epoch Merkle Log — multi-algorithm append-only log with epoch semantics"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "LICENSE"
+readme        = "README.md"
+repository    = "https://github.com/Cyphrme/eml"
+homepage      = "https://github.com/Cyphrme/eml"
+documentation = "https://docs.rs/eml"
+keywords      = ["merkle", "cryptography", "log", "security", "audit"]
+categories    = ["cryptography", "data-structures"]
 
 [dependencies]
 # Zero external dependencies. Hash operations injected via the Hasher trait.
