@@ -17,17 +17,17 @@ use crate::storage::Storage;
 
 /// Per-algorithm state within the EML log.
 #[derive(Debug)]
-struct AlgState {
+pub struct AlgState {
     /// The hasher instance for this algorithm.
-    hasher: Box<dyn Hasher>,
+    pub hasher: Box<dyn Hasher>,
     /// Disjoint active epochs. Each epoch is `(start, end)` where
     /// `end == u64::MAX` means the algorithm is currently active.
     /// Epochs are in chronological order and non-overlapping.
-    epochs: Vec<(u64, u64)>,
+    pub epochs: Vec<(u64, u64)>,
     /// Frontier stack: roots of complete subtrees along the right edge.
-    stack: Vec<Vec<u8>>,
+    pub stack: Vec<Vec<u8>>,
     /// Precomputed null subtree constants.
-    null_table: NullTable,
+    pub null_table: NullTable,
 }
 
 impl AlgState {
@@ -1147,449 +1147,489 @@ mod tests {
 
     #[test]
     fn a_equiv_single_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..16u8 {
-            log.append(&[i]).unwrap();
-
-            let incremental = log.root(0).unwrap();
-            let projected = log.project(0).unwrap();
-            let batch = batch_root(&Sha256Hasher, &projected);
-            assert_eq!(incremental, batch, "A-EQUIV-EML failed at size {}", i + 1);
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..16u8 {
+                        log.append(&[i]).await.unwrap();
+            
+                        let incremental = log.root(0).unwrap();
+                        let projected = log.project(0).await.unwrap();
+                        let batch = batch_root(&Sha256Hasher, &projected);
+                        assert_eq!(incremental, batch, "A-EQUIV-EML failed at size {}", i + 1);
+                    }
+        });
     }
 
     #[test]
     fn a_equiv_mid_stream_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        // Append 4 leaves with only alg 0.
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Add alg 1 mid-stream at index 4.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        // Append 4 more leaves with both algs active.
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Verify A-EQUIV for both algorithms.
-        for alg_id in [0, 1] {
-            let incremental = log.root(alg_id).unwrap();
-            let projected = log.project(alg_id).unwrap();
-            let hasher: &dyn Hasher = if alg_id == 0 {
-                &Sha256Hasher
-            } else {
-                &AltHasher
-            };
-            let batch = batch_root(hasher, &projected);
-            assert_eq!(incremental, batch, "A-EQUIV-EML failed for alg {alg_id}");
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    // Append 4 leaves with only alg 0.
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Add alg 1 mid-stream at index 4.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    // Append 4 more leaves with both algs active.
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Verify A-EQUIV for both algorithms.
+                    for alg_id in [0, 1] {
+                        let incremental = log.root(alg_id).unwrap();
+                        let projected = log.project(alg_id).await.unwrap();
+                        let hasher: &dyn Hasher = if alg_id == 0 {
+                            &Sha256Hasher
+                        } else {
+                            &AltHasher
+                        };
+                        let batch = batch_root(hasher, &projected);
+                        assert_eq!(incremental, batch, "A-EQUIV-EML failed for alg {alg_id}");
+                    }
+        });
     }
 
     // ---- A-STACK-EML: popcount invariant ----
 
     #[test]
     fn a_stack_popcount_invariant() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..20u8 {
-            log.append(&[i]).unwrap();
-            let expected = (log.size()).count_ones() as usize;
-            assert_eq!(
-                log.stack_len(0).unwrap(),
-                expected,
-                "A-STACK-EML failed at size {}",
-                log.size()
-            );
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..20u8 {
+                        log.append(&[i]).await.unwrap();
+                        let expected = (log.size().await).count_ones() as usize;
+                        assert_eq!(
+                            log.stack_len(0).unwrap(),
+                            expected,
+                            "A-STACK-EML failed at size {}",
+                            log.size().await
+                        );
+                    }
+        });
     }
 
     #[test]
     fn a_stack_frozen_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..6u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Freeze at size 6.
-        log.remove_algorithm(0).unwrap();
-        let frozen_stack_len = log.stack_len(0).unwrap();
-        let expected = 6u64.count_ones() as usize; // popcount(6) = 2
-        assert_eq!(frozen_stack_len, expected);
-
-        // Further appends don't change the frozen stack.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-        for i in 6..10u8 {
-            log.append(&[i]).unwrap();
-        }
-        assert_eq!(log.stack_len(0).unwrap(), frozen_stack_len);
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..6u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Freeze at size 6.
+                    log.remove_algorithm(0).await.unwrap();
+                    let frozen_stack_len = log.stack_len(0).unwrap();
+                    let expected = 6u64.count_ones() as usize; // popcount(6) = 2
+                    assert_eq!(frozen_stack_len, expected);
+            
+                    // Further appends don't change the frozen stack.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+                    for i in 6..10u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    assert_eq!(log.stack_len(0).unwrap(), frozen_stack_len);
+        });
     }
 
     // ---- T-BOUND: temporal binding ----
 
     #[test]
     fn t_bound_null_prefix_differs_from_real_leaf() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        // Append 4 leaves.
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Add alg 1 at index 4 — indices 0..4 are null for alg 1.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        // Append 4 more.
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // The projected leaf at index 0 for alg 1 should be N₀, not leaf(data[0]).
-        let state = log.algs.get(&1).unwrap();
-        let null_leaf = state.null_table.leaf_null();
-        let leaf0_data = log.storage.get_leaf(0).unwrap();
-        let real_leaf = state.hasher.leaf(&leaf0_data);
-
-        assert_ne!(
-            null_leaf,
-            real_leaf.as_slice(),
-            "T-BOUND: null prefix position must differ from real leaf hash"
-        );
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    // Append 4 leaves.
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Add alg 1 at index 4 — indices 0..4 are null for alg 1.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    // Append 4 more.
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // The projected leaf at index 0 for alg 1 should be N₀, not leaf(data[0]).
+                    let state = log.algs.get(&1).unwrap();
+                    let null_leaf = state.null_table.leaf_null();
+                    let leaf0_data = log.storage.get_leaf(0).await.unwrap();
+                    let real_leaf = state.hasher.leaf(&leaf0_data);
+            
+                    assert_ne!(
+                        null_leaf,
+                        real_leaf.as_slice(),
+                        "T-BOUND: null prefix position must differ from real leaf hash"
+                    );
+        });
     }
 
     // ---- ALG-IND: algorithm independence ----
 
     #[test]
     fn alg_ind_different_algorithms_different_roots() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 0..8u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root0 = log.root(0).unwrap();
-        let root1 = log.root(1).unwrap();
-        assert_ne!(
-            root0, root1,
-            "ALG-IND: different algorithms must produce different roots"
-        );
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 0..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root0 = log.root(0).unwrap();
+                    let root1 = log.root(1).unwrap();
+                    assert_ne!(
+                        root0, root1,
+                        "ALG-IND: different algorithms must produce different roots"
+                    );
+        });
     }
 
     // ---- Error cases ----
 
     #[test]
     fn error_duplicate_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        let err = log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap_err();
-        assert_eq!(err, Error::DuplicateAlgorithm(0));
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    let err = log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap_err();
+                    assert_eq!(err, Error::DuplicateAlgorithm(0));
+        });
     }
 
     #[test]
     fn error_unknown_algorithm() {
-        let log = Log::new(MemoryStorage::new());
-        let err = log.root(99).unwrap_err();
-        assert_eq!(err, Error::UnknownAlgorithm(99));
+        smol::block_on(async {
+                    let log = Log::new(MemoryStorage::new());
+                    let err = log.root(99).unwrap_err();
+                    assert_eq!(err, Error::UnknownAlgorithm(99));
+        });
     }
 
     #[test]
     fn error_no_active_algorithms() {
-        let mut log = Log::new(MemoryStorage::new());
-        let err = log.append(b"data").unwrap_err();
-        assert_eq!(err, Error::NoActiveAlgorithms);
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    let err = log.append(b"data").await.unwrap_err();
+                    assert_eq!(err, Error::NoActiveAlgorithms);
+        });
     }
 
     #[test]
     fn error_double_freeze() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.append(b"data").unwrap();
-        log.remove_algorithm(0).unwrap();
-        let err = log.remove_algorithm(0).unwrap_err();
-        assert_eq!(err, Error::FrozenAlgorithm(0));
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.append(b"data").await.unwrap();
+                    log.remove_algorithm(0).await.unwrap();
+                    let err = log.remove_algorithm(0).await.unwrap_err();
+                    assert_eq!(err, Error::FrozenAlgorithm(0));
+        });
     }
 
     // ---- Empty tree ----
 
     #[test]
     fn empty_tree_root() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        let root = log.root(0).unwrap();
-        assert_eq!(root, Sha256Hasher.empty());
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    let root = log.root(0).unwrap();
+                    assert_eq!(root, Sha256Hasher.empty());
+        });
     }
 
     // ---- Frozen algorithm root stability ----
 
     #[test]
     fn frozen_root_is_stable() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..5u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root_before = log.root(0).unwrap();
-        log.remove_algorithm(0).unwrap();
-        let root_after = log.root(0).unwrap();
-
-        assert_eq!(root_before, root_after, "root must not change on freeze");
-
-        // Further appends to other algorithms don't change frozen root.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-        for i in 5..10u8 {
-            log.append(&[i]).unwrap();
-        }
-        let root_still = log.root(0).unwrap();
-        assert_eq!(root_before, root_still, "frozen root must remain stable");
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..5u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root_before = log.root(0).unwrap();
+                    log.remove_algorithm(0).await.unwrap();
+                    let root_after = log.root(0).unwrap();
+            
+                    assert_eq!(root_before, root_after, "root must not change on freeze");
+            
+                    // Further appends to other algorithms don't change frozen root.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+                    for i in 5..10u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    let root_still = log.root(0).unwrap();
+                    assert_eq!(root_before, root_still, "frozen root must remain stable");
+        });
     }
 
     // ---- A-EQUIV-EML for non-power-of-two sizes ----
 
     #[test]
     fn a_equiv_non_power_of_two() {
-        // Test sizes that exercise the incomplete-tree fold path.
-        for size in [1, 3, 5, 7, 9, 11, 13, 15, 17, 19] {
-            let mut log = Log::new(MemoryStorage::new());
-            log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-            for i in 0..size as u8 {
-                log.append(&[i]).unwrap();
-            }
-
-            let incremental = log.root(0).unwrap();
-            let projected = log.project(0).unwrap();
-            let batch = batch_root(&Sha256Hasher, &projected);
-            assert_eq!(incremental, batch, "A-EQUIV failed at size {size}");
-        }
+        smol::block_on(async {
+                    // Test sizes that exercise the incomplete-tree fold path.
+                    for size in [1, 3, 5, 7, 9, 11, 13, 15, 17, 19] {
+                        let mut log = Log::new(MemoryStorage::new());
+                        log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                        for i in 0..size as u8 {
+                            log.append(&[i]).await.unwrap();
+                        }
+            
+                        let incremental = log.root(0).unwrap();
+                        let projected = log.project(0).await.unwrap();
+                        let batch = batch_root(&Sha256Hasher, &projected);
+                        assert_eq!(incremental, batch, "A-EQUIV failed at size {size}");
+                    }
+        });
     }
 
     // ---- I-SOUND-EML: inclusion proof soundness ----
 
     #[test]
     fn i_sound_single_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..12u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-
-        for idx in 0..12u64 {
-            let proof = log.inclusion_proof(0, idx).unwrap();
-            let leaf_hash = &projected[idx as usize];
-            assert!(
-                crate::proof::verify_inclusion(&Sha256Hasher, leaf_hash, &proof, &root),
-                "I-SOUND-EML failed at index {idx}"
-            );
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..12u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root = log.root(0).unwrap();
+                    let projected = log.project(0).await.unwrap();
+            
+                    for idx in 0..12u64 {
+                        let proof = log.inclusion_proof(0, idx).await.unwrap();
+                        let leaf_hash = &projected[idx as usize];
+                        assert!(
+                            crate::proof::verify_inclusion(&Sha256Hasher, leaf_hash, &proof, &root),
+                            "I-SOUND-EML failed at index {idx}"
+                        );
+                    }
+        });
     }
 
     #[test]
     fn i_sound_mid_stream_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Add alg 1 mid-stream.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 4..12u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Verify inclusion proofs for alg 1 (null prefix at 0..4, real at 4..12).
-        let root = log.root(1).unwrap();
-        let projected = log.project(1).unwrap();
-
-        for idx in 0..12u64 {
-            let proof = log.inclusion_proof(1, idx).unwrap();
-            let leaf_hash = &projected[idx as usize];
-            assert!(
-                crate::proof::verify_inclusion(&AltHasher, leaf_hash, &proof, &root),
-                "I-SOUND-EML (mid-stream) failed at index {idx}"
-            );
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Add alg 1 mid-stream.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 4..12u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Verify inclusion proofs for alg 1 (null prefix at 0..4, real at 4..12).
+                    let root = log.root(1).unwrap();
+                    let projected = log.project(1).await.unwrap();
+            
+                    for idx in 0..12u64 {
+                        let proof = log.inclusion_proof(1, idx).await.unwrap();
+                        let leaf_hash = &projected[idx as usize];
+                        assert!(
+                            crate::proof::verify_inclusion(&AltHasher, leaf_hash, &proof, &root),
+                            "I-SOUND-EML (mid-stream) failed at index {idx}"
+                        );
+                    }
+        });
     }
 
     // ---- K-SOUND-EML: consistency proof soundness ----
 
     #[test]
     fn k_sound_single_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        // Build up to size 8, checking consistency at each step.
-        let mut roots: Vec<Vec<u8>> = Vec::new();
-        for i in 0..8u8 {
-            log.append(&[i]).unwrap();
-            roots.push(log.root(0).unwrap());
-        }
-
-        let current_root = log.root(0).unwrap();
-
-        for old_size in 1..8u64 {
-            let proof = log.consistency_proof(0, old_size).unwrap();
-            let old_root = &roots[(old_size - 1) as usize];
-            assert!(
-                crate::proof::verify_consistency(&Sha256Hasher, &proof, old_root, &current_root),
-                "K-SOUND-EML failed for old_size={old_size}"
-            );
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    // Build up to size 8, checking consistency at each step.
+                    let mut roots: Vec<Vec<u8>> = Vec::new();
+                    for i in 0..8u8 {
+                        log.append(&[i]).await.unwrap();
+                        roots.push(log.root(0).unwrap());
+                    }
+            
+                    let current_root = log.root(0).unwrap();
+            
+                    for old_size in 1..8u64 {
+                        let proof = log.consistency_proof(0, old_size).await.unwrap();
+                        let old_root = &roots[(old_size - 1) as usize];
+                        assert!(
+                            crate::proof::verify_consistency(&Sha256Hasher, &proof, old_root, &current_root),
+                            "K-SOUND-EML failed for old_size={old_size}"
+                        );
+                    }
+        });
     }
 
     // ---- T-BOUND: proof-level temporal binding ----
 
     #[test]
     fn t_bound_inclusion_proof_at_null_position() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Add alg 1 at index 4 — indices 0..4 are null for alg 1.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root = log.root(1).unwrap();
-
-        // Get the inclusion proof at a null-prefix position.
-        let proof = log.inclusion_proof(1, 0).unwrap();
-
-        // The proof DOES verify with the null leaf hash (this is correct —
-        // the tree genuinely contains N₀ at position 0).
-        let null_leaf = AltHasher.null();
-        assert!(
-            crate::proof::verify_inclusion(&AltHasher, &null_leaf, &proof, &root),
-            "null leaf should verify at null position"
-        );
-
-        // But no real payload can produce a valid proof at that position.
-        // T-BOUND: ∄ d. verify_inclusion(leaf(a, d), proof, root) = true
-        for d in [b"any".as_slice(), b"data", b"", &[0], &[1], &[2], &[3]] {
-            let forged_leaf = AltHasher.leaf(d);
-            assert!(
-                !crate::proof::verify_inclusion(&AltHasher, &forged_leaf, &proof, &root),
-                "T-BOUND violated: real leaf verified at null position for data {:?}",
-                d
-            );
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Add alg 1 at index 4 — indices 0..4 are null for alg 1.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root = log.root(1).unwrap();
+            
+                    // Get the inclusion proof at a null-prefix position.
+                    let proof = log.inclusion_proof(1, 0).await.unwrap();
+            
+                    // The proof DOES verify with the null leaf hash (this is correct —
+                    // the tree genuinely contains N₀ at position 0).
+                    let null_leaf = AltHasher.null();
+                    assert!(
+                        crate::proof::verify_inclusion(&AltHasher, &null_leaf, &proof, &root),
+                        "null leaf should verify at null position"
+                    );
+            
+                    // But no real payload can produce a valid proof at that position.
+                    // T-BOUND: ∄ d. verify_inclusion(leaf(a, d), proof, root) = true
+                    for d in [b"any".as_slice(), b"data", b"", &[0], &[1], &[2], &[3]] {
+                        let forged_leaf = AltHasher.leaf(d);
+                        assert!(
+                            !crate::proof::verify_inclusion(&AltHasher, &forged_leaf, &proof, &root),
+                            "T-BOUND violated: real leaf verified at null position for data {:?}",
+                            d
+                        );
+                    }
+        });
     }
 
     // ---- Proof error cases ----
 
     #[test]
     fn inclusion_proof_out_of_bounds() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.append(b"data").unwrap();
-
-        let err = log.inclusion_proof(0, 1).unwrap_err();
-        assert_eq!(
-            err,
-            Error::IndexOutOfBounds {
-                index: 1,
-                tree_size: 1
-            }
-        );
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.append(b"data").await.unwrap();
+            
+                    let err = log.inclusion_proof(0, 1).await.unwrap_err();
+                    assert_eq!(
+                        err,
+                        Error::IndexOutOfBounds {
+                            index: 1,
+                            tree_size: 1
+                        }
+                    );
+        });
     }
 
     #[test]
     fn consistency_proof_bounds() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // old_size = 0 is invalid.
-        let err = log.consistency_proof(0, 0).unwrap_err();
-        assert_eq!(
-            err,
-            Error::IndexOutOfBounds {
-                index: 0,
-                tree_size: 4
-            }
-        );
-
-        // old_size >= tree_size is invalid.
-        let err = log.consistency_proof(0, 4).unwrap_err();
-        assert_eq!(
-            err,
-            Error::IndexOutOfBounds {
-                index: 4,
-                tree_size: 4
-            }
-        );
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // old_size = 0 is invalid.
+                    let err = log.consistency_proof(0, 0).await.unwrap_err();
+                    assert_eq!(
+                        err,
+                        Error::IndexOutOfBounds {
+                            index: 0,
+                            tree_size: 4
+                        }
+                    );
+            
+                    // old_size >= tree_size is invalid.
+                    let err = log.consistency_proof(0, 4).await.unwrap_err();
+                    assert_eq!(
+                        err,
+                        Error::IndexOutOfBounds {
+                            index: 4,
+                            tree_size: 4
+                        }
+                    );
+        });
     }
 
     // ---- EML Manifest (Definition 13) ----
 
     #[test]
     fn algorithms_returns_manifest_data() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Add alg 1, then freeze alg 0.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-        log.remove_algorithm(0).unwrap();
-
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let infos = log.algorithms();
-        assert_eq!(infos.len(), 2);
-
-        // Alg 0: frozen at index 4, activated at 0.
-        let a0 = infos.iter().find(|a| a.id == 0).unwrap();
-        assert_eq!(a0.activation_index, 0);
-        assert_eq!(a0.deactivation_index, Some(4));
-        assert_eq!(a0.tree_size, 4);
-        assert_eq!(a0.root, log.root(0).unwrap());
-
-        let expected_a0_serialized = serialize_epochs(&[(0, 4)]);
-        let expected_a0_hash = Sha256Hasher.hash(&expected_a0_serialized);
-        assert_eq!(a0.manifest_hash, expected_a0_hash);
-
-        // Alg 1: active, activated at 4.
-        let a1 = infos.iter().find(|a| a.id == 1).unwrap();
-        assert_eq!(a1.activation_index, 4);
-        assert_eq!(a1.deactivation_index, None);
-        assert_eq!(a1.tree_size, 8); // global tree size
-        assert_eq!(a1.root, log.root(1).unwrap());
-
-        let expected_a1_serialized = serialize_epochs(&[(4, u64::MAX)]);
-        let expected_a1_hash = AltHasher.hash(&expected_a1_serialized);
-        assert_eq!(a1.manifest_hash, expected_a1_hash);
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Add alg 1, then freeze alg 0.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+                    log.remove_algorithm(0).await.unwrap();
+            
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let infos = log.algorithms().await;
+                    assert_eq!(infos.len(), 2);
+            
+                    // Alg 0: frozen at index 4, activated at 0.
+                    let a0 = infos.iter().find(|a| a.id == 0).unwrap();
+                    assert_eq!(a0.activation_index, 0);
+                    assert_eq!(a0.deactivation_index, Some(4));
+                    assert_eq!(a0.tree_size, 4);
+                    assert_eq!(a0.root, log.root(0).unwrap());
+            
+                    let expected_a0_serialized = serialize_epochs(&[(0, 4)]);
+                    let expected_a0_hash = Sha256Hasher.hash(&expected_a0_serialized);
+                    assert_eq!(a0.manifest_hash, expected_a0_hash);
+            
+                    // Alg 1: active, activated at 4.
+                    let a1 = infos.iter().find(|a| a.id == 1).unwrap();
+                    assert_eq!(a1.activation_index, 4);
+                    assert_eq!(a1.deactivation_index, None);
+                    assert_eq!(a1.tree_size, 8); // global tree size
+                    assert_eq!(a1.root, log.root(1).unwrap());
+            
+                    let expected_a1_serialized = serialize_epochs(&[(4, u64::MAX)]);
+                    let expected_a1_hash = AltHasher.hash(&expected_a1_serialized);
+                    assert_eq!(a1.manifest_hash, expected_a1_hash);
+        });
     }
 
     // ====================================================================
@@ -1598,316 +1638,338 @@ mod tests {
 
     #[test]
     fn resume_basic_a_equiv() {
-        // Add alg 0 at genesis, append 4, freeze, append 4 more, resume, append 4.
-        // Alg 1 (keeper) stays active throughout to permit appends.
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-        for i in 8..12u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // A-EQUIV: incremental root must equal batch root.
-        let root = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-
-        let batch_root = crate::proof::mth(&Sha256Hasher, &projected);
-        assert_eq!(root, batch_root, "A-EQUIV violated after resume");
+        smol::block_on(async {
+                    // Add alg 0 at genesis, append 4, freeze, append 4 more, resume, append 4.
+                    // Alg 1 (keeper) stays active throughout to permit appends.
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.resume_algorithm(0).await.unwrap();
+                    for i in 8..12u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // A-EQUIV: incremental root must equal batch root.
+                    let root = log.root(0).unwrap();
+                    let projected = log.project(0).await.unwrap();
+            
+                    let batch_root = crate::proof::mth(&Sha256Hasher, &projected);
+                    assert_eq!(root, batch_root, "A-EQUIV violated after resume");
+        });
     }
 
     #[test]
     fn resume_a_stack_invariant() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 0..3u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-        for i in 3..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-        for i in 8..13u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // A-STACK: stack length == popcount(tree_size)
-        let ts = log.tree_size(0).unwrap();
-        let expected_len = ts.count_ones() as usize;
-        assert_eq!(
-            log.stack_len(0).unwrap(),
-            expected_len,
-            "A-STACK violated after resume: tree_size={ts}"
-        );
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 0..3u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+                    for i in 3..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.resume_algorithm(0).await.unwrap();
+                    for i in 8..13u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // A-STACK: stack length == popcount(tree_size)
+                    let ts = log.tree_size(0).await.unwrap();
+                    let expected_len = ts.count_ones() as usize;
+                    assert_eq!(
+                        log.stack_len(0).unwrap(),
+                        expected_len,
+                        "A-STACK violated after resume: tree_size={ts}"
+                    );
+        });
     }
 
     #[test]
     fn resume_error_active_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.append(b"a").unwrap();
-
-        let err = log.resume_algorithm(0).unwrap_err();
-        assert_eq!(err, Error::AlgorithmActive(0));
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.append(b"a").await.unwrap();
+            
+                    let err = log.resume_algorithm(0).await.unwrap_err();
+                    assert_eq!(err, Error::AlgorithmActive(0));
+        });
     }
 
     #[test]
     fn resume_error_unknown_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        let err = log.resume_algorithm(99).unwrap_err();
-        assert_eq!(err, Error::UnknownAlgorithm(99));
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    let err = log.resume_algorithm(99).await.unwrap_err();
+                    assert_eq!(err, Error::UnknownAlgorithm(99));
+        });
     }
 
     #[test]
     fn resume_inclusion_proof_soundness() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        // Epoch 1: leaves 0..4
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-
-        // Gap: leaves 4..8 (null for alg 0)
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-
-        // Epoch 2: leaves 8..12
-        for i in 8..12u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-
-        // I-SOUND: proofs verify for all active positions.
-        for &idx in &[0u64, 1, 2, 3, 8, 9, 10, 11] {
-            let proof = log.inclusion_proof(0, idx).unwrap();
-            assert!(
-                crate::verify_inclusion(&Sha256Hasher, &projected[idx as usize], &proof, &root),
-                "I-SOUND failed at active index {idx}"
-            );
-        }
-
-        // Null positions (4..8) also produce valid proofs (over null leaf).
-        for idx in 4..8u64 {
-            let proof = log.inclusion_proof(0, idx).unwrap();
-            assert!(
-                crate::verify_inclusion(&Sha256Hasher, &projected[idx as usize], &proof, &root),
-                "proof at null gap position {idx} failed"
-            );
-        }
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    // Epoch 1: leaves 0..4
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+            
+                    // Gap: leaves 4..8 (null for alg 0)
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.resume_algorithm(0).await.unwrap();
+            
+                    // Epoch 2: leaves 8..12
+                    for i in 8..12u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root = log.root(0).unwrap();
+                    let projected = log.project(0).await.unwrap();
+            
+                    // I-SOUND: proofs verify for all active positions.
+                    for &idx in &[0u64, 1, 2, 3, 8, 9, 10, 11] {
+                        let proof = log.inclusion_proof(0, idx).await.unwrap();
+                        assert!(
+                            crate::verify_inclusion(&Sha256Hasher, &projected[idx as usize], &proof, &root),
+                            "I-SOUND failed at active index {idx}"
+                        );
+                    }
+            
+                    // Null positions (4..8) also produce valid proofs (over null leaf).
+                    for idx in 4..8u64 {
+                        let proof = log.inclusion_proof(0, idx).await.unwrap();
+                        assert!(
+                            crate::verify_inclusion(&Sha256Hasher, &projected[idx as usize], &proof, &root),
+                            "proof at null gap position {idx} failed"
+                        );
+                    }
+        });
     }
 
     #[test]
     fn resume_consistency_proof_soundness() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        let root_at_4 = log.root(0).unwrap();
-
-        log.remove_algorithm(0).unwrap();
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-        for i in 8..12u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // K-SOUND: consistency from size 4 to current.
-        let proof = log.consistency_proof(0, 4).unwrap();
-        let root_now = log.root(0).unwrap();
-        assert!(
-            crate::verify_consistency(&Sha256Hasher, &proof, &root_at_4, &root_now),
-            "K-SOUND failed after resume"
-        );
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    let root_at_4 = log.root(0).unwrap();
+            
+                    log.remove_algorithm(0).await.unwrap();
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.resume_algorithm(0).await.unwrap();
+                    for i in 8..12u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // K-SOUND: consistency from size 4 to current.
+                    let proof = log.consistency_proof(0, 4).await.unwrap();
+                    let root_now = log.root(0).unwrap();
+                    assert!(
+                        crate::verify_consistency(&Sha256Hasher, &proof, &root_at_4, &root_now),
+                        "K-SOUND failed after resume"
+                    );
+        });
     }
 
     #[test]
     fn resume_consistency_across_gap() {
-        // Epoch 1: [0,4), gap: [4,8), epoch 2: [8,12).
-        // Test consistency for EVERY old_size 1..12, including mid-gap positions.
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-        for i in 8..12u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root_now = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-
-        for old_size in 1..12u64 {
-            let old_root = crate::proof::mth(&Sha256Hasher, &projected[..old_size as usize]);
-            let proof = log.consistency_proof(0, old_size).unwrap();
-            assert!(
-                crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &root_now),
-                "K-SOUND across gap failed for old_size={old_size}"
-            );
-        }
+        smol::block_on(async {
+                    // Epoch 1: [0,4), gap: [4,8), epoch 2: [8,12).
+                    // Test consistency for EVERY old_size 1..12, including mid-gap positions.
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.resume_algorithm(0).await.unwrap();
+                    for i in 8..12u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root_now = log.root(0).unwrap();
+                    let projected = log.project(0).await.unwrap();
+            
+                    for old_size in 1..12u64 {
+                        let old_root = crate::proof::mth(&Sha256Hasher, &projected[..old_size as usize]);
+                        let proof = log.consistency_proof(0, old_size).await.unwrap();
+                        assert!(
+                            crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &root_now),
+                            "K-SOUND across gap failed for old_size={old_size}"
+                        );
+                    }
+        });
     }
 
     #[test]
     fn resume_epochs_metadata() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-
-        let epochs = log.epochs(0).unwrap();
-        assert_eq!(epochs.len(), 2);
-        assert_eq!(epochs[0], (0, Some(4)));
-        assert_eq!(epochs[1], (8, None));
-
-        assert_eq!(log.activation_index(0).unwrap(), 0);
-        assert_eq!(log.deactivation_index(0).unwrap(), None); // currently active
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.resume_algorithm(0).await.unwrap();
+            
+                    let epochs = log.epochs(0).unwrap();
+                    assert_eq!(epochs.len(), 2);
+                    assert_eq!(epochs[0], (0, Some(4)));
+                    assert_eq!(epochs[1], (8, None));
+            
+                    assert_eq!(log.activation_index(0).unwrap(), 0);
+                    assert_eq!(log.deactivation_index(0).unwrap(), None); // currently active
+        });
     }
 
     #[test]
     fn resume_large_gap_o_log_g() {
-        // Stress test: gap of 2^16 = 65536 null leaves.
-        // With O(G) this would require 65536 iterations; with O(log G)
-        // via reconstruct_frontier it completes in ~16 subtree_root calls.
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        // Epoch 1: 8 active leaves.
-        for i in 0..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-
-        // Gap: 2^16 leaves appended while alg 0 is frozen.
-        // Need a second algorithm to accept appends.
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-        let gap_size: u64 = 1 << 16;
-        for i in 0..gap_size {
-            log.append(&(i as u32).to_le_bytes()).unwrap();
-        }
-
-        // Resume alg 0 across the large gap.
-        log.resume_algorithm(0).unwrap();
-
-        // Epoch 2: 4 more active leaves.
-        for i in 0..4u8 {
-            log.append(&[200 + i]).unwrap();
-        }
-
-        // A-EQUIV: root must match projection oracle.
-        let root = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-        let batch_root = crate::proof::mth(&Sha256Hasher, &projected);
-        assert_eq!(root, batch_root, "A-EQUIV violated after large-gap resume");
-
-        // A-STACK: stack length == popcount(tree_size).
-        let ts = log.tree_size(0).unwrap();
-        let expected_len = ts.count_ones() as usize;
-        assert_eq!(
-            log.stack_len(0).unwrap(),
-            expected_len,
-            "A-STACK violated after large-gap resume: tree_size={ts}"
-        );
+        smol::block_on(async {
+                    // Stress test: gap of 2^16 = 65536 null leaves.
+                    // With O(G) this would require 65536 iterations; with O(log G)
+                    // via reconstruct_frontier it completes in ~16 subtree_root calls.
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    // Epoch 1: 8 active leaves.
+                    for i in 0..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+            
+                    // Gap: 2^16 leaves appended while alg 0 is frozen.
+                    // Need a second algorithm to accept appends.
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+                    let gap_size: u64 = 1 << 16;
+                    for i in 0..gap_size {
+                        log.append(&(i as u32).to_le_bytes()).await.unwrap();
+                    }
+            
+                    // Resume alg 0 across the large gap.
+                    log.resume_algorithm(0).await.unwrap();
+            
+                    // Epoch 2: 4 more active leaves.
+                    for i in 0..4u8 {
+                        log.append(&[200 + i]).await.unwrap();
+                    }
+            
+                    // A-EQUIV: root must match projection oracle.
+                    let root = log.root(0).unwrap();
+                    let projected = log.project(0).await.unwrap();
+                    let batch_root = crate::proof::mth(&Sha256Hasher, &projected);
+                    assert_eq!(root, batch_root, "A-EQUIV violated after large-gap resume");
+            
+                    // A-STACK: stack length == popcount(tree_size).
+                    let ts = log.tree_size(0).await.unwrap();
+                    let expected_len = ts.count_ones() as usize;
+                    assert_eq!(
+                        log.stack_len(0).unwrap(),
+                        expected_len,
+                        "A-STACK violated after large-gap resume: tree_size={ts}"
+                    );
+        });
     }
 
     #[test]
     fn resume_immediate_no_gap() {
-        // Resume immediately after freeze (gap = 0).
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        let root_before = log.root(0).unwrap();
-        log.remove_algorithm(0).unwrap();
-        log.resume_algorithm(0).unwrap();
-
-        // Root should be unchanged — zero-gap fast-forward is identity.
-        let root_after = log.root(0).unwrap();
-        assert_eq!(root_before, root_after, "zero-gap resume changed root");
+        smol::block_on(async {
+                    // Resume immediately after freeze (gap = 0).
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    let root_before = log.root(0).unwrap();
+                    log.remove_algorithm(0).await.unwrap();
+                    log.resume_algorithm(0).await.unwrap();
+            
+                    // Root should be unchanged — zero-gap fast-forward is identity.
+                    let root_after = log.root(0).unwrap();
+                    assert_eq!(root_before, root_after, "zero-gap resume changed root");
+        });
     }
 
     #[test]
     fn resume_elide_multi_epoch() {
-        // Build a scenario with a gap in the middle.
-        // Epoch 1: [0, 4), gap: [4, 8), epoch 2: [8, 16).
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(AltHasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-        for i in 8..16u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let epochs = log.epochs(0).unwrap();
-        let root = log.root(0).unwrap();
-
-        // Proof for leaf in epoch 2 (index 10).
-        let full_proof = log.inclusion_proof(0, 10).unwrap();
-        let projected = log.project(0).unwrap();
-        assert!(crate::verify_inclusion(
-            &Sha256Hasher,
-            &projected[10],
-            &full_proof,
-            &root
-        ));
-
-        let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
-        let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
-        assert_eq!(rehydrated, full_proof, "multi-epoch elide roundtrip failed");
-        assert!(crate::verify_inclusion(
-            &Sha256Hasher,
-            &projected[10],
-            &rehydrated,
-            &root
-        ));
+        smol::block_on(async {
+                    // Build a scenario with a gap in the middle.
+                    // Epoch 1: [0, 4), gap: [4, 8), epoch 2: [8, 16).
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.resume_algorithm(0).await.unwrap();
+                    for i in 8..16u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let epochs = log.epochs(0).unwrap();
+                    let root = log.root(0).unwrap();
+            
+                    // Proof for leaf in epoch 2 (index 10).
+                    let full_proof = log.inclusion_proof(0, 10).await.unwrap();
+                    let projected = log.project(0).await.unwrap();
+                    assert!(crate::verify_inclusion(
+                        &Sha256Hasher,
+                        &projected[10],
+                        &full_proof,
+                        &root
+                    ));
+            
+                    let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
+                    let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
+                    assert_eq!(rehydrated, full_proof, "multi-epoch elide roundtrip failed");
+                    assert!(crate::verify_inclusion(
+                        &Sha256Hasher,
+                        &projected[10],
+                        &rehydrated,
+                        &root
+                    ));
+        });
     }
 
     // ====================================================================
@@ -1917,188 +1979,206 @@ mod tests {
     /// Round-trip: build a log, extract storage, reconstruct, verify roots match.
     #[test]
     fn from_storage_single_algorithm() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..20u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let original_root = log.root(0).unwrap();
-        let original_size = log.size();
-        let original_algos = log.algorithms();
-
-        let storage = log.into_storage();
-        let reconstructed = Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
-
-        assert_eq!(reconstructed.size(), original_size);
-        assert_eq!(reconstructed.root(0).unwrap(), original_root);
-        assert_eq!(reconstructed.algorithms(), original_algos);
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..20u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let original_root = log.root(0).unwrap();
+                    let original_size = log.size().await;
+                    let original_algos = log.algorithms().await;
+            
+                    let storage = log.into_storage();
+                    let reconstructed = Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).await.unwrap();
+            
+                    assert_eq!(reconstructed.size().await, original_size);
+                    assert_eq!(reconstructed.root(0).unwrap(), original_root);
+                    assert_eq!(reconstructed.algorithms().await, original_algos);
+        });
     }
 
     /// Multi-algorithm round-trip with one active and one frozen algorithm.
     #[test]
     fn from_storage_multi_algorithm_frozen_active() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..10u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        // Freeze algorithm 1.
-        log.remove_algorithm(1).unwrap();
-
-        for i in 10..20u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root0 = log.root(0).unwrap();
-        let root1 = log.root(1).unwrap();
-        let algos = log.algorithms();
-
-        let storage = log.into_storage();
-        let reconstructed = Log::from_storage(
-            storage,
-            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
-        )
-        .unwrap();
-
-        assert_eq!(reconstructed.root(0).unwrap(), root0);
-        assert_eq!(reconstructed.root(1).unwrap(), root1);
-        assert_eq!(reconstructed.algorithms(), algos);
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                    log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..10u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    // Freeze algorithm 1.
+                    log.remove_algorithm(1).await.unwrap();
+            
+                    for i in 10..20u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root0 = log.root(0).unwrap();
+                    let root1 = log.root(1).unwrap();
+                    let algos = log.algorithms().await;
+            
+                    let storage = log.into_storage();
+                    let reconstructed = Log::from_storage(
+                        storage,
+                        vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+                    )
+                    .await
+                    .unwrap();
+            
+                    assert_eq!(reconstructed.root(0).unwrap(), root0);
+                    assert_eq!(reconstructed.root(1).unwrap(), root1);
+                    assert_eq!(reconstructed.algorithms().await, algos);
+        });
     }
 
     /// Resume-after-gap round-trip: algorithm deactivated, gap grows, resumed.
     #[test]
     fn from_storage_resume_after_gap() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-
-        for i in 0..4u8 {
-            log.append(&[i]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-
-        // Add a second algorithm to keep appends going.
-        log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
-        for i in 4..8u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        log.resume_algorithm(0).unwrap();
-        for i in 8..16u8 {
-            log.append(&[i]).unwrap();
-        }
-
-        let root0 = log.root(0).unwrap();
-        let root1 = log.root(1).unwrap();
-        let algos = log.algorithms();
-
-        let storage = log.into_storage();
-        let reconstructed = Log::from_storage(
-            storage,
-            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
-        )
-        .unwrap();
-
-        assert_eq!(reconstructed.root(0).unwrap(), root0);
-        assert_eq!(reconstructed.root(1).unwrap(), root1);
-        assert_eq!(reconstructed.algorithms(), algos);
+        smol::block_on(async {
+                    let mut log = Log::new(MemoryStorage::new());
+                    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            
+                    for i in 0..4u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+                    log.remove_algorithm(0).await.unwrap();
+            
+                    // Add a second algorithm to keep appends going.
+                    log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+                    for i in 4..8u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    log.resume_algorithm(0).await.unwrap();
+                    for i in 8..16u8 {
+                        log.append(&[i]).await.unwrap();
+                    }
+            
+                    let root0 = log.root(0).unwrap();
+                    let root1 = log.root(1).unwrap();
+                    let algos = log.algorithms().await;
+            
+                    let storage = log.into_storage();
+                    let reconstructed = Log::from_storage(
+                        storage,
+                        vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+                    )
+                    .await
+                    .unwrap();
+            
+                    assert_eq!(reconstructed.root(0).unwrap(), root0);
+                    assert_eq!(reconstructed.root(1).unwrap(), root1);
+                    assert_eq!(reconstructed.algorithms().await, algos);
+        });
     }
 
     /// After reconstruction, continued appends must produce identical state
     /// as a log that was never interrupted.
     #[test]
     fn from_storage_continued_appends() {
-        // Build original log with 10 leaves.
-        let mut original = Log::new(MemoryStorage::new());
-        original.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        for i in 0..10u8 {
-            original.append(&[i]).unwrap();
-        }
+        smol::block_on(async {
+            // Build original log with 10 leaves.
+            let mut original = Log::new(MemoryStorage::new());
+            original.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            for i in 0..10u8 {
+                original.append(&[i]).await.unwrap();
+            }
 
-        // Reconstruct at leaf 10.
-        let storage = original.into_storage();
-        let mut reconstructed =
-            Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
+            // Reconstruct at leaf 10.
+            let storage = original.into_storage();
+            let mut reconstructed =
+                Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).await.unwrap();
 
-        // Build a reference log with the same 10 leaves.
-        let mut reference = Log::new(MemoryStorage::new());
-        reference.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        for i in 0..10u8 {
-            reference.append(&[i]).unwrap();
-        }
+            // Build a reference log with the same 10 leaves.
+            let mut reference = Log::new(MemoryStorage::new());
+            reference.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            for i in 0..10u8 {
+                reference.append(&[i]).await.unwrap();
+            }
 
-        // Append 10 more leaves to both.
-        for i in 10..20u8 {
-            reconstructed.append(&[i]).unwrap();
-            reference.append(&[i]).unwrap();
-        }
+            // Append 10 more leaves to both.
+            for i in 10..20u8 {
+                reconstructed.append(&[i]).await.unwrap();
+                reference.append(&[i]).await.unwrap();
+            }
 
-        assert_eq!(reconstructed.root(0).unwrap(), reference.root(0).unwrap());
-        assert_eq!(reconstructed.size(), reference.size());
+            assert_eq!(reconstructed.root(0).unwrap(), reference.root(0).unwrap());
+            assert_eq!(reconstructed.size().await, reference.size().await);
+        });
     }
 
     /// Error: metadata exists but no hasher provided.
     #[test]
     fn from_storage_error_orphaned_metadata() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.append(b"data").unwrap();
+        smol::block_on(async {
+            let mut log = Log::new(MemoryStorage::new());
+            log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            log.append(b"data").await.unwrap();
 
-        let storage = log.into_storage();
-        let result = Log::from_storage(storage, vec![]);
-        assert_eq!(result.unwrap_err(), Error::OrphanedMetadata(0));
+            let storage = log.into_storage();
+            let result = Log::from_storage(storage, vec![]).await;
+            assert_eq!(result.unwrap_err(), Error::OrphanedMetadata(0));
+        });
     }
 
     /// Error: hasher provided for non-existent algorithm.
     #[test]
     fn from_storage_error_unknown_metadata() {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-        log.append(b"data").unwrap();
+        smol::block_on(async {
+            let mut log = Log::new(MemoryStorage::new());
+            log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+            log.append(b"data").await.unwrap();
 
-        let storage = log.into_storage();
-        let result = Log::from_storage(
-            storage,
-            vec![(0, Box::new(Sha256Hasher)), (99, Box::new(Sha256Hasher))],
-        );
-        assert_eq!(result.unwrap_err(), Error::UnknownMetadata(99));
+            let storage = log.into_storage();
+            let result = Log::from_storage(
+                storage,
+                vec![(0, Box::new(Sha256Hasher)), (99, Box::new(Sha256Hasher))],
+            ).await;
+            assert_eq!(result.unwrap_err(), Error::UnknownMetadata(99));
+        });
     }
 
     /// Edge case: reconstruction of an empty log with no algorithms.
     #[test]
     fn from_storage_empty_log() {
-        let log = Log::new(MemoryStorage::new());
-        let storage = log.into_storage();
-        let reconstructed = Log::<MemoryStorage>::from_storage(storage, vec![]).unwrap();
-        assert_eq!(reconstructed.size(), 0);
-        assert!(reconstructed.algorithms().is_empty());
+        smol::block_on(async {
+            let log = Log::new(MemoryStorage::new());
+            let storage = log.into_storage();
+            let reconstructed = Log::<MemoryStorage>::from_storage(storage, vec![]).await.unwrap();
+            assert_eq!(reconstructed.size().await, 0);
+            assert!(reconstructed.algorithms().await.is_empty());
+        });
     }
 
     /// Various tree sizes to exercise different bit patterns in frontier
     /// reconstruction (powers of two, odd sizes, etc.).
     #[test]
     fn from_storage_various_sizes() {
-        for n in [1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 33, 63, 64, 100] {
-            let mut log = Log::new(MemoryStorage::new());
-            log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-            for i in 0..n {
-                log.append(&(i as u64).to_le_bytes()).unwrap();
-            }
-
-            let original_root = log.root(0).unwrap();
-            let storage = log.into_storage();
-            let reconstructed =
-                Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
-
-            assert_eq!(
-                reconstructed.root(0).unwrap(),
-                original_root,
-                "root mismatch for n={n}"
-            );
-        }
+        smol::block_on(async {
+                    for n in [1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 33, 63, 64, 100] {
+                        let mut log = Log::new(MemoryStorage::new());
+                        log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                        for i in 0..n {
+                            log.append(&(i as u64).to_le_bytes()).await.unwrap();
+                        }
+            
+                        let original_root = log.root(0).unwrap();
+                        let storage = log.into_storage();
+                        let reconstructed =
+                            Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).await.unwrap();
+            
+                        assert_eq!(
+                            reconstructed.root(0).unwrap(),
+                            original_root,
+                            "root mismatch for n={n}"
+                        );
+                    }
+        });
     }
 }
