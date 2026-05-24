@@ -207,9 +207,9 @@ fn complexity_add_algorithm_log_k() {
     assert_rank_at_most(data, 999, "add_algorithm", "O(log K)");
 }
 
-/// Algorithm resumption must be O(G) where G is the gap size.
+/// Algorithm resumption must be O(log n) where n is the tree size.
 #[test]
-fn complexity_resume_algorithm_linear_gap() {
+fn complexity_resume_algorithm_log_n() {
     let gaps: &[usize] = &[100, 500, 1_000, 2_000, 5_000, 10_000, 20_000];
     let base_size = 100;
     let trials = 21;
@@ -237,7 +237,6 @@ fn complexity_resume_algorithm_linear_gap() {
         data.push((g as f64, median(&mut times) as f64));
     }
 
-    // O(G) rank=1000. Allow up to O(n log n) (rank 1130) or slightly higher (1200)
-    // for minor scheduling noise.
-    assert_rank_at_most(data, 1200, "resume_algorithm", "O(G)");
+    // O(log n). Allow up to sub-linear (rank < 999).
+    assert_rank_at_most(data, 999, "resume_algorithm", "O(log n)");
 }
