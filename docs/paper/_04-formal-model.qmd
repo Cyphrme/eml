@@ -37,7 +37,7 @@ The null constant table $\{N_0(a), \ldots, N_H(a)\}$ is precomputable in $\mathc
 :::
 
 ::: {#def-activation-map}
-**Definition 5** (Activation Map). An activation map is a partial function $\text{act}: \textit{Alg} \rightharpoonup \text{Vec}\langle(\mathbb{N}, \mathbb{N} \cup \{\infty\})\rangle$ mapping each algorithm to disjoint chronological epochs. Algorithm $a$ is active at index $i$, written $\text{active}(a, i)$, iff $\exists (s_k, e_k) \in \text{act}(a)$ such that $s_k \leq i < e_k$.
+**Definition 5** (Activation Map). An activation map is a partial function $\text{act}: \textit{Alg} \rightharpoonup \text{Vec}\langle[\mathbb{N}, \mathbb{N} \cup \{\infty\})\rangle$ mapping each algorithm to disjoint chronological epochs. Algorithm $a$ is active at index $i$, written $\text{active}(a, i)$, iff $\exists [s_k, e_k) \in \text{act}(a)$ such that $s_k \leq i < e_k$.
 :::
 
 ::: {#def-leaf-value}
@@ -65,10 +65,10 @@ where $H_a(\text{act}(a))$ is the cryptographic digest of $a$'s activation map. 
 
 ### Generalized Shift-Reduce Duality
 
-We demonstrate that the structural compatibility of EML with standard log operations is not an ad-hoc bitwise artifact of standard binary configurations. Rather, it is a manifestation of a deeper combinatorial property: a generalized shift-reduce duality that holds for any append-consistent tree layout. By formalizing this equivalence over generalized split policies and merge schedules, we establish that structural correctness is a universal invariant of topological tree decompositions.
+We demonstrate that the structural compatibility of EML with standard log operations is not an ad-hoc bitwise artifact of standard binary configurations. Rather, it is a manifestation of a deeper combinatorial property: a generalized shift-reduce duality that holds for right-leaning, left-decomposing append-consistent tree layouts. By formalizing this equivalence over generalized split policies and merge schedules, we establish that structural correctness is a universal invariant of right-leaning tree decompositions.
 
 ::: {#def-generalized-duality}
-**Definition 10** (Generalized Duality & Append-Consistency). A split policy $f: \mathbb{N} \to \mathbb{N}$ satisfies $0 < f(n) < n$ for all $n > 1$. A merge schedule $s: \mathbb{N} \to \mathbb{N}$ indicates stack reductions at step $n$. Let $\text{forestSizes}(f, n)$ define the forest layout in the stack at size $n$: $[]$ if $n=0$, $[1]$ if $n=1$, and $\text{forestSizes}(f, n - k) \mathbin{+\!\!+} [k]$ if $n>1, k = f(n)$. The pair $(f, s)$ is *append-consistent* iff for all $n$: $\text{forestSizes}(f, n+1) = (1 + \sum \text{take}(c, S_n)) \mathbin{::} \text{drop}(c, S_n)$ (where $c = s(n)$ and $S_n = \text{forestSizes}(f, n)$), and for all $i < c$, the split point of the merged subtree matches the policy: $f(1 + \sum \text{take}(i+1, S_n)) = S_n[i]$.
+**Definition 10** (Generalized Duality & Append-Consistency). A split policy $f: \mathbb{N} \to \mathbb{N}$ satisfies $0 < f(n) < n$ for all $n > 1$. A merge schedule $s: \mathbb{N} \to \mathbb{N}$ indicates stack reductions at step $n$. Let $\text{forestSizes}(f, n)$ define the right-leaning forest layout in the stack at size $n$: $[]$ if $n=0$, $[1]$ if $n=1$, and $\text{forestSizes}(f, n - k) \mathbin{+\!\!+} [k]$ if $n>1, k = f(n)$. The pair $(f, s)$ is *append-consistent* iff for all $n$: $\text{forestSizes}(f, n+1) = (1 + \sum \text{take}(c, S_n)) \mathbin{::} \text{drop}(c, S_n)$ (where $c = s(n)$ and $S_n = \text{forestSizes}(f, n)$), and for all $i < c$, the split point of the merged subtree matches the policy: $f(1 + \sum \text{take}(i+1, S_n)) = S_n[i]$.
 :::
 
 ### Theorems
@@ -91,7 +91,7 @@ The following theorems are machine-checked in Lean4.
 **Theorem 3** (Temporal Binding). For any algorithm $a$ and inactive position $i < \text{tree\_size}(a)$, there is no payload $d \in \textit{Bytes}$ such that $V(a, i) = \text{leaf}(a, d)$.
 :::
 
-*Proof.* Follows directly from domain separation tag independence: $N_0(a) = H_a(\mathtt{0x02})$ and $\text{leaf}(a, d) = H_a(\mathtt{0x00} \concat d)$ occupy disjoint input domains. Finding a collision under the Random Oracle Model reduces to breaking preimage resistance of $H_a$. Mechanized in Lean 4 as `Ne.symm (domain_separation d)`. $\square$
+*Proof.* In the formal model, this is checked via the structural domain separation axiom `nullLeaf ≠ leafHash d` (representing $N_0(a) \neq \text{leaf}(a, d)$). In the physical implementation, this structural disjointness maps to a *computational hardness assumption under the Random Oracle Model (ROM)*. Since the inputs to the hash function $H_a$ are prefixed with distinct domain separation tags ($\mathtt{0x02}$ for the null constant and $\mathtt{0x00}$ for leaf data), finding a payload $d$ that violates this inequality is equivalent to finding a hash collision between different domain prefixes. Under the ROM, the probability of an adversary finding such a collision or preimage is negligible, bounding the security of the temporal witness to the hash function's cryptographic strength. Mechanized in Lean 4 as `Ne.symm (domain_separation d)`. $\square$
 
 ::: {#thm-algorithm-isolation}
 **Theorem 4** (Algorithm Isolation). Projections for different algorithms $a$ and $b$ operating on the same log are structurally independent: $\text{root}(a) = \text{mthDigest}(\pi_a(S)) \wedge \text{root}(b) = \text{mthDigest}(\pi_b(S))$.
@@ -100,12 +100,12 @@ The following theorems are machine-checked in Lean4.
 *Proof.* Each conjunct reduces to an instance of Theorem 2. Mechanized in Lean 4 as `⟨bridge_lemma _, bridge_lemma _⟩`. Because neither conjunct references the other's epochs or hashing primitives, algorithm transitions cannot degrade the security guarantees of other projections. $\square$
 
 ::: {#thm-generalized-bridge}
-**Theorem 5** (Generalized Bridge Lemma). For any split policy $f$ and merge schedule $s$ that are `AppendConsistent` (Definition 10), the generalized incremental stack machine equals the generalized batch tree: $\text{generalized\_ctoRoot}(s, \ell) = \text{generalized\_mth}(f, \ell)$.
+**Theorem 5** (Generalized Bridge Lemma). For any split policy $f$ and merge schedule $s$ that are `AppendConsistent` (Definition 10), the generalized incremental stack machine equals the generalized right-leaning batch tree: $\text{generalized\_ctoRoot}(s, \ell) = \text{generalized\_mth}(f, \ell)$.
 :::
 
 *Proof sketch.* Proved by showing that the compatibility relation `AppendConsistent` transitions stack sizes coherently under $s(n)$ merges, and that folding the forest top-to-bottom combines subtrees in the exact bisection order mandated by policy $f$. Proved purely combinatorially in `Duality.lean` (`generalized_bridge_lemma`). The linear split policy ($f(n) = 1$) and trivial schedule ($s(n) = 0$) are proven compatible in `Instantiation.lean` (representing a simple right-leaning hash chain), verifying that the generalized framework admits concrete instances without cryptographic axioms. $\square$
 
-The operational significance of Theorem 5 cannot be overstated: it demonstrates that algorithm-independent log agility is a universal structural property of append-consistent tree decompositions. By decoupling split policies from concrete carry masks, the PML paradigm provides a blueprint for formalizing lifecycle transformations across alternative data structures—including Sparse Merkle Trees and Merkle Patricia Tries—guaranteeing that structural correctness can be checked independently of any cryptographic mechanism.
+The operational significance of Theorem 5 cannot be overstated: it demonstrates that algorithm-independent log agility is a universal structural property of right-leaning, left-decomposing append-consistent tree topologies. By decoupling split policies from concrete carry masks, the PML paradigm provides a blueprint for formalizing lifecycle transformations across alternative data structures that utilize left-to-right append-only layouts—including right-leaning Sparse Merkle Trees and Merkle Patricia Tries—guaranteeing that structural correctness can be checked independently of any cryptographic mechanism.
 
 ### Corollaries & Proof Artifact
 
