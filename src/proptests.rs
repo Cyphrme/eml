@@ -30,22 +30,22 @@ fn mth_for(alg_id: u64, leaves: &[Vec<u8>]) -> Vec<u8> {
 ///
 /// When `activation > 0`, a bootstrap algorithm (id=99) is active from
 /// genesis so the log can accept appends before the test algorithm activates.
-fn build_log(size: usize, activation: usize) -> Log<MemoryStorage> {
+async fn build_log(size: usize, activation: usize) -> Log<MemoryStorage> {
     let mut log = Log::new(MemoryStorage::new());
 
     if activation == 0 {
         // Algorithm under test is active from genesis.
-        log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
     } else {
         // Bootstrap: need something active for pre-activation appends.
-        log.add_algorithm(99, Box::new(Sha256Hasher)).unwrap();
+        log.add_algorithm(99, Box::new(Sha256Hasher)).await.unwrap();
     }
 
     for i in 0..size {
         if i == activation && activation > 0 {
-            log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+            log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
         }
-        log.append(&[i as u8]).unwrap();
+        log.append(&[i as u8]).await.unwrap();
     }
 
     log
@@ -60,17 +60,20 @@ proptest! {
 
     #[test]
     fn a_equiv_eml(size in 1usize..128, act_frac in 0.0f64..1.0) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let incremental = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-        let batch = proof::mth(&Sha256Hasher, &projected);
+            let incremental = log.root(0).unwrap();
+            let projected = log.project(0).await.unwrap();
+            let batch = proof::mth(&Sha256Hasher, &projected);
 
-        prop_assert!(
-            incremental == batch,
-            "A-EQUIV-EML failed: size={}, activation={}", size, activation
-        );
+            prop_assert!(
+                incremental == batch,
+                "A-EQUIV-EML failed: size={}, activation={}", size, activation
+            );
+            Ok(())
+        })?;
     }
 }
 
@@ -86,18 +89,21 @@ proptest! {
     /// the O(n) oracle world and the O(log n) stored-node world.
     #[test]
     fn subtree_root_equiv(size in 1usize..128, act_frac in 0.0f64..1.0) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let ts = log.tree_size(0).unwrap();
-        let root = log.root(0).unwrap();
-        let subtree = log.test_subtree_root(0, 0, ts).unwrap();
+            let ts = log.tree_size(0).await.unwrap();
+            let root = log.root(0).unwrap();
+            let subtree = log.test_subtree_root(0, 0, ts).await.unwrap();
 
-        prop_assert!(
-            subtree == root,
-            "subtree_root(0, {}) != root: size={}, activation={}",
-            ts, size, activation
-        );
+            prop_assert!(
+                subtree == root,
+                "subtree_root(0, {}) != root: size={}, activation={}",
+                ts, size, activation
+            );
+            Ok(())
+        })?;
     }
 }
 
@@ -110,23 +116,26 @@ proptest! {
 
     #[test]
     fn a_stack_eml(size in 1usize..128) {
-        let log = build_log(size, 0);
+        smol::block_on(async {
+            let log = build_log(size, 0).await;
 
-        // A-EQUIV is the structural consequence of correct stack operations.
-        // If the frontier stack had the wrong number of peaks (not popcount(n)),
-        // the fold would produce a wrong root. So A-EQUIV at every size is a
-        // sufficient indirect check of A-STACK.
-        let incremental = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-        let batch = proof::mth(&Sha256Hasher, &projected);
+            // A-EQUIV is the structural consequence of correct stack operations.
+            // If the frontier stack had the wrong number of peaks (not popcount(n)),
+            // the fold would produce a wrong root. So A-EQUIV at every size is a
+            // sufficient indirect check of A-STACK.
+            let incremental = log.root(0).unwrap();
+            let projected = log.project(0).await.unwrap();
+            let batch = proof::mth(&Sha256Hasher, &projected);
 
-        prop_assert!(
-            incremental == batch,
-            "A-STACK (via A-EQUIV) violated at size={}", size
-        );
+            prop_assert!(
+                incremental == batch,
+                "A-STACK (via A-EQUIV) violated at size={}", size
+            );
 
-        let ts = log.tree_size(0).unwrap();
-        prop_assert!(ts == size as u64, "tree_size mismatch at size={}", size);
+            let ts = log.tree_size(0).await.unwrap();
+            prop_assert!(ts == size as u64, "tree_size mismatch at size={}", size);
+            Ok(())
+        })?;
     }
 }
 
@@ -143,28 +152,31 @@ proptest! {
         act_frac in 0.0f64..1.0,
         idx_frac in 0.0f64..1.0,
     ) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let ts = log.tree_size(0).unwrap() as usize;
-        if ts == 0 { return Ok(()); }
-        let index = ((idx_frac * ts as f64) as usize).min(ts - 1);
+            let ts = log.tree_size(0).await.unwrap() as usize;
+            if ts == 0 { return Ok(()); }
+            let index = ((idx_frac * ts as f64) as usize).min(ts - 1);
 
-        let root = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-        let proof = log.inclusion_proof(0, index as u64).unwrap();
+            let root = log.root(0).unwrap();
+            let projected = log.project(0).await.unwrap();
+            let proof = log.inclusion_proof(0, index as u64).await.unwrap();
 
-        prop_assert!(
-            crate::verify_inclusion(&Sha256Hasher, &projected[index], &proof, &root),
-            "I-SOUND-EML failed: size={}, activation={}, index={}", size, activation, index
-        );
+            prop_assert!(
+                crate::verify_inclusion(&Sha256Hasher, &projected[index], &proof, &root),
+                "I-SOUND-EML failed: size={}, activation={}, index={}", size, activation, index
+            );
 
-        // Wrong leaf must NOT verify (soundness, not just completeness).
-        let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA_FOR_PROPTEST");
-        prop_assert!(
-            !crate::verify_inclusion(&Sha256Hasher, &wrong, &proof, &root),
-            "I-SOUND-EML false positive: size={}, activation={}, index={}", size, activation, index
-        );
+            // Wrong leaf must NOT verify (soundness, not just completeness).
+            let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA_FOR_PROPTEST");
+            prop_assert!(
+                !crate::verify_inclusion(&Sha256Hasher, &wrong, &proof, &root),
+                "I-SOUND-EML false positive: size={}, activation={}, index={}", size, activation, index
+            );
+            Ok(())
+        })?;
     }
 }
 
@@ -180,24 +192,27 @@ proptest! {
         size in 3usize..64,
         old_frac in 0.0f64..1.0,
     ) {
-        // Algorithm active from genesis for simplicity.
-        let log = build_log(size, 0);
+        smol::block_on(async {
+            // Algorithm active from genesis for simplicity.
+            let log = build_log(size, 0).await;
 
-        let ts = log.tree_size(0).unwrap();
-        // old_size ∈ [1, ts-1].
-        let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
+            let ts = log.tree_size(0).await.unwrap();
+            // old_size ∈ [1, ts-1].
+            let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
 
-        // Compute old_root by building a separate log of old_size leaves.
-        let old_log = build_log(old_size as usize, 0);
-        let old_root = old_log.root(0).unwrap();
-        let new_root = log.root(0).unwrap();
+            // Compute old_root by building a separate log of old_size leaves.
+            let old_log = build_log(old_size as usize, 0).await;
+            let old_root = old_log.root(0).unwrap();
+            let new_root = log.root(0).unwrap();
 
-        let proof = log.consistency_proof(0, old_size).unwrap();
+            let proof = log.consistency_proof(0, old_size).await.unwrap();
 
-        prop_assert!(
-            crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
-            "K-SOUND-EML failed: size={}, old_size={}", size, old_size
-        );
+            prop_assert!(
+                crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
+                "K-SOUND-EML failed: size={}, old_size={}", size, old_size
+            );
+            Ok(())
+        })?;
     }
 
     /// K-SOUND with activation offset: consistency proofs must verify when
@@ -208,25 +223,28 @@ proptest! {
         act_frac in 0.01f64..0.99,
         old_frac in 0.0f64..1.0,
     ) {
-        let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let ts = log.tree_size(0).unwrap();
-        if ts < 2 { return Ok(()); }
-        let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
+            let ts = log.tree_size(0).await.unwrap();
+            if ts < 2 { return Ok(()); }
+            let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
 
-        // Compute old_root from the projection oracle.
-        let projected = log.project(0).unwrap();
-        let old_root = proof::mth(&Sha256Hasher, &projected[..old_size as usize]);
-        let new_root = log.root(0).unwrap();
+            // Compute old_root from the projection oracle.
+            let projected = log.project(0).await.unwrap();
+            let old_root = proof::mth(&Sha256Hasher, &projected[..old_size as usize]);
+            let new_root = log.root(0).unwrap();
 
-        let proof = log.consistency_proof(0, old_size).unwrap();
+            let proof = log.consistency_proof(0, old_size).await.unwrap();
 
-        prop_assert!(
-            crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
-            "K-SOUND-ACTIVATION failed: size={}, activation={}, old_size={}",
-            size, activation, old_size
-        );
+            prop_assert!(
+                crate::verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
+                "K-SOUND-ACTIVATION failed: size={}, activation={}, old_size={}",
+                size, activation, old_size
+            );
+            Ok(())
+        })?;
     }
 }
 
@@ -243,25 +261,28 @@ proptest! {
         act_frac in 0.01f64..1.0,  // activation > 0 to ensure null prefix exists
         payload in proptest::collection::vec(any::<u8>(), 1..32),
     ) {
-        let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let root = log.root(0).unwrap();
+            let root = log.root(0).unwrap();
 
-        // Pick a null-prefix position (index < activation).
-        let null_idx = activation.saturating_sub(1);
+            // Pick a null-prefix position (index < activation).
+            let null_idx = activation.saturating_sub(1);
 
-        // Forge a leaf hash from arbitrary payload.
-        let forged = Sha256Hasher.leaf(&payload);
+            // Forge a leaf hash from arbitrary payload.
+            let forged = Sha256Hasher.leaf(&payload);
 
-        let proof = log.inclusion_proof(0, null_idx as u64).unwrap();
+            let proof = log.inclusion_proof(0, null_idx as u64).await.unwrap();
 
-        // Forged leaf at a null position must NOT verify.
-        prop_assert!(
-            !crate::verify_inclusion(&Sha256Hasher, &forged, &proof, &root),
-            "T-BOUND violated: forged leaf at null position {}, activation={}, size={}",
-            null_idx, activation, size
-        );
+            // Forged leaf at a null position must NOT verify.
+            prop_assert!(
+                !crate::verify_inclusion(&Sha256Hasher, &forged, &proof, &root),
+                "T-BOUND violated: forged leaf at null position {}, activation={}, size={}",
+                null_idx, activation, size
+            );
+            Ok(())
+        })?;
     }
 }
 
@@ -304,45 +325,48 @@ proptest! {
         act_frac in 0.01f64..0.99,
         idx_frac in 0.0f64..1.0,
     ) {
-        let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let ts = log.tree_size(0).unwrap() as usize;
-        if ts == 0 { return Ok(()); }
+            let ts = log.tree_size(0).await.unwrap() as usize;
+            if ts == 0 { return Ok(()); }
 
-        // Pick an index in the active range (>= activation).
-        let active_range = ts.saturating_sub(activation);
-        if active_range == 0 { return Ok(()); }
-        let index = activation + ((idx_frac * active_range as f64) as usize).min(active_range - 1);
+            // Pick an index in the active range (>= activation).
+            let active_range = ts.saturating_sub(activation);
+            if active_range == 0 { return Ok(()); }
+            let index = activation + ((idx_frac * active_range as f64) as usize).min(active_range - 1);
 
-        let root = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
-        let full_proof = log.inclusion_proof(0, index as u64).unwrap();
+            let root = log.root(0).unwrap();
+            let projected = log.project(0).await.unwrap();
+            let full_proof = log.inclusion_proof(0, index as u64).await.unwrap();
 
-        // Sanity: full proof verifies.
-        prop_assert!(
-            crate::verify_inclusion(&Sha256Hasher, &projected[index], &full_proof, &root),
-            "full proof failed before elision: size={}, activation={}, index={}",
-            size, activation, index
-        );
+            // Sanity: full proof verifies.
+            prop_assert!(
+                crate::verify_inclusion(&Sha256Hasher, &projected[index], &full_proof, &root),
+                "full proof failed before elision: size={}, activation={}, index={}",
+                size, activation, index
+            );
 
-        // Elide → rehydrate.
-        let elided = crate::elide_inclusion_proof(&full_proof, &[(activation as u64, None)]);
-        let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
+            // Elide → rehydrate.
+            let elided = crate::elide_inclusion_proof(&full_proof, &[(activation as u64, None)]);
+            let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
 
-        // Rehydrated must equal original.
-        prop_assert!(
-            rehydrated == full_proof,
-            "elide roundtrip mismatch: size={}, activation={}, index={}",
-            size, activation, index
-        );
+            // Rehydrated must equal original.
+            prop_assert!(
+                rehydrated == full_proof,
+                "elide roundtrip mismatch: size={}, activation={}, index={}",
+                size, activation, index
+            );
 
-        // And verify.
-        prop_assert!(
-            crate::verify_inclusion(&Sha256Hasher, &projected[index], &rehydrated, &root),
-            "rehydrated proof failed: size={}, activation={}, index={}",
-            size, activation, index
-        );
+            // And verify.
+            prop_assert!(
+                crate::verify_inclusion(&Sha256Hasher, &projected[index], &rehydrated, &root),
+                "rehydrated proof failed: size={}, activation={}, index={}",
+                size, activation, index
+            );
+            Ok(())
+        })?;
     }
 }
 
@@ -355,44 +379,47 @@ proptest! {
 
     #[test]
     fn proj_valid(size in 1usize..128, act_frac in 0.0f64..1.0) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let projected = log.project(0).unwrap();
-        let ts = log.tree_size(0).unwrap() as usize;
+            let projected = log.project(0).await.unwrap();
+            let ts = log.tree_size(0).await.unwrap() as usize;
 
-        // Projected sequence length must equal tree_size.
-        prop_assert!(
-            projected.len() == ts,
-            "PROJ-VALID: projected length {} != tree_size {}", projected.len(), ts
-        );
+            // Projected sequence length must equal tree_size.
+            prop_assert!(
+                projected.len() == ts,
+                "PROJ-VALID: projected length {} != tree_size {}", projected.len(), ts
+            );
 
-        // Batch root over projection must match incremental root.
-        let batch = proof::mth(&Sha256Hasher, &projected);
-        let incremental = log.root(0).unwrap();
-        prop_assert!(
-            batch == incremental,
-            "PROJ-VALID: batch root != incremental at size={}, activation={}", size, activation
-        );
+            // Batch root over projection must match incremental root.
+            let batch = proof::mth(&Sha256Hasher, &projected);
+            let incremental = log.root(0).unwrap();
+            prop_assert!(
+                batch == incremental,
+                "PROJ-VALID: batch root != incremental at size={}, activation={}", size, activation
+            );
 
-        // Every leaf in the projection must be either a real leaf hash or null.
-        let null_leaf = Sha256Hasher.null();
-        for (i, leaf_hash) in projected.iter().enumerate() {
-            if i < activation {
-                // Pre-activation: must be null.
-                prop_assert!(
-                    leaf_hash == &null_leaf,
-                    "PROJ-VALID: position {} should be null (activation={})", i, activation
-                );
-            } else {
-                // Post-activation: must be real leaf hash.
-                let expected = Sha256Hasher.leaf(&[i as u8]);
-                prop_assert!(
-                    leaf_hash == &expected,
-                    "PROJ-VALID: position {} should be real leaf (activation={})", i, activation
-                );
+            // Every leaf in the projection must be either a real leaf hash or null.
+            let null_leaf = Sha256Hasher.null();
+            for (i, leaf_hash) in projected.iter().enumerate() {
+                if i < activation {
+                    // Pre-activation: must be null.
+                    prop_assert!(
+                        leaf_hash == &null_leaf,
+                        "PROJ-VALID: position {} should be null (activation={})", i, activation
+                    );
+                } else {
+                    // Post-activation: must be real leaf hash.
+                    let expected = Sha256Hasher.leaf(&[i as u8]);
+                    prop_assert!(
+                        leaf_hash == &expected,
+                        "PROJ-VALID: position {} should be real leaf (activation={})", i, activation
+                    );
+                }
             }
-        }
+            Ok(())
+        })?;
     }
 }
 
@@ -405,38 +432,41 @@ proptest! {
 
     #[test]
     fn cr_manifest_consistency(size in 1usize..64, act_frac in 0.0f64..1.0) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let infos = log.algorithms();
+            let infos = log.algorithms().await;
 
-        // When activation > 0, there's a bootstrap algorithm (99) + test algorithm (0).
-        if activation == 0 {
-            prop_assert!(infos.len() == 1, "expected 1 algorithm, got {}", infos.len());
-        } else {
-            prop_assert!(infos.len() == 2, "expected 2 algorithms, got {}", infos.len());
-        }
+            // When activation > 0, there's a bootstrap algorithm (99) + test algorithm (0).
+            if activation == 0 {
+                prop_assert!(infos.len() == 1, "expected 1 algorithm, got {}", infos.len());
+            } else {
+                prop_assert!(infos.len() == 2, "expected 2 algorithms, got {}", infos.len());
+            }
 
-        // Validate each algorithm's manifest entry.
-        for info in &infos {
-            let expected_root = log.root(info.id).unwrap();
-            let expected_ts = log.tree_size(info.id).unwrap();
-            let expected_act = log.activation_index(info.id).unwrap();
-            let expected_deact = log.deactivation_index(info.id).unwrap();
+            // Validate each algorithm's manifest entry.
+            for info in &infos {
+                let expected_root = log.root(info.id).unwrap();
+                let expected_ts = log.tree_size(info.id).await.unwrap();
+                let expected_act = log.activation_index(info.id).unwrap();
+                let expected_deact = log.deactivation_index(info.id).unwrap();
 
-            prop_assert!(info.root == expected_root, "manifest root mismatch");
-            prop_assert!(info.tree_size == expected_ts, "manifest tree_size mismatch");
-            prop_assert!(info.activation_index == expected_act, "manifest activation mismatch");
-            prop_assert!(info.deactivation_index == expected_deact, "manifest deactivation mismatch");
+                prop_assert!(info.root == expected_root, "manifest root mismatch");
+                prop_assert!(info.tree_size == expected_ts, "manifest tree_size mismatch");
+                prop_assert!(info.activation_index == expected_act, "manifest activation mismatch");
+                prop_assert!(info.deactivation_index == expected_deact, "manifest deactivation mismatch");
 
-            let db_epochs: Vec<(u64, u64)> = info.epochs
-                .iter()
-                .map(|&(s, e)| (s, e.unwrap_or(u64::MAX)))
-                .collect();
-            let expected_serialized = crate::log::serialize_epochs(&db_epochs);
-            let expected_manifest_hash = Sha256Hasher.hash(&expected_serialized);
-            prop_assert!(info.manifest_hash == expected_manifest_hash, "manifest hash mismatch");
-        }
+                let db_epochs: Vec<(u64, u64)> = info.epochs
+                    .iter()
+                    .map(|&(s, e)| (s, e.unwrap_or(u64::MAX)))
+                    .collect();
+                let expected_serialized = crate::log::serialize_epochs(&db_epochs);
+                let expected_manifest_hash = Sha256Hasher.hash(&expected_serialized);
+                prop_assert!(info.manifest_hash == expected_manifest_hash, "manifest hash mismatch");
+            }
+            Ok(())
+        })?;
     }
 }
 
@@ -470,16 +500,16 @@ fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
 ///
 /// Returns Err on first violation. This is extracted as a helper so it can
 /// be called after every mutation operation, not just at the end.
-fn check_invariants(
+async fn check_invariants(
     log: &Log<MemoryStorage>,
     frozen_roots: &std::collections::BTreeMap<u64, Vec<u8>>,
     context: &str,
 ) -> std::result::Result<(), proptest::test_runner::TestCaseError> {
-    let infos = log.algorithms();
+    let infos = log.algorithms().await;
 
     for info in &infos {
         // A-EQUIV: incremental root == batch root over projection.
-        let projected = log.project(info.id).unwrap();
+        let projected = log.project(info.id).await.unwrap();
         let batch = mth_for(info.id, &projected);
         prop_assert!(
             info.root == batch,
@@ -521,7 +551,7 @@ fn check_invariants(
             };
 
             for &idx in &sample_indices {
-                let proof = log.inclusion_proof(info.id, idx).unwrap_or_else(|e| {
+                let proof = log.inclusion_proof(info.id, idx).await.unwrap_or_else(|e| {
                     panic!(
                         "inclusion_proof({}, {}) failed {}: {}",
                         info.id, idx, context, e
@@ -550,6 +580,7 @@ fn check_invariants(
 
                 let proof = log
                     .consistency_proof(info.id, old_size)
+                    .await
                     .unwrap_or_else(|e| {
                         panic!(
                             "consistency_proof({}, {}) failed {}: {}",
@@ -608,48 +639,52 @@ proptest! {
     fn state_machine(
         ops in proptest::collection::vec(op_strategy(9), 50..150),
     ) {
-        let mut log = Log::new(MemoryStorage::new());
+        smol::block_on(async {
+            let mut log = Log::new(MemoryStorage::new());
 
-        // Seed with three algorithms — one per hash family.
-        log.add_algorithm(0, new_hasher_for(0)).unwrap(); // SHA-256
-        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // SHA3-256
-        log.add_algorithm(2, new_hasher_for(2)).unwrap(); // BLAKE2b-256
+            // Seed with three algorithms — one per hash family.
+            log.add_algorithm(0, new_hasher_for(0)).await.unwrap(); // SHA-256
+            log.add_algorithm(1, new_hasher_for(1)).await.unwrap(); // SHA3-256
+            log.add_algorithm(2, new_hasher_for(2)).await.unwrap(); // BLAKE2b-256
 
-        let mut frozen_roots: std::collections::BTreeMap<u64, Vec<u8>> =
-            std::collections::BTreeMap::new();
+            let mut frozen_roots: std::collections::BTreeMap<u64, Vec<u8>> =
+                std::collections::BTreeMap::new();
 
-        for (step, op) in ops.iter().enumerate() {
-            match op {
-                Op::Append => {
-                    let has_active = log.
-                    algorithms().
-                    iter().
-                    any(|a| a.deactivation_index.is_none());
-                    if has_active {
-                        let data = [log.size() as u8];
-                        log.append(&data).unwrap();
+            for (step, op) in ops.iter().enumerate() {
+                match op {
+                    Op::Append => {
+                        let has_active = log.
+                        algorithms().
+                        await.
+                        iter().
+                        any(|a| a.deactivation_index.is_none());
+                        if has_active {
+                            let data = [log.size().await as u8];
+                            log.append(&data).await.unwrap();
+                        }
+                    }
+                    Op::AddAlg(id) => {
+                        let _ = log.add_algorithm(*id, new_hasher_for(*id)).await;
+                    }
+                    Op::RemoveAlg(id) => {
+                        if log.remove_algorithm(*id).await.is_ok() {
+                            let root = log.root(*id).unwrap();
+                            frozen_roots.insert(*id, root);
+                        }
+                    }
+                    Op::ResumeAlg(id) => {
+                        if log.resume_algorithm(*id).await.is_ok() {
+                            frozen_roots.remove(id);
+                        }
                     }
                 }
-                Op::AddAlg(id) => {
-                    let _ = log.add_algorithm(*id, new_hasher_for(*id));
-                }
-                Op::RemoveAlg(id) => {
-                    if log.remove_algorithm(*id).is_ok() {
-                        let root = log.root(*id).unwrap();
-                        frozen_roots.insert(*id, root);
-                    }
-                }
-                Op::ResumeAlg(id) => {
-                    if log.resume_algorithm(*id).is_ok() {
-                        frozen_roots.remove(id);
-                    }
-                }
+
+                // Verify invariants after every mutation.
+                let ctx = format!("after step {} ({:?})", step, op);
+                check_invariants(&log, &frozen_roots, &ctx).await?;
             }
-
-            // Verify invariants after every mutation.
-            let ctx = format!("after step {} ({:?})", step, op);
-            check_invariants(&log, &frozen_roots, &ctx)?;
-        }
+            Ok::<(), proptest::test_runner::TestCaseError>(())
+        })?;
     }
 }
 
@@ -672,62 +707,65 @@ proptest! {
         freeze_at in 2usize..128,
         extra_appends in 10usize..256,
     ) {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, new_hasher_for(0)).unwrap(); // SHA-256 (frozen)
-        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // SHA3-256 (keeper)
-        log.add_algorithm(2, new_hasher_for(2)).unwrap(); // BLAKE2b (keeper)
+        smol::block_on(async {
+            let mut log = Log::new(MemoryStorage::new());
+            log.add_algorithm(0, new_hasher_for(0)).await.unwrap(); // SHA-256 (frozen)
+            log.add_algorithm(1, new_hasher_for(1)).await.unwrap(); // SHA3-256 (keeper)
+            log.add_algorithm(2, new_hasher_for(2)).await.unwrap(); // BLAKE2b (keeper)
 
-        for i in 0..freeze_at {
-            log.append(&[i as u8]).unwrap();
-        }
+            for i in 0..freeze_at {
+                log.append(&[i as u8]).await.unwrap();
+            }
 
-        log.remove_algorithm(0).unwrap();
-        let frozen_root = log.root(0).unwrap();
-        let frozen_ts = log.tree_size(0).unwrap();
-        prop_assert!(
-            frozen_ts == freeze_at as u64,
-            "frozen tree_size {} != freeze_at {}", frozen_ts, freeze_at
-        );
-
-        for i in 0..extra_appends {
-            log.append(&[(freeze_at + i) as u8]).unwrap();
-        }
-
-        // Root must be stable.
-        let root_after = log.root(0).unwrap();
-        prop_assert!(
-            root_after == frozen_root,
-            "frozen root changed after {} extra appends", extra_appends
-        );
-
-        // Valid range: all indices < freeze_at must produce valid proofs.
-        let projected = log.project(0).unwrap();
-        for (i, projected_leaf) in projected.iter().enumerate().take(freeze_at) {
-            let p = log.inclusion_proof(0, i as u64).unwrap_or_else(|e| {
-                panic!("inclusion_proof(0, {i}) should succeed but got: {e}")
-            });
+            log.remove_algorithm(0).await.unwrap();
+            let frozen_root = log.root(0).unwrap();
+            let frozen_ts = log.tree_size(0).await.unwrap();
             prop_assert!(
-                crate::verify_inclusion(&Sha256Hasher, projected_leaf, &p, &frozen_root),
-                "I-SOUND failed for frozen alg at index {}", i
+                frozen_ts == freeze_at as u64,
+                "frozen tree_size {} != freeze_at {}", frozen_ts, freeze_at
             );
-        }
 
-        // Out-of-bounds: indices >= freeze_at must fail with IndexOutOfBounds.
-        for i in freeze_at..(freeze_at + 3) {
-            let result = log.inclusion_proof(0, i as u64);
-            match result {
-                Err(crate::Error::IndexOutOfBounds { index, tree_size }) => {
-                    prop_assert!(index == i as u64, "wrong index in error");
-                    prop_assert!(tree_size == frozen_ts, "wrong tree_size in error");
-                }
-                other => {
-                    prop_assert!(
-                        false,
-                        "expected IndexOutOfBounds at {}, got {:?}", i, other
-                    );
+            for i in 0..extra_appends {
+                log.append(&[(freeze_at + i) as u8]).await.unwrap();
+            }
+
+            // Root must be stable.
+            let root_after = log.root(0).unwrap();
+            prop_assert!(
+                root_after == frozen_root,
+                "frozen root changed after {} extra appends", extra_appends
+            );
+
+            // Valid range: all indices < freeze_at must produce valid proofs.
+            let projected = log.project(0).await.unwrap();
+            for (i, projected_leaf) in projected.iter().enumerate().take(freeze_at) {
+                let p = log.inclusion_proof(0, i as u64).await.unwrap_or_else(|e| {
+                    panic!("inclusion_proof(0, {i}) should succeed but got: {e}")
+                });
+                prop_assert!(
+                    crate::verify_inclusion(&Sha256Hasher, projected_leaf, &p, &frozen_root),
+                    "I-SOUND failed for frozen alg at index {}", i
+                );
+            }
+
+            // Out-of-bounds: indices >= freeze_at must fail with IndexOutOfBounds.
+            for i in freeze_at..(freeze_at + 3) {
+                let result = log.inclusion_proof(0, i as u64).await;
+                match result {
+                    Err(crate::Error::IndexOutOfBounds { index, tree_size }) => {
+                        prop_assert!(index == i as u64, "wrong index in error");
+                        prop_assert!(tree_size == frozen_ts, "wrong tree_size in error");
+                    }
+                    other => {
+                        prop_assert!(
+                            false,
+                            "expected IndexOutOfBounds at {}, got {:?}", i, other
+                        );
+                    }
                 }
             }
-        }
+            Ok(())
+        })?;
     }
 }
 
@@ -745,43 +783,46 @@ proptest! {
         act_frac in 0.01f64..0.99,
         idx_frac in 0.0f64..1.0,
     ) {
-        let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
-        let log = build_log(size, activation);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
+            let log = build_log(size, activation).await;
 
-        let ts = log.tree_size(0).unwrap() as usize;
-        if ts == 0 { return Ok(()); }
+            let ts = log.tree_size(0).await.unwrap() as usize;
+            if ts == 0 { return Ok(()); }
 
-        let active_range = ts.saturating_sub(activation);
-        if active_range == 0 { return Ok(()); }
-        let index = activation + ((idx_frac * active_range as f64) as usize).min(active_range - 1);
+            let active_range = ts.saturating_sub(activation);
+            if active_range == 0 { return Ok(()); }
+            let index = activation + ((idx_frac * active_range as f64) as usize).min(active_range - 1);
 
-        let full_proof = log.inclusion_proof(0, index as u64).unwrap();
-        let epochs = log.epochs(0).unwrap();
-        let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
+            let full_proof = log.inclusion_proof(0, index as u64).await.unwrap();
+            let epochs = log.epochs(0).unwrap();
+            let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
 
-        // Wire length <= full proof length.
-        prop_assert!(
-            elided.wire_len() <= full_proof.path.len(),
-            "wire_len {} > full proof len {}", elided.wire_len(), full_proof.path.len()
-        );
+            // Wire length <= full proof length.
+            prop_assert!(
+                elided.wire_len() <= full_proof.path.len(),
+                "wire_len {} > full proof len {}", elided.wire_len(), full_proof.path.len()
+            );
 
-        // Transmitted values must match full proof.
-        for (entry, full_hash) in elided.path.iter().zip(full_proof.path.iter()) {
-            if let Some(transmitted) = entry {
-                prop_assert!(
-                    transmitted == full_hash,
-                    "transmitted sibling doesn't match full proof"
-                );
+            // Transmitted values must match full proof.
+            for (entry, full_hash) in elided.path.iter().zip(full_proof.path.iter()) {
+                if let Some(transmitted) = entry {
+                    prop_assert!(
+                        transmitted == full_hash,
+                        "transmitted sibling doesn't match full proof"
+                    );
+                }
             }
-        }
 
-        // Roundtrip fidelity.
-        let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
-        prop_assert!(
-            rehydrated == full_proof,
-            "elide roundtrip mismatch at size={}, activation={}, index={}",
-            size, activation, index
-        );
+            // Roundtrip fidelity.
+            let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
+            prop_assert!(
+                rehydrated == full_proof,
+                "elide roundtrip mismatch at size={}, activation={}, index={}",
+                size, activation, index
+            );
+            Ok(())
+        })?;
     }
 
     /// ELIDE-WIRE-LEN (multi-epoch): exercises the disjoint epoch elision path.
@@ -799,83 +840,86 @@ proptest! {
         post_resume in 2usize..64,
         idx_frac in 0.0f64..1.0,
     ) {
-        let mut log = Log::new(MemoryStorage::new());
-        log.add_algorithm(0, new_hasher_for(0)).unwrap(); // SHA-256 (frozen/resumed)
-        log.add_algorithm(1, new_hasher_for(1)).unwrap(); // SHA3-256 (keeper)
-        log.add_algorithm(2, new_hasher_for(2)).unwrap(); // BLAKE2b (keeper)
+        smol::block_on(async {
+            let mut log = Log::new(MemoryStorage::new());
+            log.add_algorithm(0, new_hasher_for(0)).await.unwrap(); // SHA-256 (frozen/resumed)
+            log.add_algorithm(1, new_hasher_for(1)).await.unwrap(); // SHA3-256 (keeper)
+            log.add_algorithm(2, new_hasher_for(2)).await.unwrap(); // BLAKE2b (keeper)
 
-        for i in 0..freeze_at {
-            log.append(&[i as u8]).unwrap();
-        }
-        log.remove_algorithm(0).unwrap();
-        for i in 0..gap {
-            log.append(&[(freeze_at + i) as u8]).unwrap();
-        }
-        log.resume_algorithm(0).unwrap();
-        for i in 0..post_resume {
-            log.append(&[(freeze_at + gap + i) as u8]).unwrap();
-        }
+            for i in 0..freeze_at {
+                log.append(&[i as u8]).await.unwrap();
+            }
+            log.remove_algorithm(0).await.unwrap();
+            for i in 0..gap {
+                log.append(&[(freeze_at + i) as u8]).await.unwrap();
+            }
+            log.resume_algorithm(0).await.unwrap();
+            for i in 0..post_resume {
+                log.append(&[(freeze_at + gap + i) as u8]).await.unwrap();
+            }
 
-        let epochs = log.epochs(0).unwrap();
-        prop_assert!(
-            epochs.len() == 2,
-            "expected 2 epochs, got {}: {:?}", epochs.len(), epochs
-        );
+            let epochs = log.epochs(0).unwrap();
+            prop_assert!(
+                epochs.len() == 2,
+                "expected 2 epochs, got {}: {:?}", epochs.len(), epochs
+            );
 
-        let ts = log.tree_size(0).unwrap() as usize;
-        let root = log.root(0).unwrap();
-        let projected = log.project(0).unwrap();
+            let ts = log.tree_size(0).await.unwrap() as usize;
+            let root = log.root(0).unwrap();
+            let projected = log.project(0).await.unwrap();
 
-        // Total active positions = freeze_at + post_resume.
-        let total_active = freeze_at + post_resume;
+            // Total active positions = freeze_at + post_resume.
+            let total_active = freeze_at + post_resume;
 
-        // Pick an index from the active positions.
-        let active_idx = ((idx_frac * total_active as f64) as usize).min(total_active - 1);
+            // Pick an index from the active positions.
+            let active_idx = ((idx_frac * total_active as f64) as usize).min(total_active - 1);
 
-        // Map to global index: first epoch [0, freeze_at), second epoch [freeze_at+gap, ...).
-        let global_index = if active_idx < freeze_at {
-            active_idx
-        } else {
-            freeze_at + gap + (active_idx - freeze_at)
-        };
+            // Map to global index: first epoch [0, freeze_at), second epoch [freeze_at+gap, ...).
+            let global_index = if active_idx < freeze_at {
+                active_idx
+            } else {
+                freeze_at + gap + (active_idx - freeze_at)
+            };
 
-        if global_index as u64 >= ts as u64 { return Ok(()); }
+            if global_index as u64 >= ts as u64 { return Ok(()); }
 
-        let full_proof = log.inclusion_proof(0, global_index as u64).unwrap();
-        let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
+            let full_proof = log.inclusion_proof(0, global_index as u64).await.unwrap();
+            let elided = crate::elide_inclusion_proof(&full_proof, &epochs);
 
-        // Wire length must be <= full proof length.
-        prop_assert!(
-            elided.wire_len() <= full_proof.path.len(),
-            "wire_len {} > full proof len {} at global_index={}",
-            elided.wire_len(), full_proof.path.len(), global_index
-        );
+            // Wire length must be <= full proof length.
+            prop_assert!(
+                elided.wire_len() <= full_proof.path.len(),
+                "wire_len {} > full proof len {} at global_index={}",
+                elided.wire_len(), full_proof.path.len(), global_index
+            );
 
-        // If gap > 0, at least some siblings should be elidable.
-        // (The gap region is entirely null, so siblings fully within it can be elided.)
-        // We only assert this when the gap is large enough relative to the tree
-        // to guarantee at least one fully-null sibling subtree.
-        if gap >= 2 && full_proof.path.len() > 1 {
-            let elided_count = elided.path.iter().filter(|e| e.is_none()).count();
-            // With a non-trivial gap, SOME elision should occur for most tree shapes.
-            // We don't assert strict > 0 because edge cases exist (e.g., gap perfectly
-            // aligns with tree splits such that no sibling falls entirely in the gap).
-            // The roundtrip check below is the hard guarantee.
-            let _ = elided_count; // Acknowledged but not strictly asserted.
-        }
+            // If gap > 0, at least some siblings should be elidable.
+            // (The gap region is entirely null, so siblings fully within it can be elided.)
+            // We only assert this when the gap is large enough relative to the tree
+            // to guarantee at least one fully-null sibling subtree.
+            if gap >= 2 && full_proof.path.len() > 1 {
+                let elided_count = elided.path.iter().filter(|e| e.is_none()).count();
+                // With a non-trivial gap, SOME elision should occur for most tree shapes.
+                // We don't assert strict > 0 because edge cases exist (e.g., gap perfectly
+                // aligns with tree splits such that no sibling falls entirely in the gap).
+                // The roundtrip check below is the hard guarantee.
+                let _ = elided_count; // Acknowledged but not strictly asserted.
+            }
 
-        // Roundtrip is the hard correctness guarantee.
-        let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
-        prop_assert!(
-            rehydrated == full_proof,
-            "multi-epoch roundtrip mismatch at freeze_at={}, gap={}, post_resume={}, idx={}",
-            freeze_at, gap, post_resume, global_index
-        );
+            // Roundtrip is the hard correctness guarantee.
+            let rehydrated = crate::rehydrate_inclusion_proof(&elided, &Sha256Hasher);
+            prop_assert!(
+                rehydrated == full_proof,
+                "multi-epoch roundtrip mismatch at freeze_at={}, gap={}, post_resume={}, idx={}",
+                freeze_at, gap, post_resume, global_index
+            );
 
-        // Rehydrated proof must verify against the root.
-        prop_assert!(
-            crate::verify_inclusion(&Sha256Hasher, &projected[global_index], &rehydrated, &root),
-            "rehydrated proof fails verification at global_index={}", global_index
-        );
+            // Rehydrated proof must verify against the root.
+            prop_assert!(
+                crate::verify_inclusion(&Sha256Hasher, &projected[global_index], &rehydrated, &root),
+                "rehydrated proof fails verification at global_index={}", global_index
+            );
+            Ok(())
+        })?;
     }
 }
