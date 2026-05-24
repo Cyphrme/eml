@@ -105,6 +105,8 @@ The following theorems are machine-checked in Lean4.
 
 *Proof sketch.* Proved by showing that the compatibility relation `AppendConsistent` transitions stack sizes coherently under $s(n)$ merges, and that folding the forest top-to-bottom combines subtrees in the exact bisection order mandated by policy $f$. Proved purely combinatorially in `Duality.lean` (`generalized_bridge_lemma`). The linear split policy ($f(n) = 1$) and trivial schedule ($s(n) = 0$) are proven compatible in `Instantiation.lean` (representing a simple right-leaning hash chain), verifying that the generalized framework admits concrete instances without cryptographic axioms. $\square$
 
+The operational significance of Theorem 5 cannot be overstated: it demonstrates that algorithm-independent log agility is a universal structural property of append-consistent tree decompositions. By decoupling split policies from concrete carry masks, the PML paradigm provides a blueprint for formalizing lifecycle transformations across alternative data structures—including Sparse Merkle Trees and Merkle Patricia Tries—guaranteeing that structural correctness can be checked independently of any cryptographic mechanism.
+
 ### Corollaries & Proof Artifact
 
 The EML's correctness properties reduce to Theorem 2 combined with standard RFC 9162 guarantees: **Inclusion/Consistency soundness** (standard RFC 9162 verifiers accept EML proofs) and **Projection validity** ($\pi_a(S)$ yields a standard RFC 9162 leaf sequence).
