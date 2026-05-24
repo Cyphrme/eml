@@ -1,6 +1,6 @@
 [package]
 name          = "eml"
-version       = "0.9.0"
+version       = "0.9.1"
 description   = "Epoch Merkle Log — multi-algorithm append-only log with epoch semantics"
 edition       = "2024"
 rust-version  = "1.85"

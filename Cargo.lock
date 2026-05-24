@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "eml"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "big_o",
  "bigoish",
