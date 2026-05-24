@@ -282,13 +282,14 @@ cargo test --release --test complexity  # complexity regression
 
 ### Fuzz targets
 
-4 [cargo-fuzz] harnesses exercise adversarial inputs against the proof
-verification and elision surfaces:
+5 [cargo-fuzz] harnesses exercise adversarial inputs against the proof
+verification, elision, and stateful transition surfaces:
 
 - `verify_inclusion` — arbitrary inclusion proof / root pairs
 - `verify_consistency` — arbitrary consistency proof / root pairs
 - `rehydrate_proof` — arbitrary elided proofs through rehydration
-- `proof_mutation` — single-bit mutations of valid proofs
+- `proof_mutation` — single-bit mutations of valid proofs (up to 65,536 leaves)
+- `state_machine` — stateful API transition command sequences and storage write-fault injection with reconstruction crash-recovery validation
 
 ```sh
 cargo +nightly fuzz run <target>
