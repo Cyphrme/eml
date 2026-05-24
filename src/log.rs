@@ -514,10 +514,11 @@ impl<S: Storage> Log<S> {
     /// # Errors
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
-    pub fn tree_size(&self, alg_id: u64) -> Result<u64> {
+    pub async fn tree_size(&self, alg_id: u64) -> Result<u64> {
+        let size = self.size().await;
         self.algs
             .get(&alg_id)
-            .map(|s| s.tree_size(self.size()))
+            .map(|s| s.tree_size(size))
             .ok_or(Error::UnknownAlgorithm(alg_id))
     }
 
@@ -772,8 +773,8 @@ impl<S: Storage> Log<S> {
     ///
     /// The serialization format is left to the implementor — EML provides
     /// the raw data; the consumer chooses the wire encoding.
-    pub fn algorithms(&self) -> Vec<AlgorithmInfo> {
-        let global_size = self.size();
+    pub async fn algorithms(&self) -> Vec<AlgorithmInfo> {
+        let global_size = self.size().await;
         self.algs
             .iter()
             .map(|(&id, state)| {
@@ -824,12 +825,12 @@ impl<S: Storage> Log<S> {
     /// Delegates to `subtree_root` (Definition 14c) without requiring
     /// callers to hold an `AlgState` reference.
     #[cfg(test)]
-    pub(crate) fn test_subtree_root(&self, alg_id: u64, lo: u64, hi: u64) -> Result<Vec<u8>> {
+    pub(crate) async fn test_subtree_root(&self, alg_id: u64, lo: u64, hi: u64) -> Result<Vec<u8>> {
         let state = self
             .algs
             .get(&alg_id)
             .ok_or(Error::UnknownAlgorithm(alg_id))?;
-        self.subtree_root(state, alg_id, lo, hi)
+        Self::subtree_root_static(&self.storage, state, alg_id, lo, hi).await
     }
 
     // ========================================================================
