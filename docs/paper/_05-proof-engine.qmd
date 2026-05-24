@@ -4,7 +4,7 @@ The formal model (§[IV](#sec-formal-model)) defines the EML's mathematical stru
 
 ### The Subtree Root Query
 
-The projection $\pi_a(S)$ is an $\mathcal{O}(n)$ specification oracle. In production, sibling hashes are resolved in $\mathcal{O}(\log n)$ via the `subtree_root` query:
+The projection mapping $\pi_a(S)$ defines the system's external mathematical specification. The operational proof engine achieves $\mathcal{O}(\log n)$ execution by resolving sibling hashes through coordinate point lookups directly over the physical storage traits.
 
 ::: {#def-subtree-root}
 **Definition 11** (Subtree root). The root hash of the subtree covering leaves $[lo, hi)$ for algorithm $a$:
