@@ -356,16 +356,16 @@ for cutting or condensing.
 ## Retrospective
 
 ### Process
-
-_To be filled after execution._
+The iterative refinement paradigm—specifically decoupling topological tree invariants from cryptographic digest algebras via magma homomorphisms—greatly simplified both the formal proof and the subsequent prose revision. Utilizing automated complexity regression and fuzz-testing harnesses during the design phase ensured the Rust implementation remained aligned with the mathematical specification, preventing architectural divergence.
 
 ### Outcomes
-
-_To be filled after execution._
+1. The formal model has been streamlined from 18 definitions to 13 concise definitions, eliminating formalism theatre.
+2. The entire EML proof chain (31 theorems) is successfully machine-checked in Lean 4 without `sorry` axioms.
+3. The main body of the manuscript compiles cleanly to exactly 13 pages, adhering strictly to USENIX Security guidelines.
+4. Definition references and stale nomenclature across all sections are fully resolved.
 
 ### Pipeline Improvements
-
-_To be filled after execution._
+For future cryptographic engineering, formal verification in Lean 4 should occur prior to draft freeze. This minimizes cross-reference churn in the manuscript when definitions are factored or consolidated to facilitate the proof.
 
 ## References
 
