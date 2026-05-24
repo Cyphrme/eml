@@ -1,102 +1,19 @@
 ## Related Work {#sec-related-work}
 
-We organize related work by theme, situating the EML against five
-categories of prior and adjacent constructions.
+We organize related work by theme, situating the EML against prior and adjacent constructions.
 
-### Foundational Constructions
+### Foundational & Transparency Log Standards
 
-Merkle introduced the authenticated hash tree in his 1979 doctoral
-thesis [@merkle1979] and refined it for digital signature applications at
-CRYPTO '89 [@merkle1989]. Crosby and Wallach [@crosby2009] extended the
-static tree into a dynamic *history tree* supporting append-only
-semantics with $\mathcal{O}(\log n)$ consistency proofs---the
-construction that underlies both Certificate Transparency and the EML.
-Pulls and Peeters [@pulls2015] introduced the *Balloon* structure, which
-adds forward security: even a compromised log operator cannot rewrite
-entries observed by a monitor. The EML does not claim forward security;
-it addresses a complementary problem (algorithm lifecycle management)
-over the same Crosby--Wallach foundation.
+Merkle introduced authenticated hash trees [@merkle1979] for signatures. Crosby and Wallach [@crosby2009] extended them into dynamic *history trees* supporting append-only semantics and $\mathcal{O}(\log n)$ consistency proofs, which form the topological foundation of both Certificate Transparency (CT) and the EML. Pulls and Peeters [@pulls2015] added forward security in *Balloon* structures. The EML addresses a complementary problem (algorithm lifecycle management) over the same Crosby--Wallach foundation.
 
-### Transparency Log Standards
+RFC 6962 [@rfc6962] and RFC 9162 [@rfc9162] standardize CT logs, binding each instance to a single hash algorithm; migrating algorithms requires spinning up a new log identity. Trillian [@trillian2016] provides a scalable multi-tenant CT backend but inherits this single-algorithm restriction. Sigsum [@sigsum2021] locks down the cryptographic primitives to SHA-256/Ed25519, managing transitions via time-bounded shard intervals (essentially the "fork the ledger" approach). 
 
-RFC 6962 [@rfc6962] defined the original Certificate Transparency
-protocol, binding each log to a single hash algorithm. RFC 9162
-[@rfc9162] introduced algorithm selection via IANA registries but
-preserved the single-algorithm-per-log constraint: migrating requires
-creating a new log identity. Google's Trillian [@trillian2016]
-generalized the CT backend into a multi-tenant platform for verifiable
-logs and maps, introducing tiled tree storage for distributed
-scalability. Trillian inherits RFC 9162's algorithm binding.
+The EML retains the single-tree topology of RFC 9162 but permits multiple algorithms to coexist via projections, avoiding both log fragmentation and chimeric weakest-link constructions.
 
-Sigsum [@sigsum2021] adopted the inverse posture: *no* algorithm
-selection, fixing SHA-256 and Ed25519 by design. Algorithm lifecycle is
-managed through time-bounded shard intervals---effectively the "fork the
-ledger" horn of the upgrade trilemma. This is a defensible architectural
-choice that prioritizes simplicity over migration flexibility.
+### Algorithm Migration & Sparsity
 
-The EML occupies a distinct position: it retains the single-tree
-topology of RFC 9162 but permits multiple algorithms to coexist via
-projections, avoiding both the fragmentation of per-algorithm logs and
-the coupling of chimeric constructions.
+**Git.** The SHA-1 to SHA-256 transition in Git [@git-hash-transition] requires a bidirectional mapping database between SHA-1 and SHA-256 representations of all objects. This incurs a retroactive translation cost of $\mathcal{O}(N)$ in repository size. The EML's null-fill mechanism avoids this: a new algorithm's projection over historical positions is computed from the local `NullTable` in $\mathcal{O}(\log n)$ on the fly.
 
-### Algorithm Migration Approaches
+**IPFS & Sigstore.** IPFS Content Identifiers (CID) [@ipfs-cid; @multiformats] use self-describing multihashes to enable multiple algorithms within the DHT address space. However, this is per-object; re-hashing content requires full network re-propagation. Sigstore [@sigstore-agility] achieves agility through predefined suites selected by policy out-of-band, but does not support concurrent multi-algorithm projections or in-band structural lifecycle management.
 
-**Git.** The SHA-1 to SHA-256 transition in Git is the most extensively
-documented hash migration in a Merkle-structured system
-[@git-hash-transition]. Because Git's object identity *is* its hash,
-changing algorithms requires a bidirectional mapping between SHA-1 and
-SHA-256 representations of every object. The transition proceeds through
-four phased modes (Dark Launch, Early, Late, Post-Transition), each
-requiring explicit compatibility code. The cost is $\mathcal{O}(N)$ in
-repository size---every object must be translated. The EML's null-fill
-mechanism avoids this cost entirely: a new algorithm's projection of
-historical positions is computed from the NullTable in
-$\mathcal{O}(\log n)$, with no access to historical data.
-
-**IPFS.** The Content Identifier (CID) v1 format uses self-describing
-multihash fields to encode the algorithm alongside the digest
-[@ipfs-cid; @multiformats]. This enables multiple hash algorithms to
-coexist within the network's address space. However, the self-description
-is per-object, not per-tree: re-hashing content under a new algorithm
-requires full network re-propagation, as the DHT routes by hash and
-cannot re-derive addresses without the original data.
-
-**Sigstore.** Sigstore achieves controlled algorithm selection through
-predefined suites and out-of-band configuration [@sigstore-agility]. The
-algorithm is not negotiated within the data structure but selected by
-policy. This avoids in-band downgrade attacks but does not support
-concurrent multi-algorithm projections or structural lifecycle
-management.
-
-### Sparse Merkle Trees
-
-Sparse Merkle Trees (SMTs) address a superficially similar problem:
-managing a vast space of positions, most of which are empty. The
-original SMT formulation by Laurie and Kasper [@laurie2012] simulated a
-complete binary tree of height 256 for certificate revocation, using
-pre-computed default hashes at each level to represent the $2^{256}$
-empty leaves. The Jellyfish Merkle Tree (JMT) [@jmt2021] optimized this
-for high-performance blockchain state commitment through path collapsing
-and version-based keys. Compact SMTs [@csmt2018] further reduced storage
-via XOR-distance-based key placement. Tari's SMT specification
-[@tari2018] detailed pruning strategies for removing empty subtrees.
-
-The distinction between SMTs and the EML is the domain of sparsity:
-
-- **SMTs** pad positions in a *spatial* $2^{256}$ keyspace that may
-  never be occupied. The empty positions represent potential keys that
-  have no associated value. Proof compression uses a bitmap to indicate
-  which siblings on a 256-level path are default values.
-
-- **The EML** pads positions on a *temporal* axis where an algorithm was
-  not yet active. The empty positions represent real chronological
-  entries that existed before the algorithm was added. Proof compression
-  uses interval arithmetic over epoch boundaries, requiring no explicit
-  bitmap.
-
-Both constructions use deterministic null constants. But SMT null
-constants fill a fixed-depth spatial gap; EML null constants fill a
-variable-depth temporal gap. The proof compression mechanisms are
-correspondingly different: SMTs transmit a 32-byte bitmap; the EML
-transmits nothing.
-
+**Sparse Merkle Trees.** SMTs [@laurie2012; @jmt2021; @csmt2018; @tari2018] manage sparse keyspaces (e.g., $2^{256}$ positions) by filling empty leaves with precomputed default hashes. While both SMTs and the EML use deterministic null constants, they differ in the domain of sparsity: SMTs pad a *spatial* keyspace representing potential keys that have no value, compressing proofs with a transmitted bitmap. EML pads a *temporal* axis where an algorithm was inactive, representing real entries that existed before activation. Proof compression in EML uses interval arithmetic over epoch boundaries, requiring no transmitted bitmap (zero per-proof metadata overhead).
