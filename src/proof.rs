@@ -306,14 +306,17 @@ fn null_subtree_hash(hasher: &dyn Hasher, null_table: &mut crate::NullTable, siz
     if size == 1 {
         return null_table.leaf_null().to_vec();
     }
-    if size.is_power_of_two() {
-        return null_table
-            .get(hasher, size.trailing_zeros() as usize)
-            .to_vec();
+
+    let k_bits = 63 - (size.leading_zeros() as usize);
+    let k = 1u64 << k_bits;
+    let left = null_table.get(hasher, k_bits).to_vec();
+
+    let remainder = size - k;
+    if remainder == 0 {
+        return left;
     }
-    let k = largest_pow2_lt(size);
-    let left = null_subtree_hash(hasher, null_table, k);
-    let right = null_subtree_hash(hasher, null_table, size - k);
+
+    let right = null_subtree_hash(hasher, null_table, remainder);
     hasher.node(&left, &right)
 }
 
