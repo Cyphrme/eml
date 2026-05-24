@@ -41,8 +41,7 @@ the security of their own algorithm's verification.
 
 - **STH signature agility.** The EML specifies the STH payload
   structure (Definition 8) but does not address signature agility for
-  the signing key $\sigma$. Extending the epoch lifecycle model to STH
-  signing keys---enabling key rotation and multi-algorithm STH
-  signatures---is an orthogonal concern. The manifest commitment
-  (Corollary 1 (Manifest Commitment)) is independent of the signature scheme used
-  to authenticate the STH itself.
+  the signing key $\sigma$. The manifest commitment is independent of the signature
+  scheme used to authenticate the tree head payload, ensuring that extending
+  the epoch lifecycle model to asymmetric key rotation can be executed cleanly
+  at the transport layer without altering the underlying tree algebra.
