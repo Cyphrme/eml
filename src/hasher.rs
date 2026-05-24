@@ -48,4 +48,10 @@ pub trait Hasher: Debug + Send + Sync {
     /// This is Definition 1 (§3) of the formal model. The single byte `0x02`
     /// is domain-separated from leaf (`0x00`) and node (`0x01`) prefixes.
     fn null(&self) -> Vec<u8>;
+
+    /// Compute the raw hash of arbitrary data: `H_a(data)`.
+    ///
+    /// This is the raw cryptographic hash function of the algorithm,
+    /// used for committing non-tree metadata (e.g., the activation map).
+    fn hash(&self, data: &[u8]) -> Vec<u8>;
 }

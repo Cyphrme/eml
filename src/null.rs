@@ -95,6 +95,12 @@ mod tests {
         fn null(&self) -> Vec<u8> {
             vec![0x02]
         }
+
+        fn hash(&self, data: &[u8]) -> Vec<u8> {
+            let mut v = vec![];
+            v.extend_from_slice(data);
+            v
+        }
     }
 
     #[test]

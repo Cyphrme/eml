@@ -37,6 +37,9 @@ impl Hasher for FuzzHasher {
     fn null(&self) -> Vec<u8> {
         Sha256::digest([0x02]).to_vec()
     }
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        Sha256::digest(data).to_vec()
+    }
 }
 
 #[derive(Debug, Arbitrary)]

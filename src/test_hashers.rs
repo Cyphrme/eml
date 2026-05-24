@@ -38,6 +38,10 @@ impl Hasher for Sha256Hasher {
     fn null(&self) -> Vec<u8> {
         Sha256::digest([0x02]).to_vec()
     }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        Sha256::digest(data).to_vec()
+    }
 }
 
 /// SHA3-256 hasher (32-byte digest, Keccak-based).
@@ -67,6 +71,10 @@ impl Hasher for Sha3Hasher {
     fn null(&self) -> Vec<u8> {
         Sha3_256::digest([0x02]).to_vec()
     }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        Sha3_256::digest(data).to_vec()
+    }
 }
 
 /// BLAKE2b-256 hasher (32-byte digest).
@@ -95,6 +103,10 @@ impl Hasher for Blake2bHasher {
 
     fn null(&self) -> Vec<u8> {
         <Blake2b<U32> as Digest>::digest([0x02]).to_vec()
+    }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        <Blake2b<U32> as Digest>::digest(data).to_vec()
     }
 }
 
@@ -128,6 +140,13 @@ impl Hasher for AltHasher {
     fn null(&self) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x02, 0xFF]);
+        h.finalize().to_vec()
+    }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([0xFF]);
+        h.update(data);
         h.finalize().to_vec()
     }
 }
