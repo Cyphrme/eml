@@ -122,8 +122,8 @@ $$
 
 This sequence is a valid input to the standard RFC 9162 MTH construction.
 The root computed from this projection equals the root maintained by the
-PML's incremental frontier for algorithm $a$. From the perspective of a
-verifier holding a single algorithm's root hash and proof, the PML is
+EML's incremental frontier for algorithm $a$. From the perspective of a
+verifier holding a single algorithm's root hash and proof, the EML is
 indistinguishable from a standard single-algorithm Merkle tree.
 
 Other algorithms are invisible. SHA-256's proofs never reference
@@ -134,7 +134,7 @@ algorithms share topology but not trust.
 
 Traditional cryptographic agility designs (such as those in TLS cipher suite negotiation or JSON Web Tokens) rely on dynamic, runtime algorithm negotiation. This dynamic negotiation introduces a significant attack surface: an adversary capable of altering network packets can intercept the handshake and inject weaker algorithms, forcing a client to downgrade its cryptographic security level.
 
-The PML design neutralizes downgrade attacks by completely eliminating runtime algorithm negotiation. Instead of relying on client-server negotiation during verification, the PML binds algorithm lifecycles directly to the log's root of trust via the epoch manifest. This manifest (Definition 8, §[IV](#sec-formal-model)) is committed in the Signed Tree Head (STH) signed by the log operator. Because client verification enforces that the active epochs for any algorithm match this immutable manifest, any attempt by an adversary to present a downgraded algorithm configuration or forge inactivity at an active position is immediately detected as a signature mismatch or tree-head equivocation.
+The EML design neutralizes downgrade attacks by completely eliminating runtime algorithm negotiation. Instead of relying on client-server negotiation during verification, the EML binds algorithm lifecycles directly to the log's root of trust via the epoch manifest. This manifest (Definition 8, §[IV](#sec-formal-model)) is committed in the Signed Tree Head (STH) signed by the log operator. Because client verification enforces that the active epochs for any algorithm match this immutable manifest, any attempt by an adversary to present a downgraded algorithm configuration or forge inactivity at an active position is immediately detected as a signature mismatch or tree-head equivocation.
 
 ```{=html}
 <figure id="fig-projection">
