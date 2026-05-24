@@ -44,3 +44,10 @@ path = "fuzz_targets/proof_mutation.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "state_machine"
+path = "fuzz_targets/state_machine.rs"
+test = false
+doc = false
+bench = false
