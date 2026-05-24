@@ -1,38 +1,16 @@
 ## Introduction {#sec-introduction}
 
-Long-lived authenticated data infrastructures are structurally bound to the operational lifecycles of their underlying cryptographic primitives. Whether driven by the eventual cryptanalytic decay of a hash function, proactive compliance mandates from regulatory bodies (e.g., NIST commercial transitions), or the necessity of migrating to post-quantum alternatives, cryptographic agility is an absolute requirement for ledger longevity. Traditionally, executing such a transition on a live log forces an unviable trilemma:
+Long-lived authenticated data infrastructures are structurally bound to the lifecycles of their underlying cryptographic hash functions. Whether driven by hash decay, regulatory compliance mandates, or post-quantum migrations, cryptographic agility is essential for ledger longevity. Traditionally, executing an algorithm transition on a live log forces an unviable trilemma:
 
-1. **Fork the ledger.** Abandon the old log and create a new one under a
-   stronger algorithm. History is preserved but fragmented: auditors must
-   track multiple disjoint log identities, and the append-only property
-   holds only within each fragment. Certificate Transparency operates in
-   this mode---RFC 9162 binds each log instance to a single hash
-   algorithm, and algorithm migration requires a new log [@rfc9162].
-   Sigsum adopts this model explicitly through time-bounded shard
-   intervals [@sigsum2021].
+1. **Fork the ledger.** Abandon the old log and start a new one. This preserves history but fragments the timeline: verifiers must track multiple disjoint log identities, and the append-only invariant holds only within each shard. Certificate Transparency [@rfc9162] and Sigsum [@sigsum2021] operate in this mode.
 
-2. **Accept weakest-link dependencies.** Construct a chimeric log where
-   multiple algorithms coexist through runtime negotiation or layered
-   signing. The security of the composite degrades to that of the
-   weakest constituent---a vulnerability surface that has produced
-   repeated downgrade attacks in TLS cipher suite negotiation and JWT
-   algorithm confusion [@caraf]. This is the failure mode that motivates
-   Bernstein and others' critique of "cryptographic agility" as
-   architectural risk [@bernstein2015boring].
+2. **Accept weakest-link security.** Combine multiple algorithms via runtime negotiation or layered signatures. The security of the composite log degrades to its weakest constituent, creating vulnerability surfaces for downgrade attacks (e.g., in TLS or JWT) and algorithm confusion [@caraf; @bernstein2015boring].
 
-3. **Pay $\mathcal{O}(N)$ retroactive computation.** Re-hash the entire
-   history under the new algorithm. Git's SHA-1 to SHA-256 transition
-   exemplifies this cost: every object in the repository must be
-   translated through a bidirectional mapping, requiring a four-phase
-   deployment and years of engineering effort for a single algorithm
-   change [@git-hash-transition]. For logs with billions of entries, the
-   cost is prohibitive; for append-only logs that disallow history
-   mutation by construction, it is architecturally impossible without
-   violating the core invariant.
+3. **Pay $\mathcal{O}(N)$ retroactive compute.** Re-hash the entire historical log under the new primitive. In Git's SHA-1 to SHA-256 transition, this required translating every historical object ID, leading to years of deployment friction [@git-hash-transition]. For append-only audit logs with billions of entries, this is computationally prohibitive and structurally impossible without mutating the history.
 
-We present the **Polymorphic Merkle Log (PML)**, a novel abstract class of cryptographically agile authenticated data structures that resolves the upgrade trilemma. A PML maintains a single unified tree topology shared across multiple cryptographic hash profiles. We instantiate this abstract class through the **Epoch Merkle Log (EML)**, a concrete, RFC 9162-compliant construction where each hash algorithm occupies discrete chronological *epochs*---intervals during which it actively processes appended data. Positions outside an algorithm's active epochs contain deterministic *null constants*: fixed-point values derived from the algorithm's own hash function, domain-separated from both real leaf hashes and internal node hashes. A new algorithm added at tree position $n$ computes $\mathcal{O}(\log n)$ null constants to establish its frontier over the existing tree, then immediately participates in subsequent appends. No historical data is re-hashed, and no fork is created. Each algorithm's verification is independent of every other's.
+We introduce the **Polymorphic Merkle Log (PML)**, an abstract class of cryptographically agile authenticated data structures that resolves this trilemma by maintaining a single unified tree topology shared across multiple hash profiles. We instantiate this via the **Epoch Merkle Log (EML)**, a concrete, RFC 9162-compliant construction where each algorithm is active only during discrete chronological *epochs*. Outside its epochs, an algorithm's projection uses deterministic *null constants*: fixed-point digests domain-separated from leaf and node hashes. A new algorithm is registered at size $n$ in $\mathcal{O}(\log n)$ time without retroactive hashing or forking.
 
-Crucially, this architecture reclaims the concept of cryptographic agility from historical vulnerability patterns. Traditional agility mechanisms, such as those in TLS or JSON Web Tokens (JWT), rely on dynamic runtime negotiation, exposing logs to downgrade attacks and algorithm confusion. In contrast, the EML eliminates runtime negotiation entirely: the epoch activation timeline for every algorithm is committed deterministically in an append-only global manifest. Because clients verify proofs against this immutable manifest, they detect any adversarial attempt to substitute or downgrade algorithms at specific coordinates, providing absolute cryptographic security without compromising operational agility.
+EML eliminates dangerous dynamic negotiation by committing all algorithm epoch boundaries to an append-only global manifest. Because verifiers check proofs against this manifest, any attempt to present a downgraded algorithm configuration or forge inactivity at an active position is immediately detected as a signature mismatch or tree equivocation, securing agility without structural complexity.
 
 The trade-off is explicit: historical data remains bound to the
 algorithms that were active at the time of insertion. A newly added
@@ -52,7 +30,7 @@ machine-checked theorem in §[IV](#sec-formal-model).
 
 ### Motivating Case Study: Long-Lived Key Directories
 
-Our work is directly motivated by the deployment requirements of long-lived key directories and decentralized identity registries. These systems face a practical conflict between client device heterogeneity and decade-scale log lifespans. On one hand, resource-constrained IoT devices or embedded hardware often possess hardware-acceleration engines restricted to SHA-256, making support for newer primitives computationally prohibitive. On the other hand, high-performance server clients require modern primitives like SHA3 or BLAKE2 for throughput, and compliance mandates eventually dictate algorithm transitions over 10- to 20-year horizons. While maintaining parallel single-algorithm trees handles cryptographic agility at the endpoint, it fragments the absolute ordering timeline of the log into separate namespaces. Reconciling independent, asynchronous state paths introduces state drift and cross-log synchronization boundaries. The Polymorphic Merkle Log addresses this tension by enforcing a single, universal index space across all cryptographic projections, unifying timeline auditing while accommodating heterogeneous client primitives.
+Our work is motivated by long-lived key directories and identity registries, which face conflicts between device heterogeneity and decade-scale log lifespans. Resource-constrained IoT hardware may be restricted to hardware-accelerated SHA-256, while servers require SHA3 or BLAKE2 for throughput, and compliance mandates eventually dictate transitions. While parallel single-algorithm trees allow agility at endpoints, they fragment the absolute ordering timeline into separate namespaces, introducing state drift and cross-log synchronization boundaries. The PML resolves this by enforcing a single, universal index space across all projections, unifying timeline auditing without duplicating state.
 
 ### Contributions
 
