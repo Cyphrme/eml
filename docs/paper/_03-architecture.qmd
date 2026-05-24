@@ -76,7 +76,7 @@ algorithms.
 ### Epochs
 
 An algorithm's lifetime within the log is partitioned into *epochs*:
-disjoint chronological intervals $[(s_1, e_1), (s_2, e_2), \ldots]$
+disjoint chronological intervals $[[s_1, e_1), [s_2, e_2), \ldots]$
 during which the algorithm actively hashes appended data. Between epochs,
 the algorithm is frozen: its root and frontier state are immutable, and
 new appends produce null constants in its projection.

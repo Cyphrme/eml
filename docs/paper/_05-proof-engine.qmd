@@ -21,7 +21,7 @@ where $w = hi - lo$, $l' = lo + k$, $k = \text{largestPow2Lt}(w)$, and $h = \log
 :::
 
 ::: {#def-active-range}
-**Definition 12** (Active range). Algorithm $a$ has active content in $[lo, hi)$ iff any epoch overlaps it: $\text{active\_range}(a, lo, hi) \iff \exists (s_k, e_k) \in \text{act}(a).\ s_k < hi \wedge e_k > lo$.
+**Definition 12** (Active range). Algorithm $a$ has active content in $[lo, hi)$ iff any epoch overlaps it: $\text{active\_range}(a, lo, hi) \iff \exists [s_k, e_k) \in \text{act}(a).\ s_k < hi \wedge e_k > lo$.
 :::
 
 The cases of Definition 11 are prioritized: (1) empty range, (2) single leaf, (3) null subtree (overlaps no epochs, resolved via `NullTable` in $\mathcal{O}(1)$ for power-of-two, or $\mathcal{O}(\log w)$ recursive splits), (4) stored node (resolved via database lookup in $\mathcal{O}(1)$), and (5) recursive bisection split.
