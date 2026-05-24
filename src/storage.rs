@@ -39,7 +39,7 @@ pub type AlgorithmMetas = Vec<(u64, Epochs)>;
 /// - [`MemoryStorage`] satisfies the contract trivially (in-process collections).
 /// - Database backends should use integrity constraints or checksums.
 /// - Filesystem backends may use content-addressed storage (hash as filename).
-pub trait Storage {
+pub trait Storage: Send + Sync {
     /// Error type for storage operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
