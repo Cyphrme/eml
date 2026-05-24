@@ -44,10 +44,10 @@ impl Hasher for FuzzHasher {
 
 #[derive(Debug, Arbitrary)]
 struct Input {
-    /// Number of leaves to append (clamped to 2..=256).
-    leaf_count: u8,
+    /// Number of leaves to append (clamped to 2..=65536).
+    leaf_count: u16,
     /// Which leaf to generate an inclusion proof for (mod tree_size).
-    target_leaf: u8,
+    target_leaf: u16,
     /// Byte index within the proof path to mutate (mod path length).
     mutate_path_idx: u8,
     /// Byte offset within the selected path entry to flip (mod entry length).
@@ -55,11 +55,11 @@ struct Input {
     /// Bit to flip (0..7).
     mutate_bit: u8,
     /// Midpoint for consistency proof (mod tree_size, clamped to 1..tree_size).
-    consistency_mid: u8,
+    consistency_mid: u16,
 }
 
 fuzz_target!(|input: Input| {
-    // Clamp leaf count to [2, 256] — need at least 2 for meaningful proofs.
+    // Clamp leaf count to [2, 65536] — need at least 2 for meaningful proofs.
     let n = (input.leaf_count as u64).max(2);
 
     let mut log = Log::new(MemoryStorage::new());
