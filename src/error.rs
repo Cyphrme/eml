@@ -36,6 +36,14 @@ pub enum Error {
 
     /// Hasher provided for an algorithm with no persisted metadata.
     UnknownMetadata(u64),
+
+    /// Persistent metadata is corrupted or logically inconsistent.
+    CorruptedMetadata {
+        /// The algorithm ID.
+        alg_id: u64,
+        /// The description of the validation failure.
+        reason: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -62,6 +70,9 @@ impl fmt::Display for Error {
                     "hasher provided for algorithm {id} with no stored metadata"
                 )
             },
+            Self::CorruptedMetadata { alg_id, reason } => {
+                write!(f, "corrupted metadata for algorithm {alg_id}: {reason}")
+            },
         }
     }
 }
@@ -87,6 +98,16 @@ impl PartialEq for Error {
             (Self::Storage(_), Self::Storage(_)) => false, // opaque; not comparable
             (Self::OrphanedMetadata(a), Self::OrphanedMetadata(b)) => a == b,
             (Self::UnknownMetadata(a), Self::UnknownMetadata(b)) => a == b,
+            (
+                Self::CorruptedMetadata {
+                    alg_id: a1,
+                    reason: r1,
+                },
+                Self::CorruptedMetadata {
+                    alg_id: a2,
+                    reason: r2,
+                },
+            ) => a1 == a2 && r1 == r2,
             _ => false,
         }
     }

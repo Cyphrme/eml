@@ -245,6 +245,52 @@ impl<S: Storage> Log<S> {
         Ok(Self { storage, algs })
     }
 
+    fn validate_epochs(alg_id: u64, epochs: &[(u64, u64)], global_size: u64) -> Result<()> {
+        if epochs.is_empty() {
+            return Err(Error::CorruptedMetadata {
+                alg_id,
+                reason: "epoch sequence is empty".to_string(),
+            });
+        }
+        let mut last_end = 0;
+        for (i, &(start, end)) in epochs.iter().enumerate() {
+            if start > end {
+                return Err(Error::CorruptedMetadata {
+                    alg_id,
+                    reason: format!("epoch start {start} exceeds end {end}"),
+                });
+            }
+            if start < last_end {
+                return Err(Error::CorruptedMetadata {
+                    alg_id,
+                    reason: format!("epoch start {start} is less than prior end {last_end}"),
+                });
+            }
+            if end != u64::MAX && end > global_size {
+                return Err(Error::CorruptedMetadata {
+                    alg_id,
+                    reason: format!("epoch end {end} exceeds global size {global_size}"),
+                });
+            }
+            if end == u64::MAX && i != epochs.len() - 1 {
+                return Err(Error::CorruptedMetadata {
+                    alg_id,
+                    reason: "open epoch (end = u64::MAX) is not the final entry".to_string(),
+                });
+            }
+            last_end = end;
+        }
+        if let Some(&(start, end)) = epochs.last() {
+            if end == u64::MAX && start > global_size {
+                return Err(Error::CorruptedMetadata {
+                    alg_id,
+                    reason: format!("active epoch start {start} exceeds global size {global_size}"),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Reconstruct a single algorithm's state from the storage backend.
     /// Exposing this enables the caller to orchestrate concurrency however they see fit.
     pub async fn reconstruct_algorithm_state(
@@ -254,6 +300,7 @@ impl<S: Storage> Log<S> {
         epochs: &[(u64, u64)],
         global_size: u64,
     ) -> Result<AlgState> {
+        Self::validate_epochs(alg_id, epochs, global_size)?;
         let mut null_table = NullTable::new(hasher.as_ref());
 
         // Determine this algorithm's effective tree size.
@@ -2182,6 +2229,25 @@ mod tests {
             )
             .await;
             assert_eq!(result.unwrap_err(), Error::UnknownMetadata(99));
+        });
+    }
+
+    /// Error: metadata is corrupted (invalid epoch boundaries).
+    #[test]
+    fn from_storage_error_corrupted_metadata() {
+        smol::block_on(async {
+            let mut storage = MemoryStorage::new();
+            // Store invalid epochs where start > end (10 > 5).
+            storage.store_algorithm_meta(0, &[(10, 5)]).await.unwrap();
+
+            let result = Log::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).await;
+            assert!(matches!(
+                result.unwrap_err(),
+                Error::CorruptedMetadata {
+                    alg_id: 0,
+                    ref reason
+                } if reason.contains("epoch start 10 exceeds end 5")
+            ));
         });
     }
 
