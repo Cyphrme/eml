@@ -417,17 +417,26 @@ proptest! {
             prop_assert!(infos.len() == 2, "expected 2 algorithms, got {}", infos.len());
         }
 
-        // Validate algorithm 0's manifest entry.
-        let info = infos.iter().find(|a| a.id == 0).expect("algorithm 0 missing from manifest");
-        let expected_root = log.root(0).unwrap();
-        let expected_ts = log.tree_size(0).unwrap();
-        let expected_act = log.activation_index(0).unwrap();
-        let expected_deact = log.deactivation_index(0).unwrap();
+        // Validate each algorithm's manifest entry.
+        for info in &infos {
+            let expected_root = log.root(info.id).unwrap();
+            let expected_ts = log.tree_size(info.id).unwrap();
+            let expected_act = log.activation_index(info.id).unwrap();
+            let expected_deact = log.deactivation_index(info.id).unwrap();
 
-        prop_assert!(info.root == expected_root, "manifest root mismatch");
-        prop_assert!(info.tree_size == expected_ts, "manifest tree_size mismatch");
-        prop_assert!(info.activation_index == expected_act, "manifest activation mismatch");
-        prop_assert!(info.deactivation_index == expected_deact, "manifest deactivation mismatch");
+            prop_assert!(info.root == expected_root, "manifest root mismatch");
+            prop_assert!(info.tree_size == expected_ts, "manifest tree_size mismatch");
+            prop_assert!(info.activation_index == expected_act, "manifest activation mismatch");
+            prop_assert!(info.deactivation_index == expected_deact, "manifest deactivation mismatch");
+
+            let db_epochs: Vec<(u64, u64)> = info.epochs
+                .iter()
+                .map(|&(s, e)| (s, e.unwrap_or(u64::MAX)))
+                .collect();
+            let expected_serialized = crate::log::serialize_epochs(&db_epochs);
+            let expected_manifest_hash = Sha256Hasher.hash(&expected_serialized);
+            prop_assert!(info.manifest_hash == expected_manifest_hash, "manifest hash mismatch");
+        }
     }
 }
 

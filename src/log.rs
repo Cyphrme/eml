@@ -84,6 +84,27 @@ fn count_trailing_ones(n: u64) -> u32 {
 }
 
 // ============================================================================
+// Epoch serialization
+// ============================================================================
+
+/// Canonically serialize a list of epochs to bytes.
+///
+/// Format:
+/// - epochs.len() as u64 big-endian (8 bytes)
+/// - For each (start, end) epoch:
+///   - start as u64 big-endian (8 bytes)
+///   - end as u64 big-endian (8 bytes)
+pub(crate) fn serialize_epochs(epochs: &[(u64, u64)]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(8 + epochs.len() * 16);
+    bytes.extend_from_slice(&(epochs.len() as u64).to_be_bytes());
+    for &(start, end) in epochs {
+        bytes.extend_from_slice(&start.to_be_bytes());
+        bytes.extend_from_slice(&end.to_be_bytes());
+    }
+    bytes
+}
+
+// ============================================================================
 // Null prefix peaks
 // ============================================================================
 
@@ -134,6 +155,9 @@ pub struct AlgorithmInfo {
     /// Complete epoch history. Each `(start, end)` is an active interval.
     /// `end == None` means the epoch is currently open (algorithm is active).
     pub epochs: Vec<(u64, Option<u64>)>,
+    /// Cryptographic digest of the canonical serialization of the algorithm's
+    /// epoch list (manifest commitment).
+    pub manifest_hash: Vec<u8>,
 }
 
 /// An Epoch Merkle Log.
@@ -689,6 +713,9 @@ impl<S: Storage> Log<S> {
                         .reduce(|acc, left| state.hasher.node(&left, &acc))
                         .expect("non-empty stack has at least one element")
                 };
+                let serialized = serialize_epochs(&state.epochs);
+                let manifest_hash = state.hasher.hash(&serialized);
+
                 AlgorithmInfo {
                     id,
                     root,
@@ -705,6 +732,7 @@ impl<S: Storage> Log<S> {
                             (start, if end == u64::MAX { None } else { Some(end) })
                         })
                         .collect(),
+                    manifest_hash,
                 }
             })
             .collect()
@@ -1453,6 +1481,10 @@ mod tests {
         assert_eq!(a0.deactivation_index, Some(4));
         assert_eq!(a0.tree_size, 4);
         assert_eq!(a0.root, log.root(0).unwrap());
+        
+        let expected_a0_serialized = serialize_epochs(&[(0, 4)]);
+        let expected_a0_hash = Sha256Hasher.hash(&expected_a0_serialized);
+        assert_eq!(a0.manifest_hash, expected_a0_hash);
 
         // Alg 1: active, activated at 4.
         let a1 = infos.iter().find(|a| a.id == 1).unwrap();
@@ -1460,6 +1492,10 @@ mod tests {
         assert_eq!(a1.deactivation_index, None);
         assert_eq!(a1.tree_size, 8); // global tree size
         assert_eq!(a1.root, log.root(1).unwrap());
+
+        let expected_a1_serialized = serialize_epochs(&[(4, u64::MAX)]);
+        let expected_a1_hash = AltHasher.hash(&expected_a1_serialized);
+        assert_eq!(a1.manifest_hash, expected_a1_hash);
     }
 
     // ====================================================================
