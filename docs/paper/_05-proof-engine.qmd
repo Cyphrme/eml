@@ -86,6 +86,15 @@ $n$: global tree size. $\lvert\mathcal{A}\rvert$: number of registered
 algorithms.
 :::
 
+### Storage and Database I/O Efficiency
+
+The EML design guarantees physical storage and database I/O sparsity. Although the logical tree topology is dense (composed of $n$ positions for all algorithms), EML implementations do not persist null leaves or null internal nodes in the storage backend.
+
+1. **Zero Write-Side Persistence Overhead**: When an algorithm is frozen (inactive), it is excluded from appending state transitions. No write operations are triggered for null subtrees, achieving a storage reduction of $\mathcal{O}(g)$ for an inactivity gap of size $g$.
+2. **Zero Read-Side Database I/O**: Because `subtree_root` intercepts ranges $[lo, hi)$ that have no epoch overlap and resolves them using the local `NullTable` in-memory, zero database queries are made to resolve null ranges.
+
+Only nodes whose leaf-coverage intervals intersect at least one active epoch require database storage, aligning EML's physical footprint with the actual hashing duration of each algorithm.
+
 ### Inclusion and Consistency Proofs
 
 Proofs follow the RFC 9162 `PATH` and `SUBPROOF` algorithms exactly,
