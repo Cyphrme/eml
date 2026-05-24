@@ -59,80 +59,82 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    // Clamp leaf count to [2, 65536] — need at least 2 for meaningful proofs.
-    let n = (input.leaf_count as u64).max(2);
+    smol::block_on(async {
+        // Clamp leaf count to [2, 65536] — need at least 2 for meaningful proofs.
+        let n = (input.leaf_count as u64).max(2);
 
-    let mut log = Log::new(MemoryStorage::new());
-    log.add_algorithm(0, Box::new(FuzzHasher)).unwrap();
-    for i in 0..n {
-        log.append(&(i as u64).to_le_bytes()).unwrap();
-    }
-
-    let tree_size = log.tree_size(0).unwrap();
-    let root = log.root(0).unwrap();
-
-    // --- Inclusion proof ---
-    let target = (input.target_leaf as u64) % tree_size;
-    let inc_proof = log.inclusion_proof(0, target).unwrap();
-    let leaf_hash = FuzzHasher.leaf(&(target as u64).to_le_bytes());
-
-    // Valid proof MUST verify.
-    assert!(
-        verify_inclusion(&FuzzHasher, &leaf_hash, &inc_proof, &root),
-        "valid inclusion proof failed to verify"
-    );
-
-    // Mutate one bit in the proof path (if non-empty).
-    if !inc_proof.path.is_empty() {
-        let mut mutated = inc_proof.clone();
-        let path_idx = (input.mutate_path_idx as usize) % mutated.path.len();
-        if !mutated.path[path_idx].is_empty() {
-            let byte_idx = (input.mutate_byte_idx as usize) % mutated.path[path_idx].len();
-            let bit = input.mutate_bit % 8;
-            mutated.path[path_idx][byte_idx] ^= 1 << bit;
-
-            // Mutated proof MUST NOT verify.
-            assert!(
-                !verify_inclusion(&FuzzHasher, &leaf_hash, &mutated, &root),
-                "mutated inclusion proof falsely verified!"
-            );
+        let mut log = Log::new(MemoryStorage::new());
+        log.add_algorithm(0, Box::new(FuzzHasher)).await.unwrap();
+        for i in 0..n {
+            log.append(&(i as u64).to_le_bytes()).await.unwrap();
         }
-    }
 
-    // --- Consistency proof ---
-    if tree_size > 1 {
-        let mid = ((input.consistency_mid as u64) % (tree_size - 1)) + 1;
+        let tree_size = log.tree_size(0).await.unwrap();
+        let root = log.root(0).unwrap();
 
-        // Build the old root by constructing a separate log of `mid` leaves.
-        let mut old_log = Log::new(MemoryStorage::new());
-        old_log.add_algorithm(0, Box::new(FuzzHasher)).unwrap();
-        for i in 0..mid {
-            old_log.append(&(i as u64).to_le_bytes()).unwrap();
-        }
-        let old_root = old_log.root(0).unwrap();
-
-        let con_proof = log.consistency_proof(0, mid).unwrap();
+        // --- Inclusion proof ---
+        let target = (input.target_leaf as u64) % tree_size;
+        let inc_proof = log.inclusion_proof(0, target).await.unwrap();
+        let leaf_hash = FuzzHasher.leaf(&(target as u64).to_le_bytes());
 
         // Valid proof MUST verify.
         assert!(
-            verify_consistency(&FuzzHasher, &con_proof, &old_root, &root),
-            "valid consistency proof failed to verify"
+            verify_inclusion(&FuzzHasher, &leaf_hash, &inc_proof, &root),
+            "valid inclusion proof failed to verify"
         );
 
-        // Mutate one bit in the consistency proof path (if non-empty).
-        if !con_proof.path.is_empty() {
-            let mut mutated = con_proof.clone();
+        // Mutate one bit in the proof path (if non-empty).
+        if !inc_proof.path.is_empty() {
+            let mut mutated = inc_proof.clone();
             let path_idx = (input.mutate_path_idx as usize) % mutated.path.len();
             if !mutated.path[path_idx].is_empty() {
                 let byte_idx = (input.mutate_byte_idx as usize) % mutated.path[path_idx].len();
                 let bit = input.mutate_bit % 8;
                 mutated.path[path_idx][byte_idx] ^= 1 << bit;
 
+                // Mutated proof MUST NOT verify.
                 assert!(
-                    !verify_consistency(&FuzzHasher, &mutated, &old_root, &root),
-                    "mutated consistency proof falsely verified!"
+                    !verify_inclusion(&FuzzHasher, &leaf_hash, &mutated, &root),
+                    "mutated inclusion proof falsely verified!"
                 );
             }
         }
-    }
+
+        // --- Consistency proof ---
+        if tree_size > 1 {
+            let mid = ((input.consistency_mid as u64) % (tree_size - 1)) + 1;
+
+            // Build the old root by constructing a separate log of `mid` leaves.
+            let mut old_log = Log::new(MemoryStorage::new());
+            old_log.add_algorithm(0, Box::new(FuzzHasher)).await.unwrap();
+            for i in 0..mid {
+                old_log.append(&(i as u64).to_le_bytes()).await.unwrap();
+            }
+            let old_root = old_log.root(0).unwrap();
+
+            let con_proof = log.consistency_proof(0, mid).await.unwrap();
+
+            // Valid proof MUST verify.
+            assert!(
+                verify_consistency(&FuzzHasher, &con_proof, &old_root, &root),
+                "valid consistency proof failed to verify"
+            );
+
+            // Mutate one bit in the consistency proof path (if non-empty).
+            if !con_proof.path.is_empty() {
+                let mut mutated = con_proof.clone();
+                let path_idx = (input.mutate_path_idx as usize) % mutated.path.len();
+                if !mutated.path[path_idx].is_empty() {
+                    let byte_idx = (input.mutate_byte_idx as usize) % mutated.path[path_idx].len();
+                    let bit = input.mutate_bit % 8;
+                    mutated.path[path_idx][byte_idx] ^= 1 << bit;
+
+                    assert!(
+                        !verify_consistency(&FuzzHasher, &mutated, &old_root, &root),
+                        "mutated consistency proof falsely verified!"
+                    );
+                }
+            }
+        }
+    });
 });

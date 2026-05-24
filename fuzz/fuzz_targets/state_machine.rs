@@ -3,8 +3,8 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use eml::{Hasher, Log, MemoryStorage, Storage};
 
 #[derive(Debug)]
@@ -27,41 +27,47 @@ impl std::error::Error for FuzzStorageErrorEnum {}
 struct FaultyStorage {
     inner: MemoryStorage,
     decisions: Vec<bool>,
-    decision_idx: Rc<Cell<usize>>,
-    inject_faults: Rc<Cell<bool>>,
+    decision_idx: Arc<AtomicUsize>,
+    inject_faults: Arc<AtomicBool>,
 }
 
 impl FaultyStorage {
     fn should_fail(&self) -> bool {
-        if !self.inject_faults.get() {
+        if !self.inject_faults.load(Ordering::SeqCst) {
             return false;
         }
-        let idx = self.decision_idx.get();
+        let idx = self.decision_idx.fetch_add(1, Ordering::SeqCst);
         if idx >= self.decisions.len() {
             return false;
         }
-        let res = self.decisions[idx];
-        self.decision_idx.set(idx + 1);
-        res
+        self.decisions[idx]
     }
 }
 
 impl Storage for FaultyStorage {
     type Error = FuzzStorageErrorEnum;
 
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        if self.should_fail() {
-            return Err(FuzzStorageErrorEnum::Injected("store_leaf failed".to_string()));
+    fn store_leaf(&mut self, index: u64, data: &[u8]) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let should_fail = self.should_fail();
+        let fut = self.inner.store_leaf(index, data);
+        async move {
+            if should_fail {
+                return Err(FuzzStorageErrorEnum::Injected("store_leaf failed".to_string()));
+            }
+            fut.await.map_err(FuzzStorageErrorEnum::Inner)
         }
-        self.inner.store_leaf(index, data).map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
-        self.inner.get_leaf(index).map_err(FuzzStorageErrorEnum::Inner)
+    fn get_leaf(&self, index: u64) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
+        let fut = self.inner.get_leaf(index);
+        async move {
+            fut.await.map_err(FuzzStorageErrorEnum::Inner)
+        }
     }
 
-    fn len(&self) -> u64 {
-        self.inner.len()
+    fn len(&self) -> impl std::future::Future<Output = u64> + Send {
+        let fut = self.inner.len();
+        async move { fut.await }
     }
 
     fn store_node(
@@ -70,11 +76,15 @@ impl Storage for FaultyStorage {
         left: u64,
         height: usize,
         hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        if self.should_fail() {
-            return Err(FuzzStorageErrorEnum::Injected("store_node failed".to_string()));
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let should_fail = self.should_fail();
+        let fut = self.inner.store_node(alg_id, left, height, hash);
+        async move {
+            if should_fail {
+                return Err(FuzzStorageErrorEnum::Injected("store_node failed".to_string()));
+            }
+            fut.await.map_err(FuzzStorageErrorEnum::Inner)
         }
-        self.inner.store_node(alg_id, left, height, hash).map_err(FuzzStorageErrorEnum::Inner)
     }
 
     fn get_node(
@@ -82,23 +92,33 @@ impl Storage for FaultyStorage {
         alg_id: u64,
         left: u64,
         height: usize,
-    ) -> Result<Option<Vec<u8>>, Self::Error> {
-        self.inner.get_node(alg_id, left, height).map_err(FuzzStorageErrorEnum::Inner)
+    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send {
+        let fut = self.inner.get_node(alg_id, left, height);
+        async move {
+            fut.await.map_err(FuzzStorageErrorEnum::Inner)
+        }
     }
 
     fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        if self.should_fail() {
-            return Err(FuzzStorageErrorEnum::Injected("store_algorithm_meta failed".to_string()));
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let should_fail = self.should_fail();
+        let fut = self.inner.store_algorithm_meta(alg_id, epochs);
+        async move {
+            if should_fail {
+                return Err(FuzzStorageErrorEnum::Injected("store_algorithm_meta failed".to_string()));
+            }
+            fut.await.map_err(FuzzStorageErrorEnum::Inner)
         }
-        self.inner.store_algorithm_meta(alg_id, epochs).map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
-        self.inner.load_algorithm_metas().map_err(FuzzStorageErrorEnum::Inner)
+    fn load_algorithm_metas(&self) -> impl std::future::Future<Output = Result<eml::AlgorithmMetas, Self::Error>> + Send {
+        let fut = self.inner.load_algorithm_metas();
+        async move {
+            fut.await.map_err(FuzzStorageErrorEnum::Inner)
+        }
     }
 }
 
@@ -224,103 +244,114 @@ struct FuzzInput {
 }
 
 fuzz_target!(|input: FuzzInput| {
-    let decisions = input.decisions;
-    let decision_idx = Rc::new(Cell::new(0));
-    let inject_faults = Rc::new(Cell::new(true));
+    smol::block_on(async {
+        let decisions = input.decisions;
+        let decision_idx = Arc::new(AtomicUsize::new(0));
+        let inject_faults = Arc::new(AtomicBool::new(true));
 
-    let storage = FaultyStorage {
-        inner: MemoryStorage::new(),
-        decisions,
-        decision_idx: decision_idx.clone(),
-        inject_faults: inject_faults.clone(),
-    };
-
-    let mut log = Log::new(storage);
-    let mut reference_leaves = Vec::new();
-    let mut registered_algs = std::collections::BTreeSet::new();
-
-    for command in input.commands {
-        let res = match &command {
-            FuzzCommand::Append { data } => {
-                let res = log.append(data);
-                if res.is_ok() {
-                    reference_leaves.push(data.clone());
-                }
-                res.map(|_| ())
-            }
-            FuzzCommand::AddAlgorithm { alg_id } => {
-                let id = *alg_id as u64;
-                if registered_algs.contains(&id) {
-                    continue;
-                }
-                let hasher = get_hasher(id);
-                let res = log.add_algorithm(id, hasher);
-                if res.is_ok() {
-                    registered_algs.insert(id);
-                }
-                res
-            }
-            FuzzCommand::RemoveAlgorithm { alg_id } => {
-                let id = *alg_id as u64;
-                log.remove_algorithm(id)
-            }
-            FuzzCommand::ResumeAlgorithm { alg_id } => {
-                let id = *alg_id as u64;
-                log.resume_algorithm(id)
-            }
+        let storage = FaultyStorage {
+            inner: MemoryStorage::new(),
+            decisions,
+            decision_idx: decision_idx.clone(),
+            inject_faults: inject_faults.clone(),
         };
 
-        if let Err(eml::Error::Storage(_)) = res {
-            // Write failure! Discard and reconstruct.
-            inject_faults.set(false);
+        let mut log = Log::new(storage);
+        let mut reference_leaves = Vec::new();
+        let mut registered_algs = std::collections::BTreeSet::new();
 
-            let storage = log.into_storage();
-            let hashers: Vec<(u64, Box<dyn Hasher>)> = registered_algs
-                .iter()
-                .map(|&id| (id, get_hasher(id)))
-                .collect();
+        for command in input.commands {
+            let res = match &command {
+                FuzzCommand::Append { data } => {
+                    let res = log.append(data).await;
+                    if res.is_ok() {
+                        reference_leaves.push(data.clone());
+                    }
+                    res.map(|_| ())
+                }
+                FuzzCommand::AddAlgorithm { alg_id } => {
+                    let id = *alg_id as u64;
+                    if registered_algs.contains(&id) {
+                        continue;
+                    }
+                    let hasher = get_hasher(id);
+                    let res = log.add_algorithm(id, hasher).await;
+                    if res.is_ok() {
+                        registered_algs.insert(id);
+                    }
+                    res
+                }
+                FuzzCommand::RemoveAlgorithm { alg_id } => {
+                    let id = *alg_id as u64;
+                    log.remove_algorithm(id).await
+                }
+                FuzzCommand::ResumeAlgorithm { alg_id } => {
+                    let id = *alg_id as u64;
+                    log.resume_algorithm(id).await
+                }
+            };
 
-            let reconstructed = Log::from_storage(storage, hashers)
-                .expect("Failed to reconstruct Log from storage after write error");
+            if let Err(eml::Error::Storage(_)) = res {
+                // Write failure! Discard and reconstruct.
+                inject_faults.store(false, Ordering::SeqCst);
 
-            log = reconstructed;
-            inject_faults.set(true);
-        }
+                let storage = log.into_storage();
 
-        // Verify invariants on the current state.
-        let global_size = log.size();
-        assert_eq!(global_size, reference_leaves.len() as u64);
+                // Reconstruct reference_leaves by querying get_leaf on storage.
+                let len = storage.len().await;
+                let mut leaves = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    leaves.push(storage.get_leaf(i).await.unwrap());
+                }
+                reference_leaves = leaves;
 
-        for &alg_id in &registered_algs {
-            let has_active = log.is_active(alg_id).unwrap();
-            let ts = log.tree_size(alg_id).unwrap();
+                let hashers: Vec<(u64, Box<dyn Hasher>)> = registered_algs
+                    .iter()
+                    .map(|&id| (id, get_hasher(id)))
+                    .collect();
 
-            if has_active {
-                assert_eq!(ts, global_size);
-            } else {
-                assert!(ts <= global_size);
+                let reconstructed = Log::from_storage(storage, hashers).await
+                    .expect("Failed to reconstruct Log from storage after write error");
+
+                log = reconstructed;
+                inject_faults.store(true, Ordering::SeqCst);
             }
 
-            let root = log.root(alg_id).unwrap();
-            let epochs = log.epochs(alg_id).unwrap();
+            // Verify invariants on the current state.
+            let global_size = log.size().await;
+            assert_eq!(global_size, reference_leaves.len() as u64);
 
-            // Construct projection.
-            let hasher = get_hasher(alg_id);
-            let mut projected = Vec::with_capacity(ts as usize);
-            for i in 0..ts {
-                let active = epochs.iter().any(|&(start, end)| {
-                    start <= i && end.map_or(true, |e| i < e)
-                });
-                let h = if active {
-                    hasher.leaf(&reference_leaves[i as usize])
+            for &alg_id in &registered_algs {
+                let has_active = log.is_active(alg_id).unwrap();
+                let ts = log.tree_size(alg_id).await.unwrap();
+
+                if has_active {
+                    assert_eq!(ts, global_size);
                 } else {
-                    hasher.null()
-                };
-                projected.push(h);
-            }
+                    assert!(ts <= global_size);
+                }
 
-            let expected_root = mth(hasher.as_ref(), &projected);
-            assert_eq!(root, expected_root);
+                let root = log.root(alg_id).unwrap();
+                let epochs = log.epochs(alg_id).unwrap();
+
+                // Construct projection.
+                let hasher = get_hasher(alg_id);
+                let mut projected = Vec::with_capacity(ts as usize);
+                for i in 0..ts {
+                    let active = epochs.iter().any(|&(start, end)| {
+                        start <= i && end.map_or(true, |e| i < e)
+                    });
+                    let h = if active {
+                        hasher.leaf(&reference_leaves[i as usize])
+                    } else {
+                        hasher.null()
+                    };
+                    projected.push(h);
+                }
+
+                let expected_root = mth(hasher.as_ref(), &projected);
+                assert_eq!(root, expected_root);
+            }
         }
-    }
+    });
 });
