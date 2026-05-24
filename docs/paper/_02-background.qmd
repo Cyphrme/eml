@@ -2,10 +2,10 @@
 
 ### RFC 9162 Merkle Trees
 
-The EML extends the standard single-algorithm append-only Merkle tree topology defined in
+Polymorphic Merkle Logs (PMLs) extend the standard single-algorithm append-only Merkle tree topology defined in
 RFC 9162 [@rfc9162] (which we refer to as a **Merkle append-only Log Tree (MALT)** for comparative shorthand), formalizing the construction introduced by
 Crosby and Wallach [@crosby2009] and deployed at scale through
-Certificate Transparency [@rfc6962]. We summarize the relevant
+Certificate Transparency [@rfc6962]. We present the Epoch Merkle Log (EML) as a concrete instantiation of the PML class. We summarize the relevant
 definitions.
 
 A log of $n$ leaf entries $D_n = \{d_0, d_1, \ldots, d_{n-1}\}$ is
@@ -48,7 +48,7 @@ constraint, not merely an operational policy [@rfc9162].
 This binding produces the upgrade trilemma described in
 §[I](#sec-introduction): any log whose identity is derived from its root
 hash is, by construction, married to the algorithm that produced that
-hash. The EML relaxes this binding by allowing multiple algorithms to
+hash. The PML class relaxes this binding by allowing multiple algorithms to
 coexist over a shared topology, each producing an independent root.
 
 ### Random Oracle Constraint
@@ -134,16 +134,14 @@ absence of algorithm $a$ at a particular point in the system's history.
 The EML's null constants are not inert padding; they are **unforgeable
 witnesses of algorithm inactivity**. A null at position $i$ for
 algorithm $a$ is a committed statement---embedded in the Merkle hash
-chain, reflected in $\text{root}(a)$, signed by the STH---that no key
-using algorithm $a$ was active at the $i$-th event. To forge activity at
+chain, reflected in $\text{root}(a)$, signed by the STH---that
+algorithm $a$ was inactive at the $i$-th event. To forge activity at
 a position where none existed, an attacker must replace $N_0(a)$ with
 $\text{leaf}(a, d)$, altering $\text{root}(a)$ and therefore the
 STH---a detectable equivocation. Independent trees provide no structural
 representation of inactivity and thus no mechanism to cryptographically
-prove it. This temporal witness operates at algorithm granularity; when
-multiple keys share a hash algorithm, the tree commits which
-*algorithm* was active at each position, while key identity is resolved
-by the leaf payload.
+prove it. This temporal witness operates at algorithm granularity; the
+tree commits which algorithm was active at each position, while specific payload identity is resolved by the leaf payload itself.
 
 Operationally, the shared topology also yields unified consistency
 proofs (a single check vs. $|\mathcal{A}|$ independent checks) and
