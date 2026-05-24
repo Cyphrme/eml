@@ -612,7 +612,10 @@ impl<S: Storage> Log<S> {
 
         // Fold right-to-left: the rightmost stack entry is the accumulator seed.
         let mut iter = state.stack.iter().rev();
-        let first = iter.next().expect("non-empty stack has at least one element").clone();
+        let first = iter
+            .next()
+            .expect("non-empty stack has at least one element")
+            .clone();
         let root = iter.fold(first, |acc, left| state.hasher.node(left, &acc));
 
         Ok(root)
@@ -702,7 +705,10 @@ impl<S: Storage> Log<S> {
                     state.hasher.empty()
                 } else {
                     let mut iter = state.stack.iter().rev();
-                    let first = iter.next().expect("non-empty stack has at least one element").clone();
+                    let first = iter
+                        .next()
+                        .expect("non-empty stack has at least one element")
+                        .clone();
                     iter.fold(first, |acc, left| state.hasher.node(left, &acc))
                 };
                 let serialized = serialize_epochs(&state.epochs);
@@ -989,6 +995,7 @@ impl<S: Storage> Log<S> {
     ///
     /// Recursively computes the intermediate hashes proving that the first
     /// `m` leaves (relative to `lo`) form a prefix of `[lo, hi)`.
+    #[allow(clippy::too_many_arguments)]
     fn subproof(
         &self,
         state: &AlgState,
@@ -1472,7 +1479,7 @@ mod tests {
         assert_eq!(a0.deactivation_index, Some(4));
         assert_eq!(a0.tree_size, 4);
         assert_eq!(a0.root, log.root(0).unwrap());
-        
+
         let expected_a0_serialized = serialize_epochs(&[(0, 4)]);
         let expected_a0_hash = Sha256Hasher.hash(&expected_a0_serialized);
         assert_eq!(a0.manifest_hash, expected_a0_hash);

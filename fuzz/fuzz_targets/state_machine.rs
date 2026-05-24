@@ -97,7 +97,7 @@ impl Storage for FaultyStorage {
         self.inner.store_algorithm_meta(alg_id, epochs).map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error> {
+    fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().map_err(FuzzStorageErrorEnum::Inner)
     }
 }

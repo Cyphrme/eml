@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use common::Sha256Hasher;
-use eml::{Hasher, Log, Storage, verify_inclusion};
+use eml::{AlgorithmMetas, Hasher, Log, Storage, verify_inclusion};
 
 // ============================================================================
 // CorruptingStorage — fault injection wrapper
@@ -201,7 +201,7 @@ impl Storage for CorruptingStorage {
         Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error> {
+    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         // Fault injection tests don't reconstruct from storage.
         Ok(Vec::new())
     }
@@ -216,7 +216,7 @@ fn build_log(leaf_count: u64) -> (Log<CorruptingStorage>, FaultHandle) {
     let mut log = Log::new(storage);
     log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
     for i in 0..leaf_count {
-        log.append(&(i as u64).to_le_bytes()).unwrap();
+        log.append(&i.to_le_bytes()).unwrap();
     }
     (log, handle)
 }
@@ -244,7 +244,7 @@ fn bit_flip_corrupts_inclusion_proof() {
         // verification to fail.
         for leaf_idx in [0, n / 2, n - 1] {
             let proof = log.inclusion_proof(0, leaf_idx).unwrap();
-            let leaf_hash = Sha256Hasher.leaf(&(leaf_idx as u64).to_le_bytes());
+            let leaf_hash = Sha256Hasher.leaf(&leaf_idx.to_le_bytes());
 
             // The proof was generated with corrupted nodes —
             // it must NOT verify against the correct root.
@@ -299,7 +299,7 @@ fn drop_mode_forces_recomputation() {
 
         for leaf_idx in [0, n / 2, n - 1] {
             let proof = log.inclusion_proof(0, leaf_idx).unwrap();
-            let leaf_hash = Sha256Hasher.leaf(&(leaf_idx as u64).to_le_bytes());
+            let leaf_hash = Sha256Hasher.leaf(&leaf_idx.to_le_bytes());
 
             // Proof should STILL verify — subtree_root falls back to
             // recursive computation from intact leaf data.

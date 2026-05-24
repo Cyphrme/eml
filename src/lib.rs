@@ -58,7 +58,7 @@ pub use proof::{
     ConsistencyProof, ElidedInclusionProof, InclusionProof, elide_inclusion_proof,
     rehydrate_inclusion_proof, verify_consistency, verify_inclusion,
 };
-pub use storage::{MemoryStorage, MemoryStorageError, Storage};
+pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, MemoryStorageError, Storage};
 
 #[cfg(test)]
 mod proptests;

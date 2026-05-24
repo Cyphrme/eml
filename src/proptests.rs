@@ -702,12 +702,12 @@ proptest! {
 
         // Valid range: all indices < freeze_at must produce valid proofs.
         let projected = log.project(0).unwrap();
-        for i in 0..freeze_at {
+        for (i, projected_leaf) in projected.iter().enumerate().take(freeze_at) {
             let p = log.inclusion_proof(0, i as u64).unwrap_or_else(|e| {
                 panic!("inclusion_proof(0, {i}) should succeed but got: {e}")
             });
             prop_assert!(
-                crate::verify_inclusion(&Sha256Hasher, &projected[i], &p, &frozen_root),
+                crate::verify_inclusion(&Sha256Hasher, projected_leaf, &p, &frozen_root),
                 "I-SOUND failed for frozen alg at index {}", i
             );
         }

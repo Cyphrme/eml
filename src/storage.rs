@@ -10,6 +10,12 @@
 
 use std::collections::HashMap;
 
+/// Epoch metadata for a registered algorithm: a sequence of half-open `[start, end)` intervals.
+pub type Epochs = Vec<(u64, u64)>;
+
+/// Reconstructed metadata for registered algorithms: a list of `(alg_id, epochs)` pairs.
+pub type AlgorithmMetas = Vec<(u64, Epochs)>;
+
 /// Backend for persisting and retrieving raw leaf payloads and sealed
 /// internal node hashes.
 ///
@@ -106,7 +112,7 @@ pub trait Storage {
     /// has been registered (including frozen ones). Used by
     /// `Log::from_storage` to reconstruct the algorithm registry on cold
     /// start.
-    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error>;
+    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error>;
 }
 
 // ============================================================================
@@ -221,7 +227,7 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error> {
+    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         Ok(self
             .algorithm_metas
             .iter()
