@@ -68,10 +68,18 @@ Specifically, we require:
   $H_b(x)$. Under ROM, this follows from the independence of distinct
   random oracles.
 
-The third property is the cryptographic foundation for [Alg-Ind]{.smallcaps}
-(§[IV](#sec-formal-model)): adding a weak algorithm to the EML cannot
-weaken a strong one, because the hash outputs of distinct algorithms are
-informationally independent.
+- **Domain separation.** For any hash function $H_a$, inputs with
+  distinct prefix tags produce computationally independent outputs.
+  Specifically, $H_a(\mathtt{0x00} \concat d) \neq H_a(\mathtt{0x02})$
+  for all $d$---a collision between the leaf and null domains requires
+  breaking preimage resistance of $H_a$. This is the sole cryptographic
+  assumption required by Temporal Binding (Theorem 2,
+  §[IV](#sec-formal-model)).
+
+The third property is the cryptographic foundation for Algorithm
+Isolation (Theorem 3, §[IV](#sec-formal-model)): adding a weak
+algorithm to the EML cannot weaken a strong one, because the hash
+outputs of distinct algorithms are informationally independent.
 
 ### Design Constraints
 
@@ -106,8 +114,8 @@ algorithm's projection.
 
 The adversary *cannot* exploit the presence of multiple algorithms to
 weaken any single algorithm's guarantees. This is the content of
-[Alg-Ind]{.smallcaps}: each projection is informationally independent under
-ROM.
+Algorithm Isolation (Theorem 3, §[IV](#sec-formal-model)): each
+projection is informationally independent under ROM.
 
 **Why not independent trees?** An alternative design maintains entirely
 separate Merkle trees per algorithm, binding their roots via a composite
@@ -158,9 +166,9 @@ operational tradeoffs:
 
 **Epoch manifest commitment via the Signed Tree Head.** The EML binds
 the activation manifest directly to the log's root of trust. The Signed
-Tree Head (STH) commits the global tree size, per-algorithm roots and
-tree sizes, and a cryptographic digest of the canonical activation map
-(formalized as Definition 15 in §[IV](#sec-formal-model)). This binding
+Tree Head (STH) commits the global tree size, and per-algorithm roots,
+tree sizes, and cryptographic digests of each algorithm's canonical activation map
+(formalized as Definition 14 in §[IV](#sec-formal-model)). This binding
 guarantees that any attempt by a malicious log to present conflicting
 manifests to different clients requires signing distinct STHs---a
 classical equivocation detectable by standard client-gossip and witness

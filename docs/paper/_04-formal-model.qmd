@@ -210,21 +210,20 @@ unchanged as the root.
 commitment is:
 
 $$
-\text{STH} = \text{Sign}_\sigma\!\left(n,\; t,\; \left\{\bigl(a,\, \text{root}(a),\, \text{tree\_size}(a)\bigr) \mid a \in \text{dom}(\text{act})\right\},\; H(\text{act})\right)
+\text{STH} = \text{Sign}_\sigma\!\left(n,\; t,\; \left\{\bigl(a,\, \text{root}(a),\, \text{tree\_size}(a),\, H_a(\text{act}(a))\bigr) \mid a \in \text{dom}(\text{act})\right\}\right)
 $$
 
 where $n$ is the global tree size, $t$ is a timestamp, $\sigma$ is the
-log's signing key, and $H(\text{act})$ is a cryptographic digest
-of a canonical, deterministic serialization of the activation map
-(Definition 4). The hash function $H$ used for manifest commitment is
-independent of the tree's per-algorithm hash functions $H_a$.
+log's signing key, and $H_a(\text{act}(a))$ is a cryptographic digest
+of a canonical, deterministic serialization of algorithm $a$'s activation map
+(Definition 4) using its own hash function $H_a$.
 Canonicality requires that the serialization function is
 injective: distinct logical activation maps must produce distinct byte
-sequences. The concrete serialization format is implementation-defined.
+sequences. The concrete serialization format is big-endian binary encoding.
 
-The per-algorithm entries include $\text{tree\_size}(a)$ alongside
-$\text{root}(a)$. Although $\text{tree\_size}(a)$ is derivable from
-$\text{act}$ (it equals $n$ for active algorithms and $e_k$ for frozen
+The per-algorithm entries include $\text{tree\_size}(a)$ and
+$H_a(\text{act}(a))$ alongside $\text{root}(a)$. Although $\text{tree\_size}(a)$ is
+derivable from $\text{act}$ (it equals $n$ for active algorithms and $e_k$ for frozen
 ones), its inclusion in the signed tuple enables epoch-unaware clients
 to verify standard RFC 9162 proofs using only the STH, without
 possessing or parsing the activation map.

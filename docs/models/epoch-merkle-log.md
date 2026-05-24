@@ -350,26 +350,33 @@ commitment is:
 STH = Sign_σ(
   n,
   t,
-  { (a, root(a), tree_size(a)) | a ∈ dom(act) },
-  H(act)
+  { (a, root(a), tree_size(a), H_a(act(a))) | a ∈ dom(act) }
 )
 ```
 
 where `n` is the global tree size, `t` is a timestamp, `σ` is the log's
-signing key, and `H(act)` is a cryptographic digest of a canonical,
-deterministic serialization of the activation map (Definition 3).
-The hash function `H` used for manifest commitment is independent of the
-tree's per-algorithm hash functions.
-Canonicality requires that the serialization function is injective:
-distinct logical activation maps must produce distinct byte sequences.
-The concrete serialization format is implementation-defined.
+signing key, and `H_a(act(a))` is a cryptographic digest of a canonical,
+deterministic serialization of algorithm `a`'s activation map (epochs,
+Definition 3) using its own hash function `H_a`.
+The serialization format is deterministic and injective: distinct logical
+activation maps produce distinct byte sequences. The concrete serialization
+format is big-endian binary encoding (Definition 13c).
 
-The per-algorithm entries include `tree_size(a)` alongside `root(a)`.
-Although `tree_size(a)` is derivable from `act` (it equals `n` for
+The per-algorithm entries include `tree_size(a)` and `H_a(act(a))` alongside
+`root(a)`. Although `tree_size(a)` is derivable from `act` (it equals `n` for
 active algorithms and `e_k` for frozen ones), its inclusion in the
 signed tuple enables epoch-unaware clients to verify standard RFC 9162
 proofs using only the STH, without possessing or parsing the activation
 map.
+
+**Definition 13c** (Canonical Activation Map Serialization). The canonical
+serialization of an algorithm `a`'s epochs `act(a) = [(s₁, e₁), (s₂, e₂), ...]`
+is defined as:
+- `|act(a)|` represented as a 64-bit big-endian integer.
+- For each epoch `(s_k, e_k)`:
+  - `s_k` represented as a 64-bit big-endian integer.
+  - `e_k` represented as a 64-bit big-endian integer (with `u64::MAX` for active).
+  - The hash function `H_a` hashes this serialization directly without any domain prefix.
 
 ### §11. Projection (Specification Oracle)
 
@@ -644,7 +651,7 @@ but a cryptographic consequence of STH verification.
 | T-BOUND                  | PASS   | All inactive positions (pre-activation, inter-epoch gaps, post-deactivation): D-SEP prevents forgery. Beyond `tree_size(a)`: projection bounds prevent proof generation.                            |
 | ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                                                                  |
 | PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                                                                 |
-| M-COMMIT                 | PASS   | By construction: H(act) is committed by the STH signature. Agreement on the STH implies agreement on the activation map.                                                                           |
+| M-COMMIT                 | PASS   | By construction: H_a(act(a)) is committed in the STH signature per algorithm. Agreement on the STH implies agreement on the activation map.                                                           |
 | **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-EML → PROJ-VALID, M-COMMIT → elision shared-state, ALG-IND standalone.                                      |
 | **External adequacy**    | PASS   | The model captures all design constraints from the original exploration.                                                                                                                            |
 | **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                                                                     |
