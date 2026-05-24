@@ -194,74 +194,64 @@ impl std::error::Error for MemoryStorageError {}
 impl Storage for MemoryStorage {
     type Error = MemoryStorageError;
 
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            debug_assert_eq!(
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
+        debug_assert_eq!(
+            index,
+            self.leaves.len() as u64,
+            "store_leaf called out of order"
+        );
+        self.leaves.push(data.to_vec());
+        Ok(())
+    }
+
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
+        self.leaves
+            .get(index as usize)
+            .cloned()
+            .ok_or(MemoryStorageError {
                 index,
-                self.leaves.len() as u64,
-                "store_leaf called out of order"
-            );
-            self.leaves.push(data.to_vec());
-            Ok(())
-        }
+                stored: self.leaves.len() as u64,
+            })
     }
 
-    fn get_leaf(&self, index: u64) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
-        async move {
-            self.leaves
-                .get(index as usize)
-                .cloned()
-                .ok_or(MemoryStorageError {
-                    index,
-                    stored: self.leaves.len() as u64,
-                })
-        }
+    async fn len(&self) -> u64 {
+        self.leaves.len() as u64
     }
 
-    fn len(&self) -> impl std::future::Future<Output = u64> + Send {
-        async move { self.leaves.len() as u64 }
-    }
-
-    fn store_node(
+    async fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
         height: usize,
         hash: &[u8],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            self.nodes.insert((alg_id, left, height), hash.to_vec());
-            Ok(())
-        }
+    ) -> Result<(), Self::Error> {
+        self.nodes.insert((alg_id, left, height), hash.to_vec());
+        Ok(())
     }
 
-    fn get_node(
+    async fn get_node(
         &self,
         alg_id: u64,
         left: u64,
         height: usize,
-    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send {
-        async move { Ok(self.nodes.get(&(alg_id, left, height)).cloned()) }
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        Ok(self.nodes.get(&(alg_id, left, height)).cloned())
     }
 
-    fn store_algorithm_meta(
+    async fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            self.algorithm_metas.insert(alg_id, epochs.to_vec());
-            Ok(())
-        }
+    ) -> Result<(), Self::Error> {
+        self.algorithm_metas.insert(alg_id, epochs.to_vec());
+        Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send {
-        async move {
-            Ok(self
-                .algorithm_metas
-                .iter()
-                .map(|(&id, e)| (id, e.clone()))
-                .collect())
-        }
+    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
+        Ok(self
+            .algorithm_metas
+            .iter()
+            .map(|(&id, e)| (id, e.clone()))
+            .collect())
     }
 }

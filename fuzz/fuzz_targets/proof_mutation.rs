@@ -66,7 +66,7 @@ fuzz_target!(|input: Input| {
         let mut log = Log::new(MemoryStorage::new());
         log.add_algorithm(0, Box::new(FuzzHasher)).await.unwrap();
         for i in 0..n {
-            log.append(&(i as u64).to_le_bytes()).await.unwrap();
+            log.append(&i.to_le_bytes()).await.unwrap();
         }
 
         let tree_size = log.tree_size(0).await.unwrap();
@@ -108,7 +108,7 @@ fuzz_target!(|input: Input| {
             let mut old_log = Log::new(MemoryStorage::new());
             old_log.add_algorithm(0, Box::new(FuzzHasher)).await.unwrap();
             for i in 0..mid {
-                old_log.append(&(i as u64).to_le_bytes()).await.unwrap();
+                old_log.append(&i.to_le_bytes()).await.unwrap();
             }
             let old_root = old_log.root(0).unwrap();
 

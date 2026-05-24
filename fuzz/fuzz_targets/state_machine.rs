@@ -47,78 +47,59 @@ impl FaultyStorage {
 impl Storage for FaultyStorage {
     type Error = FuzzStorageErrorEnum;
 
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
         let should_fail = self.should_fail();
-        let fut = self.inner.store_leaf(index, data);
-        async move {
-            if should_fail {
-                return Err(FuzzStorageErrorEnum::Injected("store_leaf failed".to_string()));
-            }
-            fut.await.map_err(FuzzStorageErrorEnum::Inner)
+        if should_fail {
+            return Err(FuzzStorageErrorEnum::Injected("store_leaf failed".to_string()));
         }
+        self.inner.store_leaf(index, data).await.map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn get_leaf(&self, index: u64) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
-        let fut = self.inner.get_leaf(index);
-        async move {
-            fut.await.map_err(FuzzStorageErrorEnum::Inner)
-        }
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
+        self.inner.get_leaf(index).await.map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn len(&self) -> impl std::future::Future<Output = u64> + Send {
-        let fut = self.inner.len();
-        async move { fut.await }
+    async fn len(&self) -> u64 {
+        self.inner.len().await
     }
 
-    fn store_node(
+    async fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
         height: usize,
         hash: &[u8],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> Result<(), Self::Error> {
         let should_fail = self.should_fail();
-        let fut = self.inner.store_node(alg_id, left, height, hash);
-        async move {
-            if should_fail {
-                return Err(FuzzStorageErrorEnum::Injected("store_node failed".to_string()));
-            }
-            fut.await.map_err(FuzzStorageErrorEnum::Inner)
+        if should_fail {
+            return Err(FuzzStorageErrorEnum::Injected("store_node failed".to_string()));
         }
+        self.inner.store_node(alg_id, left, height, hash).await.map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn get_node(
+    async fn get_node(
         &self,
         alg_id: u64,
         left: u64,
         height: usize,
-    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send {
-        let fut = self.inner.get_node(alg_id, left, height);
-        async move {
-            fut.await.map_err(FuzzStorageErrorEnum::Inner)
-        }
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        self.inner.get_node(alg_id, left, height).await.map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn store_algorithm_meta(
+    async fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> Result<(), Self::Error> {
         let should_fail = self.should_fail();
-        let fut = self.inner.store_algorithm_meta(alg_id, epochs);
-        async move {
-            if should_fail {
-                return Err(FuzzStorageErrorEnum::Injected("store_algorithm_meta failed".to_string()));
-            }
-            fut.await.map_err(FuzzStorageErrorEnum::Inner)
+        if should_fail {
+            return Err(FuzzStorageErrorEnum::Injected("store_algorithm_meta failed".to_string()));
         }
+        self.inner.store_algorithm_meta(alg_id, epochs).await.map_err(FuzzStorageErrorEnum::Inner)
     }
 
-    fn load_algorithm_metas(&self) -> impl std::future::Future<Output = Result<eml::AlgorithmMetas, Self::Error>> + Send {
-        let fut = self.inner.load_algorithm_metas();
-        async move {
-            fut.await.map_err(FuzzStorageErrorEnum::Inner)
-        }
+    async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
+        self.inner.load_algorithm_metas().await.map_err(FuzzStorageErrorEnum::Inner)
     }
 }
 
@@ -339,7 +320,7 @@ fuzz_target!(|input: FuzzInput| {
                 let mut projected = Vec::with_capacity(ts as usize);
                 for i in 0..ts {
                     let active = epochs.iter().any(|&(start, end)| {
-                        start <= i && end.map_or(true, |e| i < e)
+                        start <= i && end.is_none_or(|e| i < e)
                     });
                     let h = if active {
                         hasher.leaf(&reference_leaves[i as usize])

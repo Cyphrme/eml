@@ -8,8 +8,8 @@
 mod common;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use common::Sha256Hasher;
 use eml::{AlgorithmMetas, Hasher, Log, Storage, verify_inclusion};
@@ -133,80 +133,73 @@ impl CorruptingStorage {
 impl Storage for CorruptingStorage {
     type Error = CorruptingStorageError;
 
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
         debug_assert_eq!(index, self.leaves.len() as u64);
         self.leaves.push(data.to_vec());
-        async move { Ok(()) }
+        Ok(())
     }
 
-    fn get_leaf(&self, index: u64) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         let val = self.leaves.get(index as usize).cloned();
         let stored = self.leaves.len() as u64;
-        async move {
-            val.ok_or(CorruptingStorageError { index, stored })
-        }
+        val.ok_or(CorruptingStorageError { index, stored })
     }
 
-    fn len(&self) -> impl std::future::Future<Output = u64> + Send {
-        let l = self.leaves.len() as u64;
-        async move { l }
+    async fn len(&self) -> u64 {
+        self.leaves.len() as u64
     }
 
-    fn store_node(
+    async fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
         height: usize,
         hash: &[u8],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> Result<(), Self::Error> {
         self.nodes.insert((alg_id, left, height), hash.to_vec());
-        async move { Ok(()) }
+        Ok(())
     }
 
-    fn get_node(
+    async fn get_node(
         &self,
         alg_id: u64,
         left: u64,
         height: usize,
-    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send {
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
         let mode = *self.mode.lock().unwrap();
         let val = self.nodes.get(&(alg_id, left, height)).cloned();
         let has_key = self.nodes.contains_key(&(alg_id, left, height));
         let corruptions = self.corruptions.clone();
-        async move {
-            match mode {
-                FaultMode::Clean => Ok(val),
-                FaultMode::BitFlip { byte_offset, bit } => {
-                    Ok(val.map(|hash| {
-                        let mut corrupted = hash.clone();
-                        if !corrupted.is_empty() {
-                            let idx = byte_offset % corrupted.len();
-                            corrupted[idx] ^= 1 << bit;
-                            corruptions.fetch_add(1, Ordering::SeqCst);
-                        }
-                        corrupted
-                    }))
+        match mode {
+            FaultMode::Clean => Ok(val),
+            FaultMode::BitFlip { byte_offset, bit } => Ok(val.map(|hash| {
+                let mut corrupted = hash.clone();
+                if !corrupted.is_empty() {
+                    let idx = byte_offset % corrupted.len();
+                    corrupted[idx] ^= 1 << bit;
+                    corruptions.fetch_add(1, Ordering::SeqCst);
                 }
-                FaultMode::Drop => {
-                    if has_key {
-                        corruptions.fetch_add(1, Ordering::SeqCst);
-                    }
-                    Ok(None)
+                corrupted
+            })),
+            FaultMode::Drop => {
+                if has_key {
+                    corruptions.fetch_add(1, Ordering::SeqCst);
                 }
+                Ok(None)
             }
         }
     }
 
-    fn store_algorithm_meta(
+    async fn store_algorithm_meta(
         &mut self,
         _alg_id: u64,
         _epochs: &[(u64, u64)],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        async move { Ok(()) }
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send {
-        async move { Ok(Vec::new()) }
+    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
+        Ok(Vec::new())
     }
 }
 
