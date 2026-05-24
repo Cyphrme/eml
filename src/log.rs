@@ -846,54 +846,62 @@ impl<S: Storage> Log<S> {
     ///
     /// This is the O(log n) mechanism that replaces projection-based proof
     /// generation.
-    fn subtree_root(&self, state: &AlgState, alg_id: u64, lo: u64, hi: u64) -> Result<Vec<u8>> {
-        let size = hi - lo;
+    fn subtree_root_static<'a>(
+        storage: &'a S,
+        state: &'a AlgState,
+        alg_id: u64,
+        lo: u64,
+        hi: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+        Box::pin(async move {
+            let size = hi - lo;
 
-        // Base cases.
-        if size == 0 {
-            return Ok(state.hasher.empty());
-        }
-        if size == 1 {
-            // Single leaf: compute V(a, lo).
-            if state.is_active_at(lo) {
-                let data = self
-                    .storage
-                    .get_leaf(lo)
-                    .map_err(|e| Error::Storage(Box::new(e)))?;
-                return Ok(state.hasher.leaf(&data));
+            // Base cases.
+            if size == 0 {
+                return Ok(state.hasher.empty());
             }
-            return Ok(state.null_table.leaf_null().to_vec());
-        }
+            if size == 1 {
+                // Single leaf: compute V(a, lo).
+                if state.is_active_at(lo) {
+                    let data = storage
+                        .get_leaf(lo)
+                        .await
+                        .map_err(|e| Error::Storage(Box::new(e)))?;
+                    return Ok(state.hasher.leaf(&data));
+                }
+                return Ok(state.null_table.leaf_null().to_vec());
+            }
 
-        // Null range optimization: if no epoch overlaps [lo, hi), the entire
-        // subtree is null-valued.
-        if !state.active_range(lo, hi) {
+            // Null range optimization: if no epoch overlaps [lo, hi), the entire
+            // subtree is null-valued.
+            if !state.active_range(lo, hi) {
+                if size.is_power_of_two() {
+                    // Power-of-2 null range: direct NullTable lookup.
+                    let h = size.trailing_zeros() as usize;
+                    return Ok(state.null_table.get_precomputed(h).to_vec());
+                }
+                // Non-power-of-2 null range: decompose into power-of-2 subtrees.
+                return Self::null_range_root_static(state, size);
+            }
+
+            // Stored node lookup: only valid for power-of-2 aligned ranges.
             if size.is_power_of_two() {
-                // Power-of-2 null range: direct NullTable lookup.
                 let h = size.trailing_zeros() as usize;
-                return Ok(state.null_table.get_precomputed(h).to_vec());
+                if let Some(hash) = storage
+                    .get_node(alg_id, lo, h)
+                    .await
+                    .map_err(|e| Error::Storage(Box::new(e)))?
+                {
+                    return Ok(hash);
+                }
             }
-            // Non-power-of-2 null range: decompose into power-of-2 subtrees.
-            return self.null_range_root(state, size);
-        }
 
-        // Stored node lookup: only valid for power-of-2 aligned ranges.
-        if size.is_power_of_two() {
-            let h = size.trailing_zeros() as usize;
-            if let Some(hash) = self
-                .storage
-                .get_node(alg_id, lo, h)
-                .map_err(|e| Error::Storage(Box::new(e)))?
-            {
-                return Ok(hash);
-            }
-        }
-
-        // RFC 9162 binary split.
-        let k = crate::proof::largest_pow2_lt(size);
-        let left = self.subtree_root(state, alg_id, lo, lo + k)?;
-        let right = self.subtree_root(state, alg_id, lo + k, hi)?;
-        Ok(state.hasher.node(&left, &right))
+            // RFC 9162 binary split.
+            let k = crate::proof::largest_pow2_lt(size);
+            let left = Self::subtree_root_static(storage, state, alg_id, lo, lo + k).await?;
+            let right = Self::subtree_root_static(storage, state, alg_id, lo + k, hi).await?;
+            Ok(state.hasher.node(&left, &right))
+        })
     }
 
     /// Compute the root of `size` consecutive null leaves for algorithm `a`.
@@ -901,7 +909,7 @@ impl<S: Storage> Log<S> {
     /// Definition 14d (Null range root): decomposes a non-power-of-2 null
     /// range into power-of-2 subtrees whose roots are NullTable lookups.
     /// Complexity: O(popcount(size)) hash operations.
-    fn null_range_root(&self, state: &AlgState, size: u64) -> Result<Vec<u8>> {
+    fn null_range_root_static(state: &AlgState, size: u64) -> Result<Vec<u8>> {
         debug_assert!(size > 0, "null_range_root requires size > 0");
 
         if size == 1 {
@@ -919,7 +927,7 @@ impl<S: Storage> Log<S> {
             return Ok(left_root);
         }
 
-        let right_root = self.null_range_root(state, remainder)?;
+        let right_root = Self::null_range_root_static(state, remainder)?;
         Ok(state.hasher.node(&left_root, &right_root))
     }
 
@@ -941,19 +949,20 @@ impl<S: Storage> Log<S> {
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
     #[cfg(test)]
-    pub fn project(&self, alg_id: u64) -> Result<Vec<Vec<u8>>> {
+    pub async fn project(&self, alg_id: u64) -> Result<Vec<Vec<u8>>> {
         let state = self
             .algs
             .get(&alg_id)
             .ok_or(Error::UnknownAlgorithm(alg_id))?;
 
-        let ts = state.tree_size(self.size());
+        let ts = state.tree_size(self.size().await);
         let mut leaves = Vec::with_capacity(ts as usize);
         for i in 0..ts {
             let leaf_hash = if state.is_active_at(i) {
                 let data = self
                     .storage
                     .get_leaf(i)
+                    .await
                     .map_err(|e| Error::Storage(Box::new(e)))?;
                 state.hasher.leaf(&data)
             } else {
@@ -977,13 +986,13 @@ impl<S: Storage> Log<S> {
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
     /// Returns [`Error::IndexOutOfBounds`] if `index >= tree_size(alg_id)`.
-    pub fn inclusion_proof(&self, alg_id: u64, index: u64) -> Result<crate::proof::InclusionProof> {
+    pub async fn inclusion_proof(&self, alg_id: u64, index: u64) -> Result<crate::proof::InclusionProof> {
         let state = self
             .algs
             .get(&alg_id)
             .ok_or(Error::UnknownAlgorithm(alg_id))?;
 
-        let ts = state.tree_size(self.size());
+        let ts = state.tree_size(self.size().await);
         if ts == 0 || index >= ts {
             return Err(Error::IndexOutOfBounds {
                 index,
@@ -992,7 +1001,7 @@ impl<S: Storage> Log<S> {
         }
 
         let mut path = Vec::with_capacity(64);
-        self.path(state, alg_id, index, 0, ts, &mut path)?;
+        self.path(state, alg_id, index, 0, ts, &mut path).await?;
 
         Ok(crate::proof::InclusionProof {
             index,
@@ -1004,31 +1013,35 @@ impl<S: Storage> Log<S> {
     /// RFC 9162 PATH algorithm (§2.1.3) using `subtree_root`.
     ///
     /// Recursively computes sibling hashes from leaf `m` within `[lo, hi)`.
-    fn path(
-        &self,
-        state: &AlgState,
+    fn path<'a>(
+        &'a self,
+        state: &'a AlgState,
         alg_id: u64,
         m: u64,
         lo: u64,
         hi: u64,
-        path: &mut Vec<Vec<u8>>,
-    ) -> Result<()> {
-        let size = hi - lo;
-        if size <= 1 {
-            return Ok(());
-        }
+        path: &'a mut Vec<Vec<u8>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let size = hi - lo;
+            if size <= 1 {
+                return Ok(());
+            }
 
-        let k = crate::proof::largest_pow2_lt(size);
-        if m - lo < k {
-            // Target is in the left subtree; right subtree is the sibling.
-            self.path(state, alg_id, m, lo, lo + k, path)?;
-            path.push(self.subtree_root(state, alg_id, lo + k, hi)?);
-        } else {
-            // Target is in the right subtree; left subtree is the sibling.
-            self.path(state, alg_id, m, lo + k, hi, path)?;
-            path.push(self.subtree_root(state, alg_id, lo, lo + k)?);
-        }
-        Ok(())
+            let k = crate::proof::largest_pow2_lt(size);
+            if m - lo < k {
+                // Target is in the left subtree; right subtree is the sibling.
+                self.path(state, alg_id, m, lo, lo + k, path).await?;
+                let sib = Self::subtree_root_static(&self.storage, state, alg_id, lo + k, hi).await?;
+                path.push(sib);
+            } else {
+                // Target is in the right subtree; left subtree is the sibling.
+                self.path(state, alg_id, m, lo + k, hi, path).await?;
+                let sib = Self::subtree_root_static(&self.storage, state, alg_id, lo, lo + k).await?;
+                path.push(sib);
+            }
+            Ok(())
+        })
     }
 
     /// Generate a consistency proof from `old_size` to the current tree
@@ -1041,7 +1054,7 @@ impl<S: Storage> Log<S> {
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
     /// Returns [`Error::IndexOutOfBounds`] if `old_size` is out of range.
-    pub fn consistency_proof(
+    pub async fn consistency_proof(
         &self,
         alg_id: u64,
         old_size: u64,
@@ -1051,7 +1064,7 @@ impl<S: Storage> Log<S> {
             .get(&alg_id)
             .ok_or(Error::UnknownAlgorithm(alg_id))?;
 
-        let ts = state.tree_size(self.size());
+        let ts = state.tree_size(self.size().await);
         if old_size == 0 || old_size >= ts {
             return Err(Error::IndexOutOfBounds {
                 index: old_size,
@@ -1060,7 +1073,7 @@ impl<S: Storage> Log<S> {
         }
 
         let mut path = Vec::with_capacity(64);
-        self.subproof(state, alg_id, old_size, 0, ts, true, &mut path)?;
+        self.subproof(state, alg_id, old_size, 0, ts, true, &mut path).await?;
 
         Ok(crate::proof::ConsistencyProof {
             old_size,
@@ -1074,33 +1087,38 @@ impl<S: Storage> Log<S> {
     /// Recursively computes the intermediate hashes proving that the first
     /// `m` leaves (relative to `lo`) form a prefix of `[lo, hi)`.
     #[allow(clippy::too_many_arguments)]
-    fn subproof(
-        &self,
-        state: &AlgState,
+    fn subproof<'a>(
+        &'a self,
+        state: &'a AlgState,
         alg_id: u64,
         m: u64,
         lo: u64,
         hi: u64,
         b: bool,
-        path: &mut Vec<Vec<u8>>,
-    ) -> Result<()> {
-        let size = hi - lo;
-        if m == size {
-            if !b {
-                path.push(self.subtree_root(state, alg_id, lo, hi)?);
+        path: &'a mut Vec<Vec<u8>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let size = hi - lo;
+            if m == size {
+                if !b {
+                    let r = Self::subtree_root_static(&self.storage, state, alg_id, lo, hi).await?;
+                    path.push(r);
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
 
-        let k = crate::proof::largest_pow2_lt(size);
-        if m <= k {
-            self.subproof(state, alg_id, m, lo, lo + k, b, path)?;
-            path.push(self.subtree_root(state, alg_id, lo + k, hi)?);
-        } else {
-            self.subproof(state, alg_id, m - k, lo + k, hi, false, path)?;
-            path.push(self.subtree_root(state, alg_id, lo, lo + k)?);
-        }
-        Ok(())
+            let k = crate::proof::largest_pow2_lt(size);
+            if m <= k {
+                self.subproof(state, alg_id, m, lo, lo + k, b, path).await?;
+                let r = Self::subtree_root_static(&self.storage, state, alg_id, lo + k, hi).await?;
+                path.push(r);
+            } else {
+                self.subproof(state, alg_id, m - k, lo + k, hi, false, path).await?;
+                let r = Self::subtree_root_static(&self.storage, state, alg_id, lo, lo + k).await?;
+                path.push(r);
+            }
+            Ok(())
+        })
     }
 }
 
