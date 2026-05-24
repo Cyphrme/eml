@@ -371,6 +371,125 @@ impl<S: Storage> Log<S> {
         })
     }
 
+    /// Reconstruct the frontier stack and collect mixed boundary nodes.
+    fn reconstruct_frontier_and_collect_mixed<'a>(
+        storage: &'a S,
+        state: &'a AlgState,
+        alg_id: u64,
+        tree_size: u64,
+        deactivation: u64,
+        collected: std::sync::Arc<std::sync::Mutex<Vec<(u64, usize, Vec<u8>)>>>,
+    ) -> BoxedFuture<'a, Result<Vec<Vec<u8>>>> {
+        Box::pin(async move {
+            if tree_size == 0 {
+                return Ok(Vec::new());
+            }
+
+            let mut stack = Vec::new();
+            let bit_width = 64 - tree_size.leading_zeros();
+            let mut pos = 0u64;
+
+            for bit in (0..bit_width).rev() {
+                if tree_size & (1 << bit) != 0 {
+                    let subtree_size = 1u64 << bit;
+                    let root =
+                        Self::reconstruct_and_collect_mixed(
+                            storage,
+                            state,
+                            alg_id,
+                            pos,
+                            pos + subtree_size,
+                            deactivation,
+                            collected.clone(),
+                        )
+                        .await?;
+                    stack.push(root);
+                    pos += subtree_size;
+                }
+            }
+
+            Ok(stack)
+        })
+    }
+
+    /// Recursively resolve a subtree root and collect mixed boundary nodes.
+    fn reconstruct_and_collect_mixed<'a>(
+        storage: &'a S,
+        state: &'a AlgState,
+        alg_id: u64,
+        lo: u64,
+        hi: u64,
+        deactivation: u64,
+        collected: std::sync::Arc<std::sync::Mutex<Vec<(u64, usize, Vec<u8>)>>>,
+    ) -> BoxedFuture<'a, Result<Vec<u8>>> {
+        Box::pin(async move {
+            let size = hi - lo;
+
+            if size == 0 {
+                return Ok(state.hasher.empty());
+            }
+            if size == 1 {
+                if state.is_active_at(lo) {
+                    let data = storage
+                        .get_leaf(lo)
+                        .await
+                        .map_err(|e| Error::Storage(Box::new(e)))?;
+                    return Ok(state.hasher.leaf(&data));
+                }
+                return Ok(state.null_table.leaf_null().to_vec());
+            }
+
+            if !state.active_range(lo, hi) {
+                if size.is_power_of_two() {
+                    let h = size.trailing_zeros() as usize;
+                    return Ok(state.null_table.get_precomputed(h).to_vec());
+                }
+                return Self::null_range_root_static(state, size);
+            }
+
+            if size.is_power_of_two() {
+                let h = size.trailing_zeros() as usize;
+                if let Some(hash) = storage
+                    .get_node(alg_id, lo, h)
+                    .await
+                    .map_err(|e| Error::Storage(Box::new(e)))?
+                {
+                    return Ok(hash);
+                }
+            }
+
+            let k = crate::proof::largest_pow2_lt(size);
+            let left = Self::reconstruct_and_collect_mixed(
+                storage,
+                state,
+                alg_id,
+                lo,
+                lo + k,
+                deactivation,
+                collected.clone(),
+            )
+            .await?;
+            let right = Self::reconstruct_and_collect_mixed(
+                storage,
+                state,
+                alg_id,
+                lo + k,
+                hi,
+                deactivation,
+                collected.clone(),
+            )
+            .await?;
+            let hash = state.hasher.node(&left, &right);
+
+            if size.is_power_of_two() && lo < deactivation && deactivation < hi {
+                let h = size.trailing_zeros() as usize;
+                collected.lock().unwrap().push((lo, h, hash.clone()));
+            }
+
+            Ok(hash)
+        })
+    }
+
     /// Current number of leaves in the global log.
     pub async fn size(&self) -> u64 {
         self.storage.len().await
@@ -534,13 +653,33 @@ impl<S: Storage> Log<S> {
             }
 
             // Reconstruct the frontier from scratch for the target tree size.
-            // subtree_root resolves stored nodes for the real-data range [0, deact),
-            // NullTable for the null gap [deact, current_size), and recursive
-            // binary splits for mixed boundary subtrees.
+            // During reconstruction, any computed boundary/mixed subtrees of power-of-two size
+            // are collected.
             let state = &self.algs[&alg_id];
+            let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let new_stack =
-                Self::reconstruct_frontier_for_state(&self.storage, state, alg_id, current_size)
-                    .await?;
+                Self::reconstruct_frontier_and_collect_mixed(
+                    &self.storage,
+                    state,
+                    alg_id,
+                    current_size,
+                    deactivation,
+                    collected.clone(),
+                )
+                .await?;
+
+            // Persist the collected mixed/boundary nodes to storage.
+            let nodes_to_store = {
+                let mut guard = collected.lock().unwrap();
+                std::mem::take(&mut *guard)
+            };
+            for (lo, h, hash) in nodes_to_store {
+                self.storage
+                    .store_node(alg_id, lo, h, &hash)
+                    .await
+                    .map_err(|e| Error::Storage(Box::new(e)))?;
+            }
+
             self.algs.get_mut(&alg_id).unwrap().stack = new_stack;
         }
 
