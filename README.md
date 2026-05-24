@@ -18,10 +18,11 @@ post-quantum transition) face a choice: maintain one tree per algorithm
 
 EML eliminates both costs. A single tree topology is shared across all
 algorithms. When a new algorithm activates at position _n_, its projection of
-positions 0..*n*−1 yields a deterministic null constant: a fixed-point value
-derived from the algorithm's own hash function, domain-separated from real
-leaves and internal nodes. Existing algorithms are unaffected. The new algorithm
-immediately participates in the shared append sequence with no backfill.
+positions 0..*n*−1 yields a deterministic null constant. Existing algorithms
+are unaffected. The new algorithm immediately participates in the shared append
+sequence without retroactive hashing: its frontier stack is initialized in
+O(log _n_) time to the "null prefix peaks" corresponding to the binary
+decomposition of the activation index _n_ (using precomputed null subtree roots).
 
 Deactivated algorithms freeze at their removal point. Their root and tree size
 remain immutable.
@@ -134,9 +135,10 @@ governs structure; per-algorithm tree sizes may differ (frozen algorithms stop
 at their deactivation index).
 
 **Null-fill.** Positions before an algorithm's activation contain `N₀(a) =
-H_a(0x02)` — a single-byte hash with a prefix distinct from leaf (`0x00`) and
-node (`0x01`) operations. This three-way domain separation (D-SEP) ensures null
-leaves cannot collide with real data or internal nodes.
+H_a(0x02)` — a cryptographic digest computed over a single prefix byte (`0x02`)
+with a prefix distinct from leaf (`0x00`) and node (`0x01`) operations. This
+three-way domain separation (D-SEP) ensures null leaves cannot collide with
+real data or internal nodes.
 
 **Epochs.** Each algorithm has a vector of disjoint `(start, end)` intervals.
 The initial epoch begins at activation; removal closes the current epoch;
@@ -146,11 +148,26 @@ no forged payload can verify at any inactive position — whether in the null
 prefix before first activation, inter-epoch gaps, or the null suffix after
 final deactivation.
 
+**Manifest commitment.** To maintain absolute independence between algorithms
+and prevent downgrade or misrepresentation attacks, each algorithm's active
+epoch boundaries (its manifest) are cryptographically committed to the Signed
+Tree Head (STH) alongside the Merkle root. Agreement on the STH guarantees
+agreement on the epoch topology, making epoch membership a cryptographic
+consequence of root verification without requiring out-of-band trust
+assumptions.
+
 **Projection.** `Log::project(alg_id)` materializes the full leaf sequence for
 one algorithm — null constants for inactive positions, real hashes for active
 positions. This projected sequence is a standard RFC 9162 log. All proofs
 operate over it directly (PROJ-VALID), so standard verifiers work without
 modification.
+
+**Isomorphic correctness.** The bottom-up, stack-based merge cascade executed
+on append is mathematically guaranteed to be topologically isomorphic to RFC
+9162's top-down bisection (the core theorem of the Lean 4 proof). While EML
+computes roots incrementally in memory, the resulting roots and proofs are
+identical to those of a standard top-down Merkle tree constructed over the
+algorithm's virtual projection.
 
 **Elided proofs.** Inclusion proofs contain null-sibling hashes that are
 deterministically reconstructable by the verifier. `elide_inclusion_proof`
@@ -158,15 +175,21 @@ strips these redundant siblings, reducing wire size from O(log _n_) to O(log
 _n_\_a) where _n_\_a is the algorithm's active tree size. `rehydrate_inclusion_proof`
 restores the full proof client-side.
 
+**Gap resumption.** Reactivating a frozen algorithm requires bridging the gap
+of size _G_ since deactivation. EML fast-forwards the algorithm's frontier stack
+in O(log _G_) time by merging the existing stack with precomputed null subtrees
+(frontier extension). This allows resumed algorithms to rejoin the append loop
+without O(_G_) retroactive hashing.
+
 **Node caching.** During `append`, sealed internal nodes (complete subtree roots
 computed during CTO merges) are persisted through the `Storage` backend. This
 enables O(log n) proof generation via point lookups rather than O(n)
 materialization. `subtree_root` resolves sibling hashes through stored-node
 lookups, falling back to recursive recomputation only when a node is absent.
 
-**Cold reconstruction.** `Log::from_storage` reconstructs the full log state
-from a populated storage backend. Algorithm metadata (IDs, epoch boundaries) is
-loaded from storage; frontier stacks are rebuilt in O(log n) per algorithm by
+**Cold reconstruction.** `Log::from_storage` introduces the capability to rebuild
+the full log state from a populated storage backend. Algorithm metadata (IDs, epoch boundaries)
+is loaded from storage; frontier stacks are rebuilt in O(log n) per algorithm by
 decomposing the tree size into binary and resolving each complete subtree root
 through stored nodes. This enables process restarts without replaying the
 append history.
