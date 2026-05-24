@@ -88,6 +88,7 @@ impl FaultHandle {
 struct CorruptingStorage {
     leaves: Vec<Vec<u8>>,
     nodes: HashMap<(u64, u64, usize), Vec<u8>>,
+    algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
     mode: Arc<Mutex<FaultMode>>,
     corruptions: Arc<AtomicU64>,
 }
@@ -123,6 +124,7 @@ impl CorruptingStorage {
         let storage = Self {
             leaves: Vec::new(),
             nodes: HashMap::new(),
+            algorithm_metas: HashMap::new(),
             mode,
             corruptions,
         };
@@ -192,14 +194,19 @@ impl Storage for CorruptingStorage {
 
     async fn store_algorithm_meta(
         &mut self,
-        _alg_id: u64,
-        _epochs: &[(u64, u64)],
+        alg_id: u64,
+        epochs: &[(u64, u64)],
     ) -> Result<(), Self::Error> {
+        self.algorithm_metas.insert(alg_id, epochs.to_vec());
         Ok(())
     }
 
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
-        Ok(Vec::new())
+        Ok(self
+            .algorithm_metas
+            .iter()
+            .map(|(&id, e)| (id, e.clone()))
+            .collect())
     }
 }
 
