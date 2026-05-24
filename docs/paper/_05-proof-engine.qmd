@@ -1,73 +1,34 @@
 ## Proof Generation and Verification {#sec-proof-engine}
 
-The formal model (§[IV](#sec-formal-model)) defines the EML's
-mathematical structure. This section bridges from the algebraic
-specification to the operational proof engine: how proofs are generated
-in $\mathcal{O}(\log n)$ time without materializing the full projection.
+The formal model (§[IV](#sec-formal-model)) defines the EML's mathematical structure. We now describe the operational proof engine: how proofs are generated in $\mathcal{O}(\log n)$ time without materializing the full projection.
 
 ### The Subtree Root Query
 
-The projection $\pi_a(S)$ is a *specification oracle*---an
-$\mathcal{O}(n)$ construction used by the equational laws to establish
-correctness. Production proof generation never invokes it. Instead, each
-sibling hash in a proof path is resolved through the `subtree_root`
-query:
+The projection $\pi_a(S)$ is an $\mathcal{O}(n)$ specification oracle. In production, sibling hashes are resolved in $\mathcal{O}(\log n)$ via the `subtree_root` query:
 
 ::: {#def-subtree-root}
-**Definition 19** (Subtree root). The root hash of the subtree covering
-leaves $[lo, hi)$ for algorithm $a$:
-
+**Definition 11** (Subtree root). The root hash of the subtree covering leaves $[lo, hi)$ for algorithm $a$:
 $$
 \text{sr}(a, lo, hi) = \begin{cases}
 \text{empty}(a) & w = 0 \\
 V(a, lo) & w = 1 \\
 N_h(a) & \text{null range},\ w = 2^h \\
 \text{nodes}(a)[(lo,h)] & \text{stored},\ w = 2^h \\
-\text{node}(a, \text{sr}(a, lo, l'), & \text{otherwise} \\
-\quad \text{sr}(a, l', hi))
+\text{node}_a(\text{sr}(a, lo, l'), \text{sr}(a, l', hi)) & \text{otherwise}
 \end{cases}
 $$
-
-where $w = hi - lo$, $l' = lo + k$, $k = \text{largest\_pow2\_lt}(w)$, and $h = \log_2 w$.
-We abbreviate $\text{subtree\_root}(S, a, \ldots)$ as $\text{sr}(a, \ldots)$
-throughout.
+where $w = hi - lo$, $l' = lo + k$, $k = \text{largestPow2Lt}(w)$, and $h = \log_2 w$.
 :::
-
-The cases, in order of priority:
-
-1. **Empty range**: returns the empty root.
-2. **Single leaf**: returns the leaf value directly (Definition 12).
-3. **Pure null subtree**: if no epoch of algorithm $a$ overlaps the
-   range $[lo, hi)$, the entire subtree consists of null constants. For
-   power-of-two ranges, this is a single NullTable lookup:
-   $\mathcal{O}(1)$. For non-power-of-two ranges, the subtree
-   decomposes into $\text{popcount}(hi - lo)$ NullTable lookups.
-4. **Stored node**: the CTO merge during `append` (Definition 13)
-   persists sealed internal nodes keyed by $(lo, h)$. A hash-map lookup
-   resolves the subtree root in $\mathcal{O}(1)$.
-5. **Recursive split**: the standard RFC 9162 decomposition into left
-   and right subtrees.
 
 ::: {#def-active-range}
-**Definition 20** (Active range). Algorithm $a$ has active content in
-$[lo, hi)$ iff any epoch overlaps it:
-
-$$
-\begin{aligned}
-&\text{active\_range}(a, lo, hi) \iff \\
-&\quad \exists (s_k, e_k) \in \text{act}(a).\ s_k < hi \wedge e_k > lo
-\end{aligned}
-$$
+**Definition 12** (Active range). Algorithm $a$ has active content in $[lo, hi)$ iff any epoch overlaps it: $\text{active\_range}(a, lo, hi) \iff \exists (s_k, e_k) \in \text{act}(a).\ s_k < hi \wedge e_k > lo$.
 :::
 
-### Complexity Analysis
+The cases of Definition 11 are prioritized: (1) empty range, (2) single leaf, (3) null subtree (overlaps no epochs, resolved via `NullTable` in $\mathcal{O}(1)$ for power-of-two, or $\mathcal{O}(\log w)$ recursive splits), (4) stored node (resolved via database lookup in $\mathcal{O}(1)$), and (5) recursive bisection split.
 
-Each recursive call to `subtree_root` either terminates via a stored
-node or NullTable lookup ($\mathcal{O}(1)$), or splits into two
-subproblems where at least one child terminates. The proof path requires
-at most $\lceil \log_2 n \rceil$ sibling resolutions, each requiring a
-single `subtree_root` invocation. Total: $\mathcal{O}(\log n)$ lookups
-$+$ $\mathcal{O}(\log n)$ hash operations.
+### Complexity & Storage Efficiency
+
+Each recursive call to `subtree_root` either terminates via a stored node or `NullTable` lookup ($\mathcal{O}(1)$), or splits into two subproblems where at least one child terminates. The proof path requires at most $\lceil \log_2 n \rceil$ sibling resolutions, each requiring a single `subtree_root` invocation. Total complexity is $\mathcal{O}(\log n)$ lookups and hash operations (see @tbl-perf-bounds).
 
 ::: {#tbl-perf-bounds}
 | Operation | Complexity | Mechanism |
@@ -81,82 +42,23 @@ $+$ $\mathcal{O}(\log n)$ hash operations.
 | Inclusion proof | $\mathcal{O}(\log n)$ | `subtree_root` resolution |
 | Consistency proof | $\mathcal{O}(\log n)$ | `subtree_root` resolution |
 
-: Operational complexity bounds. $K$: tree size at algorithm addition.
-$n$: global tree size. $\lvert\mathcal{A}\rvert$: number of registered
-algorithms.
+: Operational complexity bounds. $K$: tree size at algorithm addition; $n$: global tree size; $\lvert\mathcal{A}\rvert$: registered algorithm count.
 :::
 
-### Storage and Database I/O Efficiency
-
-The EML design guarantees physical storage and database I/O sparsity. Although the logical tree topology is dense (composed of $n$ positions for all algorithms), EML implementations do not persist null leaves or null internal nodes in the storage backend.
-
-1. **Zero Write-Side Persistence Overhead**: When an algorithm is frozen (inactive), it is excluded from appending state transitions. No write operations are triggered for null subtrees, achieving a storage reduction of $\mathcal{O}(g)$ for an inactivity gap of size $g$.
-2. **Zero Read-Side Database I/O**: Because `subtree_root` intercepts ranges $[lo, hi)$ that have no epoch overlap and resolves them using the local `NullTable` in-memory, zero database queries are made to resolve null ranges.
-
-Only nodes whose leaf-coverage intervals intersect at least one active epoch require database storage, aligning EML's physical footprint with the actual hashing duration of each algorithm.
+**Storage and Database I/O Sparsity.** EML does not persist null leaves or null internal nodes in the storage backend. When an algorithm is frozen, it is excluded from appending, saving write I/O. During proof generation, `subtree_root` intercepts null ranges $[lo, hi)$ in-memory using the local `NullTable` without triggering database queries. Only nodes whose intervals intersect active epochs require physical storage, minimizing the I/O footprint.
 
 ### Inclusion and Consistency Proofs
 
-Proofs follow the RFC 9162 `PATH` and `SUBPROOF` algorithms exactly,
-with `subtree_root` replacing materialized-array slicing at each sibling
-resolution. The recursive structure is unchanged; only the mechanism for
-obtaining sibling hashes differs.
+Proofs follow the RFC 9162 `PATH` and `SUBPROOF` algorithms exactly, with `subtree_root` replacing materialized-array slicing at each sibling resolution.
 
-::: {#def-inclusion-proof}
-**Definition 21** (Inclusion proof). For algorithm $a$ and leaf index
-$m$:
-
-$$
-\text{inclusion\_proof}(S, a, m) = \text{path}(S, a, m, 0,
-\text{tree\_size}(a))
-$$
-
-where `path` recurses via $\text{largest\_pow2\_lt}$, collecting sibling
-hashes resolved through `subtree_root`.
+::: {#def-proof-generation}
+**Definition 13** (Proofs). The inclusion proof is $\text{inclusion\_proof}(S, a, m) = \text{path}(S, a, m, 0, \text{tree\_size}(a))$ where $\text{path}$ collects sibling hashes via $\text{subtree\_root}$. The consistency proof is $\text{consistency\_proof}(S, a, m) = \text{subproof}(S, a, m, 0, \text{tree\_size}(a), \text{true})$ where `subproof` follows RFC 9162 §2.1.4.
 :::
 
-::: {#def-consistency-proof}
-**Definition 22** (Consistency proof). For algorithm $a$ and old tree
-size $m$:
+Consistency proofs operate correctly across epoch boundaries because the `subproof` algorithm decomposes the tree by index ranges, which `subtree_root` resolves transparently via stored nodes, the `NullTable`, or recursive bisection. By Theorem 2, the proofs verify against the STH root.
 
-$$
-\begin{aligned}
-&\text{consistency\_proof}(S, a, m) = \\
-&\quad \text{subproof}(S, a, m, 0, \text{tree\_size}(a), \text{true})
-\end{aligned}
-$$
+### Node Caching, Frontier & Cold Reconstruction
 
-where `subproof` follows RFC 9162 §2.1.4 with `subtree_root` sibling
-resolution. Consistency proofs operate correctly across epoch boundaries
-by construction: the `subproof` algorithm decomposes the tree by index
-ranges, and `subtree_root` resolves each range by dispatching to stored
-nodes, the NullTable, or recursive binary splitting---without awareness
-of epoch boundaries.
-:::
+During CTO merges in `append`, each merge of two stack entries produces a parent hash written to the node store keyed by `(algorithm, left_index, height)`. Null subtrees are never written to disk.
 
-**Correctness bridge.** The operational definitions produce identical
-output to the specification oracle (batch construction over $\pi_a(S)$).
-Both decompose the tree identically via $\text{largest\_pow2\_lt}$; the
-only difference is how sibling roots are obtained. By Theorem 2
-(Projection Equivalence), the proofs verify against the same root.
-
-### Node Caching and Frontier Architecture
-
-The EML persists sealed internal nodes during the CTO merge in
-`append`. Each merge of two frontier stack entries produces a parent hash
-that is the root of a complete power-of-two subtree. This parent is
-written to the node store keyed by (algorithm, left index, height).
-
-Null subtrees are *not* persisted (Observation 2 of the formal model):
-`subtree_root` reconstructs them via NullTable in $\mathcal{O}(1)$. Only
-subtrees containing at least one active leaf require storage.
-
-### Cold Reconstruction
-
-The `from_storage` constructor reconstructs the full EML state from a
-populated storage backend in $\mathcal{O}(\log n)$ per algorithm.
-Algorithm metadata (IDs, epoch boundaries) is loaded from storage.
-Frontier stacks are rebuilt by decomposing the tree size into its binary
-representation and resolving each complete subtree root through the node
-store. This enables process restarts without replaying the append
-history.
+For restarts, the `from_storage` constructor reconstructs the full EML state in $\mathcal{O}(\log n)$ per algorithm. It loads the epoch metadata, decomposes the tree size $n$ into binary components, and rebuilds the frontier stacks by resolving the root of each complete subtree through the node store, bypassing the need to replay the append history.
