@@ -11,7 +11,7 @@ deterministic elision. Historical data remains bound to the algorithms
 active at the time of insertion---a principled trade-off that preserves
 temporal fidelity while eliminating operational fragmentation.
 
-The formal model (18 definitions and 5 theorems, machine-checked in Lean 4)
+The formal model (13 definitions and 5 theorems, machine-checked in Lean 4)
 reduces multi-algorithm correctness to the well-understood correctness of
 single-algorithm RFC 9162 verification. The production Rust
 implementation validates these properties empirically through
@@ -40,7 +40,7 @@ the security of their own algorithm's verification.
   application-layer concern outside the scope of this work.
 
 - **STH signature agility.** The EML specifies the STH payload
-  structure (Definition 15) but does not address signature agility for
+  structure (Definition 8) but does not address signature agility for
   the signing key $\sigma$. Extending the epoch lifecycle model to STH
   signing keys---enabling key rotation and multi-algorithm STH
   signatures---is an orthogonal concern. The manifest commitment

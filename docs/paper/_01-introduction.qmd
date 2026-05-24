@@ -88,7 +88,7 @@ We make the following contributions:
    $\mathcal{O}(\log n)$ algorithm addition, and $\mathcal{O}(1)$
    algorithm removal.
 
-2. **A machine-checked formal model** (§[IV](#sec-formal-model)): 18
+2. **A machine-checked formal model** (§[IV](#sec-formal-model)): 13
    definitions and five theorems (Structural Bridge Lemma, Projection
    Equivalence, Temporal Binding, Algorithm Isolation, Generalized Bridge Lemma)
    mechanized in Lean4 (~1400 lines, zero `sorry`). The model decouples structural

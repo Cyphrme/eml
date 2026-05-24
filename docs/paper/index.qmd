@@ -22,7 +22,7 @@ abstract: |
   algorithm's projection yields a complete, independently verifiable standard
   Merkle tree---while enabling $\mathcal{O}(\log N)$ hash transitions with
   zero retroactive computation. We formalize and verify the EML via a
-  machine-checked proof in Lean4 (18 definitions, 5 theorems), decoupling
+  machine-checked proof in Lean4 (13 definitions, 5 theorems), decoupling
   structural tree topology from cryptographic digests via a unique algebra
   homomorphism. We provide a production Rust implementation
   validated by property-based testing, fault injection, and complexity

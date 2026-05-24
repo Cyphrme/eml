@@ -168,7 +168,7 @@ operational tradeoffs:
 the activation manifest directly to the log's root of trust. The Signed
 Tree Head (STH) commits the global tree size, and per-algorithm roots,
 tree sizes, and cryptographic digests of each algorithm's canonical activation map
-(formalized as Definition 15 in §[IV](#sec-formal-model)). This binding
+(formalized as Definition 8 in §[IV](#sec-formal-model)). This binding
 guarantees that any attempt by a malicious log to present conflicting
 manifests to different clients requires signing distinct STHs---a
 classical equivocation detectable by standard client-gossip and witness

@@ -36,7 +36,7 @@ regression).
 against proof verification and elision surfaces. Reproduction:
 `cargo +nightly fuzz run <target>`.
 
-**Formal model and Lean 4 proof.** The formal model (18 definitions, 5 theorems)
+**Formal model and Lean 4 proof.** The formal model (13 definitions, 5 theorems)
 and its complete machine-checked verification (establishing structural
 equivalence, algorithm isolation, and temporal binding) are located in
 `proofs/lean/` and `docs/models/`. The Lean 4 proof consists of approximately
