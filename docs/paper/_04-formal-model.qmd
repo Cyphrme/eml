@@ -1,12 +1,6 @@
 ## Formal Model {#sec-formal-model}
 
-We formalize the novel constructs of the EML and state five
-machine-checked theorems establishing its correctness. The model decouples
-the tree topology from cryptographic hashing by defining tree arithmetic
-over the free magma `MerkleTree α`, projecting to concrete cryptographic digests
-via a unique algebra homomorphism `eval`. Definitions inherited from RFC 9162
-are referenced inline. The full proof artifact (Lean4, ~1400 lines, 31
-theorems, zero `sorry`) accompanies this paper.
+We formalize the abstract algebra of Polymorphic Merkle Logs (PML), its concrete Epoch Merkle Log (EML) instantiation, and state five machine-checked theorems establishing their correctness. The model decouples the tree topology from cryptographic hashing by defining tree arithmetic over the free magma `MerkleTree α`, projecting to concrete cryptographic digests via a unique algebra homomorphism `eval`. Definitions inherited from RFC 9162 are referenced inline. The full proof artifact (Lean 4, ~1400 lines, 31 theorems, zero `sorry`) accompanies this paper.
 
 ### Structural Merkle Tree Algebra
 
@@ -71,7 +65,7 @@ where $H_a(\text{act}(a))$ is the cryptographic digest of $a$'s activation map. 
 
 ### Generalized Shift-Reduce Duality
 
-To show that structural correctness is a general combinatorial property of tree decompositions rather than an ad-hoc artifact of binary arithmetic, we formalize the equivalence over generalized split policies and merge schedules.
+We demonstrate that the structural compatibility of EML with standard log operations is not an ad-hoc bitwise artifact of standard binary configurations. Rather, it is a manifestation of a deeper combinatorial property: a generalized shift-reduce duality that holds for any append-consistent tree layout. By formalizing this equivalence over generalized split policies and merge schedules, we establish that structural correctness is a universal invariant of topological tree decompositions.
 
 ::: {#def-generalized-duality}
 **Definition 10** (Generalized Duality & Append-Consistency). A split policy $f: \mathbb{N} \to \mathbb{N}$ satisfies $0 < f(n) < n$ for all $n > 1$. A merge schedule $s: \mathbb{N} \to \mathbb{N}$ indicates stack reductions at step $n$. Let $\text{forestSizes}(f, n)$ define the forest layout in the stack at size $n$: $[]$ if $n=0$, $[1]$ if $n=1$, and $\text{forestSizes}(f, n - k) \mathbin{+\!\!+} [k]$ if $n>1, k = f(n)$. The pair $(f, s)$ is *append-consistent* iff for all $n$: $\text{forestSizes}(f, n+1) = (1 + \sum \text{take}(c, S_n)) \mathbin{::} \text{drop}(c, S_n)$ (where $c = s(n)$ and $S_n = \text{forestSizes}(f, n)$), and for all $i < c$, the split point of the merged subtree matches the policy: $f(1 + \sum \text{take}(i+1, S_n)) = S_n[i]$.
