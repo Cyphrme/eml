@@ -135,12 +135,13 @@ respective Lean symbols in the source code:
 
 | Paper Entity | Lean Symbol Link | Description |
 | :--- | :--- | :--- |
-| **Definition 1** | [mth](EMLProof/Tree.lean#L92) | Batch Merkle Tree Hash |
-| **Definition 2** | [cto](EMLProof/Tree.lean#L112) | Count Trailing Ones count |
-| **Definition 6** | [stackInvariant](EMLProof/Invariant.lean#L31) | Loop invariant |
-| **Theorem 1** | [projection_equivalence](EMLProof/Projection.lean#L114) | CTO & MTH Equivalence |
-| **Theorem 2** | [temporal_binding](EMLProof/Projection.lean#L131) | Inactive leaf binding |
-| **Theorem 3** | [algorithm_isolation](EMLProof/Projection.lean#L144) | State separation |
+| **Definition 2** | [mth](EMLProof/Tree.lean#L92) | Batch Merkle Tree Hash |
+| **Definition 3** | [cto](EMLProof/Tree.lean#L112) | Count Trailing Ones count |
+| **Theorem 1** | [bridge_lemma](EMLProof/Bridge.lean#L155) | Structural Bridge Lemma |
+| **Theorem 2** | [projection_equivalence](EMLProof/Projection.lean#L114) | Projection Equivalence |
+| **Theorem 3** | [temporal_binding](EMLProof/Projection.lean#L131) | Temporal Binding |
+| **Theorem 4** | [algorithm_isolation](EMLProof/Projection.lean#L144) | Algorithm Isolation |
+| **Theorem 5** | [generalized_bridge_lemma](EMLProof/General/Duality.lean#L444) | Generalized Bridge Lemma |
 
 
 ---

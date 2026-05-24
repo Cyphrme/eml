@@ -2,10 +2,8 @@
 
 <!--
   Formal domain model for the Epoch Merkle Log data structure.
-  Extends the malt verifiable-log model with multi-algorithm support,
-  null-fill semantics, and epoch-aware proof generation.
-
-  See: malt docs/models/verifiable-log.md for the base model this extends.
+  Defines EML multi-algorithm support, null-fill semantics, and
+  epoch-aware proof generation.
 -->
 
 ## Domain Classification
@@ -36,10 +34,10 @@ verification. Deactivated algorithms freeze at their removal point.
 
 | Aspect                  | Detail                                                |
 | :---------------------- | :---------------------------------------------------- |
-| **Primary Formalism**   | Initial algebra with equational laws                  |
+| **Primary Formalism**   | Free magma and algebra homomorphisms                  |
 | **Supporting Tools**    | Indexed products over finite algorithm sets           |
 | **Decision Matrix Row** | §4 (Algebra) — constructing finite inductive data     |
-| **Rationale**           | Direct extension of malt's model; minimal; verifiable |
+| **Rationale**           | Structural-to-homomorphic decoupling; minimal; verified|
 
 **Alternatives Considered:**
 
@@ -59,7 +57,7 @@ Bytes     — Arbitrary byte sequences (leaf payloads).
 AlgSet    — Finite subsets of Alg.
 ```
 
-### §2. Hash Operations (inherited from malt)
+### §2. Hash Operations
 
 For each algorithm `a ∈ Alg`, the hash operations are:
 
@@ -72,7 +70,7 @@ empty(a)      = H_a("")                   — Empty tree root
 Domain separation is enforced by the prefix byte (RFC 9162 §2.1):
 `leaf(a, d) ≠ node(a, l, r)` for all inputs.
 
-### §3. Null Constants (NEW — extends malt)
+### §3. Null Constants (NEW)
 
 **Definition 1** (Null leaf constant). For each algorithm `a`:
 
@@ -320,7 +318,7 @@ root(a) = empty(a)                                         if stacks(a) = []
                      stacks(a))                            otherwise
 ```
 
-This is identical to malt's root extraction, applied per algorithm.
+This is identical to standard RFC 9162 root extraction, applied per algorithm.
 
 **Definition 13** (EML Manifest). The state manifest is a structured snapshot:
 
@@ -387,22 +385,22 @@ onto algorithm `a` yields a sequence of digests:
 project(S, a) = [V(a, i) | 0 ≤ i < tree_size(a)]
 ```
 
-This sequence is equivalent to the leaves of a standard malt::Log where
+This sequence is equivalent to the leaves of a standard single-algorithm Merkle tree where
 positions outside `a`'s active window contain `N₀(a)` and positions
 inside contain `leaf(a, leaves[i])`.
 
 **Oracle designation.** `project` is a specification oracle — an `O(n)`
-mathematical construction used exclusively by the equational laws (§13)
+mathematical construction used exclusively by the theorems (§13)
 to prove correctness. It is not used operationally. Proof generation
 uses `subtree_root` (Definition 14c), which achieves `O(log n)` by
 querying the `nodes` store directly.
 
-**Theorem 1** (Projection equivalence). For any algorithm `a`, the root
+**Theorem 2** (Projection equivalence). For any algorithm `a`, the root
 computed by `root(a)` from the EML frontier stack equals the root of a
-batch-constructed malt::Log over the projected leaf sequence:
+batch-constructed Merkle tree over the projected leaf sequence:
 
 ```
-root(a) = malt::mth(hasher_a, project(S, a))
+root(a) = mthDigest(project(S, a))
 ```
 
 ### §11b. Active Range Predicate
@@ -503,169 +501,75 @@ subproof(S, a, m, lo, hi, b) =
 This is the RFC 9162 SUBPROOF algorithm (§2.1.4) with `subtree_root`
 replacing materialized-array slicing.
 
-**Correctness bridge.** The operational definitions produce identical output
-to the oracle definitions (`malt::gen_path` and `malt::gen_subproof` over
-`project(S, a)`) by Theorem 1 and the structural correspondence between
-range-based and array-based recursion. Both decompose the tree identically
-via `largest_pow2_lt`; the only difference is how sibling roots are obtained
-(stored lookup vs. batch recomputation).
+### §13. Theorems and Corollaries
 
-### §13. Equational Laws
+The formal model defines structural operations on `MerkleTree α` and proves correct projection onto cryptographic digests. The following theorems are checked by the Lean 4 proof:
 
-The following laws extend malt's invariants to the multi-algorithm setting.
-
-#### A-EQUIV-EML — Incremental equals batch
-
-For all algorithms in the activation map, the incrementally maintained
-root equals the batch-computed root over the projected leaf sequence:
-
+#### Theorem 1 (Structural Bridge Lemma)
+For any list of structural trees `l`:
 ```
-∀ a ∈ dom(act).
-  root(a) = malt::mth(hasher_a, project(S, a))
+ctoRoot(l) = mth(l)
 ```
+This shows that incremental stack root extraction is topologically identical to batch Merkle tree hashing at the structural level.
 
-For active algorithms, this follows from malt's A-EQUIV applied at each
-append. For frozen algorithms, `stacks(a)` ceased updating at the last epoch's close
-and `project(S, a)` is bounded at `tree_size(a) = last(act(a)).end` — the
-frozen stack and the truncated projection agree by construction. For resumed
-algorithms, `extend_with_nulls` (Definition 11c) fast-forwards the stack through
-the null gap, preserving the invariant. This is Theorem 1, restated as a
-universal invariant.
-
-#### A-STACK-EML — Frontier stack size invariant
-
-For all algorithms in the activation map:
-
+#### Theorem 2 (Projection Equivalence)
+For all algorithms `a` in the activation map, the incrementally maintained root equals the batch-computed root over the projected leaf sequence:
 ```
-∀ a ∈ dom(act).
-  |stacks(a)| = popcount(tree_size(a))
+root(a) = mthDigest(project(S, a))
 ```
+This reduces multi-algorithm correctness to the correctness of single-algorithm RFC 9162 verification.
 
-For active algorithms, `tree_size(a) = global_tree_size`. For frozen
-algorithms, `tree_size(a) = last(act(a)).end`. Resume (Definition 11b)
-preserves this invariant via `merge_stacks`. This single law governs
-the entire state map.
-
-#### N-DET — Null determinism
-
+#### Theorem 3 (Temporal Binding)
+For all `a` and `i` where `¬active(a, i) ∧ i < tree_size(a)`:
 ```
-∀ a, h.  Nₕ(a) is uniquely determined by (a, h).
+∄ d ∈ Bytes. leaf(a, d) = V(a, i)
 ```
+No payload can produce a valid leaf hash at an inactive position, because that position is committed to `N₀(a)` and `leaf(a, d) ≠ N₀(a)` by domain separation (D-SEP).
 
-Null subtrees are stateless — they require no storage and are computable
-from first principles.
-
-#### D-SEP — Domain separation
-
+#### Theorem 4 (Algorithm Isolation)
+For any two algorithms `a, b` in the activation map operating over the same payload sequence, both projections independently yield valid RFC 9162 Merkle trees:
 ```
-∀ a, d.       N₀(a) ≠ leaf(a, d)        — null ≠ real leaf  (0x02 ≠ 0x00)
-∀ a, l, r.    N₀(a) ≠ node(a, l, r)     — null ≠ interior   (0x02 ≠ 0x01)
-∀ a, d, l, r. leaf(a, d) ≠ node(a, l, r) — leaf ≠ interior   (0x00 ≠ 0x01)
+root(a) = mthDigest(project(S, a)) ∧ root(b) = mthDigest(project(S, b))
 ```
+Their structural properties and verification paths are mathematically independent.
 
-Three-way domain separation across all tree domains.
-
-#### I-SOUND-EML — Inclusion proof soundness
-
-For all active `(a, i)` where `active(a, i)`:
-
+#### Theorem 5 (Generalized Bridge Lemma)
+For any split policy `f` and merge schedule `s` that are `AppendConsistent`:
 ```
-let proof = inclusion_proof(S, a, i)
-let leaf_hash = leaf(a, leaves[i])
-⟹  verify_inclusion(hasher_a, leaf_hash, proof, root(a)) = true
+generalized_ctoRoot(s, l) = generalized_mth(f, l)
 ```
+This establishes EML's equivalence theorem as a special case of a broader combinatorial property of tree decompositions (shift-reduce duality).
 
-#### K-SOUND-EML — Consistency proof soundness
-
-For all `a` and `old_size < tree_size(a)`:
-
-```
-let proof = consistency_proof(S, a, old_size)
-let old_root = root_at(a, old_size)
-⟹  verify_consistency(hasher_a, proof, old_root, root(a)) = true
-```
-
-#### T-BOUND — Temporal binding
-
-For all `a` and `i` in any inactive gap (outside all epochs):
-
-```
-let proof = inclusion_proof(S, a, i)
-∀ a, i where ¬active(a, i) ∧ i < tree_size(a):
-  ∄ d ∈ Bytes.
-    verify_inclusion(hasher_a, leaf(a, d), proof, root(a)) = true
-```
-
-No payload can produce a valid inclusion proof at an inactive position,
-because the tree contains `N₀(a)` at that position, and `leaf(a, d) ≠ N₀(a)`
-by D-SEP. This covers the null prefix (before first activation), the null
-suffix (after final deactivation for frozen algorithms, bounded by
-`tree_size(a)`), and any inter-epoch gaps introduced by resumption.
-
-#### ALG-IND — Algorithm independence
-
-Under the Random Oracle Model:
-
-```
-∀ a ≠ b.  project(S, a) and project(S, b) are mutually incompressible.
-```
-
-Knowing one algorithm's digest tree reveals zero information about any
-other algorithm's digest tree.
-
-#### PROJ-VALID — Projection produces valid malt tree
-
-```
-∀ a ∈ dom(act).
-  project(S, a) is a valid malt::Log leaf sequence.
-  All malt invariants (A-EQUIV, A-STACK, I-SOUND, K-SOUND) hold
-  for the projected tree.
-```
-
-This is the composition law: EML correctness reduces to malt correctness
-per algorithm, plus the multi-algorithm extension laws above.
-
-#### M-COMMIT — Manifest commitment (Corollary)
-
-For any two clients C₁, C₂ that accept the same STH (Definition 13b):
-
+#### Corollary 1 (Manifest Commitment)
+For any two clients `C₁`, `C₂` that accept the same Signed Tree Head (STH):
 ```
 act_C₁ = act_C₂
 ```
-
-This follows directly from Definition 13b: agreement on the STH implies
-agreement on the epoch topology. The shared knowledge of `act(a)`
-required by the elision protocol is not an out-of-band trust assumption
-but a cryptographic consequence of STH verification.
+Agreement on the STH implies agreement on the epoch topology. This corollary closes the manifest authentication loop: the shared knowledge of `act(a)` required by the elision protocol is a cryptographic consequence of STH verification.
 
 ## Validation
 
 | Check                    | Result | Detail                                                                                                                                                                                              |
 | :----------------------- | :----- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A-EQUIV-EML              | PASS   | Follows from malt's A-EQUIV applied per-algorithm over the projected sequence. The null constants are just another leaf value.                                                                      |
-| A-STACK-EML              | PASS   | Active algorithms track `popcount(global_tree_size)`, frozen algorithms track `popcount(last(act(a)).end)`. Resume via `merge_stacks` preserves the invariant. Unified by `popcount(tree_size(a))`. |
-| N-DET                    | PASS   | By construction: `Nₕ(a)` is a pure function of `(a, h)`.                                                                                                                                            |
-| D-SEP                    | PASS   | Three distinct prefix bytes (0x00, 0x01, 0x02) under cryptographic hash. Collision requires breaking preimage resistance.                                                                           |
-| I-SOUND-EML              | PASS   | Reduces to malt's I-SOUND over the projected leaf sequence. Null leaves verify as `N₀(a)`, not as real data.                                                                                        |
-| K-SOUND-EML              | PASS   | Reduces to malt's K-SOUND. Null subtrees are valid tree nodes.                                                                                                                                      |
-| T-BOUND                  | PASS   | All inactive positions (pre-activation, inter-epoch gaps, post-deactivation): D-SEP prevents forgery. Beyond `tree_size(a)`: projection bounds prevent proof generation.                            |
-| ALG-IND                  | PASS   | Follows from ROM: distinct hash functions produce mutually incompressible outputs.                                                                                                                  |
-| PROJ-VALID               | PASS   | By construction: each algorithm's projected sequence is a valid input to malt's batch construction.                                                                                                 |
-| M-COMMIT                 | PASS   | By construction: H_a(act(a)) is committed in the STH signature per algorithm. Agreement on the STH implies agreement on the activation map.                                                           |
-| **Internal consistency** | PASS   | No equational law contradicts another. The laws are layered: D-SEP → T-BOUND, A-EQUIV-EML → PROJ-VALID, M-COMMIT → elision shared-state, ALG-IND standalone.                                      |
+| Theorem 1 (Bridge Lemma) | PASS   | Proved by strong induction on length in Lean 4.                                                                                                                                                    |
+| Theorem 2 (Proj-Equiv)   | PASS   | Commutativity of unique evaluation homomorphism `eval` with structural constructors under the homomorphic projection of Theorem 1.                                                                 |
+| Theorem 3 (Temp-Binding) | PASS   | Follows from three-way domain separation (0x00, 0x01, 0x02) under ROM tag independence.                                                                                                            |
+| Theorem 4 (Alg-Isolation) | PASS   | Proved in Lean 4; type signature guarantees independence as neither projection references the other algorithm's epochs or hash functions.                                                        |
+| Theorem 5 (Gen-Bridge)   | PASS   | Proved purely combinatorially in Lean 4 for any append-consistent split policy and merge schedule.                                                                                                  |
+| Corollary 1 (M-Commit)   | PASS   | Cryptographic commitment of `H_a(act(a))` in the signed STH tuple per algorithm.                                                                                                                    |
+| **Internal consistency** | PASS   | No theorem contradicts another. The properties are layered: domain separation → Theorem 3, Theorem 1 → Theorem 2 → Theorem 4.                                                                      |
 | **External adequacy**    | PASS   | The model captures all design constraints from the original exploration.                                                                                                                            |
-| **Minimality**           | PASS   | No formalism beyond initial algebra + indexed products is used.                                                                                                                                     |
 
 ### Performance Bounds
 
 | Operation                   | Complexity            | Notes                                                        |
 | :-------------------------- | :-------------------- | :----------------------------------------------------------- |
-| Append (per algorithm)      | O(1) amortized        | Same as malt (hash + CTO merge)                              |
+| Append (per algorithm)      | O(1) amortized        | Hash + CTO stack merge                                       |
 | Append node storage         | O(1) amortized        | Per algorithm; persists sealed CTO nodes                     |
 | Append (total)              | O(\|A(i)\|) amortized | Linear in active algorithm count                             |
-| Algorithm addition          | O(log K)              | Null prefix peak computation                                 |
+| Algorithm addition          | O(log K) worst-case   | Null prefix peak computation                                 |
 | Algorithm removal           | O(1)                  | Freeze frontier stack                                        |
-| Algorithm resumption        | O(G)                  | Null gap extension + node storage                            |
+| Algorithm resumption        | O(log n)              | Frontier stack reconstruction via subtree_root               |
 | Root extraction (per alg)   | O(log n)              | Frontier stack fold                                          |
 | STH construction            | O(|A| · log n)        | Root extraction per algorithm + manifest hash                |
 | Inclusion proof (per alg)   | O(log n)              | Via subtree_root (Def. 14c); stored node + NullTable lookups |
@@ -676,35 +580,21 @@ but a cryptographic consequence of STH verification.
 
 ### Proof Size Trade-off (Resolved: Elided Proofs)
 
-In independent MALTs, algorithm `a` active for `nₐ` appends has proof depth
-`O(log nₐ)`. In EML, proof depth is `O(log n)` where `n` is global tree
-size. If `nₐ ≪ n`, EML proofs are deeper.
+In independent RFC 9162 Merkle logs, algorithm `a` active for `nₐ` appends has proof depth `O(log nₐ)`. In EML, proof depth is `O(log n)` where `n` is global tree size. If `nₐ ≪ n`, EML proofs are deeper.
 
-**Resolution — Elided proofs.** Null subtree siblings are deterministic and
-need not be transmitted. The proof flow is:
+**Resolution — Elided proofs.** Null subtree siblings are deterministic and need not be transmitted. The proof flow is:
 
-1. **Server (prover):** Generates the full `malt` proof. Siblings whose
-   entire leaf-coverage range falls outside all active epochs are null
-   subtrees. The server omits them from the wire payload.
-2. **EML client envelope:** The client knows `tree_size`, `index`, and
-   the epoch list. It walks the virtual tree path, detects positions fully
-   inside an inactive gap, synthesizes `Nₕ(a)` locally, and injects them
-   into the proof array.
-3. **Core verifier:** The envelope hands the rehydrated, full proof to the
-   unmodified `malt::verify_*` function.
+1. **Server (prover):** Generates the full Merkle proof. Siblings whose entire leaf-coverage range falls outside all active epochs are null subtrees. The server omits them from the wire payload.
+2. **EML client envelope:** The client knows `tree_size`, `index`, and the epoch list. It walks the virtual tree path, detects positions fully inside an inactive gap, synthesizes `Nₕ(a)` locally, and injects them into the proof array.
+3. **Core verifier:** The envelope hands the rehydrated, full proof to the unmodified RFC 9162 verification function.
 
-Wire proof size collapses to `O(log nₐ)`, neutralizing EML's only
-theoretical overhead while preserving verifier independence.
+Wire proof size collapses to `O(log nₐ)`, neutralizing EML's only theoretical overhead while preserving verifier independence.
 
 ## Implications
 
 ### Implementation Guidance
 
-1. **New crate, not malt modification.** EML extends malt's model but
-   changes the fundamental abstraction from single-algorithm to multi-algorithm.
-   The `TreeHasher` trait doesn't accommodate multi-algorithm operations.
-   Create an `eml` crate that depends on `malt` for proof primitives
-   (`gen_path`, `gen_subproof`, `verify_inclusion`, `verify_consistency`).
+1. **Self-contained crate.** EML is implemented as a standalone Rust crate (`eml`) with zero runtime dependencies. Hash algorithms are abstracted via a `Hasher` trait injected at runtime, and storage backends are abstracted via a `Storage` trait.
 
 2. **Core data structure.** The EML state maps directly to:
 
@@ -722,52 +612,31 @@ theoretical overhead while preserving verifier independence.
    }
    ```
 
-   The `Storage` trait provides both leaf storage (`store_leaf`/`get_leaf`)
-   and sealed node storage (`store_node`/`get_node`). Node entries are
-   keyed by `(alg_id, left_index, height)` and written during CTO merges.
+   The `Storage` trait provides both leaf storage (`store_leaf`/`get_leaf`) and sealed node storage (`store_node`/`get_node`). Node entries are keyed by `(alg_id, left_index, height)` and written during CTO merges.
 
-   `project()` is a test-only method (specification oracle) gated behind
-   `#[cfg(test)]`. Production proof generation uses `subtree_root`
-   (Definition 14c) which queries stored nodes directly.
+   `project()` is a test-only method (specification oracle) gated behind `#[cfg(test)]`. Production proof generation uses `subtree_root` (Definition 14c) which queries stored nodes directly.
 
-3. **Manifest.** Introduce a structured manifest type that includes
-   `global_tree_size`, per-algorithm roots, and activation metadata.
+3. **Manifest.** Introduce a structured manifest type that includes `global_tree_size`, per-algorithm roots, and activation metadata.
 
 ### Testing Strategy
 
-- **A-EQUIV-EML:** For each algorithm, verify incremental root equals batch.
-- **T-BOUND:** Attempt inclusion proof at null position with arbitrary data;
-  verify it fails.
-- **Cross-algorithm independence:** Verify that changing data in one algorithm's
-  active range doesn't affect another algorithm's root.
-- **Algorithm addition:** Add algorithm mid-stream, verify null prefix peaks
-  are correct by comparing against batch construction.
-- **Parity:** EML proofs must verify against standard `malt::verify_*`
-  functions — the verifier is unmodified.
+- **Theorem 2 (Projection Equivalence):** For each algorithm, verify incremental root equals batch.
+- **Theorem 3 (Temporal Binding):** Attempt inclusion proof at null position with arbitrary data; verify it fails.
+- **Cross-algorithm independence:** Verify that changing data in one algorithm's active range doesn't affect another algorithm's root.
+- **Algorithm addition:** Add algorithm mid-stream, verify null prefix peaks are correct by comparing against batch construction.
+- **Parity:** EML proofs must verify against standard RFC 9162 verifiers — the verifier is unmodified.
 
 ### Architecture Decisions
 
-- **Algorithm removal: freeze.** Deactivated algorithms freeze at their
-  removal point. Zero ongoing maintenance cost. The manifest records
-  the terminal `tree_size(a)` explicitly.
+- **Algorithm removal: freeze.** Deactivated algorithms freeze at their removal point. Zero ongoing maintenance cost. The manifest records the terminal `tree_size(a)` explicitly.
 
-- **Proof transmission: elide null siblings.** The EML client envelope
-  rehydrates deterministic null subtree siblings before handing to the
-  standard `malt` verifier. Wire size is `O(log nₐ)`, not `O(log n)`.
+- **Proof transmission: elide null siblings.** The EML client envelope rehydrates deterministic null subtree siblings before handing to the standard RFC 9162 verifier. Wire size is `O(log nₐ)`, not `O(log n)`.
 
-- **Manifest wire format.** The manifest's serialization format is a
-  consumer concern (candidate: deterministic canonical serialization
-  keyed by algorithm IDs).
+- **Manifest wire format.** The manifest's serialization format is a consumer concern (candidate: deterministic canonical serialization keyed by algorithm IDs).
 
 ### Resolved Design Questions
 
 1. **Manifest wire format** (JSON vs. CBOR vs. other canonical form) — deferred to consumer.
 
-**Resolved:** Elided proof wire encoding requires no explicit metadata.
-The client deterministically identifies omitted siblings via interval
-arithmetic: for each sibling in the proof path, the client computes its
-leaf-coverage range `[start, end)`. If the range overlaps no active epoch,
-the entire subtree is null and was elided — the client synthesizes `Nₕ(a)`
-locally. Otherwise, the sibling was transmitted. Both parties share
 `tree_size(a)`, `index`, and the epoch list, ensuring lockstep
 agreement with zero wire overhead.

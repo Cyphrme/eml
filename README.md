@@ -261,10 +261,11 @@ via `Log::from_storage(storage, hashers)`.
 The core algebraic correctness of EML is formally verified using the **Lean 4 interactive theorem prover**. The machine-checked proofs are located in the [`proofs/lean/`](proofs/lean/) directory (see the [Reviewer's Guide](proofs/lean/README.md) for details).
 
 Specifically, the proofs verify:
-- **Theorem 1: Projection Equivalence** (`projection_equivalence`): An incremental bottom-up frontier stack fold is structurally equivalent to a top-down bisection of the full algorithm projection (RFC 9162 Merkle Tree Hash), establishing correctness of the $O(\log n)$ append/reconstruction state transitions.
-- **Theorem 2: Temporal Binding** (`temporal_binding`): For any algorithm $a$, inactive tree positions before first activation, in inter-epoch gaps, or after final deactivation are bound to a domain-separated null constant $N_0(a) = H_a(0x02)$, preventing adversarial forgeries at inactive positions.
-- **Theorem 3: Algorithm Isolation** (`algorithm_isolation`): Independent algorithms operating on the shared topology maintain strict state separation, preventing cross-algorithm collisions or security degradation.
-- **Duality Theorem** (`generalized_bridge_lemma`): The shift-reduce duality holds in a generalized algebraic framework over free magmas, proving topology equivalence for *any* append-consistent Merkle tree layout.
+- **Theorem 1: Structural Bridge Lemma** (`bridge_lemma`): Incremental stack root extraction is topologically identical to batch Merkle tree hashing at the structural level.
+- **Theorem 2: Projection Equivalence** (`projection_equivalence`): An incremental bottom-up frontier stack fold is structurally equivalent to a top-down bisection of the full algorithm projection (RFC 9162 Merkle Tree Hash), establishing correctness of the $O(\log n)$ append/reconstruction state transitions.
+- **Theorem 3: Temporal Binding** (`temporal_binding`): For any algorithm $a$, inactive tree positions before first activation, in inter-epoch gaps, or after final deactivation are bound to a domain-separated null constant $N_0(a) = H_a(0x02)$, preventing adversarial forgeries at inactive positions.
+- **Theorem 4: Algorithm Isolation** (`algorithm_isolation`): Independent algorithms operating on the shared topology maintain strict state separation, preventing cross-algorithm collisions or security degradation.
+- **Theorem 5: Generalized Bridge Lemma** (`generalized_bridge_lemma`): The shift-reduce duality holds in a generalized algebraic framework over free magmas, proving topology equivalence for *any* append-consistent Merkle tree layout.
 
 Key laws verified by the test suite:
 
