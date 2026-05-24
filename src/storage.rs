@@ -46,21 +46,21 @@ pub trait Storage: Send + Sync {
     /// Persist a raw leaf payload at the given index.
     ///
     /// Called exactly once per index, in monotonically increasing order.
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error>;
+    fn store_leaf(&mut self, index: u64, data: &[u8]) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Retrieve the raw leaf payload at the given index.
     ///
     /// Returns the exact bytes previously passed to `store_leaf` for this
     /// index. Returns an error if the index has not been stored or if the
     /// underlying storage detects corruption.
-    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error>;
+    fn get_leaf(&self, index: u64) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send;
 
     /// The number of leaves currently stored.
-    async fn len(&self) -> u64;
+    fn len(&self) -> impl std::future::Future<Output = u64> + Send;
 
     /// Whether the storage is empty.
-    async fn is_empty(&self) -> bool {
-        self.len().await == 0
+    fn is_empty(&self) -> impl std::future::Future<Output = bool> + Send {
+        async move { self.len().await == 0 }
     }
 
     /// Persist a sealed internal node hash.
@@ -72,24 +72,24 @@ pub trait Storage: Send + Sync {
     /// - `left`: the leftmost leaf index of the subtree.
     /// - `height`: the height of this node (1 = parent of two leaves).
     /// - `hash`: the computed node hash.
-    async fn store_node(
+    fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
         height: usize,
         hash: &[u8],
-    ) -> Result<(), Self::Error>;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Retrieve a sealed internal node hash.
     ///
     /// Returns `None` if no node has been stored for this coordinate.
     /// Returns `Err` only on storage corruption or I/O failure.
-    async fn get_node(
+    fn get_node(
         &self,
         alg_id: u64,
         left: u64,
         height: usize,
-    ) -> Result<Option<Vec<u8>>, Self::Error>;
+    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send;
 
     /// Persist algorithm metadata (epoch boundaries).
     ///
@@ -100,11 +100,11 @@ pub trait Storage: Send + Sync {
     /// Epochs use `u64::MAX` as the sentinel for "currently active" — the
     /// internal representation. Consumers should not interpret this value;
     /// it is an implementation detail of the log.
-    async fn store_algorithm_meta(
+    fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error>;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Load all persisted algorithm metadata.
     ///
@@ -112,24 +112,26 @@ pub trait Storage: Send + Sync {
     /// has been registered (including frozen ones). Used by
     /// `Log::from_storage` to reconstruct the algorithm registry on cold
     /// start.
-    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error>;
+    fn load_algorithm_metas(&self) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send;
 
     /// Perform a batch write of multiple leaves and nodes.
     ///
     /// Default implementation loops and invokes individual storage operations sequentially.
     /// Custom backend implementations can override this to implement atomic transactions.
-    async fn write_batch(
+    fn write_batch(
         &mut self,
         leaves: &[(u64, &[u8])],
         nodes: &[(u64, u64, usize, &[u8])],
-    ) -> Result<(), Self::Error> {
-        for &(index, data) in leaves {
-            self.store_leaf(index, data).await?;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            for &(index, data) in leaves {
+                self.store_leaf(index, data).await?;
+            }
+            for &(alg_id, left, height, hash) in nodes {
+                self.store_node(alg_id, left, height, hash).await?;
+            }
+            Ok(())
         }
-        for &(alg_id, left, height, hash) in nodes {
-            self.store_node(alg_id, left, height, hash).await?;
-        }
-        Ok(())
     }
 }
 
@@ -192,64 +194,74 @@ impl std::error::Error for MemoryStorageError {}
 impl Storage for MemoryStorage {
     type Error = MemoryStorageError;
 
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        debug_assert_eq!(
-            index,
-            self.leaves.len() as u64,
-            "store_leaf called out of order"
-        );
-        self.leaves.push(data.to_vec());
-        Ok(())
-    }
-
-    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
-        self.leaves
-            .get(index as usize)
-            .cloned()
-            .ok_or(MemoryStorageError {
+    fn store_leaf(&mut self, index: u64, data: &[u8]) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            debug_assert_eq!(
                 index,
-                stored: self.leaves.len() as u64,
-            })
+                self.leaves.len() as u64,
+                "store_leaf called out of order"
+            );
+            self.leaves.push(data.to_vec());
+            Ok(())
+        }
     }
 
-    async fn len(&self) -> u64 {
-        self.leaves.len() as u64
+    fn get_leaf(&self, index: u64) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
+        async move {
+            self.leaves
+                .get(index as usize)
+                .cloned()
+                .ok_or(MemoryStorageError {
+                    index,
+                    stored: self.leaves.len() as u64,
+                })
+        }
     }
 
-    async fn store_node(
+    fn len(&self) -> impl std::future::Future<Output = u64> + Send {
+        async move { self.leaves.len() as u64 }
+    }
+
+    fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
         height: usize,
         hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        self.nodes.insert((alg_id, left, height), hash.to_vec());
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            self.nodes.insert((alg_id, left, height), hash.to_vec());
+            Ok(())
+        }
     }
 
-    async fn get_node(
+    fn get_node(
         &self,
         alg_id: u64,
         left: u64,
         height: usize,
-    ) -> Result<Option<Vec<u8>>, Self::Error> {
-        Ok(self.nodes.get(&(alg_id, left, height)).cloned())
+    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send {
+        async move { Ok(self.nodes.get(&(alg_id, left, height)).cloned()) }
     }
 
-    async fn store_algorithm_meta(
+    fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        self.algorithm_metas.insert(alg_id, epochs.to_vec());
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            self.algorithm_metas.insert(alg_id, epochs.to_vec());
+            Ok(())
+        }
     }
 
-    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
-        Ok(self
-            .algorithm_metas
-            .iter()
-            .map(|(&id, e)| (id, e.clone()))
-            .collect())
+    fn load_algorithm_metas(&self) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send {
+        async move {
+            Ok(self
+                .algorithm_metas
+                .iter()
+                .map(|(&id, e)| (id, e.clone()))
+                .collect())
+        }
     }
 }
