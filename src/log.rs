@@ -11,6 +11,8 @@ use crate::hasher::Hasher;
 use crate::null::NullTable;
 use crate::storage::Storage;
 
+type BoxedFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
 // ============================================================================
 // Algorithm state
 // ============================================================================
@@ -296,8 +298,7 @@ impl<S: Storage> Log<S> {
         state: &'a AlgState,
         alg_id: u64,
         tree_size: u64,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Vec<u8>>>> + Send + 'a>>
-    {
+    ) -> BoxedFuture<'a, Result<Vec<Vec<u8>>>> {
         Box::pin(async move {
             if tree_size == 0 {
                 return Ok(Vec::new());
@@ -866,7 +867,7 @@ impl<S: Storage> Log<S> {
         alg_id: u64,
         lo: u64,
         hi: u64,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+    ) -> BoxedFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
             let size = hi - lo;
 
@@ -1039,7 +1040,7 @@ impl<S: Storage> Log<S> {
         lo: u64,
         hi: u64,
         path: &'a mut Vec<Vec<u8>>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    ) -> BoxedFuture<'a, Result<()>> {
         Box::pin(async move {
             let size = hi - lo;
             if size <= 1 {
@@ -1117,7 +1118,7 @@ impl<S: Storage> Log<S> {
         hi: u64,
         b: bool,
         path: &'a mut Vec<Vec<u8>>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    ) -> BoxedFuture<'a, Result<()>> {
         Box::pin(async move {
             let size = hi - lo;
             if m == size {

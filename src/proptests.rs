@@ -335,7 +335,8 @@ proptest! {
             // Pick an index in the active range (>= activation).
             let active_range = ts.saturating_sub(activation);
             if active_range == 0 { return Ok(()); }
-            let index = activation + ((idx_frac * active_range as f64) as usize).min(active_range - 1);
+            let offset = (idx_frac * active_range as f64) as usize;
+            let index = activation + offset.min(active_range - 1);
 
             let root = log.root(0).unwrap();
             let projected = log.project(0).await.unwrap();
@@ -792,7 +793,8 @@ proptest! {
 
             let active_range = ts.saturating_sub(activation);
             if active_range == 0 { return Ok(()); }
-            let index = activation + ((idx_frac * active_range as f64) as usize).min(active_range - 1);
+            let offset = (idx_frac * active_range as f64) as usize;
+            let index = activation + offset.min(active_range - 1);
 
             let full_proof = log.inclusion_proof(0, index as u64).await.unwrap();
             let epochs = log.epochs(0).unwrap();
@@ -915,9 +917,16 @@ proptest! {
             );
 
             // Rehydrated proof must verify against the root.
+            let ok = crate::verify_inclusion(
+                &Sha256Hasher,
+                &projected[global_index],
+                &rehydrated,
+                &root,
+            );
             prop_assert!(
-                crate::verify_inclusion(&Sha256Hasher, &projected[global_index], &rehydrated, &root),
-                "rehydrated proof fails verification at global_index={}", global_index
+                ok,
+                "rehydrated proof fails verification at global_index={}",
+                global_index
             );
             Ok(())
         })?;

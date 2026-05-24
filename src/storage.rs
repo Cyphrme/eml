@@ -46,14 +46,21 @@ pub trait Storage: Send + Sync {
     /// Persist a raw leaf payload at the given index.
     ///
     /// Called exactly once per index, in monotonically increasing order.
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    fn store_leaf(
+        &mut self,
+        index: u64,
+        data: &[u8],
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Retrieve the raw leaf payload at the given index.
     ///
     /// Returns the exact bytes previously passed to `store_leaf` for this
     /// index. Returns an error if the index has not been stored or if the
     /// underlying storage detects corruption.
-    fn get_leaf(&self, index: u64) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send;
+    fn get_leaf(
+        &self,
+        index: u64,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send;
 
     /// The number of leaves currently stored.
     fn len(&self) -> impl std::future::Future<Output = u64> + Send;
@@ -112,7 +119,9 @@ pub trait Storage: Send + Sync {
     /// has been registered (including frozen ones). Used by
     /// `Log::from_storage` to reconstruct the algorithm registry on cold
     /// start.
-    fn load_algorithm_metas(&self) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send;
+    fn load_algorithm_metas(
+        &self,
+    ) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send;
 
     /// Perform a batch write of multiple leaves and nodes.
     ///

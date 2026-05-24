@@ -186,7 +186,7 @@ impl Storage for CorruptingStorage {
                     corruptions.fetch_add(1, Ordering::SeqCst);
                 }
                 Ok(None)
-            }
+            },
         }
     }
 
