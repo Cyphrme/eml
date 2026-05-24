@@ -14,7 +14,7 @@ sibling hash in a proof path is resolved through the `subtree_root`
 query:
 
 ::: {#def-subtree-root}
-**Definition 17** (Subtree root). The root hash of the subtree covering
+**Definition 19** (Subtree root). The root hash of the subtree covering
 leaves $[lo, hi)$ for algorithm $a$:
 
 $$
@@ -36,20 +36,20 @@ throughout.
 The cases, in order of priority:
 
 1. **Empty range**: returns the empty root.
-2. **Single leaf**: returns the leaf value directly (Definition 9).
+2. **Single leaf**: returns the leaf value directly (Definition 12).
 3. **Pure null subtree**: if no epoch of algorithm $a$ overlaps the
    range $[lo, hi)$, the entire subtree consists of null constants. For
    power-of-two ranges, this is a single NullTable lookup:
    $\mathcal{O}(1)$. For non-power-of-two ranges, the subtree
    decomposes into $\text{popcount}(hi - lo)$ NullTable lookups.
-4. **Stored node**: the CTO merge during `append` (Definition 10)
+4. **Stored node**: the CTO merge during `append` (Definition 13)
    persists sealed internal nodes keyed by $(lo, h)$. A hash-map lookup
    resolves the subtree root in $\mathcal{O}(1)$.
 5. **Recursive split**: the standard RFC 9162 decomposition into left
    and right subtrees.
 
 ::: {#def-active-range}
-**Definition 18** (Active range). Algorithm $a$ has active content in
+**Definition 20** (Active range). Algorithm $a$ has active content in
 $[lo, hi)$ iff any epoch overlaps it:
 
 $$
@@ -74,7 +74,7 @@ $+$ $\mathcal{O}(\log n)$ hash operations.
 |:----------|:-----------|:----------|
 | Append (per algorithm) | $\mathcal{O}(1)$ amortized | CTO merge + node persistence |
 | Append (total) | $\mathcal{O}(\lvert A(i) \rvert)$ amortized | Linear in active algorithm count |
-| Algorithm addition | $\mathcal{O}(\log K)$ | Null prefix peak computation |
+| Algorithm addition | $\mathcal{O}(\log K)$ worst-case | Null prefix peak computation |
 | Algorithm resumption | $\mathcal{O}(\log n)$ | Frontier reconstruction via `subtree_root` |
 | Root extraction | $\mathcal{O}(\log n)$ | Frontier stack fold |
 | STH construction | $\mathcal{O}(\lvert\mathcal{A}\rvert \cdot \log n)$ | Root extraction per algorithm $+$ manifest hash |
@@ -103,7 +103,7 @@ resolution. The recursive structure is unchanged; only the mechanism for
 obtaining sibling hashes differs.
 
 ::: {#def-inclusion-proof}
-**Definition 19** (Inclusion proof). For algorithm $a$ and leaf index
+**Definition 21** (Inclusion proof). For algorithm $a$ and leaf index
 $m$:
 
 $$
@@ -116,7 +116,7 @@ hashes resolved through `subtree_root`.
 :::
 
 ::: {#def-consistency-proof}
-**Definition 20** (Consistency proof). For algorithm $a$ and old tree
+**Definition 22** (Consistency proof). For algorithm $a$ and old tree
 size $m$:
 
 $$
@@ -137,8 +137,8 @@ of epoch boundaries.
 **Correctness bridge.** The operational definitions produce identical
 output to the specification oracle (batch construction over $\pi_a(S)$).
 Both decompose the tree identically via $\text{largest\_pow2\_lt}$; the
-only difference is how sibling roots are obtained. By Theorem 1 and
-[A-Equiv]{.smallcaps}, the proofs verify against the same root.
+only difference is how sibling roots are obtained. By Theorem 2
+(Projection Equivalence), the proofs verify against the same root.
 
 ### Node Caching and Frontier Architecture
 
