@@ -334,7 +334,7 @@ for cutting or condensing.
 - [x] resume_alg justified by operational scenario, not key lifecycle
 - [x] §1.1 contains no identifying proper nouns
 - [x] Absolute benchmarks present in §VII
-- [/] Paper renders within 13-page body limit (In progress; main body reduced from 19 to 16 pages via single-column figures, needs text trimming)
+- [x] Paper renders within 13-page body limit
 - [x] Bibliography complete with venues, dates, and stable URLs
 
 ## Technical Debt
