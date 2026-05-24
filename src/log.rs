@@ -777,9 +777,8 @@ impl<S: Storage> Log<S> {
                     .get_leaf(lo)
                     .map_err(|e| Error::Storage(Box::new(e)))?;
                 return Ok(state.hasher.leaf(&data));
-            } else {
-                return Ok(state.null_table.leaf_null().to_vec());
             }
+            return Ok(state.null_table.leaf_null().to_vec());
         }
 
         // Null range optimization: if no epoch overlaps [lo, hi), the entire
@@ -789,10 +788,9 @@ impl<S: Storage> Log<S> {
                 // Power-of-2 null range: direct NullTable lookup.
                 let h = size.trailing_zeros() as usize;
                 return Ok(state.null_table.get_precomputed(h).to_vec());
-            } else {
-                // Non-power-of-2 null range: decompose into power-of-2 subtrees.
-                return self.null_range_root(state, size);
             }
+            // Non-power-of-2 null range: decompose into power-of-2 subtrees.
+            return self.null_range_root(state, size);
         }
 
         // Stored node lookup: only valid for power-of-2 aligned ranges.
