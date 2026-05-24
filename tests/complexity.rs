@@ -47,13 +47,17 @@ use eml::{Log, MemoryStorage};
 // ---------------------------------------------------------------------------
 
 /// Build a log with one algorithm (id 0) and `n` appended leaves.
-fn make_log(n: usize) -> Arc<Log<MemoryStorage>> {
+async fn make_log(n: usize) -> Arc<Log<MemoryStorage>> {
     let mut log = Log::new(MemoryStorage::new());
-    log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
     for i in 0..n {
-        log.append(&(i as u64).to_le_bytes()).unwrap();
+        log.append(&(i as u64).to_le_bytes()).await.unwrap();
     }
     Arc::new(log)
+}
+
+fn make_log_sync(n: usize) -> Arc<Log<MemoryStorage>> {
+    smol::block_on(make_log(n))
 }
 
 // ===========================================================================
@@ -68,14 +72,16 @@ fn complexity_inclusion_proof_log_n() {
     assert_best_fit(
         LogModel(N),
         |log: Arc<Log<MemoryStorage>>| {
-            let ts = log.tree_size(0).unwrap();
-            let mut proof = None;
-            for _ in 0..100 {
-                proof = Some(log.inclusion_proof(0, ts / 2).unwrap());
-            }
-            proof.unwrap()
+            smol::block_on(async {
+                let ts = log.tree_size(0).await.unwrap();
+                let mut proof = None;
+                for _ in 0..100 {
+                    proof = Some(log.inclusion_proof(0, ts / 2).await.unwrap());
+                }
+                proof.unwrap()
+            })
         },
-        growing_inputs(100, make_log, 25),
+        growing_inputs(100, make_log_sync, 25),
     );
 }
 
@@ -87,14 +93,16 @@ fn complexity_consistency_proof_log_n() {
     assert_best_fit(
         LogModel(N),
         |log: Arc<Log<MemoryStorage>>| {
-            let ts = log.tree_size(0).unwrap();
-            let mut proof = None;
-            for _ in 0..100 {
-                proof = Some(log.consistency_proof(0, ts / 2).unwrap());
-            }
-            proof.unwrap()
+            smol::block_on(async {
+                let ts = log.tree_size(0).await.unwrap();
+                let mut proof = None;
+                for _ in 0..100 {
+                    proof = Some(log.consistency_proof(0, ts / 2).await.unwrap());
+                }
+                proof.unwrap()
+            })
         },
-        growing_inputs(100, make_log, 25),
+        growing_inputs(100, make_log_sync, 25),
     );
 }
 
@@ -112,7 +120,7 @@ fn complexity_root_extraction_log_n() {
             }
             root.unwrap()
         },
-        growing_inputs(100, make_log, 25),
+        growing_inputs(100, make_log_sync, 25),
     );
 }
 
@@ -149,16 +157,18 @@ fn complexity_append_amortized_constant() {
     for &n in sizes {
         let mut times = Vec::with_capacity(trials);
         for _ in 0..trials {
-            let mut log = Log::new(MemoryStorage::new());
-            log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-            for i in 0..n {
-                log.append(&(i as u64).to_le_bytes()).unwrap();
-            }
-            let start = ThreadTime::now();
-            for i in n..(n + batch) {
-                log.append(&(i as u64).to_le_bytes()).unwrap();
-            }
-            times.push(start.elapsed().as_nanos());
+            smol::block_on(async {
+                let mut log = Log::new(MemoryStorage::new());
+                log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                for i in 0..n {
+                    log.append(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                let start = ThreadTime::now();
+                for i in n..(n + batch) {
+                    log.append(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                times.push(start.elapsed().as_nanos());
+            });
         }
         let per_append = median(&mut times) as f64 / batch as f64;
         data.push((n as f64, per_append));
@@ -179,14 +189,16 @@ fn complexity_add_algorithm_log_k() {
     for &k in sizes {
         let mut times = Vec::with_capacity(trials);
         for _ in 0..trials {
-            let mut log = Log::new(MemoryStorage::new());
-            log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-            for i in 0..k {
-                log.append(&(i as u64).to_le_bytes()).unwrap();
-            }
-            let start = ThreadTime::now();
-            log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
-            times.push(start.elapsed().as_nanos());
+            smol::block_on(async {
+                let mut log = Log::new(MemoryStorage::new());
+                log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                for i in 0..k {
+                    log.append(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                let start = ThreadTime::now();
+                log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+                times.push(start.elapsed().as_nanos());
+            });
         }
         data.push((k as f64, median(&mut times) as f64));
     }
@@ -206,19 +218,21 @@ fn complexity_resume_algorithm_linear_gap() {
     for &g in gaps {
         let mut times = Vec::with_capacity(trials);
         for _ in 0..trials {
-            let mut log = Log::new(MemoryStorage::new());
-            log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
-            log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
-            for i in 0..base_size {
-                log.append(&(i as u64).to_le_bytes()).unwrap();
-            }
-            log.remove_algorithm(1).unwrap();
-            for i in base_size..(base_size + g) {
-                log.append(&(i as u64).to_le_bytes()).unwrap();
-            }
-            let start = ThreadTime::now();
-            log.resume_algorithm(1).unwrap();
-            times.push(start.elapsed().as_nanos());
+            smol::block_on(async {
+                let mut log = Log::new(MemoryStorage::new());
+                log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+                log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+                for i in 0..base_size {
+                    log.append(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                log.remove_algorithm(1).await.unwrap();
+                for i in base_size..(base_size + g) {
+                    log.append(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                let start = ThreadTime::now();
+                log.resume_algorithm(1).await.unwrap();
+                times.push(start.elapsed().as_nanos());
+            });
         }
         data.push((g as f64, median(&mut times) as f64));
     }
