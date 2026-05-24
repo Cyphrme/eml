@@ -115,7 +115,14 @@ impl PartialEq for Error {
 
 impl Eq for Error {}
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 /// Convenience alias.
 pub type Result<T> = std::result::Result<T, Error>;

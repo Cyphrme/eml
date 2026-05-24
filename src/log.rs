@@ -620,27 +620,24 @@ impl<S: Storage> Log<S> {
         let current_size = self.storage.len().await;
 
         // Validate state and extract parameters.
-        let state = self
-            .algs
-            .get(&alg_id)
-            .ok_or(Error::UnknownAlgorithm(alg_id))?;
+        let (deactivation, mut new_epochs) = {
+            let state = self
+                .algs
+                .get(&alg_id)
+                .ok_or(Error::UnknownAlgorithm(alg_id))?;
 
-        if state.is_active() {
-            return Err(Error::AlgorithmActive(alg_id));
-        }
+            if state.is_active() {
+                return Err(Error::AlgorithmActive(alg_id));
+            }
 
-        let deactivation = state.epochs.last().unwrap().1;
+            let deactivation = state.epochs.last().unwrap().1;
+            (deactivation, state.epochs.clone())
+        };
+
+        new_epochs.push((current_size, u64::MAX));
         let gap = current_size - deactivation;
 
-        // Compute new epochs and persist BEFORE committing in-memory state.
-        let mut new_epochs = state.epochs.clone();
-        new_epochs.push((current_size, u64::MAX));
-
-        self.storage
-            .store_algorithm_meta(alg_id, &new_epochs)
-            .await
-            .map_err(|e| Error::Storage(Box::new(e)))?;
-
+        let mut new_stack = None;
         if gap > 0 {
             // Ensure null table covers the target tree height.
             {
@@ -654,17 +651,19 @@ impl<S: Storage> Log<S> {
             // Reconstruct the frontier from scratch for the target tree size.
             // During reconstruction, any computed boundary/mixed subtrees of power-of-two size
             // are collected.
-            let state = &self.algs[&alg_id];
             let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let new_stack = Self::reconstruct_frontier_and_collect_mixed(
-                &self.storage,
-                state,
-                alg_id,
-                current_size,
-                deactivation,
-                collected.clone(),
-            )
-            .await?;
+            let reconstructed_stack = {
+                let state = &self.algs[&alg_id];
+                Self::reconstruct_frontier_and_collect_mixed(
+                    &self.storage,
+                    state,
+                    alg_id,
+                    current_size,
+                    deactivation,
+                    collected.clone(),
+                )
+                .await?
+            };
 
             // Persist the collected mixed/boundary nodes to storage in a batch write.
             let nodes_to_store = {
@@ -680,19 +679,28 @@ impl<S: Storage> Log<S> {
                 .await
                 .map_err(|e| Error::Storage(Box::new(e)))?;
 
-            self.algs.get_mut(&alg_id).unwrap().stack = new_stack;
+            new_stack = Some(reconstructed_stack);
+        }
+
+        // Compute new epochs and persist to storage.
+        self.storage
+            .store_algorithm_meta(alg_id, &new_epochs)
+            .await
+            .map_err(|e| Error::Storage(Box::new(e)))?;
+
+        // Update in-memory state only after all storage writes succeed.
+        let state = self.algs.get_mut(&alg_id).unwrap();
+        if let Some(stack) = new_stack {
+            state.stack = stack;
         }
 
         // Eagerly populate null table to current tree height.
-        {
-            let state = self.algs.get_mut(&alg_id).unwrap();
-            let max_height = (64 - current_size.leading_zeros()) as usize;
-            state
-                .null_table
-                .ensure_height(state.hasher.as_ref(), max_height);
-        }
+        let max_height = (64 - current_size.leading_zeros()) as usize;
+        state
+            .null_table
+            .ensure_height(state.hasher.as_ref(), max_height);
 
-        self.algs.get_mut(&alg_id).unwrap().epochs = new_epochs;
+        state.epochs = new_epochs;
         Ok(())
     }
 
@@ -759,6 +767,14 @@ impl<S: Storage> Log<S> {
             return Err(Error::NoActiveAlgorithms);
         }
 
+        // Back up frontier stacks to ensure rollback safety on write failure.
+        let mut backups = std::collections::HashMap::with_capacity(self.algs.len());
+        for (&alg_id, state) in self.algs.iter() {
+            if state.is_active() {
+                backups.insert(alg_id, state.stack.clone());
+            }
+        }
+
         let mut leaves = Vec::with_capacity(data_items.len());
         let mut nodes = Vec::new();
         let start_index = self.size().await;
@@ -808,10 +824,15 @@ impl<S: Storage> Log<S> {
             .iter()
             .map(|n| (n.0, n.1, n.2, n.3.as_slice()))
             .collect();
-        self.storage
-            .write_batch(&leaves, &raw_nodes)
-            .await
-            .map_err(|e| Error::Storage(Box::new(e)))?;
+        if let Err(e) = self.storage.write_batch(&leaves, &raw_nodes).await {
+            // Roll back eagerly mutated in-memory frontier stacks on write failure.
+            for (alg_id, stack) in backups {
+                if let Some(state) = self.algs.get_mut(&alg_id) {
+                    state.stack = stack;
+                }
+            }
+            return Err(Error::Storage(Box::new(e)));
+        }
 
         Ok(start_index + data_items.len() as u64)
     }
@@ -1106,7 +1127,7 @@ impl<S: Storage> Log<S> {
             .ok_or(Error::UnknownAlgorithm(alg_id))?;
 
         let ts = state.tree_size(self.size().await);
-        let mut leaves = Vec::with_capacity(ts as usize);
+        let mut leaves = Vec::with_capacity(usize::try_from(ts).unwrap());
         for i in 0..ts {
             let leaf_hash = if state.is_active_at(i) {
                 let data = self
