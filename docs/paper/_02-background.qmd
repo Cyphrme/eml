@@ -157,25 +157,25 @@ not stored per-position.
 verify historical data under newly added algorithms. A newly activated algorithm
 verifies only the data appended during its active epochs; pre-epoch positions are
 committed as deterministic null constants that are unforgeable but carry no payload
-verification (@def-null-leaf). This design reflects three fundamental security and
+verification (@def-null-constants). This design reflects three fundamental security and
 operational tradeoffs:
 
 1. *Preimage vs. Collision Asymmetry:* Cryptographic hash functions typically succumb to collision attacks (enabling future forgeries) decades before they succumb to preimage attacks (enabling modification of past history). The EML protects future appends by immediately transitioning to a collision-resistant algorithm, while relying on the remaining preimage resistance of the deprecated algorithm to protect the past.
 2. *Operational Viability:* The alternative is an $\mathcal{O}(N)$ retroactive rehashing migration, which is computationally prohibitive and structurally impossible for live immutable logs without downtime or violating write invariants. EML enables $\mathcal{O}(1)$ instant algorithm additions.
-3. *Monitor Ecosystem Defense-in-Depth:* In deployed transparency ecosystems, independent monitors archive Signed Tree Heads and periodically verify consistency. Retroactive modification of historical data in a deprecated epoch would require not only a second-preimage attack on the old hash function but also equivocation against all monitors that have recorded prior STHs---an independently detectable event.
+3. *Monitor Ecosystem Defense-in-Depth:* If an adversary succeeds in finding a second preimage for the deprecated algorithm, they can silently substitute a historical payload without altering the tree root, which is undetectable by monitors. However, if preimage resistance holds, any attempt to retroactively modify history forces a change in the leaf hash. This alters the tree root, requiring the log to present conflicting roots (equivocation) to different clients to avoid detection---an independently detectable event in standard transparency monitor networks.
 
 **Epoch manifest commitment via the Signed Tree Head.** The EML binds
 the activation manifest directly to the log's root of trust. The Signed
 Tree Head (STH) commits the global tree size, and per-algorithm roots,
 tree sizes, and cryptographic digests of each algorithm's canonical activation map
-(formalized as Definition 14 in §[IV](#sec-formal-model)). This binding
+(formalized as Definition 15 in §[IV](#sec-formal-model)). This binding
 guarantees that any attempt by a malicious log to present conflicting
 manifests to different clients requires signing distinct STHs---a
 classical equivocation detectable by standard client-gossip and witness
 protocols. The manifest commitment also closes the shared-state
 assumption underlying proof elision (§[VI](#sec-elided-proofs)):
 agreement on the STH implies agreement on the epoch topology
-([M-Commit]{.smallcaps}, Corollary 1), so verifiers need not trust any
+(Corollary 1 (Manifest Commitment)), so verifiers need not trust any
 out-of-band channel for epoch metadata.
 
 **Equivocation detection.** Cross-algorithm equivocation---a malicious

@@ -16,7 +16,7 @@ This is not one tree per algorithm. It is a single, unified data structure with 
 
 1. **Timeline Continuity and Shared Sequencing:** The log enforces a single, globally ordered index space. Index $n$ under algorithm $a$ represents the exact same entry and transaction timeline as index $n$ under algorithm $b$. This eliminates coordinate fragmentation, allowing applications to reason about strict, chronological ordering across different cryptographic epoch transitions.
 2. **Atomic Write Coordination:** A single append operation updates the logical state of the log atomically across all active projections, ensuring they can never diverge or drift out of sync.
-3. **Consolidated Auditing Complexity:** Auditors and monitors watch a single log identity. Equivocation on any projection is immediately detectable as a split-view of the same shared logical sequence, bypassing the distributed systems nightmare of reconciling separate, asynchronous log timelines.
+3. **Consolidated Auditing Complexity:** Auditors and monitors watch a single log identity. Equivocation on any projection is immediately detectable as a split-view of the same shared logical sequence, bypassing the complexity of reconciling separate, asynchronous log timelines.
 
 ### Null Constants
 
@@ -85,7 +85,7 @@ new appends produce null constants in its projection.
 Three lifecycle operations govern epochs:
 
 - **`add_alg`$(a)$**: Registers algorithm $a$ with initial epoch
-  $[(n, \infty)]$, where $n$ is the current tree size. The algorithm's
+  $[n, \infty)$, where $n$ is the current tree size. The algorithm's
   frontier is initialized to the *null prefix peaks*: the Merkle mountain
   range (MMR) peaks of $n$ null leaves, each computable as a NullTable
   lookup. Cost: $\mathcal{O}(\log n)$.
@@ -95,14 +95,15 @@ Three lifecycle operations govern epochs:
   not update them. Cost: $\mathcal{O}(1)$.
 
 - **`resume_alg`$(a)$**: Reopens a frozen algorithm by appending a new
-  epoch $[(n, \infty)]$. The frontier stack is reconstructed for the
+  epoch $[n, \infty)$. The frontier stack is reconstructed for the
   current tree size $n$ by decomposing $n$ into its binary
   representation and resolving each complete subtree root---via stored
-  nodes, the NullTable, or recursive binary splits for mixed-boundary
-  subtrees. Cost: $\mathcal{O}(\log n)$. Resume is structurally
-  necessary for deployments where algorithm activation is coupled to
-  key lifecycle (e.g., a key using a previously removed algorithm is
-  reactivated) rather than governed by a global deprecation policy.
+  nodes, the NullTable, or recursive binary splits for mixed boundary
+  subtrees. Cost: $\mathcal{O}(\log n)$. Resume provides operational
+  flexibility to temporarily freeze inactive algorithms (saving write I/O
+  and database storage during quiet periods) and resume them later if
+  verification demand or compliance mandates change, paying a one-time
+  $\mathcal{O}(\log n)$ reconstruction cost.
 
 ```{=html}
 <figure id="fig-epochs">
@@ -151,28 +152,25 @@ algorithms share topology but not trust.
 ```
 
 ```{=latex}
-\begin{figure*}[t]
+\begin{figure}[t]
   \centering
-  \resizebox{0.85\textwidth}{!}{\input{figures/fig-projection.tex}}
+  \resizebox{\columnwidth}{!}{\input{figures/fig-projection.tex}}
   \caption{Projection view of the EML from Figure~\ref{fig:topology}. Left:
   Algorithm~A's projection --- a standard Merkle tree with all positions
   active. Right: Algorithm~B's projection --- positions 0--3 are null
   constants ($N_h$), positions 4--7 are active. Each projection is an
   independently valid Merkle tree; proofs are generated per-projection.}
   \label{fig:projection}
-\end{figure*}
-```
+\end{figure}
 
-```{=latex}
-\begin{figure*}[t]
+\begin{figure}[t]
   \centering
-  \resizebox{0.9\textwidth}{!}{\input{figures/fig-epoch-timeline.tex}}
+  \resizebox{\columnwidth}{!}{\input{figures/fig-epoch-timeline.tex}}
   \caption{Algorithm lifecycle in the EML. Algorithm~A is active from
   genesis. Algorithm~B is added at position~4, removed at position~10
   (entering a frozen state where null hashing continues), and resumed at
   position~15. Each active interval defines an \emph{epoch}; the frozen
   gap preserves tree-wide append consistency.}
   \label{fig:epochs}
-\end{figure*}
+\end{figure}
 ```
-
