@@ -739,60 +739,9 @@ impl<S: Storage> Log<S> {
     ///
     /// Returns [`Error::NoActiveAlgorithms`] if no algorithms are active.
     pub async fn append(&mut self, data: &[u8]) -> Result<u64> {
-        // Check at least one algorithm is active.
-        if !self.algs.values().any(|s| s.is_active()) {
-            return Err(Error::NoActiveAlgorithms);
-        }
-
-        let index = self.size().await;
-        let merge_count = count_trailing_ones(index);
-
-        self.storage
-            .store_leaf(index, data)
-            .await
-            .map_err(|e| Error::Storage(Box::new(e)))?;
-
-        for (&alg_id, state) in self.algs.iter_mut() {
-            if !state.is_active() {
-                continue;
-            }
-
-            // Definition 7 (Leaf value): real hash or null constant.
-            let digest = if state.is_active_at(index) {
-                state.hasher.leaf(data)
-            } else {
-                state.null_table.leaf_null().to_vec()
-            };
-
-            state.stack.push(digest);
-
-            // CTO merge with node persistence (Definition 8).
-            // After merge j (1-indexed), the sealed subtree covers
-            // [index + 1 - 2^j, index + 1) at height j.
-            for j in 1..=merge_count {
-                let right = state.stack.pop().expect("stack underflow in merge");
-                let left = state.stack.pop().expect("stack underflow in merge");
-                let parent = state.hasher.node(&left, &right);
-
-                let height = j as usize;
-                let left_pos = index + 1 - (1u64 << height);
-                self.storage
-                    .store_node(alg_id, left_pos, height, &parent)
-                    .await
-                    .map_err(|e| Error::Storage(Box::new(e)))?;
-
-                state.stack.push(parent);
-            }
-
-            // Eagerly populate null table to current tree height.
-            let tree_size = index + 1;
-            let max_height = (64 - tree_size.leading_zeros()) as usize;
-            state
-                .null_table
-                .ensure_height(state.hasher.as_ref(), max_height);
-        }
-
-        Ok(index)
+        let size_before = self.size().await;
+        self.append_batch(&[data]).await?;
+        Ok(size_before)
     }
 
     /// Append a batch of leaf payloads to the EML log.
@@ -2152,7 +2101,11 @@ mod tests {
     impl Storage for TrackingStorage {
         type Error = <MemoryStorage as Storage>::Error;
 
-        async fn store_leaf(&mut self, index: u64, data: &[u8]) -> std::result::Result<(), Self::Error> {
+        async fn store_leaf(
+            &mut self,
+            index: u64,
+            data: &[u8],
+        ) -> std::result::Result<(), Self::Error> {
             self.inner.store_leaf(index, data).await
         }
 
@@ -2202,7 +2155,8 @@ mod tests {
             leaves: &[(u64, &[u8])],
             nodes: &[(u64, u64, usize, &[u8])],
         ) -> std::result::Result<(), Self::Error> {
-            self.batch_write_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.batch_write_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.inner.write_batch(leaves, nodes).await
         }
     }
@@ -2232,18 +2186,23 @@ mod tests {
                 log.append(&[i]).await.unwrap();
             }
 
-            // Assert that batch writes did not occur during single-element appends.
+            // Assert that batch writes occurred during single-element appends (since append
+            // delegates to append_batch).
             let writes_before_resume = batch_write_calls.load(std::sync::atomic::Ordering::SeqCst);
-            assert_eq!(writes_before_resume, 0, "Should not have called write_batch during single appends");
+            assert_eq!(
+                writes_before_resume, 8,
+                "Expected exactly 8 write_batch calls during single-element appends"
+            );
 
             // Resume alg 0: total size = 8.
             log.resume_algorithm(0).await.unwrap();
 
-            // Assert that exactly ONE write_batch call occurred for persisting mixed nodes.
+            // Assert that exactly ONE additional write_batch call occurred for persisting mixed
+            // nodes.
             let writes_after_resume = batch_write_calls.load(std::sync::atomic::Ordering::SeqCst);
             assert_eq!(
                 writes_after_resume,
-                1,
+                writes_before_resume + 1,
                 "resume_algorithm should call write_batch exactly once to persist all mixed nodes"
             );
 
@@ -2271,7 +2230,8 @@ mod tests {
                 "active node [0, 2) height 1 missing"
             );
 
-            // Reference check: Verify the node hashes are canonical and identical to the expected EML tree.
+            // Reference check: Verify the node hashes are canonical and identical to the expected
+            // EML tree.
             let h0 = Sha256Hasher.leaf(&[0]);
             let h1 = Sha256Hasher.leaf(&[1]);
             let h2 = Sha256Hasher.leaf(&[2]);
