@@ -611,13 +611,9 @@ impl<S: Storage> Log<S> {
         }
 
         // Fold right-to-left: the rightmost stack entry is the accumulator seed.
-        let root = state
-            .stack
-            .iter()
-            .rev()
-            .cloned()
-            .reduce(|acc, left| state.hasher.node(&left, &acc))
-            .expect("non-empty stack has at least one element");
+        let mut iter = state.stack.iter().rev();
+        let first = iter.next().expect("non-empty stack has at least one element").clone();
+        let root = iter.fold(first, |acc, left| state.hasher.node(left, &acc));
 
         Ok(root)
     }
@@ -705,13 +701,9 @@ impl<S: Storage> Log<S> {
                 let root = if state.stack.is_empty() {
                     state.hasher.empty()
                 } else {
-                    state
-                        .stack
-                        .iter()
-                        .rev()
-                        .cloned()
-                        .reduce(|acc, left| state.hasher.node(&left, &acc))
-                        .expect("non-empty stack has at least one element")
+                    let mut iter = state.stack.iter().rev();
+                    let first = iter.next().expect("non-empty stack has at least one element").clone();
+                    iter.fold(first, |acc, left| state.hasher.node(left, &acc))
                 };
                 let serialized = serialize_epochs(&state.epochs);
                 let manifest_hash = state.hasher.hash(&serialized);
@@ -917,7 +909,8 @@ impl<S: Storage> Log<S> {
             });
         }
 
-        let path = self.path(state, alg_id, index, 0, ts)?;
+        let mut path = Vec::with_capacity(64);
+        self.path(state, alg_id, index, 0, ts, &mut path)?;
 
         Ok(crate::proof::InclusionProof {
             index,
@@ -936,24 +929,24 @@ impl<S: Storage> Log<S> {
         m: u64,
         lo: u64,
         hi: u64,
-    ) -> Result<Vec<Vec<u8>>> {
+        path: &mut Vec<Vec<u8>>,
+    ) -> Result<()> {
         let size = hi - lo;
         if size <= 1 {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
         let k = crate::proof::largest_pow2_lt(size);
         if m - lo < k {
             // Target is in the left subtree; right subtree is the sibling.
-            let mut result = self.path(state, alg_id, m, lo, lo + k)?;
-            result.push(self.subtree_root(state, alg_id, lo + k, hi)?);
-            Ok(result)
+            self.path(state, alg_id, m, lo, lo + k, path)?;
+            path.push(self.subtree_root(state, alg_id, lo + k, hi)?);
         } else {
             // Target is in the right subtree; left subtree is the sibling.
-            let mut result = self.path(state, alg_id, m, lo + k, hi)?;
-            result.push(self.subtree_root(state, alg_id, lo, lo + k)?);
-            Ok(result)
+            self.path(state, alg_id, m, lo + k, hi, path)?;
+            path.push(self.subtree_root(state, alg_id, lo, lo + k)?);
         }
+        Ok(())
     }
 
     /// Generate a consistency proof from `old_size` to the current tree
@@ -984,7 +977,8 @@ impl<S: Storage> Log<S> {
             });
         }
 
-        let path = self.subproof(state, alg_id, old_size, 0, ts, true)?;
+        let mut path = Vec::with_capacity(64);
+        self.subproof(state, alg_id, old_size, 0, ts, true, &mut path)?;
 
         Ok(crate::proof::ConsistencyProof {
             old_size,
@@ -1005,26 +999,25 @@ impl<S: Storage> Log<S> {
         lo: u64,
         hi: u64,
         b: bool,
-    ) -> Result<Vec<Vec<u8>>> {
+        path: &mut Vec<Vec<u8>>,
+    ) -> Result<()> {
         let size = hi - lo;
         if m == size {
-            if b {
-                return Ok(Vec::new());
-            } else {
-                return Ok(vec![self.subtree_root(state, alg_id, lo, hi)?]);
+            if !b {
+                path.push(self.subtree_root(state, alg_id, lo, hi)?);
             }
+            return Ok(());
         }
 
         let k = crate::proof::largest_pow2_lt(size);
         if m <= k {
-            let mut result = self.subproof(state, alg_id, m, lo, lo + k, b)?;
-            result.push(self.subtree_root(state, alg_id, lo + k, hi)?);
-            Ok(result)
+            self.subproof(state, alg_id, m, lo, lo + k, b, path)?;
+            path.push(self.subtree_root(state, alg_id, lo + k, hi)?);
         } else {
-            let mut result = self.subproof(state, alg_id, m - k, lo + k, hi, false)?;
-            result.push(self.subtree_root(state, alg_id, lo, lo + k)?);
-            Ok(result)
+            self.subproof(state, alg_id, m - k, lo + k, hi, false, path)?;
+            path.push(self.subtree_root(state, alg_id, lo, lo + k)?);
         }
+        Ok(())
     }
 }
 
