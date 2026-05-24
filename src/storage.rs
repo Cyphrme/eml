@@ -46,21 +46,21 @@ pub trait Storage {
     /// Persist a raw leaf payload at the given index.
     ///
     /// Called exactly once per index, in monotonically increasing order.
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error>;
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error>;
 
     /// Retrieve the raw leaf payload at the given index.
     ///
     /// Returns the exact bytes previously passed to `store_leaf` for this
     /// index. Returns an error if the index has not been stored or if the
     /// underlying storage detects corruption.
-    fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error>;
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error>;
 
     /// The number of leaves currently stored.
-    fn len(&self) -> u64;
+    async fn len(&self) -> u64;
 
     /// Whether the storage is empty.
-    fn is_empty(&self) -> bool {
-        self.len() == 0
+    async fn is_empty(&self) -> bool {
+        self.len().await == 0
     }
 
     /// Persist a sealed internal node hash.
@@ -72,7 +72,7 @@ pub trait Storage {
     /// - `left`: the leftmost leaf index of the subtree.
     /// - `height`: the height of this node (1 = parent of two leaves).
     /// - `hash`: the computed node hash.
-    fn store_node(
+    async fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
@@ -84,7 +84,7 @@ pub trait Storage {
     ///
     /// Returns `None` if no node has been stored for this coordinate.
     /// Returns `Err` only on storage corruption or I/O failure.
-    fn get_node(
+    async fn get_node(
         &self,
         alg_id: u64,
         left: u64,
@@ -100,7 +100,7 @@ pub trait Storage {
     /// Epochs use `u64::MAX` as the sentinel for "currently active" — the
     /// internal representation. Consumers should not interpret this value;
     /// it is an implementation detail of the log.
-    fn store_algorithm_meta(
+    async fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
@@ -112,7 +112,25 @@ pub trait Storage {
     /// has been registered (including frozen ones). Used by
     /// `Log::from_storage` to reconstruct the algorithm registry on cold
     /// start.
-    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error>;
+    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error>;
+
+    /// Perform a batch write of multiple leaves and nodes.
+    ///
+    /// Default implementation loops and invokes individual storage operations sequentially.
+    /// Custom backend implementations can override this to implement atomic transactions.
+    async fn write_batch(
+        &mut self,
+        leaves: &[(u64, &[u8])],
+        nodes: &[(u64, u64, usize, &[u8])],
+    ) -> Result<(), Self::Error> {
+        for &(index, data) in leaves {
+            self.store_leaf(index, data).await?;
+        }
+        for &(alg_id, left, height, hash) in nodes {
+            self.store_node(alg_id, left, height, hash).await?;
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -150,7 +168,7 @@ impl MemoryStorage {
 
 /// Error type for [`MemoryStorage`] operations.
 ///
-/// In-memory storage can only fail on out-of-bounds reads.
+/// In-memory storage can fail on out-of-bounds reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryStorageError {
     /// The index that was requested.
@@ -174,7 +192,7 @@ impl std::error::Error for MemoryStorageError {}
 impl Storage for MemoryStorage {
     type Error = MemoryStorageError;
 
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
         debug_assert_eq!(
             index,
             self.leaves.len() as u64,
@@ -184,7 +202,7 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         self.leaves
             .get(index as usize)
             .cloned()
@@ -194,11 +212,11 @@ impl Storage for MemoryStorage {
             })
     }
 
-    fn len(&self) -> u64 {
+    async fn len(&self) -> u64 {
         self.leaves.len() as u64
     }
 
-    fn store_node(
+    async fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
@@ -209,7 +227,7 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn get_node(
+    async fn get_node(
         &self,
         alg_id: u64,
         left: u64,
@@ -218,7 +236,7 @@ impl Storage for MemoryStorage {
         Ok(self.nodes.get(&(alg_id, left, height)).cloned())
     }
 
-    fn store_algorithm_meta(
+    async fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
@@ -227,7 +245,7 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         Ok(self
             .algorithm_metas
             .iter()
