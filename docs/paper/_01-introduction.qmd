@@ -1,19 +1,6 @@
 ## Introduction {#sec-introduction}
 
-Cryptographic hash functions have finite lifetimes. MD5 was deprecated
-after practical collision attacks in 2004; SHA-1 fell to the SHAttered
-attack in 2017 [@crosby2009]. The current ubiquitous standard, SHA-256,
-remains computationally secure, but long-term audit logs must navigate
-migration readiness. Standardizing bodies (such as NIST) have begun active
-transitions to post-quantum and larger-output primitives [@mtc-draft; @chopra2026].
-For verifiable append-only logs---Certificate Transparency [@rfc6962; @rfc9162],
-software supply chain attestation, and identity state trees---this
-obsolescence poses a fundamental tension. The log's historical immutability
-derives from its hash function. When the hash function must change, the
-log's integrity guarantee is at risk.
-
-Existing systems resolve this tension by accepting one horn of what we
-term the *upgrade trilemma*:
+Long-lived authenticated data infrastructures are structurally bound to the operational lifecycles of their underlying cryptographic primitives. Whether driven by the eventual cryptanalytic decay of a hash function, proactive compliance mandates from regulatory bodies (e.g., NIST commercial transitions), or the necessity of migrating to post-quantum alternatives, cryptographic agility is an absolute requirement for ledger longevity. Traditionally, executing such a transition on a live log forces an unviable trilemma:
 
 1. **Fork the ledger.** Abandon the old log and create a new one under a
    stronger algorithm. History is preserved but fragmented: auditors must
@@ -43,19 +30,9 @@ term the *upgrade trilemma*:
    mutation by construction, it is architecturally impossible without
    violating the core invariant.
 
-We present the **Epoch Merkle Log (EML)**, a verifiable append-only data
-structure that navigates the trilemma without forking or rehashing. The
-EML maintains a single RFC 9162 Merkle tree topology shared across all
-hash algorithms. Each algorithm occupies discrete chronological
-*epochs*---intervals during which it actively hashes appended data.
-Positions outside an algorithm's active epochs contain deterministic
-*null constants*: fixed-point values derived from the algorithm's own
-hash function, domain-separated from both real leaf hashes and internal
-node hashes. A new algorithm added at tree position $n$ computes
-$\mathcal{O}(\log n)$ null constants to establish its frontier over the
-existing tree, then immediately participates in subsequent appends. No
-historical data is re-hashed. No fork is created. Each algorithm's
-verification is independent of every other's.
+We present the **Polymorphic Merkle Log (PML)**, a novel abstract class of cryptographically agile authenticated data structures that resolves the upgrade trilemma. A PML maintains a single unified tree topology shared across multiple cryptographic hash profiles. We instantiate this abstract class through the **Epoch Merkle Log (EML)**, a concrete, RFC 9162-compliant construction where each hash algorithm occupies discrete chronological *epochs*---intervals during which it actively processes appended data. Positions outside an algorithm's active epochs contain deterministic *null constants*: fixed-point values derived from the algorithm's own hash function, domain-separated from both real leaf hashes and internal node hashes. A new algorithm added at tree position $n$ computes $\mathcal{O}(\log n)$ null constants to establish its frontier over the existing tree, then immediately participates in subsequent appends. No historical data is re-hashed, and no fork is created. Each algorithm's verification is independent of every other's.
+
+Crucially, this architecture reclaims the concept of cryptographic agility from historical vulnerability patterns. Traditional agility mechanisms, such as those in TLS or JSON Web Tokens (JWT), rely on dynamic runtime negotiation, exposing logs to downgrade attacks and algorithm confusion. In contrast, the EML eliminates runtime negotiation entirely: the epoch activation timeline for every algorithm is committed deterministically in an append-only global manifest. Because clients verify proofs against this immutable manifest, they detect any adversarial attempt to substitute or downgrade algorithms at specific coordinates, providing absolute cryptographic security without compromising operational agility.
 
 The trade-off is explicit: historical data remains bound to the
 algorithms that were active at the time of insertion. A newly added
@@ -81,20 +58,18 @@ Our work is directly motivated by the deployment requirements of long-lived key 
 
 We make the following contributions:
 
-1. **The Epoch Merkle Log data structure** (§[III](#sec-architecture)):
-   a shared-topology append-only Merkle tree supporting concurrent,
-   independent hash algorithms via null-padded chronological epochs. The
-   EML achieves $\mathcal{O}(1)$ amortized appends per algorithm,
-   $\mathcal{O}(\log n)$ algorithm addition, and $\mathcal{O}(1)$
-   algorithm removal.
+1. **The Polymorphic Merkle Log (PML) paradigm and EML concrete construction** (§[III](#sec-architecture)):
+   we introduce the PML abstract class and its epoch-based concrete instantiation, the EML. The EML
+   maintains a shared-topology append-only Merkle tree supporting concurrent, independent hash algorithms
+   via null-padded chronological epochs. It achieves $\mathcal{O}(1)$ amortized appends per active algorithm,
+   $\mathcal{O}(\log n)$ algorithm addition, and $\mathcal{O}(1)$ algorithm removal.
 
-2. **A machine-checked formal model** (§[IV](#sec-formal-model)): 13
-   definitions and five theorems (Structural Bridge Lemma, Projection
-   Equivalence, Temporal Binding, Algorithm Isolation, Generalized Bridge Lemma)
-   mechanized in Lean4 (~1400 lines, zero `sorry`). The model decouples structural
-   tree arithmetic over the free magma `MerkleTree α` from cryptographic hash function properties,
-   proving topological equivalence and generalized shift-reduce duality for any append-consistent topology.
-   To our knowledge, this includes the first machine-checked formalization of RFC 9162's MTH construction.
+2. **A machine-checked formal model of the PML algebra** (§[IV](#sec-formal-model)): 15
+   definitions and five theorems (Structural Bridge Lemma, Projection Equivalence, Temporal Binding,
+   Algorithm Isolation, and the Generalized Bridge Lemma) mechanized in Lean 4 (~1400 lines, zero `sorry`).
+   The model decouples structural tree arithmetic over the free magma `MerkleTree α` from cryptographic hash
+   function properties, proving topological equivalence and the shift-reduce duality for any append-consistent
+   topology. To our knowledge, this includes the first machine-checked formalization of RFC 9162's MTH construction.
 
 3. **Deterministic proof elision** (§[VI](#sec-elided-proofs)): a
    zero per-proof-metadata wire optimization that compresses inclusion proofs from
