@@ -101,6 +101,50 @@ impl Storage for FaultyStorage {
     async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().await.map_err(FuzzStorageErrorEnum::Inner)
     }
+
+    async fn write_batch(
+        &mut self,
+        leaves: &[(u64, &[u8])],
+        nodes: &[(u64, u64, usize, &[u8])],
+    ) -> Result<(), Self::Error> {
+        let should_fail = self.should_fail();
+        if should_fail {
+            return Err(FuzzStorageErrorEnum::Injected("write_batch failed".to_string()));
+        }
+        let backup_leaves = self.inner.leaves.clone();
+        let backup_nodes = self.inner.nodes.clone();
+        let backup_algorithm_metas = self.inner.algorithm_metas.clone();
+
+        for &(index, data) in leaves {
+            if self.should_fail() {
+                self.inner.leaves = backup_leaves;
+                self.inner.nodes = backup_nodes;
+                self.inner.algorithm_metas = backup_algorithm_metas;
+                return Err(FuzzStorageErrorEnum::Injected("write_batch leaf failed".to_string()));
+            }
+            if let Err(e) = self.inner.store_leaf(index, data).await {
+                self.inner.leaves = backup_leaves;
+                self.inner.nodes = backup_nodes;
+                self.inner.algorithm_metas = backup_algorithm_metas;
+                return Err(FuzzStorageErrorEnum::Inner(e));
+            }
+        }
+        for &(alg_id, left, height, hash) in nodes {
+            if self.should_fail() {
+                self.inner.leaves = backup_leaves;
+                self.inner.nodes = backup_nodes;
+                self.inner.algorithm_metas = backup_algorithm_metas;
+                return Err(FuzzStorageErrorEnum::Injected("write_batch node failed".to_string()));
+            }
+            if let Err(e) = self.inner.store_node(alg_id, left, height, hash).await {
+                self.inner.leaves = backup_leaves;
+                self.inner.nodes = backup_nodes;
+                self.inner.algorithm_metas = backup_algorithm_metas;
+                return Err(FuzzStorageErrorEnum::Inner(e));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -273,28 +317,10 @@ fuzz_target!(|input: FuzzInput| {
             };
 
             if let Err(eml::Error::Storage(_)) = res {
-                // Write failure! Discard and reconstruct.
+                // Write failure! Verify that the log is consistent.
                 inject_faults.store(false, Ordering::SeqCst);
-
-                let storage = log.into_storage();
-
-                // Reconstruct reference_leaves by querying get_leaf on storage.
-                let len = storage.len().await;
-                let mut leaves = Vec::with_capacity(len as usize);
-                for i in 0..len {
-                    leaves.push(storage.get_leaf(i).await.unwrap());
-                }
-                reference_leaves = leaves;
-
-                let hashers: Vec<(u64, Box<dyn Hasher>)> = registered_algs
-                    .iter()
-                    .map(|&id| (id, get_hasher(id)))
-                    .collect();
-
-                let reconstructed = Log::from_storage(storage, hashers).await
-                    .expect("Failed to reconstruct Log from storage after write error");
-
-                log = reconstructed;
+                let len = log.size().await;
+                assert_eq!(len, reference_leaves.len() as u64);
                 inject_faults.store(true, Ordering::SeqCst);
             }
 
