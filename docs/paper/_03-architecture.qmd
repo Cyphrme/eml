@@ -1,10 +1,10 @@
-## The Epoch Merkle Log {#sec-architecture}
+## Design Paradigm and Architectural Topology {#sec-architecture}
 
 This section introduces the Polymorphic Merkle Log (PML) paradigm and its concrete Epoch Merkle Log (EML) construction informally. The formal algebraic model follows in §[IV](#sec-formal-model).
 
 ### Shared Topology
 
-An EML is a single binary Merkle tree. Every registered algorithm
+A PML is a single binary Merkle tree. Every registered algorithm
 observes the same tree topology---the same number of leaf positions, the
 same branching structure, the same internal node relationships (as illustrated in Figure 1). What
 differs across algorithms is the *value* computed at each node: each
@@ -51,8 +51,8 @@ $H = \lceil \log_2 n \rceil$.
 
 ```{=html}
 <figure id="fig-topology">
-  <img src="figures/fig-topology.svg" style="width:100%" alt="An 8-leaf EML with two algorithms showing shared topology with independent hash values per algorithm.">
-  <figcaption><strong>Figure 1.</strong> An 8-leaf EML with two algorithms. Algorithm A (blue) is active from genesis. Algorithm B (amber) was added at position 4; its pre-activation positions are filled with null constants (gray, dashed). Each node computes independent hash values per algorithm over a shared topology.</figcaption>
+  <img src="figures/fig-topology.svg" style="width:100%" alt="An 8-leaf PML with two algorithms showing shared topology with independent hash values per algorithm.">
+  <figcaption><strong>Figure 1.</strong> An 8-leaf PML with two algorithms. Algorithm A (blue) is active from genesis. Algorithm B (amber) was added at position 4; its pre-activation positions are filled with null constants (gray, dashed). Each node computes independent hash values per algorithm over a shared topology.</figcaption>
 </figure>
 ```
 
@@ -113,17 +113,17 @@ Three lifecycle operations govern epochs:
 
 ### One Tree, Many Projections
 
-The *projection* of the EML onto algorithm $a$ yields a sequence of
+The *projection* of the PML onto algorithm $a$ yields a sequence of
 leaf values:
 
 $$
-\pi_a(\text{EML}) = [V(a, 0),\ V(a, 1),\ \ldots,\ V(a, \text{tree\_size}(a) - 1)]
+\pi_a(\text{PML}) = [V(a, 0),\ V(a, 1),\ \ldots,\ V(a, \text{tree\_size}(a) - 1)]
 $$
 
 This sequence is a valid input to the standard RFC 9162 MTH construction.
 The root computed from this projection equals the root maintained by the
-EML's incremental frontier for algorithm $a$. From the perspective of a
-verifier holding a single algorithm's root hash and proof, the EML is
+PML's incremental frontier for algorithm $a$. From the perspective of a
+verifier holding a single algorithm's root hash and proof, the PML is
 indistinguishable from a standard single-algorithm Merkle tree.
 
 Other algorithms are invisible. SHA-256's proofs never reference
@@ -134,12 +134,12 @@ algorithms share topology but not trust.
 
 Traditional cryptographic agility designs (such as those in TLS cipher suite negotiation or JSON Web Tokens) rely on dynamic, runtime algorithm negotiation. This dynamic negotiation introduces a significant attack surface: an adversary capable of altering network packets can intercept the handshake and inject weaker algorithms, forcing a client to downgrade its cryptographic security level.
 
-The EML design neutralizes downgrade attacks by completely eliminating runtime algorithm negotiation. Instead of relying on client-server negotiation during verification, the EML binds algorithm lifecycles directly to the log's root of trust via the epoch manifest. This manifest (Definition 8, §[IV](#sec-formal-model)) is committed in the Signed Tree Head (STH) signed by the log operator. Because client verification enforces that the active epochs for any algorithm match this immutable manifest, any attempt by an adversary to present a downgraded algorithm configuration or forge inactivity at an active position is immediately detected as a signature mismatch or tree-head equivocation.
+The PML design neutralizes downgrade attacks by completely eliminating runtime algorithm negotiation. Instead of relying on client-server negotiation during verification, the PML binds algorithm lifecycles directly to the log's root of trust via the epoch manifest. This manifest (Definition 8, §[IV](#sec-formal-model)) is committed in the Signed Tree Head (STH) signed by the log operator. Because client verification enforces that the active epochs for any algorithm match this immutable manifest, any attempt by an adversary to present a downgraded algorithm configuration or forge inactivity at an active position is immediately detected as a signature mismatch or tree-head equivocation.
 
 ```{=html}
 <figure id="fig-projection">
   <img src="figures/fig-projection.svg" style="width:85%" alt="Projection view: Algorithm A sees a standard Merkle tree; Algorithm B sees null constants at positions 0–3 and active entries at 4–7.">
-  <figcaption><strong>Figure 2.</strong> Projection view of the EML from Figure 1. Left: Algorithm A's projection — a standard Merkle tree with all positions active. Right: Algorithm B's projection — positions 0–3 are null constants (N<sub>h</sub>), positions 4–7 are active. Each projection is an independently valid Merkle tree; proofs are generated per-projection.</figcaption>
+  <figcaption><strong>Figure 2.</strong> Projection view of the PML from Figure 1. Left: Algorithm A's projection — a standard Merkle tree with all positions active. Right: Algorithm B's projection — positions 0–3 are null constants (N<sub>h</sub>), positions 4–7 are active. Each projection is an independently valid Merkle tree; proofs are generated per-projection.</figcaption>
 </figure>
 ```
 
@@ -147,7 +147,7 @@ The EML design neutralizes downgrade attacks by completely eliminating runtime a
 \begin{figure*}[t]
   \centering
   \resizebox{\textwidth}{!}{\input{figures/fig-topology.tex}}
-  \caption{An 8-leaf EML with two algorithms. Algorithm~A (blue) is
+  \caption{An 8-leaf PML with two algorithms. Algorithm~A (blue) is
   active from genesis. Algorithm~B (amber) was added at position~4;
   its pre-activation positions are filled with null constants (gray,
   dashed). Each node computes independent hash values per algorithm
@@ -160,7 +160,7 @@ The EML design neutralizes downgrade attacks by completely eliminating runtime a
 \begin{figure}[t]
   \centering
   \resizebox{\columnwidth}{!}{\input{figures/fig-projection.tex}}
-  \caption{Projection view of the EML from Figure~\ref{fig:topology}. Left:
+  \caption{Projection view of the PML from Figure~\ref{fig:topology}. Left:
   Algorithm~A's projection --- a standard Merkle tree with all positions
   active. Right: Algorithm~B's projection --- positions 0--3 are null
   constants ($N_h$), positions 4--7 are active. Each projection is an
