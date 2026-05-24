@@ -169,37 +169,37 @@ two things: (1) state the theorems with enough precision to be verifiable,
 and (2) convey the *surprising punchline* — that structural correctness
 requires no cryptographic assumptions. Everything else is ceremony to cut.
 
-- [ ] Strip "initial algebra" and "carrier types" framing
-- [ ] Retain only novel definitions:
-  - [ ] Null constants (N₀, Nₕ)
-  - [ ] Activation map + active predicate + active set
-  - [ ] Leaf value function V(a,i)
-  - [ ] Projection π_a(S)
-  - [ ] Definition of `tree_size(a)` for frozen algorithms
-- [ ] Inherited RFC 9162 definitions: brief inline references, not restated as numbered definitions
-  - [ ] Hash operations: "We adopt the MTH construction from RFC 9162 (§2.1)" with equation references to §II
-  - [ ] Domain separation: stated as a property of the prefix scheme, not an equational law
-  - [ ] State tuple, append, root extraction: described informally in §III, referenced from §IV
-- [ ] Theorems with proofs:
-  - [ ] **Theorem 1** (Projection Equivalence): integrate proof from Phase 1; reference Lean4 mechanization
-  - [ ] **Theorem 2** (Temporal Binding): proof sketch reducing to D-Sep + Theorem 1; mechanized in Lean4
-  - [ ] **Theorem 3** (Algorithm Isolation): state and reference Lean4; emphasize structural independence visible in the type signature
-  - [ ] Note in §IV that proofs are machine-checked (cite Lean4 artifact)
-  - [ ] **Emphasize**: bridge lemma requires NO cryptographic assumptions — state explicitly that the structural equivalence is a theorem of combinatorics, not cryptography
-- [ ] Assumptions (moved to §II Threat Model):
-  - [ ] Domain separation as computational hardness under ROM (not absolute quantifier)
-  - [ ] Algorithm independence (mutual incompressibility under ROM)
-- [ ] Corollaries:
-  - [ ] Inclusion/consistency soundness as one-sentence reductions to Theorem 1 + RFC 9162
-  - [ ] Projection validity as direct consequence of Theorem 1
-  - [ ] Manifest commitment (M-Commit)
-- [ ] Clarify MTH notation: explicit note that Theorem 1's MTH operates on pre-hashed digest sequences
-- [ ] Rename "Projection Isomorphism" → "Projection Equivalence"
-- [ ] Update contribution list in §I:
-  - [ ] Replace "initial algebra, 20 definitions, 9 equational laws" with machine-checked proof framing
-  - [ ] Explicitly state: "the first machine-checked formalization of RFC 9162's MTH construction"
-  - [ ] Note the bridge lemma's generality: holds for any deterministic combining function
-  - [ ] Frame as contribution to CT ecosystem, not just EML
+- [x] Strip "initial algebra" and "carrier types" framing
+- [x] Retain only novel definitions:
+  - [x] Null constants (N₀, Nₕ)
+  - [x] Activation map + active predicate + active set
+  - [x] Leaf value function V(a,i)
+  - [x] Projection π_a(S)
+  - [x] Definition of `tree_size(a)` for frozen algorithms
+- [x] Inherited RFC 9162 definitions: brief inline references, not restated as numbered definitions
+  - [x] Hash operations: "We adopt the MTH construction from RFC 9162 (§2.1)" with equation references to §II
+  - [x] Domain separation: stated as a property of the prefix scheme, not an equational law
+  - [x] State tuple, append, root extraction: described informally in §III, referenced from §IV
+- [x] Theorems with proofs:
+  - [x] **Theorem 1** (Projection Equivalence): integrate proof from Phase 1; reference Lean4 mechanization
+  - [x] **Theorem 2** (Temporal Binding): proof sketch reducing to D-Sep + Theorem 1; mechanized in Lean4
+  - [x] **Theorem 3** (Algorithm Isolation): state and reference Lean4; emphasize structural independence visible in the type signature
+  - [x] Note in §IV that proofs are machine-checked (cite Lean4 artifact)
+  - [x] **Emphasize**: bridge lemma requires NO cryptographic assumptions — state explicitly that the structural equivalence is a theorem of combinatorics, not cryptography
+- [x] Assumptions (moved to §II Threat Model):
+  - [x] Domain separation as computational hardness under ROM (not absolute quantifier)
+  - [x] Algorithm independence (mutual incompressibility under ROM)
+- [x] Corollaries:
+  - [x] Inclusion/consistency soundness as one-sentence reductions to Theorem 1 + RFC 9162
+  - [x] Projection validity as direct consequence of Theorem 1
+  - [x] Manifest commitment (M-Commit)
+- [x] Clarify MTH notation: explicit note that Theorem 1's MTH operates on pre-hashed digest sequences
+- [x] Rename "Projection Isomorphism" → "Projection Equivalence"
+- [x] Update contribution list in §I:
+  - [x] Replace "initial algebra, 20 definitions, 9 equational laws" with machine-checked proof framing
+  - [x] Explicitly state: "the first machine-checked formalization of RFC 9162's MTH construction"
+  - [x] Note the bridge lemma's generality: holds for any deterministic combining function
+  - [x] Frame as contribution to CT ecosystem, not just EML
 
 ---
 
@@ -258,10 +258,10 @@ Apply the spine as a filter to each section:
 #### Specific cuts and trims
 
 - [ ] **§8.5 Post-Quantum**: Cut entirely. Move to one sentence in §IX. Reviewers explicitly called this "marketing padding" (round 6). It doesn't serve any beat of the throughline.
-- [ ] **Carrier Types (§4.1)**: Cut. Ceremony that doesn't advance the proof narrative.
-- [ ] **"Faithful representation of temporal reality"**: Cut. Promotional, not diagnostic.
+- [x] **Carrier Types (§4.1)**: Cut. Ceremony that doesn't advance the proof narrative.
+- [x] **"Faithful representation of temporal reality"**: Cut. Promotional, not diagnostic.
 - [ ] **"Distributed systems nightmare"**: Cut. Hyperbole.
-- [ ] **"Structural crisis"** in §I: Replace with objective description. The upgrade trilemma already conveys urgency without editorializing.
+- [x] **"Structural crisis"** in §I: Replace with objective description. The upgrade trilemma already conveys urgency without editorializing.
 - [ ] **Upgrade trilemma repetition**: Use the term once (definition in §I), reference thereafter. Currently repeated ~5 times.
 - [ ] **§V Proof Engine**: Audit for expansion since last draft. This section tends to grow. It should describe operations, not re-derive theory. Any theory belongs in §IV.
 - [ ] **resume_alg in §III**: Keep but minimize. It's operational detail, not the throughline. One paragraph maximum.
@@ -320,17 +320,17 @@ for cutting or condensing.
 - [x] Lean4 proof of Temporal Binding type-checks successfully
 - [x] Lean4 proof of Algorithm Isolation type-checks successfully
 - [ ] Lean4 proof artifact included in supplementary materials
-- [ ] Bridge lemma's axiom-independence from cryptography stated explicitly in §IV
-- [ ] Algorithm isolation theorem referenced in §IV with structural independence explanation
-- [ ] Paper's contribution framed as first machine-checked formalization of RFC 9162 MTH
+- [x] Bridge lemma's axiom-independence from cryptography stated explicitly in §IV
+- [x] Algorithm isolation theorem referenced in §IV with structural independence explanation
+- [x] Paper's contribution framed as first machine-checked formalization of RFC 9162 MTH
 - [ ] Narrative throughline (pain → solution → proof → generality) visible across all sections
-- [ ] No "Law" in §IV — all properties are definitions, assumptions, proved theorems, or corollaries
-- [ ] D-Sep stated as computational hardness, not absolute universal quantifier
-- [ ] MTH notation unambiguous between raw-payload and digest-domain variants
+- [x] No "Law" in §IV — all properties are definitions, assumptions, proved theorems, or corollaries
+- [x] D-Sep stated as computational hardness, not absolute universal quantifier
+- [x] MTH notation unambiguous between raw-payload and digest-domain variants
 - [ ] STH contains per-algorithm H_a(act) digests (code + paper)
 - [ ] Second-preimage and equivocation discussed as independent threats
 - [ ] "Zero metadata" claim qualified with session-level bandwidth accounting
-- [ ] No "initial algebra" terminology remains
+- [x] No "initial algebra" terminology remains
 - [ ] resume_alg justified by operational scenario, not key lifecycle
 - [ ] §1.1 contains no identifying proper nouns
 - [ ] Absolute benchmarks present in §VII
@@ -341,6 +341,10 @@ for cutting or condensing.
 
 | Item | Severity | Why Introduced | Follow-Up | Resolved |
 | :--- | :------- | :------------- | :-------- | :------: |
+| Definition numbers in §V (17-20) are stale after §IV renumbering | MEDIUM | §IV stripped old Def 1 (Carrier Types) and renumbered 2-16 → 1-15. §V definitions 17-20 should now be 16-19. | Phase 6 cross-reference consistency pass | |
+| Definition references in §II (Def 15), §VI (Def 15), §IX (Def 15) point to old STH number | MEDIUM | STH was old Def 15, now Def 14. Projection was old Def 16, now Def 15. | Phase 6 cross-reference consistency pass | |
+| Old law names (A-Equiv, Proj-Valid, A-Stack, I-Sound, K-Sound, T-Bound) in §I, §II, §V, §VII | MEDIUM | Laws removed in §IV rewrite. Other sections still reference them by old smallcaps names. | Phase 4 presentation surgery or Phase 6 | |
+| Definition reference in §VII (Def 20) stale | LOW | Should be Def 19 after renumbering. | Phase 6 cross-reference consistency pass | |
 
 ## Deviation Log
 

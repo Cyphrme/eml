@@ -8,7 +8,7 @@ migration readiness. Standardizing bodies (such as NIST) have begun active
 transitions to post-quantum and larger-output primitives [@mtc-draft; @chopra2026].
 For verifiable append-only logs---Certificate Transparency [@rfc6962; @rfc9162],
 software supply chain attestation, and identity state trees---this
-obsolescence poses a structural crisis. The log's historical immutability
+obsolescence poses a fundamental tension. The log's historical immutability
 derives from its hash function. When the hash function must change, the
 log's integrity guarantee is at risk.
 
@@ -63,16 +63,15 @@ algorithm verifies only the data appended during its active epochs;
 pre-epoch positions are committed as deterministic null constants---unforgeable
 commitments to algorithm inactivity at specific historical
 positions---that carry no payload verification. This is a principled
-choice---faithful representation of temporal reality---not an
-evasion of the retroactive computation cost.
+choice, not an evasion of the retroactive computation cost.
 
-The key theoretical result is the *projection isomorphism*: for any
+The key theoretical result is *Projection Equivalence*: for any
 algorithm $a$, the EML's per-algorithm projection $\pi_a$ yields a
 standard RFC 9162 Merkle tree whose leaves are the null-or-real values at
 each position. This projection is a valid input to unmodified RFC 9162
 verification. Correctness of the multi-algorithm EML thus *reduces* to
-correctness of the single-algorithm standard, a property we formalize as
-[Proj-Valid]{.smallcaps}.
+correctness of the single-algorithm standard, a property we prove via
+machine-checked theorem in §[IV](#sec-formal-model).
 
 ### Motivating Case Study: Long-Lived Key Directories
 
@@ -89,12 +88,14 @@ We make the following contributions:
    $\mathcal{O}(\log n)$ algorithm addition, and $\mathcal{O}(1)$
    algorithm removal.
 
-2. **A formal algebraic model** (§[IV](#sec-formal-model)): an initial
-   algebra over 20 definitions with 9 equational laws establishing
-   algorithm-independent correctness. The projection isomorphism
-   ($\pi_a(\text{EML}) \cong \text{RFC 9162}(\text{leaves}_a)$) reduces
-   multi-algorithm verification to standard single-algorithm
-   verification.
+2. **A machine-checked formal model** (§[IV](#sec-formal-model)): 15
+   definitions and three theorems (Projection Equivalence, Temporal
+   Binding, Algorithm Isolation) mechanized in Lean4 (~1400 lines,
+   zero `sorry`). The bridge lemma---the engine of Projection
+   Equivalence---requires no cryptographic assumptions, establishing
+   structural correctness independent of hash function properties.
+   To our knowledge, this includes the first machine-checked
+   formalization of RFC 9162's MTH construction.
 
 3. **Deterministic proof elision** (§[VI](#sec-elided-proofs)): a
    zero per-proof-metadata wire optimization that compresses inclusion proofs from
