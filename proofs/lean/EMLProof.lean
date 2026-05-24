@@ -1,1 +1,1 @@
-import EMLProof.ProjectionEquivalence
+import EMLProof.Projection
