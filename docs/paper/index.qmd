@@ -22,7 +22,7 @@ abstract: |
   RFC 9162-compliant instantiation of this paradigm, partitioning algorithm
   lifecycles into discrete, null-padded chronological epochs. The EML achieves
   strictly algorithm-independent verification---each hash algorithm's projection
-  yields a complete, independently verifiable standard Merkle tree---while
+  yields a complete, independently verifiable Merkle tree---while
   enabling $\mathcal{O}(\log N)$ hash transitions with zero retroactive
   computation. We formalize and verify the PML algebra via a machine-checked
   model in Lean 4 (15 definitions, 5 theorems), decoupling structural tree
