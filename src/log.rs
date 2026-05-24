@@ -392,17 +392,16 @@ impl<S: Storage> Log<S> {
             for bit in (0..bit_width).rev() {
                 if tree_size & (1 << bit) != 0 {
                     let subtree_size = 1u64 << bit;
-                    let root =
-                        Self::reconstruct_and_collect_mixed(
-                            storage,
-                            state,
-                            alg_id,
-                            pos,
-                            pos + subtree_size,
-                            deactivation,
-                            collected.clone(),
-                        )
-                        .await?;
+                    let root = Self::reconstruct_and_collect_mixed(
+                        storage,
+                        state,
+                        alg_id,
+                        pos,
+                        pos + subtree_size,
+                        deactivation,
+                        collected.clone(),
+                    )
+                    .await?;
                     stack.push(root);
                     pos += subtree_size;
                 }
@@ -657,28 +656,29 @@ impl<S: Storage> Log<S> {
             // are collected.
             let state = &self.algs[&alg_id];
             let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let new_stack =
-                Self::reconstruct_frontier_and_collect_mixed(
-                    &self.storage,
-                    state,
-                    alg_id,
-                    current_size,
-                    deactivation,
-                    collected.clone(),
-                )
-                .await?;
+            let new_stack = Self::reconstruct_frontier_and_collect_mixed(
+                &self.storage,
+                state,
+                alg_id,
+                current_size,
+                deactivation,
+                collected.clone(),
+            )
+            .await?;
 
-            // Persist the collected mixed/boundary nodes to storage.
+            // Persist the collected mixed/boundary nodes to storage in a batch write.
             let nodes_to_store = {
                 let mut guard = collected.lock().unwrap();
                 std::mem::take(&mut *guard)
             };
-            for (lo, h, hash) in nodes_to_store {
-                self.storage
-                    .store_node(alg_id, lo, h, &hash)
-                    .await
-                    .map_err(|e| Error::Storage(Box::new(e)))?;
-            }
+            let batch_nodes: Vec<(u64, u64, usize, &[u8])> = nodes_to_store
+                .iter()
+                .map(|&(lo, h, ref hash)| (alg_id, lo, h, hash.as_slice()))
+                .collect();
+            self.storage
+                .write_batch(&[], &batch_nodes)
+                .await
+                .map_err(|e| Error::Storage(Box::new(e)))?;
 
             self.algs.get_mut(&alg_id).unwrap().stack = new_stack;
         }
@@ -2140,6 +2140,168 @@ mod tests {
             // Root should be unchanged — zero-gap fast-forward is identity.
             let root_after = log.root(0).unwrap();
             assert_eq!(root_before, root_after, "zero-gap resume changed root");
+        });
+    }
+
+    #[derive(Debug)]
+    struct TrackingStorage {
+        inner: MemoryStorage,
+        batch_write_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Storage for TrackingStorage {
+        type Error = <MemoryStorage as Storage>::Error;
+
+        async fn store_leaf(&mut self, index: u64, data: &[u8]) -> std::result::Result<(), Self::Error> {
+            self.inner.store_leaf(index, data).await
+        }
+
+        async fn get_leaf(&self, index: u64) -> std::result::Result<Vec<u8>, Self::Error> {
+            self.inner.get_leaf(index).await
+        }
+
+        async fn len(&self) -> u64 {
+            self.inner.len().await
+        }
+
+        async fn store_node(
+            &mut self,
+            alg_id: u64,
+            left: u64,
+            height: usize,
+            hash: &[u8],
+        ) -> std::result::Result<(), Self::Error> {
+            self.inner.store_node(alg_id, left, height, hash).await
+        }
+
+        async fn get_node(
+            &self,
+            alg_id: u64,
+            left: u64,
+            height: usize,
+        ) -> std::result::Result<Option<Vec<u8>>, Self::Error> {
+            self.inner.get_node(alg_id, left, height).await
+        }
+
+        async fn store_algorithm_meta(
+            &mut self,
+            alg_id: u64,
+            epochs: &[(u64, u64)],
+        ) -> std::result::Result<(), Self::Error> {
+            self.inner.store_algorithm_meta(alg_id, epochs).await
+        }
+
+        async fn load_algorithm_metas(
+            &self,
+        ) -> std::result::Result<crate::storage::AlgorithmMetas, Self::Error> {
+            self.inner.load_algorithm_metas().await
+        }
+
+        async fn write_batch(
+            &mut self,
+            leaves: &[(u64, &[u8])],
+            nodes: &[(u64, u64, usize, &[u8])],
+        ) -> std::result::Result<(), Self::Error> {
+            self.batch_write_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.write_batch(leaves, nodes).await
+        }
+    }
+
+    #[test]
+    fn resume_persists_mixed_nodes() {
+        smol::block_on(async {
+            let batch_write_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let tracking_storage = TrackingStorage {
+                inner: MemoryStorage::new(),
+                batch_write_calls: batch_write_calls.clone(),
+            };
+
+            let mut log = Log::new(tracking_storage);
+            log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+
+            // Epoch 1 active: 3 leaves (0, 1, 2).
+            for i in 0..3u8 {
+                log.append(&[i]).await.unwrap();
+            }
+            log.remove_algorithm(0).await.unwrap();
+
+            // Gap: 5 leaves (3, 4, 5, 6, 7).
+            // Need alt algorithm to accept appends.
+            log.add_algorithm(1, Box::new(AltHasher)).await.unwrap();
+            for i in 3..8u8 {
+                log.append(&[i]).await.unwrap();
+            }
+
+            // Assert that batch writes did not occur during single-element appends.
+            let writes_before_resume = batch_write_calls.load(std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(writes_before_resume, 0, "Should not have called write_batch during single appends");
+
+            // Resume alg 0: total size = 8.
+            log.resume_algorithm(0).await.unwrap();
+
+            // Assert that exactly ONE write_batch call occurred for persisting mixed nodes.
+            let writes_after_resume = batch_write_calls.load(std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                writes_after_resume,
+                1,
+                "resume_algorithm should call write_batch exactly once to persist all mixed nodes"
+            );
+
+            // Verify stored mixed nodes.
+            // Under size 8 and deactivation 3, mixed nodes are:
+            // - [0, 8) height 3
+            // - [0, 4) height 2
+            // - [2, 4) height 1
+            // Active node [0, 2) height 1 is also persisted (from initial appends).
+            let storage = log.into_storage().inner;
+            assert!(
+                storage.nodes.contains_key(&(0, 0, 3)),
+                "mixed node [0, 8) height 3 not persisted"
+            );
+            assert!(
+                storage.nodes.contains_key(&(0, 0, 2)),
+                "mixed node [0, 4) height 2 not persisted"
+            );
+            assert!(
+                storage.nodes.contains_key(&(0, 2, 1)),
+                "mixed node [2, 4) height 1 not persisted"
+            );
+            assert!(
+                storage.nodes.contains_key(&(0, 0, 1)),
+                "active node [0, 2) height 1 missing"
+            );
+
+            // Reference check: Verify the node hashes are canonical and identical to the expected EML tree.
+            let h0 = Sha256Hasher.leaf(&[0]);
+            let h1 = Sha256Hasher.leaf(&[1]);
+            let h2 = Sha256Hasher.leaf(&[2]);
+            let hn = Sha256Hasher.null();
+
+            let n_0_2 = Sha256Hasher.node(&h0, &h1);
+            let n_2_4 = Sha256Hasher.node(&h2, &hn);
+            let n_4_6 = Sha256Hasher.node(&hn, &hn);
+            let n_6_8 = Sha256Hasher.node(&hn, &hn);
+
+            let n_0_4 = Sha256Hasher.node(&n_0_2, &n_2_4);
+            let n_4_8 = Sha256Hasher.node(&n_4_6, &n_6_8);
+
+            let n_0_8 = Sha256Hasher.node(&n_0_4, &n_4_8);
+
+            assert_eq!(
+                storage.nodes.get(&(0, 0, 3)),
+                Some(&n_0_8),
+                "Hash mismatch for mixed node [0, 8) height 3"
+            );
+            assert_eq!(
+                storage.nodes.get(&(0, 0, 2)),
+                Some(&n_0_4),
+                "Hash mismatch for mixed node [0, 4) height 2"
+            );
+            assert_eq!(
+                storage.nodes.get(&(0, 2, 1)),
+                Some(&n_2_4),
+                "Hash mismatch for mixed node [2, 4) height 1"
+            );
         });
     }
 

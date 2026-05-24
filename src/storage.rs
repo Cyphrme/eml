@@ -155,14 +155,14 @@ pub trait Storage: Send + Sync {
 /// external actors.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
-    leaves: Vec<Vec<u8>>,
+    pub leaves: Vec<Vec<u8>>,
     /// Sealed internal node hashes, keyed by `(alg_id, left_index, height)`.
     ///
     /// `HashMap` for O(1) amortized lookups — this map is point-queried
     /// only (never iterated or range-scanned).
-    nodes: HashMap<(u64, u64, usize), Vec<u8>>,
+    pub nodes: HashMap<(u64, u64, usize), Vec<u8>>,
     /// Algorithm epoch metadata, keyed by algorithm ID.
-    algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
+    pub algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
 }
 
 impl MemoryStorage {
