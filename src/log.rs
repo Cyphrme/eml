@@ -208,9 +208,10 @@ impl<S: Storage> Log<S> {
     ///
     /// Returns [`Error::UnknownMetadata`] if a hasher is provided for an
     /// algorithm with no persisted metadata.
-    pub fn from_storage(storage: S, hashers: Vec<(u64, Box<dyn Hasher>)>) -> Result<Self> {
+    pub async fn from_storage(storage: S, hashers: Vec<(u64, Box<dyn Hasher>)>) -> Result<Self> {
         let metas = storage
             .load_algorithm_metas()
+            .await
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
         let mut hasher_map: BTreeMap<u64, Box<dyn Hasher>> = hashers.into_iter().collect();
@@ -228,92 +229,94 @@ impl<S: Storage> Log<S> {
             }
         }
 
-        let global_size = storage.len();
+        let global_size = storage.len().await;
 
-        let mut log = Self {
-            storage,
-            algs: BTreeMap::new(),
-        };
-
+        let mut algs = BTreeMap::new();
         for (alg_id, epochs) in metas {
             let hasher = hasher_map.remove(&alg_id).expect("validated above");
-
-            let mut null_table = NullTable::new(hasher.as_ref());
-
-            // Determine this algorithm's effective tree size.
-            let is_active = epochs.last().is_some_and(|&(_, end)| end == u64::MAX);
-            let tree_size = if is_active {
-                global_size
-            } else {
-                epochs.last().map_or(0, |&(_, end)| end)
-            };
-
-            // Eagerly populate null table to tree height.
-            if tree_size > 0 {
-                let max_height = (64 - tree_size.leading_zeros()) as usize;
-                null_table.ensure_height(hasher.as_ref(), max_height);
-            }
-
-            // Build a temporary AlgState so subtree_root can access epoch
-            // and null_table data. Stack starts empty — we'll populate it.
-            let state = AlgState {
-                hasher,
-                epochs: epochs.clone(),
-                stack: Vec::new(),
-                null_table,
-            };
-
-            // Reconstruct frontier stack by decomposing tree_size into binary.
-            // MSB-first: iterate bits from MSB to LSB.
-            let stack = Self::reconstruct_frontier(&log, &state, alg_id, tree_size)?;
-
-            log.algs.insert(alg_id, AlgState { stack, ..state });
+            let state = Self::reconstruct_algorithm_state(&storage, alg_id, hasher, &epochs, global_size).await?;
+            algs.insert(alg_id, state);
         }
 
-        Ok(log)
+        Ok(Self { storage, algs })
+    }
+
+    /// Reconstruct a single algorithm's state from the storage backend.
+    /// Exposing this enables the caller to orchestrate concurrency however they see fit.
+    pub async fn reconstruct_algorithm_state(
+        storage: &S,
+        alg_id: u64,
+        hasher: Box<dyn Hasher>,
+        epochs: &[(u64, u64)],
+        global_size: u64,
+    ) -> Result<AlgState> {
+        let mut null_table = NullTable::new(hasher.as_ref());
+
+        // Determine this algorithm's effective tree size.
+        let is_active = epochs.last().is_some_and(|&(_, end)| end == u64::MAX);
+        let tree_size = if is_active {
+            global_size
+        } else {
+            epochs.last().map_or(0, |&(_, end)| end)
+        };
+
+        // Eagerly populate null table to tree height.
+        if tree_size > 0 {
+            let max_height = (64 - tree_size.leading_zeros()) as usize;
+            null_table.ensure_height(hasher.as_ref(), max_height);
+        }
+
+        let state = AlgState {
+            hasher,
+            epochs: epochs.to_vec(),
+            stack: Vec::new(),
+            null_table,
+        };
+
+        // Reconstruct frontier stack by decomposing tree_size into binary.
+        let stack = Self::reconstruct_frontier_for_state(storage, &state, alg_id, tree_size).await?;
+
+        Ok(AlgState { stack, ..state })
+    }
+
+    /// Initialize a Log from a set of pre-reconstructed algorithm states.
+    pub fn from_reconstructed_states(storage: S, states: BTreeMap<u64, AlgState>) -> Self {
+        Self { storage, algs: states }
     }
 
     /// Reconstruct the frontier stack for an algorithm from stored nodes.
-    ///
-    /// Decomposes `tree_size` into its binary representation. Each set bit
-    /// at position `j` (MSB-first) corresponds to a complete subtree of size
-    /// `2^j`. The root of each subtree is resolved via `subtree_root`, which
-    /// performs O(1) stored-node lookups for intact data or falls back to
-    /// recursive recomputation.
-    ///
-    /// Complexity: O(popcount(tree_size) * log(tree_size)) expected, with
-    /// O(popcount) stored-node hits in the common case.
-    fn reconstruct_frontier(
-        log: &Self,
-        state: &AlgState,
+    fn reconstruct_frontier_for_state<'a>(
+        storage: &'a S,
+        state: &'a AlgState,
         alg_id: u64,
         tree_size: u64,
-    ) -> Result<Vec<Vec<u8>>> {
-        if tree_size == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut stack = Vec::new();
-        let bit_width = 64 - tree_size.leading_zeros();
-        let mut pos = 0u64;
-
-        // MSB-first: largest subtrees at the bottom of the stack.
-        for bit in (0..bit_width).rev() {
-            if tree_size & (1 << bit) != 0 {
-                let subtree_size = 1u64 << bit;
-                let root = log.subtree_root(state, alg_id, pos, pos + subtree_size)?;
-                stack.push(root);
-                pos += subtree_size;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Vec<u8>>>> + Send + 'a>> {
+        Box::pin(async move {
+            if tree_size == 0 {
+                return Ok(Vec::new());
             }
-        }
 
-        Ok(stack)
+            let mut stack = Vec::new();
+            let bit_width = 64 - tree_size.leading_zeros();
+            let mut pos = 0u64;
+
+            // MSB-first: largest subtrees at the bottom of the stack.
+            for bit in (0..bit_width).rev() {
+                if tree_size & (1 << bit) != 0 {
+                    let subtree_size = 1u64 << bit;
+                    let root = Self::subtree_root_static(storage, state, alg_id, pos, pos + subtree_size).await?;
+                    stack.push(root);
+                    pos += subtree_size;
+                }
+            }
+
+            Ok(stack)
+        })
     }
 
     /// Current number of leaves in the global log.
-    #[must_use]
-    pub fn size(&self) -> u64 {
-        self.storage.len()
+    pub async fn size(&self) -> u64 {
+        self.storage.len().await
     }
 
     /// Consume the log and return the underlying storage backend.
@@ -336,17 +339,18 @@ impl<S: Storage> Log<S> {
     /// # Errors
     ///
     /// Returns [`Error::DuplicateAlgorithm`] if `alg_id` is already registered.
-    pub fn add_algorithm(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) -> Result<()> {
+    pub async fn add_algorithm(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) -> Result<()> {
         if self.algs.contains_key(&alg_id) {
             return Err(Error::DuplicateAlgorithm(alg_id));
         }
 
-        let activation = self.size();
+        let activation = self.size().await;
         let epochs = vec![(activation, u64::MAX)];
 
         // Persist metadata BEFORE committing in-memory state.
         self.storage
             .store_algorithm_meta(alg_id, &epochs)
+            .await
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
         let mut null_table = NullTable::new(hasher.as_ref());
@@ -382,8 +386,8 @@ impl<S: Storage> Log<S> {
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
     /// Returns [`Error::FrozenAlgorithm`] if already deactivated.
-    pub fn remove_algorithm(&mut self, alg_id: u64) -> Result<()> {
-        let current_size = self.size();
+    pub async fn remove_algorithm(&mut self, alg_id: u64) -> Result<()> {
+        let current_size = self.size().await;
         let state = self
             .algs
             .get_mut(&alg_id)
@@ -401,6 +405,7 @@ impl<S: Storage> Log<S> {
 
         self.storage
             .store_algorithm_meta(alg_id, &new_epochs)
+            .await
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
         self.algs.get_mut(&alg_id).unwrap().epochs = new_epochs;
@@ -436,8 +441,8 @@ impl<S: Storage> Log<S> {
     ///
     /// Returns [`Error::UnknownAlgorithm`] if `alg_id` is not registered.
     /// Returns [`Error::AlgorithmActive`] if the algorithm is already active.
-    pub fn resume_algorithm(&mut self, alg_id: u64) -> Result<()> {
-        let current_size = self.storage.len();
+    pub async fn resume_algorithm(&mut self, alg_id: u64) -> Result<()> {
+        let current_size = self.storage.len().await;
 
         // Validate state and extract parameters.
         let state = self
@@ -458,6 +463,7 @@ impl<S: Storage> Log<S> {
 
         self.storage
             .store_algorithm_meta(alg_id, &new_epochs)
+            .await
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
         if gap > 0 {
@@ -475,7 +481,7 @@ impl<S: Storage> Log<S> {
             // NullTable for the null gap [deact, current_size), and recursive
             // binary splits for mixed boundary subtrees.
             let state = &self.algs[&alg_id];
-            let new_stack = Self::reconstruct_frontier(self, state, alg_id, current_size)?;
+            let new_stack = Self::reconstruct_frontier_for_state(&self.storage, state, alg_id, current_size).await?;
             self.algs.get_mut(&alg_id).unwrap().stack = new_stack;
         }
 
@@ -533,17 +539,18 @@ impl<S: Storage> Log<S> {
     /// # Errors
     ///
     /// Returns [`Error::NoActiveAlgorithms`] if no algorithms are active.
-    pub fn append(&mut self, data: &[u8]) -> Result<u64> {
+    pub async fn append(&mut self, data: &[u8]) -> Result<u64> {
         // Check at least one algorithm is active.
         if !self.algs.values().any(|s| s.is_active()) {
             return Err(Error::NoActiveAlgorithms);
         }
 
-        let index = self.size();
+        let index = self.size().await;
         let merge_count = count_trailing_ones(index);
 
         self.storage
             .store_leaf(index, data)
+            .await
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
         for (&alg_id, state) in self.algs.iter_mut() {
@@ -572,6 +579,7 @@ impl<S: Storage> Log<S> {
                 let left_pos = index + 1 - (1u64 << height);
                 self.storage
                     .store_node(alg_id, left_pos, height, &parent)
+                    .await
                     .map_err(|e| Error::Storage(Box::new(e)))?;
 
                 state.stack.push(parent);
@@ -586,6 +594,75 @@ impl<S: Storage> Log<S> {
         }
 
         Ok(index)
+    }
+
+    /// Append a batch of leaf payloads to the EML log.
+    ///
+    /// Performs in-memory Merkle tree mutations and commits all new leaves and nodes
+    /// in a single batch write to the storage engine (using `write_batch`), achieving
+    /// atomic transactions and optimal I/O throughput in database implementations.
+    ///
+    /// Returns the global tree size *after* the appends.
+    pub async fn append_batch(&mut self, data_items: &[&[u8]]) -> Result<u64> {
+        if data_items.is_empty() {
+            return Ok(self.size().await);
+        }
+        if !self.algs.values().any(|s| s.is_active()) {
+            return Err(Error::NoActiveAlgorithms);
+        }
+
+        let mut leaves = Vec::with_capacity(data_items.len());
+        let mut nodes = Vec::new();
+        let start_index = self.size().await;
+
+        for (offset, &data) in data_items.iter().enumerate() {
+            let index = start_index + offset as u64;
+            leaves.push((index, data));
+
+            let merge_count = count_trailing_ones(index);
+
+            for (&alg_id, state) in self.algs.iter_mut() {
+                if !state.is_active() {
+                    continue;
+                }
+
+                let digest = if state.is_active_at(index) {
+                    state.hasher.leaf(data)
+                } else {
+                    state.null_table.leaf_null().to_vec()
+                };
+
+                state.stack.push(digest);
+
+                for j in 1..=merge_count {
+                    let right = state.stack.pop().expect("stack underflow in merge");
+                    let left = state.stack.pop().expect("stack underflow in merge");
+                    let parent = state.hasher.node(&left, &right);
+
+                    let height = j as usize;
+                    let left_pos = index + 1 - (1u64 << height);
+                    nodes.push((alg_id, left_pos, height, parent.clone()));
+
+                    state.stack.push(parent);
+                }
+
+                // Eagerly populate null table to current tree height.
+                let tree_size = index + 1;
+                let max_height = (64 - tree_size.leading_zeros()) as usize;
+                state
+                    .null_table
+                    .ensure_height(state.hasher.as_ref(), max_height);
+            }
+        }
+
+        // Commit leaves and nodes in a single call.
+        let raw_nodes: Vec<(u64, u64, usize, &[u8])> = nodes.iter().map(|n| (n.0, n.1, n.2, n.3.as_slice())).collect();
+        self.storage
+            .write_batch(&leaves, &raw_nodes)
+            .await
+            .map_err(|e| Error::Storage(Box::new(e)))?;
+
+        Ok(start_index + data_items.len() as u64)
     }
 
     // ========================================================================
