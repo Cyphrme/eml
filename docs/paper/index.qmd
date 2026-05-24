@@ -1,5 +1,5 @@
 ---
-title: '$\mathcal{O}(\log N)$ Hash Transitions: Algorithm-Independent Verification in Append-Only Logs'
+title: 'Polymorphic Merkle Logs: Achieving Seamless Algorithm Lifecycle Upgrades without Ledger Fragmentation'
 author:
   - name: Timothy DeHerrera
     affiliations:
@@ -15,20 +15,22 @@ abstract: |
   traditionally forces a trilemma: fracturing the ledger into incompatible
   forks, accepting weakest-link algorithmic dependencies through chimeric
   constructions, or incurring a prohibitive $\mathcal{O}(N)$ retroactive
-  compute penalty.  We introduce the *Epoch Merkle Log* (EML), an append-only
-  data structure that partitions algorithm lifecycles into discrete,
-  null-padded chronological epochs over a shared RFC 9162 topology. The EML
-  achieves strictly algorithm-independent verification---each hash
-  algorithm's projection yields a complete, independently verifiable standard
-  Merkle tree---while enabling $\mathcal{O}(\log N)$ hash transitions with
-  zero retroactive computation. We formalize and verify the EML via a
-  machine-checked proof in Lean4 (13 definitions, 5 theorems), decoupling
-  structural tree topology from cryptographic digests via a unique algebra
-  homomorphism. We provide a production Rust implementation
-  validated by property-based testing, fault injection, and complexity
-  regression, demonstrating $\mathcal{O}(1)$ amortized appends,
-  $\mathcal{O}(\log N)$ proofs, and zero-overhead bandwidth compression via
-  deterministic proof elision.
+  compute penalty. We introduce the *Polymorphic Merkle Log* (PML), a novel
+  abstract class of cryptographically agile authenticated data structures that
+  supports multiple projected cryptographic hash profiles over a single,
+  unified tree topology. We present the *Epoch Merkle Log* (EML) as a concrete,
+  RFC 9162-compliant instantiation of this paradigm, partitioning algorithm
+  lifecycles into discrete, null-padded chronological epochs. The EML achieves
+  strictly algorithm-independent verification---each hash algorithm's projection
+  yields a complete, independently verifiable standard Merkle tree---while
+  enabling $\mathcal{O}(\log N)$ hash transitions with zero retroactive
+  computation. We formalize and verify the PML algebra via a machine-checked
+  model in Lean 4 (15 definitions, 5 theorems), decoupling structural tree
+  topology from cryptographic digests via a unique algebra homomorphism. We
+  provide a production Rust implementation validated by property-based testing,
+  fault injection, and complexity regression, demonstrating $\mathcal{O}(1)$
+  amortized appends, $\mathcal{O}(\log N)$ proofs, and zero-overhead bandwidth
+  compression via deterministic proof elision.
 date: 2026-05-15
 ---
 
