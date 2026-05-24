@@ -1,8 +1,12 @@
 # EMLProof: Reviewer's Guide to Epoch Merkle Log Formalization
 
-This directory contains the machine-checked mathematical proofs for Epoch Merkle Logs (EML), formalized in Lean 4. 
+This directory contains the machine-checked mathematical proofs for Epoch Merkle Logs (EML),
+formalized in Lean 4.
 
-Rather than verifying a single concrete implementation, EMLProof formalizes a general model for **hash-independent projective cryptography**, proving that a bottom-up incremental frontier stack folds into a single root topologically identical to a top-down bisected RFC 9162 Merkle tree.
+Rather than verifying a single concrete implementation, EMLProof formalizes a general model for
+**hash-independent projective cryptography**, proving that a bottom-up incremental frontier
+stack folds into a single root topologically identical to a top-down bisected RFC 9162 Merkle
+tree.
 
 ---
 
@@ -23,21 +27,20 @@ them entirely by formalizing structural tree arithmetic over the free algebra `M
   projects to any concrete hash-specific instantiation. This is explicitly demonstrated in the
   code by `generic_projection_equivalence`, which proves equivalence for *any* evaluation
   function over *any* digest space in a single step.
-
-### B. Structural Specificity vs. Algebraic Generality
-A critical distinction must be made between the algebraic generality of the projection method
-and the topological specificity of the bridge theorem:
-- **Highly Targeted Topology**: The structural equivalence proved in `bridge_lemma` is **highly
-  targeted to the RFC 9162 topology**. It is **not** structurally generic to arbitrary Merkle
-  structures. The proof relies on the specific `largestPow2Lt` split point rule of RFC 9162
-  and the specific carry-driven Count Trailing Ones (CTO) frontier stack. If the target tree
-  utilized a different split point (e.g., standard binary bisection `n / 2` or standard MMR
-  multi-peak layouts), the structural equivalence would fail.
-- **Generic Projective Pattern**: While the topological bridge itself is a targeted result, the
-  projective proof pattern is structurally/algebraically generic. The unique homomorphism of
-  the free magma ensures that for *any* authenticated data structure (e.g., Merkle Patricia
-  Tries, Sparse Merkle Trees), structural equivalence proved at the algebraic tree level
-  projects to all concrete digest algebras.
+### B. Generalized Shift-Reduce Duality
+Instead of verifying only the concrete RFC 9162 / CTO equivalence, EMLProof proves a general
+shift-reduce duality theorem for any append-consistent Merkle tree topology:
+- **Abstract Interfaces**: Defines `SplitPolicy` (top-down partitioning) and `MergeSchedule`
+  (bottom-up merges).
+- **Append-Consistency**: A transition relation `AppendConsistent f s` asserting that the merge
+  schedule `s` correctly transitions the forest sizes under policy `f` from $N$ to $N+1$, and that
+  all intermediate splits match the policy.
+- **Duality Theorem** (`generalized_bridge_lemma`): Proves that any `SplitPolicy` and
+  `MergeSchedule` satisfying `AppendConsistent` are topologically equivalent.
+- **Universal Projective Pattern**: The unique homomorphism of the free magma ensures that for
+  *any* authenticated data structure (e.g., Merkle Patricia Tries, Sparse Merkle Trees),
+  structural equivalence proved at the algebraic tree level automatically projects to all
+  concrete cryptographic digest spaces.
 
 ### C. The Topological Bridge (RFC 9162 vs. MMR Peaks)
 To remain backward-compatible with standard Certificate Transparency clients, EML must yield
@@ -63,32 +66,89 @@ complete security isolation:
   exploiting the active periods of algorithm $b$ to forge inclusion proofs at inactive positions
   of algorithm $a$.
 
+### E. Coexistence of Concrete and Generalized Proof Paths
+To optimize auditability and academic generality, EMLProof maintains two parallel proof paths:
+- **The Concrete Path** ([Bridge.lean](EMLProof/Bridge.lean) /
+  [Invariant.lean](EMLProof/Invariant.lean)):
+  This path directly verifies the RFC 9162 / CTO equivalence. By avoiding template indirection,
+  it remains highly readable and direct to audit.
+- **The Generalized Path** ([Duality.lean](EMLProof/General/Duality.lean) /
+  [Policy.lean](EMLProof/General/Policy.lean)):
+  This path proves the shift-reduce duality for *any* append-consistent topology, showing the
+  construction is a general combinatorial property.
+
+Keeping these paths parallel separates the combinatorial duality theorem from the binary arithmetic
+instantiation, avoiding unnecessary typeclass boilerplate in the production-grade CTO proofs.
 
 ---
 
+
 ## 2. Directed Reviewer's Code Map
 
-To facilitate the formal review process, the following index maps the core proofs to their locations in the source files:
+To facilitate the formal review process, the following index maps the core proofs to their
+locations in the source files:
 
-| Theorem / Definition | File | Line Range | Mathematical Purpose |
-| :--- | :--- | :--- | :--- |
-| `largestPow2Lt` | [Tree.lean](EMLProof/Tree.lean) | L51–L54 | RFC 9162 top-down bisection boundary |
-| `cto` | [Tree.lean](EMLProof/Tree.lean) | L111–L114 | Count Trailing Ones merge cascade count |
-| `cto_trailing_geo` | [Binary.lean](EMLProof/Binary.lean) | L441–L510 | descent condition (modular arithmetic bounds) |
-| `stackInvariant` | [Invariant.lean](EMLProof/Invariant.lean) | L31–L37 | Binomial forest loop invariant relation |
-| `appendToStack_invariant` | [Invariant.lean](EMLProof/Invariant.lean) | L82–L373 | preservation of stack invariant on append |
-| `stackRoot_segments_eq_mth` | [Bridge.lean](EMLProof/Bridge.lean) | L35–L153 | topological isomorphism inductive step |
-| `bridge_lemma` | [Bridge.lean](EMLProof/Bridge.lean) | L155–L166 | structural incremental-to-batch equivalence |
-| `generic_projection_equivalence` | [Projection.lean](EMLProof/Projection.lean) | L107–L112 | homomorphic projection to any digest space |
-| `projection_equivalence` | [Projection.lean](EMLProof/Projection.lean) | L114–L119 | EML Theorem 1 (Projection Equivalence) |
-| `temporal_binding` | [Projection.lean](EMLProof/Projection.lean) | L131–L135 | EML Theorem 2 (Temporal Binding / ROM separation) |
-| `algorithm_isolation` | [Projection.lean](EMLProof/Projection.lean) | L144–L151 | EML Theorem 3 (Algorithm Isolation) |
+- **[Policy.lean](EMLProof/General/Policy.lean)**:
+  - `SplitPolicy` / `MergeSchedule` (L13 / L20): Abstract topology interface signatures.
+  - `AppendConsistent` (L50–L55): Coherence condition mapping policy to schedule transitions.
+- **[Duality.lean](EMLProof/General/Duality.lean)**:
+  - `generalized_bridge_lemma` (L444–L447): General shift-reduce duality theorem.
+- **[Instantiation.lean](EMLProof/General/Instantiation.lean)**:
+  - `linear_split_policy` (L16): Linear split policy definition.
+  - `linear_schedule_compatible` (L55): Proof of append-consistency for the linear policy.
+  - `linear_bridge_lemma` (L66): Instantiated general bridge lemma.
+- **[Tree.lean](EMLProof/Tree.lean)**:
+  - `largestPow2Lt` (L51–L54): RFC 9162 top-down bisection boundary.
+  - `cto` (L111–L114): Count Trailing Ones merge cascade count.
+- **[Binary.lean](EMLProof/Binary.lean)**:
+  - `cto_trailing_geo` (L441–L510): Descent condition (modular arithmetic bounds).
+- **[Invariant.lean](EMLProof/Invariant.lean)**:
+  - `stackInvariant` (L31–L37): Binomial forest loop invariant relation.
+  - `appendToStack_invariant` (L82–L373): Preservation of stack invariant on append.
+- **[Bridge.lean](EMLProof/Bridge.lean)**:
+  - `stackRoot_segments_eq_mth` (L35–L153): Topological isomorphism inductive step.
+  - `bridge_lemma` (L155–L166): Structural incremental-to-batch equivalence.
+- **[Projection.lean](EMLProof/Projection.lean)**:
+  - `generic_projection_equivalence` (L107–L112): Homomorphic projection to any digest space.
+  - `projection_equivalence` (L114–L119): EML Theorem 1 (Projection Equivalence).
+  - `temporal_binding` (L131–L135): EML Theorem 2 (Temporal Binding / ROM separation).
+  - `algorithm_isolation` (L144–L151): EML Theorem 3 (Algorithm Isolation).
+
+### 2.1. How to Audit and Verify Axioms (TCB)
+To verify that no axioms or `sorry` placeholders are hidden inside EMLProof's core theorems, a
+reviewer can inspect the Trusted Computing Base (TCB) using Lean's `#print axioms` command:
+1. Append the following diagnostics to the end of [Projection.lean](EMLProof/Projection.lean):
+   ```lean
+   #print axioms projection_equivalence
+   #print axioms temporal_binding
+   #print axioms algorithm_isolation
+   ```
+2. Build the project. The compiler output will display the exact axioms utilized.
+3. Reviewers can verify that the only printed axioms are the five declared domain constants:
+   `Digest`, `Digest.nonempty`, `H`, `digestToBytes`, and `domain_separation`. This confirms
+   that no unsound rules or unfinished proofs were introduced.
+
+
+### 2.2. Paper-to-Formalization Dictionary
+For convenience, this table maps the formal names used in the accompanying paper to their
+respective Lean symbols in the source code:
+
+| Paper Entity | Lean Symbol Link | Description |
+| :--- | :--- | :--- |
+| **Definition 1** | [mth](EMLProof/Tree.lean#L92) | Batch Merkle Tree Hash |
+| **Definition 2** | [cto](EMLProof/Tree.lean#L112) | Count Trailing Ones count |
+| **Definition 6** | [stackInvariant](EMLProof/Invariant.lean#L31) | Loop invariant |
+| **Theorem 1** | [projection_equivalence](EMLProof/Projection.lean#L114) | CTO & MTH Equivalence |
+| **Theorem 2** | [temporal_binding](EMLProof/Projection.lean#L131) | Inactive leaf binding |
+| **Theorem 3** | [algorithm_isolation](EMLProof/Projection.lean#L144) | State separation |
+
 
 ---
 
 ## 3. Build & Verification Instructions
 
-The Lean 4 proof environment is managed via a Nix shell. Run the following command at the directory root to check all proofs:
+The Lean 4 proof environment is managed via a Nix shell. Run the following command at the
+directory root to check all proofs:
 
 ```bash
 nix-shell --run "lake build"
@@ -101,6 +161,57 @@ A successful compile outputs `Build completed successfully` with zero warnings a
 ## 4. Semantic Correspondence with Rust Code
 
 To verify that the formalized state machine matches the production implementation:
-1. **CTO Cascade**: The Rust implementation in `src/log.rs` (`count_trailing_ones`) uses the constant-time bitwise instruction `(!n).trailing_zeros()`, which matches the recursive `cto` definition in `Tree.lean`.
-2. **Stack Traversal**: The Rust stack is represented as a vector with the top at the end, and the root is folded right-to-left. The Lean stack represents the top at the head of the list and folds left-to-right. Both expand to the same parent node evaluation order: `node(left_sibling, right_accumulator)`.
-3. **Null Prefix Peaks**: The MMR peaks initialized during algorithm activation in `src/log.rs` (`null_prefix_peaks`) match `null_prefix_peaks` in the formal model.
+1. **CTO Cascade**: The Rust implementation in `src/log.rs` (`count_trailing_ones`) uses the
+   constant-time bitwise instruction `(!n).trailing_zeros()`, which matches the recursive `cto`
+   definition in `Tree.lean`.
+2. **Stack Traversal**: The Rust stack is represented as a vector with the top at the end, and the
+   root is folded right-to-left. The Lean stack represents the top at the head of the list and
+   folds left-to-right. Both expand to the same parent node evaluation order:
+   `node(left_sibling, right_accumulator)`.
+3. **Null Prefix Peaks**: The MMR peaks initialized during algorithm activation in `src/log.rs`
+   (`null_prefix_peaks`) match `null_prefix_peaks` in the formal model.
+
+---
+
+## 5. Formal Red Team Audit & Vulnerability Analysis
+
+To stress-test the formalization against potential mathematical or semantic exploits, we present
+the findings of our formal red-team audit:
+
+### A. Axiom Minimality and Soundness
+- The codebase relies on exactly five structural/domain axioms declared in `Projection.lean` (e.g.,
+  the existence of `Digest`, a hashing operator `H`, and prefix-based domain separation).
+- We assume no structural algebraic properties of `H` (such as associativity or commutativity). The
+  proof is purely combinatorial and arithmetic.
+- Domain separation (`nullLeaf ≠ leafHash d`) is modeled as a computational hardness assumption
+  under the Random Oracle Model (ROM).
+
+### B. Generalized Topology Robustness
+- **Fallback Logic**: If the policy function `f` is invalid (e.g., returns 0 or a split $\ge n$),
+  `generalized_mth` falls back to returning `MerkleTree.empty`. Because all theorems are guarded by
+  `Fact (ValidSplitPolicy f)` (which guarantees $0 < f(n) < n$), this fallback branch is proven
+  unreachable.
+- **Underflow Protection**: If a merge schedule `s n` exceeds the stack height, the machine
+  handles underflow safely by returning the remaining stack untouched, preventing empty list panics.
+- **Degenerate Structures**: The framework successfully admits trivial policies (like the linear
+  split policy with 0 merges proved in [Instantiation.lean](EMLProof/General/Instantiation.lean))
+  showing that the shift-reduce duality is a general property of all append-consistent trees.
+
+### C. Lean-to-Rust Semantic Gaps
+- **CTO Cascade**: Rust uses the constant-time bitwise instruction `(!n).trailing_zeros()`, while
+  Lean uses the recursive function `cto`. These are equivalent for all $n < 2^{64}$.
+- **Stack Fold Order**: Lean folds from top to bottom (left-to-right), whereas Rust vectors fold
+  right-to-left. Both expand to the identical parent node evaluation order:
+  `node(left_sibling, right_accumulator)`.
+- **Epoch Boundaries**: The finite epoch stops in the model do not restrict the proof since
+  equivalence holds for any static projection evaluation at size $N$.
+
+### D. Invalidation Vectors
+- **Boundary Cases**: Zero-length and single-length boundary cases are closed by explicit guards in
+  `largestPow2Lt` and structural checks in `mth`.
+- **Collision Forgeries**: Forging inclusion proofs at inactive positions requires finding a
+  collision between $0x00$ and $0x02$ domains, which is computationally infeasible.
+- **Resumption Divergence**: Stack reconstruction from stored nodes (`reconstruct_frontier`) is
+  guaranteed to equal continuous appends because of the proven uniqueness of the descending
+  binomial stack partition.
+
