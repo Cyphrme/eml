@@ -99,6 +99,16 @@ theorem treeHeight_leaf_map {α : Type} (L : List α) :
   obtain ⟨v, _, rfl⟩ := ht
   rfl
 
+/-- **Generic Projection Equivalence.**
+    For any type `β` representing a digest space and any evaluation function `eval_fn`
+    (which maps a structural tree to `β`), the evaluated ctoRoot equals the evaluated mth
+    over any list of leaves. This proves that the equivalence is independent of any concrete
+    hash function or serialization format. -/
+theorem generic_projection_equivalence {α β : Type} (eval_fn : MerkleTree α → β)
+    (leaves : List (MerkleTree α)) :
+    eval_fn (ctoRoot leaves) = eval_fn (mth leaves) := by
+  rw [bridge_lemma]
+
 /-- **Theorem 1 (Projection Equivalence).**
     The concrete ctoRoot digest equals the concrete mth digest over any projected sequence. -/
 theorem projection_equivalence (epochs : List Epoch) (payloads : List Digest) :
