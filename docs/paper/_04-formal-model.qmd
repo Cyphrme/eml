@@ -62,7 +62,7 @@ The null constant table $\{N_0(a), \ldots, N_H(a)\}$ is precomputable in $\mathc
 $$
 \text{STH} = \text{Sign}_\sigma\!\left(n,\; t,\; \left\{\bigl(a,\, \text{root}(a),\, \text{tree\_size}(a),\, H_a(\text{act}(a))\bigr) \mid a \in \text{dom}(\text{act})\right\}\right)
 $$
-where $H_a(\text{act}(a))$ is the canonical hash of $a$'s activation map.
+where $H_a(\text{act}(a))$ is the cryptographic digest of $a$'s activation map. The map is canonically serialized as a 64-bit big-endian length prefix specifying the epoch count, followed by a contiguous sequence of 16-byte blocks, where each block contains an 8-byte big-endian `start` index and an 8-byte big-endian `end` index (using $2^{64}-1$ as the active sentinel).
 :::
 
 ::: {#def-projection}

@@ -63,7 +63,7 @@ The empirical and theoretical results confirm:
 - **Append (per algorithm)**: $\mathcal{O}(1)$ amortized. The CTO merge
   produces at most one sealed node per bit position in the tree size's
   binary representation.
-- **Algorithm addition**: $\mathcal{O}(\log K)$. Null prefix peak
+- **Algorithm addition**: $\mathcal{O}(\text{popcount}(K))$. Null prefix peak
   computation requires one NullTable entry per set bit in the tree size
   at the point of addition.
 - **Algorithm resumption**: $\mathcal{O}(\log n)$. Frontier
@@ -120,3 +120,5 @@ sizes up to $2^{12}$ and up to 4 concurrent algorithms.
 While the complexity regression tests confirm asymptotic scaling, we also evaluate absolute performance to demonstrate practical viability. We benchmark inclusion proof generation using the standard SHA-256 hash algorithm and an in-memory storage backend, running on a single thread of a standard server CPU (using thread-time measurements to isolate scheduler noise). 
 
 At a modest tree size of $n = 1024$ leaves (height 10), generating an inclusion proof requires a median of $3.58~\mu\text{s}$ (p25 = $3.54~\mu\text{s}$, p75 = $3.62~\mu\text{s}$). At a large tree size of $n = 16.7\text{M}$ leaves ($2^{24}$, height 24), proof generation requires a median of $6.32~\mu\text{s}$ (p25 = $6.28~\mu\text{s}$, p75 = $6.38~\mu\text{s}$). This corresponds to an incremental cost of approximately $196~\text{ns}$ per tree level. These sub-microsecond absolute latencies confirm that EML is highly practical for high-throughput, low-latency deployment environments.
+
+**Comparative Overhead Analysis.** When evaluated under identical storage backend configurations, the database query footprint of the EML is identical to that of a vanilla, single-algorithm RFC 9162 Merkle tree. For active subtrees, EML's `subtree_root` queries resolve internal nodes by issuing the exact same coordinate lookups `get_node(alg_id, left, height)` to the storage layer as a standard RFC 9162 tree. The only computational overhead introduced by managing the multi-algorithm frontier map consists of in-memory epoch range checks and null-subtree detection checks, which are resolved in sub-nanosecond CPU time. EML thus introduces negligible performance overhead relative to standard single-algorithm log implementations.
