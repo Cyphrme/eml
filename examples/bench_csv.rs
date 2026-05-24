@@ -66,11 +66,11 @@ fn percentile(sorted: &[u128], pct: f64) -> u128 {
 }
 
 /// Build a log with one algorithm (id 0) and `n` appended leaves.
-fn make_log(n: usize) -> Arc<Log<MemoryStorage>> {
+async fn make_log(n: usize) -> Arc<Log<MemoryStorage>> {
     let mut log = Log::new(MemoryStorage::new());
-    log.add_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+    log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
     for i in 0..n {
-        log.append(&(i as u64).to_le_bytes()).unwrap();
+        log.append(&(i as u64).to_le_bytes()).await.unwrap();
     }
     Arc::new(log)
 }
@@ -86,29 +86,31 @@ const WARMUP: usize = 5; // discarded warmup iterations
 fn bench_inclusion(sizes: &[usize]) -> Vec<(usize, u128, u128, u128)> {
     let mut data = Vec::with_capacity(sizes.len());
     for &n in sizes {
-        let log = make_log(n);
-        let ts = log.tree_size(0).unwrap();
-        let leaf = ts / 2; // midpoint for maximal depth
+        smol::block_on(async {
+            let log = make_log(n).await;
+            let ts = log.tree_size(0).await.unwrap();
+            let leaf = ts / 2; // midpoint for maximal depth
 
-        // Warmup
-        for _ in 0..WARMUP {
-            let _ = log.inclusion_proof(0, leaf).unwrap();
-        }
+            // Warmup
+            for _ in 0..WARMUP {
+                let _ = log.inclusion_proof(0, leaf).await.unwrap();
+            }
 
-        let mut times = Vec::with_capacity(TRIALS);
-        for _ in 0..TRIALS {
-            let start = ThreadTime::now();
-            let _ = log.inclusion_proof(0, leaf).unwrap();
-            times.push(start.elapsed().as_nanos());
-        }
-        times.sort_unstable();
+            let mut times = Vec::with_capacity(TRIALS);
+            for _ in 0..TRIALS {
+                let start = ThreadTime::now();
+                let _ = log.inclusion_proof(0, leaf).await.unwrap();
+                times.push(start.elapsed().as_nanos());
+            }
+            times.sort_unstable();
 
-        let p25 = percentile(&times, 25.0);
-        let p50 = percentile(&times, 50.0);
-        let p75 = percentile(&times, 75.0);
+            let p25 = percentile(&times, 25.0);
+            let p50 = percentile(&times, 50.0);
+            let p75 = percentile(&times, 75.0);
 
-        data.push((n, p25, p50, p75));
-        eprintln!("  inclusion  n={n:>8}  p25={p25}  p50={p50}  p75={p75} ns");
+            data.push((n, p25, p50, p75));
+            eprintln!("  inclusion  n={n:>8}  p25={p25}  p50={p50}  p75={p75} ns");
+        });
     }
     data
 }
