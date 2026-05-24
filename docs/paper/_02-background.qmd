@@ -106,11 +106,13 @@ The adversary controls the network between the log server and verifying
 clients. They can delay, reorder, or drop messages but cannot forge hash
 preimages or collisions under any algorithm satisfying the ROM
 assumption. The adversary may also control the log server itself,
-attempting to present inconsistent views (equivocation) to different
-clients. The EML inherits the same consistency and equivocation
+attempting to present inconsistent views (state-forking equivocation) to different
+clients, or silently substitute historical payloads (second-preimage attacks) if
+underlying hash function security decays. EML inherits the same consistency
 guarantees as RFC 9162: any two clients that agree on a tree size and
-root hash are guaranteed to observe identical history for that
-algorithm's projection.
+root hash for a given algorithm are guaranteed to observe identical history.
+Importantly, these guarantees treat state-forking equivocation and historical payload substitution
+as distinct cryptographic failure modes, as detailed below.
 
 The adversary *cannot* exploit the presence of multiple algorithms to
 weaken any single algorithm's guarantees. This is the content of
@@ -136,9 +138,14 @@ witnesses of algorithm inactivity**. A null at position $i$ for
 algorithm $a$ is a committed statement---embedded in the Merkle hash
 chain, reflected in $\text{root}(a)$, signed by the STH---that
 algorithm $a$ was inactive at the $i$-th event. To forge activity at
-a position where none existed, an attacker must replace $N_0(a)$ with
-$\text{leaf}(a, d)$, altering $\text{root}(a)$ and therefore the
-STH---a detectable equivocation. Independent trees provide no structural
+a position where none existed, an attacker must either: (1) alter the leaf
+representation from $N_0(a)$ to a valid data leaf $\text{leaf}(a, d)$, which
+necessarily changes $\text{root}(a)$ and requires the malicious log to sign a
+distinct, conflicting STH to cover its tracks (detected as state-forking equivocation
+via verifier gossip); or (2) execute a second-preimage attack by finding a payload
+$d$ such that $\text{leaf}(a, d) = N_0(a)$, which preserves the root hash and thus
+bypasses equivocation detection entirely. Under the ROM assumption, the latter is
+computationally infeasible. Independent trees provide no structural
 representation of inactivity and thus no mechanism to cryptographically
 prove it. This temporal witness operates at algorithm granularity; the
 tree commits which algorithm was active at each position, while specific payload identity is resolved by the leaf payload itself.
