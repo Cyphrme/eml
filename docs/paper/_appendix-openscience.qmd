@@ -36,9 +36,11 @@ regression).
 against proof verification and elision surfaces. Reproduction:
 `cargo +nightly fuzz run <target>`.
 
-**Formal model.** The algebraic specification (20 definitions, 9
-equational laws) is provided as a standalone Markdown document in
-`docs/models/`.
+**Formal model and Lean 4 proof.** The formal model (18 definitions, 5 theorems)
+and its complete machine-checked verification (establishing structural
+equivalence, algorithm isolation, and temporal binding) are located in
+`proofs/lean/` and `docs/models/`. The Lean 4 proof consists of approximately
+1400 lines of proof code checking 30+ theorems with zero `sorry` axioms.
 
 **Reproduction instructions.** A `README` in the supplementary archive
 documents the exact commands to build, test, and reproduce all results

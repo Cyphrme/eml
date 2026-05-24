@@ -6,12 +6,12 @@ transitions in verifiable logs. By partitioning algorithm lifecycles
 into null-padded chronological epochs over a shared RFC 9162 topology,
 the EML achieves $\mathcal{O}(\log n)$ algorithm addition with zero
 retroactive computation, strictly algorithm-independent verification via
-the projection isomorphism, and zero per-proof-metadata compression through
+the projection equivalence, and zero per-proof-metadata compression through
 deterministic elision. Historical data remains bound to the algorithms
 active at the time of insertion---a principled trade-off that preserves
 temporal fidelity while eliminating operational fragmentation.
 
-The formal algebraic model (9 equational laws over 20 definitions)
+The formal model (18 definitions and 5 theorems, machine-checked in Lean 4)
 reduces multi-algorithm correctness to the well-understood correctness of
 single-algorithm RFC 9162 verification. The production Rust
 implementation validates these properties empirically through
@@ -30,11 +30,6 @@ the security of their own algorithm's verification.
 
 ### Future Work
 
-- **Machine-checked proofs.** The equational laws are currently
-  validated empirically. A mechanized formalization in Lean or Coq would
-  provide a stronger correctness guarantee for the projection
-  isomorphism and the three-way domain separation.
-
 - **Post-quantum hash integration.** Integrating the EML with Merkle
   Tree Certificates [@mtc-draft] would combine per-epoch hash lifecycle
   management with amortized post-quantum signature costs.
@@ -49,5 +44,5 @@ the security of their own algorithm's verification.
   the signing key $\sigma$. Extending the epoch lifecycle model to STH
   signing keys---enabling key rotation and multi-algorithm STH
   signatures---is an orthogonal concern. The manifest commitment
-  ([M-Commit]{.smallcaps}) is independent of the signature scheme used
+  (Corollary 1 (Manifest Commitment)) is independent of the signature scheme used
   to authenticate the STH itself.

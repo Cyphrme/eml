@@ -100,22 +100,3 @@ variable-depth temporal gap. The proof compression mechanisms are
 correspondingly different: SMTs transmit a 32-byte bitmap; the EML
 transmits nothing.
 
-### Post-Quantum Context
-
-The IETF PLANTS working group is developing Merkle Tree Certificates
-(MTC) [@mtc-draft], which aggregate millions of certificates into a
-Merkle tree signed by a single post-quantum signature. This amortizes
-the bandwidth cost of post-quantum signatures (ML-DSA-65 at 3,309 bytes
-vs. Ed25519 at 64 bytes) across all certificates in the batch
-[@chopra2026]. The Crypto Agility Risk Assessment Framework (CARAF)
-[@caraf] provides a structured methodology for evaluating migration
-risk.
-
-The EML does not directly address post-quantum signature schemes, but
-its algorithm-independent verification is directly applicable to
-post-quantum hash transitions. An EML log that begins with SHA-256 can
-add a post-quantum hash algorithm (e.g., a SHA-3 variant or a
-hash-based construction) at any point without disrupting existing
-SHA-256 verification. MTC batching and EML epoch management are
-complementary: the former amortizes signature costs, the latter manages
-hash algorithm lifecycles.

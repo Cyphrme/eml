@@ -45,9 +45,16 @@ The proof compression operates in three phases:
 
 3. **Rehydration (client).** The client walks the virtual tree path for
    index $m$ in a tree of size $n$. At each level, it computes the
-   sibling's coverage range. If the range overlaps no active epoch, the
-   client synthesizes $N_h(a)$ from its local NullTable. Otherwise, it
-   consumes the next sibling from the elided proof's hash sequence.
+   sibling's coverage range $[lo, hi)$ of width $w = hi - lo$. If the
+   range overlaps no active epoch, the sibling is a completely null subtree.
+   If $w = 2^h$ is a power of two, the client synthesizes its hash in
+   $\mathcal{O}(1)$ via $N_h(a)$ from its local `NullTable` (Definition 9).
+   If $w$ is not a power of two, the client recursively computes the sibling's
+   hash in $\mathcal{O}(\log w)$ using Definition 19 Case 3 and the local
+   `NullTable` (recursively splitting the null range into power-of-two subtrees).
+   In both cases, this synthesis incurs zero network overhead. If the range
+   overlaps at least one active epoch, the client consumes the next sibling
+   hash from the elided proof's sequence.
 
 4. **Verification (client).** The rehydrated proof is a standard
    RFC 9162 inclusion or consistency proof. It is passed to the
@@ -65,7 +72,7 @@ were elided. Both the prover and verifier share:
 - The global tree size $n$ (committed by the STH, Definition 15)
 - The leaf index $m$
 - The algorithm's epoch list $\text{act}(a)$ (committed by the STH via
-  $H_a(\text{act}(a))$; agreement guaranteed by [M-Commit]{.smallcaps}, Corollary 1)
+  $H_a(\text{act}(a))$; agreement guaranteed by Corollary 1 (Manifest Commitment))
 
 These three values fully determine the tree path and, for each sibling
 position, whether its coverage range intersects an active epoch. The
@@ -78,6 +85,18 @@ Sparse Merkle Tree proof compression, which requires an explicit bitmap
 (typically 32 bytes) to indicate which siblings in a 256-level proof are
 default values [@laurie2012; @tari2018].
 
+However, this zero per-proof metadata property does not mean the system is
+entirely free of metadata overhead; rather, it shifts the bandwidth cost from
+the individual proof payloads to a one-time session-level bootstrap payload.
+Clients tracking a set of algorithms must download the activation map
+$\text{act}$ to reconstruct the epoch boundaries. For a log supporting $|A|$
+algorithms with $E$ total epochs, this requires distributing a session-level
+metadata payload of size $\mathcal{O}(|A| \cdot E)$. Since algorithm activation and
+deprecation are rare operational events (occurring on the order of months or years),
+this bootstrap payload is transferred once per session (or cached across sessions)
+and amortized over millions of subsequent proofs, yielding a net wire overhead
+of zero for each inclusion or consistency proof.
+
 ### Wire Size Analysis
 
 Let $n$ be the global tree size and $n_a$ the number of positions where
@@ -85,7 +104,7 @@ algorithm $a$ was active ($n_a = \sum_{(s_k, e_k)} (e_k - s_k)$). The
 full proof contains $\lceil \log_2 n \rceil$ siblings. Each null sibling
 covers a range entirely outside $a$'s active epochs.
 
-In the common case of a single contiguous epoch $[(s, \infty)]$:
+In the common case of a single contiguous epoch $[s, \infty)$ :
 
 - Siblings covering the null prefix $[0, s)$ are elided.
 - Siblings covering the active and post-activation range are retained.
@@ -103,10 +122,9 @@ small relative to tree depth.
 | RFC 9162 (standard) | $\mathcal{O}(\log n)$ hashes | None |
 | SMT (bitmap compressed) | $\mathcal{O}(\log N_{\text{items}})$ hashes | 32-byte bitmap |
 | EML (full proof) | $\mathcal{O}(\log n)$ hashes | None |
-| EML (elided proof) | $\mathcal{O}(\log n_a)$ hashes | **None** |
+| EML (elided proof) | $\mathcal{O}(\log n_a)$ hashes | **None**\* |
 
-: Wire proof size comparison. $n$: tree size. $n_a$: active entries for
-the queried algorithm. $N_{\text{items}}$: non-empty entries in SMT.
+: Wire proof size comparison. $n$: tree size. $n_a$: active entries for the queried algorithm. $N_{\text{items}}$: non-empty entries in SMT. \* EML elided proofs carry zero per-proof metadata on the wire, but require a one-time session-level bootstrap payload of $\mathcal{O}(|A| \cdot E)$ to distribute the algorithm activation maps.
 :::
 
 The EML's elided proofs achieve comparable compression to SMT bitmap
@@ -114,16 +132,16 @@ techniques but without transmitting any metadata. The verifier's
 knowledge of the epoch boundaries is sufficient.
 
 ```{=latex}
-\begin{figure*}[t]
+\begin{figure}[t]
   \centering
-  \resizebox{0.85\textwidth}{!}{\input{figures/fig-elision.tex}}
+  \resizebox{\columnwidth}{!}{\input{figures/fig-elision.tex}}
   \caption{Proof elision. Left: a full inclusion proof for Algorithm~B
   at position~$d_2$ requires two siblings, including a null subtree
   root covering positions 0--1. Right: the elided proof omits the null
   sibling entirely; the verifier rehydrates it from the precomputed null
   table $N_h(b)$ using only the epoch boundary metadata.}
   \label{fig:elision}
-\end{figure*}
+\end{figure}
 ```
 
 ```{=html}
