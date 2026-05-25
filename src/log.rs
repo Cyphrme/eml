@@ -2664,4 +2664,111 @@ mod tests {
             }
         });
     }
+
+    /// Verifies that multiple algorithm state reconstructions happen concurrently.
+    #[test]
+    fn from_storage_concurrency() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct YieldFuture {
+            yields: usize,
+        }
+
+        impl std::future::Future for YieldFuture {
+            type Output = ();
+            fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+                if self.yields > 0 {
+                    self.yields -= 1;
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                } else {
+                    std::task::Poll::Ready(())
+                }
+            }
+        }
+
+        #[derive(Clone)]
+        struct ConcurrencyMockStorage {
+            active_count: Arc<AtomicUsize>,
+            max_active_count: Arc<AtomicUsize>,
+        }
+
+        impl crate::Storage for ConcurrencyMockStorage {
+            type Error = std::convert::Infallible;
+
+            async fn store_leaf(&mut self, _index: u64, _data: &[u8]) -> std::result::Result<(), Self::Error> {
+                Ok(())
+            }
+
+            async fn get_leaf(&self, _index: u64) -> std::result::Result<Vec<u8>, Self::Error> {
+                Ok(Vec::new())
+            }
+
+            async fn len(&self) -> u64 {
+                // Return a non-zero size so that reconstruct_algorithm_state seeks stored nodes.
+                4
+            }
+
+            async fn store_node(&mut self, _alg_id: u64, _left: u64, _height: usize, _hash: &[u8]) -> std::result::Result<(), Self::Error> {
+                Ok(())
+            }
+
+            async fn get_node(&self, _alg_id: u64, _left: u64, _height: usize) -> std::result::Result<Option<Vec<u8>>, Self::Error> {
+                let current = self.active_count.fetch_add(1, Ordering::SeqCst) + 1;
+                loop {
+                    let max = self.max_active_count.load(Ordering::SeqCst);
+                    if current > max {
+                        if self.max_active_count.compare_exchange(max, current, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                // Yield the future to allow other concurrent tasks to run and increment the counter.
+                YieldFuture { yields: 2 }.await;
+
+                self.active_count.fetch_sub(1, Ordering::SeqCst);
+                // Return dummy node hash of length 32
+                Ok(Some(vec![0; 32]))
+            }
+
+            async fn store_algorithm_meta(&mut self, _alg_id: u64, _epochs: &[(u64, u64)]) -> std::result::Result<(), Self::Error> {
+                Ok(())
+            }
+
+            async fn load_algorithm_metas(&self) -> std::result::Result<crate::storage::AlgorithmMetas, Self::Error> {
+                // Register two active algorithms.
+                Ok(vec![
+                    (1, vec![(0, u64::MAX)]),
+                    (2, vec![(0, u64::MAX)]),
+                ])
+            }
+        }
+
+        let active_count = Arc::new(AtomicUsize::new(0));
+        let max_active_count = Arc::new(AtomicUsize::new(0));
+
+        let storage = ConcurrencyMockStorage {
+            active_count: active_count.clone(),
+            max_active_count: max_active_count.clone(),
+        };
+
+        smol::block_on(async {
+            let hashers = vec![
+                (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+                (2, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+            ];
+
+            let _log = Log::from_storage(storage, hashers).await.unwrap();
+
+            assert_eq!(
+                max_active_count.load(Ordering::SeqCst),
+                2,
+                "Expected at least 2 reconstructions to run concurrently"
+            );
+        });
+    }
 }
