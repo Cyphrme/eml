@@ -51,8 +51,12 @@ Each recursive call to `subtree_root` either terminates via a stored node or `Nu
 
 Proofs follow the RFC 9162 `PATH` and `SUBPROOF` algorithms exactly, with `subtree_root` replacing materialized-array slicing at each sibling resolution.
 
-::: {#def-proof-generation}
-**Definition 13** (Proofs). The inclusion proof is $\text{inclusion\_proof}(S, a, m) = \text{path}(S, a, m, 0, \text{tree\_size}(a))$ where $\text{path}$ collects sibling hashes via $\text{subtree\_root}$. The consistency proof is $\text{consistency\_proof}(S, a, m) = \text{subproof}(S, a, m, 0, \text{tree\_size}(a), \text{true})$ where `subproof` follows RFC 9162 §2.1.4.
+::: {#def-inclusion-proof}
+**Definition 13a** (Inclusion Proofs). The inclusion proof is $\text{inclusion\_proof}(S, a, m) = \text{path}(S, a, m, 0, \text{tree\_size}(a))$ where $\text{path}$ collects sibling hashes via $\text{subtree\_root}$.
+:::
+
+::: {#def-consistency-proof}
+**Definition 13b** (Consistency Proofs). The consistency proof is $\text{consistency\_proof}(S, a, m) = \text{subproof}(S, a, m, 0, \text{tree\_size}(a), \text{true})$ where `subproof` follows RFC 9162 §2.1.4.
 :::
 
 Consistency proofs operate correctly across epoch boundaries because the `subproof` algorithm decomposes the tree by index ranges, which `subtree_root` resolves transparently via stored nodes, the `NullTable`, or recursive bisection. By Theorem 2, the proofs verify against the STH root.
