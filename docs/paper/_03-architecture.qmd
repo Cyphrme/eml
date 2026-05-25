@@ -113,11 +113,11 @@ Three lifecycle operations govern epochs:
 
 ### One Tree, Many Projections
 
-The *projection* of the PML onto algorithm $a$ yields a sequence of
+The *projection* of the EML onto algorithm $a$ yields a sequence of
 leaf values:
 
 $$
-\pi_a(\text{PML}) = [V(a, 0),\ V(a, 1),\ \ldots,\ V(a, \text{tree\_size}(a) - 1)]
+\pi_a(\text{EML}) = [V(a, 0),\ V(a, 1),\ \ldots,\ V(a, \text{tree\_size}(a) - 1)]
 $$
 
 This sequence is a valid input to the standard RFC 9162 MTH construction.
