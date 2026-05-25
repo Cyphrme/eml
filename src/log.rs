@@ -13,6 +13,8 @@ use crate::storage::Storage;
 
 type BoxedFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
+type MixedNodeCollector = std::sync::Arc<std::sync::Mutex<Vec<(u64, usize, Vec<u8>)>>>;
+
 // ============================================================================
 // Algorithm state
 // ============================================================================
@@ -378,7 +380,7 @@ impl<S: Storage> Log<S> {
         alg_id: u64,
         tree_size: u64,
         deactivation: u64,
-        collected: std::sync::Arc<std::sync::Mutex<Vec<(u64, usize, Vec<u8>)>>>,
+        collected: MixedNodeCollector,
     ) -> BoxedFuture<'a, Result<Vec<Vec<u8>>>> {
         Box::pin(async move {
             if tree_size == 0 {
@@ -419,7 +421,7 @@ impl<S: Storage> Log<S> {
         lo: u64,
         hi: u64,
         deactivation: u64,
-        collected: std::sync::Arc<std::sync::Mutex<Vec<(u64, usize, Vec<u8>)>>>,
+        collected: MixedNodeCollector,
     ) -> BoxedFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
             let size = hi - lo;
