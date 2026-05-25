@@ -955,6 +955,34 @@ impl<'a> malt::TreeHasher for IdentityTreeHasher<'a> {
     }
 }
 
+struct RealSha256TreeHasher;
+
+impl malt::TreeHasher for RealSha256TreeHasher {
+    type Digest = Vec<u8>;
+
+    fn leaf(&self, data: &[u8]) -> Self::Digest {
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update([0x00]);
+        h.update(data);
+        h.finalize().to_vec()
+    }
+
+    fn node(&self, left: &Self::Digest, right: &Self::Digest) -> Self::Digest {
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update([0x01]);
+        h.update(left);
+        h.update(right);
+        h.finalize().to_vec()
+    }
+
+    fn empty(&self) -> Self::Digest {
+        use sha2::Digest;
+        sha2::Sha256::digest(b"").to_vec()
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -1001,4 +1029,50 @@ proptest! {
             Ok(())
         })?;
     }
+
+    #[test]
+    fn differential_malt_raw_equivalence(
+        size in 1usize..128,
+        payloads in prop::collection::vec(prop::collection::vec(0u8..255u8, 0..32), 128)
+    ) {
+        smol::block_on(async {
+            let actual_size = size.min(payloads.len());
+            let mut eml_log = Log::new(MemoryStorage::new());
+            eml_log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+
+            let mut malt_log = malt::Log::new(RealSha256TreeHasher);
+
+            for i in 0..actual_size {
+                let data = &payloads[i];
+                eml_log.append(data).await.unwrap();
+                malt_log.append(data);
+            }
+
+            // 1. Root Equivalence
+            let eml_root = eml_log.root(0).unwrap();
+            let malt_root = malt_log.root();
+            prop_assert_eq!(&eml_root, &malt_root, "Roots mismatch: EML vs MALT on raw inputs");
+
+            // 2. Inclusion Proof Equivalence
+            for i in 0..actual_size {
+                let eml_proof = eml_log.inclusion_proof(0, i as u64).await.unwrap();
+                let malt_proof = malt_log.inclusion_proof(i as u64).unwrap();
+                prop_assert_eq!(eml_proof.index, malt_proof.index);
+                prop_assert_eq!(eml_proof.tree_size, malt_proof.tree_size);
+                prop_assert_eq!(eml_proof.path, malt_proof.path, "Inclusion proof path mismatch at index {}", i);
+            }
+
+            // 3. Consistency Proof Equivalence
+            for old_size in 1..actual_size {
+                let eml_proof = eml_log.consistency_proof(0, old_size as u64).await.unwrap();
+                let malt_proof = malt_log.consistency_proof(old_size as u64).unwrap();
+                prop_assert_eq!(eml_proof.old_size, malt_proof.old_size);
+                prop_assert_eq!(eml_proof.new_size, malt_proof.new_size);
+                prop_assert_eq!(eml_proof.path, malt_proof.path, "Consistency proof path mismatch for old_size {}", old_size);
+            }
+
+            Ok(())
+        })?;
+    }
 }
+
