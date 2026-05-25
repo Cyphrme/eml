@@ -585,7 +585,9 @@ impl<S: Storage> Log<S> {
             .await
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
-        self.algs.get_mut(&alg_id).unwrap().epochs = new_epochs;
+        if let Some(state) = self.algs.get_mut(&alg_id) {
+            state.epochs = new_epochs;
+        }
         Ok(())
     }
 
@@ -632,7 +634,14 @@ impl<S: Storage> Log<S> {
                 return Err(Error::AlgorithmActive(alg_id));
             }
 
-            let deactivation = state.epochs.last().unwrap().1;
+            let deactivation = state
+                .epochs
+                .last()
+                .ok_or_else(|| Error::CorruptedMetadata {
+                    alg_id,
+                    reason: "epoch sequence is empty".to_string(),
+                })?
+                .1;
             (deactivation, state.epochs.clone())
         };
 
@@ -643,7 +652,10 @@ impl<S: Storage> Log<S> {
         if gap > 0 {
             // Ensure null table covers the target tree height.
             {
-                let state = self.algs.get_mut(&alg_id).unwrap();
+                let state = self
+                    .algs
+                    .get_mut(&alg_id)
+                    .ok_or(Error::UnknownAlgorithm(alg_id))?;
                 let max_height = (64 - current_size.leading_zeros()) as usize;
                 state
                     .null_table
@@ -691,7 +703,10 @@ impl<S: Storage> Log<S> {
             .map_err(|e| Error::Storage(Box::new(e)))?;
 
         // Update in-memory state only after all storage writes succeed.
-        let state = self.algs.get_mut(&alg_id).unwrap();
+        let state = self
+            .algs
+            .get_mut(&alg_id)
+            .ok_or(Error::UnknownAlgorithm(alg_id))?;
         if let Some(stack) = new_stack {
             state.stack = stack;
         }
