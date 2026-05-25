@@ -932,3 +932,73 @@ proptest! {
         })?;
     }
 }
+
+// ============================================================================
+// DIFFERENTIAL TESTING WITH MALT ORACLE
+// ============================================================================
+
+struct IdentityTreeHasher<'a>(&'a dyn Hasher);
+
+impl<'a> malt::TreeHasher for IdentityTreeHasher<'a> {
+    type Digest = Vec<u8>;
+
+    fn leaf(&self, data: &[u8]) -> Self::Digest {
+        data.to_vec()
+    }
+
+    fn node(&self, left: &Self::Digest, right: &Self::Digest) -> Self::Digest {
+        self.0.node(left, right)
+    }
+
+    fn empty(&self) -> Self::Digest {
+        self.0.empty()
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    #[test]
+    fn differential_malt_equivalence(
+        size in 1usize..128,
+        activation in 0usize..128,
+    ) {
+        smol::block_on(async {
+            let actual_activation = activation.min(size.saturating_sub(1));
+            let eml_log = build_log(size, actual_activation).await;
+
+            let projected = eml_log.project(0).await.unwrap();
+
+            // Build reference malt tree from the projected leaves
+            let mut malt_log = malt::Log::new(IdentityTreeHasher(&Sha256Hasher));
+            for leaf_hash in &projected {
+                malt_log.append(leaf_hash);
+            }
+
+            // 1. Root Equivalence
+            let eml_root = eml_log.root(0).unwrap();
+            let malt_root = malt_log.root();
+            prop_assert_eq!(&eml_root, &malt_root, "Roots mismatch: EML root vs MALT root");
+
+            // 2. Inclusion Proof Equivalence
+            for i in 0..projected.len() {
+                let eml_proof = eml_log.inclusion_proof(0, i as u64).await.unwrap();
+                let malt_proof = malt_log.inclusion_proof(i as u64).unwrap();
+                prop_assert_eq!(eml_proof.index, malt_proof.index);
+                prop_assert_eq!(eml_proof.tree_size, malt_proof.tree_size);
+                prop_assert_eq!(eml_proof.path, malt_proof.path, "Inclusion proof path mismatch at index {}", i);
+            }
+
+            // 3. Consistency Proof Equivalence
+            for old_size in 1..projected.len() {
+                let eml_proof = eml_log.consistency_proof(0, old_size as u64).await.unwrap();
+                let malt_proof = malt_log.consistency_proof(old_size as u64).unwrap();
+                prop_assert_eq!(eml_proof.old_size, malt_proof.old_size);
+                prop_assert_eq!(eml_proof.new_size, malt_proof.new_size);
+                prop_assert_eq!(eml_proof.path, malt_proof.path, "Consistency proof path mismatch for old_size {}", old_size);
+            }
+
+            Ok(())
+        })?;
+    }
+}

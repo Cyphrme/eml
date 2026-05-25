@@ -320,6 +320,7 @@ dependencies = [
  "bigoish",
  "blake2",
  "cpu-time",
+ "malt",
  "proptest",
  "sha2",
  "sha3",
@@ -548,6 +549,12 @@ checksum = "090c82b62cea25118790ca8fe5290b41e019f913915920df18ddfe5049bd8aae"
 dependencies = [
  "nalgebra",
 ]
+
+[[package]]
+name = "malt"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d77d18a9b213ee3b93b87f43e578e7b757bb8f24f13e760760cbe1a6877bdd6"
 
 [[package]]
 name = "matrixmultiply"

@@ -24,4 +24,5 @@ bigoish = "0.1"
 big_o = "0.1"
 cpu-time = "1"
 smol = "2.0"
+malt = "0.1.1"
 
