@@ -235,12 +235,86 @@ impl<S: Storage> Log<S> {
 
         let global_size = storage.len().await;
 
-        let mut algs = BTreeMap::new();
+        struct JoinAll<'a, T: std::marker::Unpin> {
+            futures: Vec<Option<std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>>>,
+            results: Vec<Option<T>>,
+            completed: usize,
+        }
+
+        impl<'a, T: std::marker::Unpin> std::future::Future for JoinAll<'a, T> {
+            type Output = Vec<T>;
+
+            fn poll(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Self::Output> {
+                let this = self.as_mut().get_mut();
+                let len = this.futures.len();
+                for i in 0..len {
+                    if this.results[i].is_some() {
+                        continue;
+                    }
+                    if let Some(fut) = &mut this.futures[i] {
+                        match fut.as_mut().poll(cx) {
+                            std::task::Poll::Ready(val) => {
+                                this.results[i] = Some(val);
+                                this.futures[i] = None;
+                                this.completed += 1;
+                            }
+                            std::task::Poll::Pending => {}
+                        }
+                    }
+                }
+
+                if this.completed == len {
+                    let results = std::mem::take(&mut this.results)
+                        .into_iter()
+                        .map(Option::unwrap)
+                        .collect();
+                    std::task::Poll::Ready(results)
+                } else {
+                    std::task::Poll::Pending
+                }
+            }
+        }
+
+        let mut futures: Vec<
+            Option<
+                std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<(u64, AlgState)>> + Send + '_>,
+                >,
+            >,
+        > = Vec::with_capacity(metas.len());
+        let storage_ref = &storage;
+
         for (alg_id, epochs) in metas {
             let hasher = hasher_map.remove(&alg_id).expect("validated above");
-            let state =
-                Self::reconstruct_algorithm_state(&storage, alg_id, hasher, &epochs, global_size)
-                    .await?;
+            let fut = Box::pin(async move {
+                let state = Self::reconstruct_algorithm_state(
+                    storage_ref,
+                    alg_id,
+                    hasher,
+                    &epochs,
+                    global_size,
+                )
+                .await?;
+                Ok::<_, Error>((alg_id, state))
+            });
+            futures.push(Some(fut));
+        }
+
+        let results_len = futures.len();
+        let join_all = JoinAll {
+            futures,
+            results: (0..results_len).map(|_| None).collect(),
+            completed: 0,
+        };
+
+        let reconstructed = join_all.await;
+
+        let mut algs = BTreeMap::new();
+        for res in reconstructed {
+            let (alg_id, state) = res?;
             algs.insert(alg_id, state);
         }
 
