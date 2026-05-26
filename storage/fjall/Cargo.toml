@@ -1,0 +1,19 @@
+[package]
+name          = "eml-storage-fjall"
+version       = "0.1.0"
+description   = "Fjall-backed storage implementation for Epoch Merkle Log (EML)"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../../LICENSE"
+
+[dependencies]
+eml       = { path = "../.." }
+fjall     = "2"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+sha2 = "0.10"
+tempfile = "3"
+
+
