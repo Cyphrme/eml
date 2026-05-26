@@ -156,8 +156,6 @@ async fn test_eml_log_integration_and_cold_start() {
     }
 }
 
-
-
 #[tokio::test]
 async fn test_concurrency_and_race_conditions() {
     use std::sync::Arc;
@@ -228,4 +226,3 @@ async fn test_double_open_locking() {
     let storage2 = FjallStorage::open(dir.path());
     assert!(storage2.is_err());
 }
-

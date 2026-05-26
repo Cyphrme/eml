@@ -12,8 +12,9 @@
 //! - `"eml_metadata"`: Maps algorithm ID (`u64`) to serialized active epoch ranges.
 
 use std::path::Path;
-use fjall::{Database, Keyspace, KeyspaceCreateOptions};
+
 use eml::{AlgorithmMetas, Epochs, Storage};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 
 /// Error type for [`FjallStorage`] operations.
 #[derive(Debug, thiserror::Error)]
@@ -159,17 +160,14 @@ impl Storage for FjallStorage {
         // Iterate through all entries in the metadata keyspace.
         for guard in self.metadata.iter() {
             let (key_bytes, value_bytes) = guard.into_inner()?;
-            
-            let alg_id = u64::from_be_bytes(
-                key_bytes
-                    .as_ref()
-                    .try_into()
-                    .map_err(|_| FjallStorageError::MetadataCorruption("Invalid key length".to_string()))?
-            );
-            
+
+            let alg_id = u64::from_be_bytes(key_bytes.as_ref().try_into().map_err(|_| {
+                FjallStorageError::MetadataCorruption("Invalid key length".to_string())
+            })?);
+
             let epochs = deserialize_epochs(value_bytes.as_ref())
                 .map_err(FjallStorageError::MetadataCorruption)?;
-            
+
             metas.push((alg_id, epochs));
         }
         Ok(metas)
@@ -228,8 +226,9 @@ fn deserialize_epochs(bytes: &[u8]) -> Result<Epochs, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_atomic_batch_abort() {
