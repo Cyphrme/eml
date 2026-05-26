@@ -7,7 +7,7 @@ rust-version  = "1.85"
 license-file  = "../../LICENSE"
 
 [dependencies]
-eml       = { path = "../.." }
+eml       = { version = "0.10.0", path = "../.." }
 fjall     = "3"
 thiserror = "2"
 
