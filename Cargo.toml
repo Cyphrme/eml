@@ -33,3 +33,10 @@ cpu-time = "1"
 smol = "2.0"
 malt = "0.1.1"
 
+[workspace]
+members = [
+    ".",
+    "storage/fjall",
+]
+
+
