@@ -1,6 +1,6 @@
 [package]
 name          = "eml-storage-fjall"
-version       = "0.1.0"
+version       = "0.10.0"
 description   = "Fjall-backed storage implementation for Epoch Merkle Log (EML)"
 edition       = "2024"
 rust-version  = "1.85"
