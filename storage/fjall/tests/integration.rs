@@ -218,3 +218,14 @@ async fn test_concurrency_and_race_conditions() {
         assert_eq!(data, format!("leaf_payload_{i}").as_bytes());
     }
 }
+
+#[tokio::test]
+async fn test_double_open_locking() {
+    let dir = tempdir().unwrap();
+    // Open first storage driver instance
+    let _storage1 = FjallStorage::open(dir.path()).unwrap();
+    // Opening a second instance pointing to the same path should fail due to process-level locking
+    let storage2 = FjallStorage::open(dir.path());
+    assert!(storage2.is_err());
+}
+

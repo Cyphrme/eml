@@ -8,12 +8,13 @@ license-file  = "../../LICENSE"
 
 [dependencies]
 eml       = { path = "../.." }
-fjall     = "2"
+fjall     = "3"
 thiserror = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 sha2 = "0.10"
 tempfile = "3"
+
 
 

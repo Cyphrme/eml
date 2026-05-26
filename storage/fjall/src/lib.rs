@@ -2,19 +2,18 @@
 //!
 //! This crate provides [`FjallStorage`], a production-grade implementation of the EML
 //! [`Storage`] trait. It stores leaves, internal node hashes, and algorithm metadata
-//! in dedicated Fjall partitions inside a shared keyspace.
+//! in dedicated Fjall keyspaces inside a shared database.
 //!
 //! # Architecture
 //!
-//! `FjallStorage` manages three distinct partitions:
+//! `FjallStorage` manages three distinct keyspaces (partitions):
 //! - `"eml_leaves"`: Maps leaf index (`u64`) to raw payload bytes.
 //! - `"eml_nodes"`: Maps tree node coordinates `(alg_id, left, height)` to hash digests.
 //! - `"eml_metadata"`: Maps algorithm ID (`u64`) to serialized active epoch ranges.
 
 use std::path::Path;
-
+use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 use eml::{AlgorithmMetas, Epochs, Storage};
-use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle};
 
 /// Error type for [`FjallStorage`] operations.
 #[derive(Debug, thiserror::Error)]
@@ -32,45 +31,44 @@ pub enum FjallStorageError {
     MetadataCorruption(String),
 }
 
-/// A production-grade EML storage backend backed by a Fjall keyspace.
+/// A production-grade EML storage backend backed by a Fjall database.
 ///
 /// Clones of `FjallStorage` share the same underlying database handle.
 #[derive(Clone)]
 pub struct FjallStorage {
-    keyspace: Keyspace,
-    leaves: PartitionHandle,
-    nodes: PartitionHandle,
-    metadata: PartitionHandle,
+    db: Database,
+    leaves: Keyspace,
+    nodes: Keyspace,
+    metadata: Keyspace,
 }
 
 impl FjallStorage {
-    /// Open or create a new EML storage keyspace at the specified directory path.
+    /// Open or create a new EML storage database at the specified directory path.
     ///
     /// # Errors
     ///
     /// Returns a [`FjallStorageError`] if the directory cannot be created or the database
-    /// keyspace fails to initialize.
+    /// fails to initialize.
     pub fn open(path: &Path) -> Result<Self, FjallStorageError> {
-        let keyspace = Config::new(path).open()?;
-        Self::with_keyspace(keyspace)
+        let db = Database::builder(path).open()?;
+        Self::with_database(db)
     }
 
-    /// Initialize EML storage partitions using an existing, shared Fjall keyspace.
+    /// Initialize EML storage keyspaces using an existing, shared Fjall database.
     ///
-    /// This constructor allows reuse of a single keyspace instance (e.g., sharing it
+    /// This constructor allows reuse of a single database instance (e.g., sharing it
     /// with a concurrent content-addressed blob store).
     ///
     /// # Errors
     ///
-    /// Returns a [`FjallStorageError`] if partition initialization fails.
-    pub fn with_keyspace(keyspace: Keyspace) -> Result<Self, FjallStorageError> {
-        let leaves = keyspace.open_partition("eml_leaves", PartitionCreateOptions::default())?;
-        let nodes = keyspace.open_partition("eml_nodes", PartitionCreateOptions::default())?;
-        let metadata =
-            keyspace.open_partition("eml_metadata", PartitionCreateOptions::default())?;
+    /// Returns a [`FjallStorageError`] if keyspace initialization fails.
+    pub fn with_database(db: Database) -> Result<Self, FjallStorageError> {
+        let leaves = db.keyspace("eml_leaves", || KeyspaceCreateOptions::default())?;
+        let nodes = db.keyspace("eml_nodes", || KeyspaceCreateOptions::default())?;
+        let metadata = db.keyspace("eml_metadata", || KeyspaceCreateOptions::default())?;
 
         Ok(Self {
-            keyspace,
+            db,
             leaves,
             nodes,
             metadata,
@@ -100,10 +98,18 @@ impl Storage for FjallStorage {
     }
 
     async fn len(&self) -> u64 {
-        // len() returns the number of leaves currently stored.
-        // We retrieve the count of keys stored in the leaves partition.
-        // Fjall's len() provides the partition key count as a Result.
-        self.leaves.len().map(|len| len as u64).unwrap_or(0)
+        // Since leaf indices are written sequentially (0, 1, 2...) as big-endian u64,
+        // the last key in the partition is the highest index.
+        // Seeking to the end of the keyspace is O(1) in Fjall/LSM.
+        if let Some(guard) = self.leaves.iter().rev().next() {
+            if let Ok(key_bytes) = guard.key() {
+                if key_bytes.len() == 8 {
+                    let index = u64::from_be_bytes(key_bytes.as_ref().try_into().unwrap());
+                    return index + 1;
+                }
+            }
+        }
+        0
     }
 
     async fn store_node(
@@ -150,17 +156,20 @@ impl Storage for FjallStorage {
 
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         let mut metas = Vec::new();
-        // Iterate through all entries in the metadata partition.
-        for result in self.metadata.iter() {
-            let (key_bytes, value_bytes) = result?;
-
-            let alg_id = u64::from_be_bytes(key_bytes.as_ref().try_into().map_err(|_| {
-                FjallStorageError::MetadataCorruption("Invalid key length".to_string())
-            })?);
-
-            let epochs =
-                deserialize_epochs(&value_bytes).map_err(FjallStorageError::MetadataCorruption)?;
-
+        // Iterate through all entries in the metadata keyspace.
+        for guard in self.metadata.iter() {
+            let (key_bytes, value_bytes) = guard.into_inner()?;
+            
+            let alg_id = u64::from_be_bytes(
+                key_bytes
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| FjallStorageError::MetadataCorruption("Invalid key length".to_string()))?
+            );
+            
+            let epochs = deserialize_epochs(value_bytes.as_ref())
+                .map_err(FjallStorageError::MetadataCorruption)?;
+            
             metas.push((alg_id, epochs));
         }
         Ok(metas)
@@ -171,8 +180,8 @@ impl Storage for FjallStorage {
         leaves: &[(u64, &[u8])],
         nodes: &[(u64, u64, usize, &[u8])],
     ) -> Result<(), Self::Error> {
-        // Implement atomic batch write across both leaf and node partitions
-        let mut batch = self.keyspace.batch();
+        // Implement atomic batch write across both leaf and node keyspaces
+        let mut batch = self.db.batch();
 
         for &(index, data) in leaves {
             let key = index.to_be_bytes();
@@ -219,9 +228,8 @@ fn deserialize_epochs(bytes: &[u8]) -> Result<Epochs, String> {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
-
     use super::*;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_atomic_batch_abort() {
@@ -233,7 +241,7 @@ mod tests {
 
         // Open a batch, perform inserts, then drop the batch without committing
         {
-            let mut batch = storage.keyspace.batch();
+            let mut batch = storage.db.batch();
             batch.insert(&storage.leaves, 0u64.to_be_bytes(), b"should_not_exist");
             let mut node_key = [0u8; 24];
             node_key[0..8].copy_from_slice(&99u64.to_be_bytes());
