@@ -8,7 +8,7 @@ use eml::Hasher;
 use sha2::{Digest, Sha256};
 
 /// SHA-256 implementation of the EML Hasher trait.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sha256Hasher;
 
 impl Hasher for Sha256Hasher {
@@ -37,5 +37,9 @@ impl Hasher for Sha256Hasher {
 
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
+    }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(self.clone())
     }
 }

@@ -34,6 +34,17 @@ pub struct AlgState {
     pub null_table: NullTable,
 }
 
+impl Clone for AlgState {
+    fn clone(&self) -> Self {
+        Self {
+            hasher: self.hasher.clone(),
+            epochs: self.epochs.clone(),
+            stack: self.stack.clone(),
+            null_table: self.null_table.clone(),
+        }
+    }
+}
+
 impl AlgState {
     /// Whether this algorithm is currently active (not frozen).
     fn is_active(&self) -> bool {
@@ -186,6 +197,15 @@ pub struct Log<S: Storage> {
     algs: BTreeMap<u64, AlgState>,
 }
 
+impl<S: Storage + Clone> Clone for Log<S> {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            algs: self.algs.clone(),
+        }
+    }
+}
+
 impl<S: Storage> Log<S> {
     /// Create a new empty EML log with the given storage backend.
     pub fn new(storage: S) -> Self {
@@ -193,6 +213,11 @@ impl<S: Storage> Log<S> {
             storage,
             algs: BTreeMap::new(),
         }
+    }
+
+    /// Check if the algorithm is registered.
+    pub fn has_algorithm(&self, alg_id: u64) -> bool {
+        self.algs.contains_key(&alg_id)
     }
 
     /// Reconstruct an EML log from a populated storage backend.
@@ -965,6 +990,11 @@ impl<S: Storage> Log<S> {
     /// Returns an iterator over all registered algorithm IDs.
     pub fn algorithm_ids(&self) -> impl Iterator<Item = u64> + '_ {
         self.algs.keys().copied()
+    }
+
+    /// Returns true if no algorithms are registered.
+    pub fn is_empty(&self) -> bool {
+        self.algs.is_empty()
     }
 
     /// Returns the first activation index for an algorithm.

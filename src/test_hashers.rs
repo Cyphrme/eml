@@ -12,7 +12,7 @@ use sha3::Sha3_256;
 use crate::Hasher;
 
 /// SHA-256 hasher (32-byte digest).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Sha256Hasher;
 
 impl Hasher for Sha256Hasher {
@@ -42,10 +42,14 @@ impl Hasher for Sha256Hasher {
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(self.clone())
+    }
 }
 
 /// SHA3-256 hasher (32-byte digest, Keccak-based).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Sha3Hasher;
 
 impl Hasher for Sha3Hasher {
@@ -75,10 +79,14 @@ impl Hasher for Sha3Hasher {
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha3_256::digest(data).to_vec()
     }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(self.clone())
+    }
 }
 
 /// BLAKE2b-256 hasher (32-byte digest).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Blake2bHasher;
 
 impl Hasher for Blake2bHasher {
@@ -108,11 +116,15 @@ impl Hasher for Blake2bHasher {
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         <Blake2b<U32> as Digest>::digest(data).to_vec()
     }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(self.clone())
+    }
 }
 
 /// Second hasher for multi-algorithm tests (uses a different prefix to
 /// produce distinct outputs — simulates SHA-384 without importing it).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AltHasher;
 
 impl Hasher for AltHasher {
@@ -148,6 +160,10 @@ impl Hasher for AltHasher {
         h.update([0xFF]);
         h.update(data);
         h.finalize().to_vec()
+    }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(self.clone())
     }
 }
 

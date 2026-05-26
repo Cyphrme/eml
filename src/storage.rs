@@ -153,7 +153,7 @@ pub trait Storage: Send + Sync {
 /// Suitable for testing and small logs. The integrity contract is
 /// satisfied trivially — in-process memory cannot be corrupted by
 /// external actors.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct MemoryStorage {
     pub leaves: Vec<Vec<u8>>,
     /// Sealed internal node hashes, keyed by `(alg_id, left_index, height)`.

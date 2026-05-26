@@ -71,7 +71,7 @@ mod tests {
     use super::*;
 
     /// Minimal test hasher that concatenates with prefixes.
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct ConcatHasher;
 
     impl Hasher for ConcatHasher {
@@ -100,6 +100,10 @@ mod tests {
             let mut v = vec![];
             v.extend_from_slice(data);
             v
+        }
+
+        fn clone_box(&self) -> Box<dyn Hasher> {
+            Box::new(self.clone())
         }
     }
 

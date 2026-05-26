@@ -54,4 +54,13 @@ pub trait Hasher: Debug + Send + Sync {
     /// This is the raw cryptographic hash function of the algorithm,
     /// used for committing non-tree metadata (e.g., the activation map).
     fn hash(&self, data: &[u8]) -> Vec<u8>;
+
+    /// Clone the hasher into a box.
+    fn clone_box(&self) -> Box<dyn Hasher>;
+}
+
+impl Clone for Box<dyn Hasher> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
 }
