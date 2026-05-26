@@ -384,6 +384,7 @@ version = "0.1.0"
 dependencies = [
  "eml",
  "fjall",
+ "proptest",
  "sha2",
  "tempfile",
  "thiserror",
