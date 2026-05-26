@@ -104,9 +104,8 @@ impl Storage for FjallStorage {
         // Seeking to the end of the keyspace is O(1) in Fjall/LSM.
         if let Some(guard) = self.leaves.iter().rev().next() {
             if let Ok(key_bytes) = guard.key() {
-                if key_bytes.len() == 8 {
-                    let index = u64::from_be_bytes(key_bytes.as_ref().try_into().unwrap());
-                    return index + 1;
+                if let Ok(arr) = key_bytes.as_ref().try_into() {
+                    return u64::from_be_bytes(arr) + 1;
                 }
             }
         }
@@ -217,8 +216,10 @@ fn deserialize_epochs(bytes: &[u8]) -> Result<Epochs, String> {
     }
     let mut epochs = Vec::with_capacity(bytes.len() / 16);
     for chunk in bytes.chunks_exact(16) {
-        let start = u64::from_be_bytes(chunk[0..8].try_into().unwrap());
-        let end = u64::from_be_bytes(chunk[8..16].try_into().unwrap());
+        let start_bytes = chunk[0..8].try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?;
+        let end_bytes = chunk[8..16].try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?;
+        let start = u64::from_be_bytes(start_bytes);
+        let end = u64::from_be_bytes(end_bytes);
         epochs.push((start, end));
     }
     Ok(epochs)

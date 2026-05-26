@@ -33,6 +33,10 @@ impl Hasher for Sha256Hasher {
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(self.clone())
+    }
 }
 
 #[tokio::test]
