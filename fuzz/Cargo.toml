@@ -16,7 +16,24 @@ smol = "2.0"
 [dependencies.eml]
 path = ".."
 
+[dependencies.cyphr-malt]
+path = "../cyphr-malt"
+
 # --- Fuzz targets ---
+
+[[bin]]
+name = "cyphr_malt_verify_inclusion"
+path = "fuzz_targets/cyphr_malt_verify_inclusion.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cyphr_malt_verify_consistency"
+path = "fuzz_targets/cyphr_malt_verify_consistency.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "verify_inclusion"
@@ -52,3 +69,5 @@ path = "fuzz_targets/state_machine.rs"
 test = false
 doc = false
 bench = false
+
+[workspace]

@@ -223,6 +223,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyphr-malt"
+version = "0.1.0"
+
+[[package]]
 name = "derive_arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -245,13 +249,14 @@ dependencies = [
 
 [[package]]
 name = "eml"
-version = "0.9.1"
+version = "0.10.0"
 
 [[package]]
 name = "eml-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
+ "cyphr-malt",
  "eml",
  "libfuzzer-sys",
  "sha2",

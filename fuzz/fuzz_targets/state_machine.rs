@@ -172,6 +172,9 @@ impl Hasher for HasherA {
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(HasherA)
+    }
 }
 
 #[derive(Debug)]
@@ -199,6 +202,9 @@ impl Hasher for HasherB {
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(HasherB)
+    }
 }
 
 #[derive(Debug)]
@@ -225,6 +231,9 @@ impl Hasher for HasherC {
     }
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
+    }
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(HasherC)
     }
 }
 

@@ -53,10 +53,16 @@ pub fn verify_inclusion(
     if proof.index >= proof.tree_size {
         return false;
     }
+    if proof.path.len() > 256 {
+        return false;
+    }
 
     let mut current = leaf_hash.to_vec();
 
     for step in &proof.path {
+        if step.siblings.len() > 256 {
+            return false;
+        }
         if step.siblings.is_empty() {
             // Promoted node — current hash passes through unchanged
             continue;
@@ -83,18 +89,23 @@ pub fn verify_inclusion(
     current == root
 }
 
-/// Helper function to reconstruct the coordinates (left_index, height) of the frontier for a given
-/// tree size.
 fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
+    if k < 2 {
+        return Vec::new();
+    }
     let mut frontier = Vec::new();
     let mut curr_left = 0;
     let mut temp_n = n;
     while temp_n > 0 {
         let mut height = 0;
-        let mut cap = 1;
-        while cap * k <= temp_n {
-            cap *= k;
-            height += 1;
+        let mut cap: u64 = 1;
+        while let Some(next_cap) = cap.checked_mul(k) {
+            if next_cap <= temp_n {
+                cap = next_cap;
+                height += 1;
+            } else {
+                break;
+            }
         }
         frontier.push((curr_left, height));
         curr_left += cap;
@@ -115,6 +126,12 @@ pub fn verify_consistency(
     new_root: &[u8],
 ) -> bool {
     if proof.old_size == 0 || proof.old_size >= proof.new_size {
+        return false;
+    }
+    if proof.log_arity < 2 || proof.log_arity > 256 {
+        return false;
+    }
+    if proof.path.len() > 256 {
         return false;
     }
 

@@ -1,63 +1,73 @@
-//! Fuzz target: verify_inclusion must never panic.
-//!
-//! Feeds arbitrary proof structures to `verify_inclusion` and asserts
-//! it returns a bool without panicking. Any panic is a defect.
-
 #![no_main]
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use eml::verify_inclusion;
+use cyphr_malt::{verify_inclusion, InclusionProof, ProofStep};
 
-/// Hasher for fuzz context — SHA-256 with RFC 9162 domain separation.
 #[derive(Debug)]
 struct FuzzHasher;
 
-impl eml::Hasher for FuzzHasher {
+impl cyphr_malt::Hasher for FuzzHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x00]);
         h.update(data);
         h.finalize().to_vec()
     }
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01]);
-        h.update(left);
-        h.update(right);
+        for child in children {
+            h.update(child);
+        }
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
     }
+
     fn null(&self) -> Vec<u8> {
         Sha256::digest([0x02]).to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
-    fn clone_box(&self) -> Box<dyn eml::Hasher> {
+
+    fn clone_box(&self) -> Box<dyn cyphr_malt::Hasher> {
         Box::new(FuzzHasher)
     }
+}
+
+#[derive(Debug, Arbitrary)]
+struct FuzzProofStep {
+    siblings: Vec<Vec<u8>>,
+    position: usize,
 }
 
 #[derive(Debug, Arbitrary)]
 struct Input {
     index: u64,
     tree_size: u64,
-    /// Sibling hashes — up to 64 entries (log2(u64::MAX)).
-    path: Vec<Vec<u8>>,
+    path: Vec<FuzzProofStep>,
     leaf_hash: Vec<u8>,
     root: Vec<u8>,
 }
 
 fuzz_target!(|input: Input| {
-    let proof = eml::InclusionProof {
+    let path = input.path.into_iter().map(|step| ProofStep {
+        siblings: step.siblings,
+        position: step.position,
+    }).collect();
+
+    let proof = InclusionProof {
         index: input.index,
         tree_size: input.tree_size,
-        path: input.path,
+        path,
     };
-    // Must not panic — result is discarded.
+    
     let _ = verify_inclusion(&FuzzHasher, &input.leaf_hash, &proof, &input.root);
 });
