@@ -1,0 +1,644 @@
+use std::collections::BTreeMap;
+
+use cyphr_malt::{
+    Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig, evaluate,
+    verify_consistency, verify_inclusion,
+};
+use proptest::prelude::*;
+use sha2::{Digest, Sha256};
+
+#[derive(Debug)]
+struct Sha256Hasher;
+
+impl Hasher for Sha256Hasher {
+    fn leaf(&self, data: &[u8]) -> Vec<u8> {
+        Sha256::digest(data).to_vec()
+    }
+
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        for child in children {
+            h.update(child);
+        }
+        h.finalize().to_vec()
+    }
+
+    fn empty(&self) -> Vec<u8> {
+        Sha256::digest(b"").to_vec()
+    }
+
+    fn null(&self) -> Vec<u8> {
+        Sha256::digest([0x02]).to_vec()
+    }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        Sha256::digest(data).to_vec()
+    }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(Sha256Hasher)
+    }
+}
+
+// Custom mock hasher to check hasher-independence.
+#[derive(Debug)]
+struct SaltedHasher(u8);
+
+impl Hasher for SaltedHasher {
+    fn leaf(&self, data: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        h.update(data);
+        h.finalize().to_vec()
+    }
+
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        for child in children {
+            h.update(child);
+        }
+        h.finalize().to_vec()
+    }
+
+    fn empty(&self) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        h.finalize().to_vec()
+    }
+
+    fn null(&self) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0, 0x02]);
+        h.finalize().to_vec()
+    }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        h.update(data);
+        h.finalize().to_vec()
+    }
+
+    fn clone_box(&self) -> Box<dyn Hasher> {
+        Box::new(SaltedHasher(self.0))
+    }
+}
+
+fn new_hasher_for(alg_id: u64) -> Box<dyn Hasher> {
+    if alg_id % 2 == 0 {
+        Box::new(Sha256Hasher)
+    } else {
+        Box::new(SaltedHasher((alg_id & 0xFF) as u8))
+    }
+}
+
+// Custom reduction count helper
+fn reduction_count(n: u64, k: u64) -> u64 {
+    let mut count = 0;
+    let mut temp = n + 1;
+    while temp > 0 && temp % k == 0 {
+        count += 1;
+        temp /= k;
+    }
+    count
+}
+
+// Custom nary_mr helper matching definition
+fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
+    match children.len() {
+        0 => hasher.empty(),
+        1 => children[0].to_vec(),
+        _ => {
+            let null_const = hasher.null();
+            if children.iter().all(|&c| c == null_const) {
+                null_const
+            } else {
+                hasher.node(children)
+            }
+        },
+    }
+}
+
+// Reconstruct coordinate-based frontier for size `n` and arity `k`
+fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
+    let mut frontier = Vec::new();
+    let mut curr_left = 0;
+    let mut temp_n = n;
+    while temp_n > 0 {
+        let mut height = 0;
+        let mut cap = 1;
+        while cap * k <= temp_n {
+            cap *= k;
+            height += 1;
+        }
+        frontier.push((curr_left, height));
+        curr_left += cap;
+        temp_n -= cap;
+    }
+    frontier
+}
+
+// Simulates stack folding on a sequence of projected leaf hashes
+fn nary_mth(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> Vec<u8> {
+    if leaves.is_empty() {
+        return hasher.empty();
+    }
+    let mut frontier: Vec<Vec<u8>> = Vec::new();
+    let mut frontier_coords: Vec<(u64, u32)> = Vec::new();
+
+    for (i, leaf_hash) in leaves.iter().enumerate() {
+        frontier.push(leaf_hash.clone());
+        frontier_coords.push((i as u64, 0));
+
+        let merges = reduction_count(i as u64, k as u64);
+        for _ in 0..merges {
+            let mut children = Vec::with_capacity(k);
+            let mut coords = Vec::with_capacity(k);
+            for _ in 0..k {
+                children.push(frontier.pop().unwrap());
+                coords.push(frontier_coords.pop().unwrap());
+            }
+            children.reverse();
+            coords.reverse();
+            let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
+            let parent = nary_mr(hasher, &child_refs);
+
+            let parent_left_index = coords[0].0;
+            let parent_height = coords[0].1 + 1;
+
+            frontier.push(parent);
+            frontier_coords.push((parent_left_index, parent_height));
+        }
+    }
+
+    if frontier.is_empty() {
+        return hasher.empty();
+    }
+    if frontier.len() == 1 {
+        return frontier[0].clone();
+    }
+    let mut current = frontier.clone();
+    while current.len() > k {
+        let split_idx = current.len() - k;
+        let right_elements = &current[split_idx..];
+        let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
+        let merged = nary_mr(hasher, &refs);
+        current.truncate(split_idx);
+        current.push(merged);
+    }
+    let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+    nary_mr(hasher, &refs)
+}
+
+// Recursively calculates the subtree root matching Definition 14c
+fn recursive_subtree_root(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> Vec<u8> {
+    let size = leaves.len();
+    if size == 0 {
+        return hasher.empty();
+    }
+    if size == 1 {
+        return leaves[0].clone();
+    }
+
+    let is_power_of_k = {
+        let mut temp = size;
+        while temp % k == 0 {
+            temp /= k;
+        }
+        temp == 1
+    };
+
+    if is_power_of_k {
+        let child_size = size / k;
+        let mut child_hashes = Vec::with_capacity(k);
+        for j in 0..k {
+            let c_lo = j * child_size;
+            let c_hi = (j + 1) * child_size;
+            let child_hash = recursive_subtree_root(hasher, &leaves[c_lo..c_hi], k);
+            child_hashes.push(child_hash);
+        }
+        let child_refs: Vec<&[u8]> = child_hashes.iter().map(|c| c.as_slice()).collect();
+        nary_mr(hasher, &child_refs)
+    } else {
+        let coords = frontier_for_size(size as u64, k as u64);
+        let mut component_hashes = Vec::with_capacity(coords.len());
+        for &(part_left, part_height) in &coords {
+            let cap = (k as u64).pow(part_height) as usize;
+            let c_lo = part_left as usize;
+            let c_hi = c_lo + cap;
+            let part_root = recursive_subtree_root(hasher, &leaves[c_lo..c_hi], k);
+            component_hashes.push(part_root);
+        }
+
+        let mut current = component_hashes;
+        while current.len() > k {
+            let split_idx = current.len() - k;
+            let right_elements = &current[split_idx..];
+            let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
+            let merged = nary_mr(hasher, &refs);
+            current.truncate(split_idx);
+            current.push(merged);
+        }
+        let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+        nary_mr(hasher, &refs)
+    }
+}
+
+// Read leaf projection for given algorithm
+fn project<S: cyphr_malt::Storage>(
+    log: &NaryMerkleLog<S>,
+    alg_id: u64,
+    hasher: &dyn Hasher,
+) -> Vec<Vec<u8>> {
+    let metas = log.storage().load_algorithm_metas().unwrap();
+    let epochs = metas
+        .iter()
+        .find(|(id, _)| *id == alg_id)
+        .map(|(_, eps)| eps)
+        .unwrap();
+    let global_size = if log.size() > 0 {
+        log.size()
+    } else {
+        log.commit_count()
+    };
+
+    let is_active = epochs.last().is_some_and(|&(_, end)| end == u64::MAX);
+    let tree_size = if is_active {
+        global_size
+    } else {
+        epochs.last().map_or(0, |&(_, end)| end)
+    };
+
+    let mut leaves = Vec::with_capacity(tree_size as usize);
+    for i in 0..tree_size {
+        let active = epochs.iter().any(|&(start, end)| start <= i && i < end);
+        if active {
+            if log.size() > 0 {
+                let data = log.storage().get_leaf(i).unwrap();
+                leaves.push(hasher.leaf(&data));
+            } else {
+                let node_id = i << 16;
+                let hash = log.storage().get_node(alg_id, node_id).unwrap().unwrap();
+                leaves.push(hash);
+            }
+        } else {
+            leaves.push(hasher.null());
+        }
+    }
+    leaves
+}
+
+fn build_log(size: usize, activation: usize, k: usize) -> NaryMerkleLog<MemoryStorage> {
+    let config = TreeConfig { log_arity: k };
+    let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config);
+
+    if activation > 0 {
+        log.add_algorithm(99, Box::new(Sha256Hasher)).unwrap();
+        log.remove_algorithm(0).unwrap();
+    }
+
+    for i in 0..size {
+        if i == activation && activation > 0 {
+            log.resume_algorithm(0).unwrap();
+        }
+        log.append_leaf(&[i as u8]).unwrap();
+    }
+
+    log
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn d_sep_leaf_vs_null(data in proptest::collection::vec(any::<u8>(), 0..64)) {
+        let leaf = Sha256Hasher.leaf(&data);
+        let null = Sha256Hasher.null();
+        prop_assert!(leaf != null, "D-SEP violated: leaf == null");
+    }
+
+    #[test]
+    fn d_sep_leaf_vs_node(
+        data in proptest::collection::vec(any::<u8>(), 0..64),
+        left in proptest::collection::vec(any::<u8>(), 32..=32),
+        right in proptest::collection::vec(any::<u8>(), 32..=32),
+    ) {
+        let leaf = Sha256Hasher.leaf(&data);
+        let node = Sha256Hasher.node(&[&left, &right]);
+        prop_assert!(leaf != node, "D-SEP violated: leaf == node");
+    }
+
+    #[test]
+    fn a_equiv_malt(
+        size in 1usize..64,
+        k in 2usize..5,
+        act_frac in 0.0f64..1.0,
+    ) {
+        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+        let log = build_log(size, activation, k);
+
+        let projected = project(&log, 0, &Sha256Hasher);
+        let incremental = log.root_for(0).unwrap();
+        let batch = nary_mth(&Sha256Hasher, &projected, k);
+
+        prop_assert_eq!(incremental, batch);
+    }
+
+    #[test]
+    fn subtree_root_equiv_malt(
+        size in 1usize..64,
+        k in 2usize..5,
+        act_frac in 0.0f64..1.0,
+    ) {
+        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+        let log = build_log(size, activation, k);
+
+        let projected = project(&log, 0, &Sha256Hasher);
+        let incremental = log.root_for(0).unwrap();
+        let recursive = recursive_subtree_root(&Sha256Hasher, &projected, k);
+
+        prop_assert_eq!(incremental, recursive);
+    }
+
+    #[test]
+    fn i_sound_malt(
+        size in 2usize..64,
+        k in 2usize..5,
+        act_frac in 0.0f64..1.0,
+        idx_frac in 0.0f64..1.0,
+    ) {
+        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+        let log = build_log(size, activation, k);
+
+        let ts = log.size();
+        let index = ((idx_frac * ts as f64) as u64).min(ts - 1);
+
+        let root = log.root_for(0).unwrap();
+        let projected = project(&log, 0, &Sha256Hasher);
+        let proof = log.inclusion_proof_for(0, index, ts).unwrap().unwrap();
+
+        prop_assert!(
+            verify_inclusion(&Sha256Hasher, &projected[index as usize], &proof, &root),
+            "I-SOUND-MALT failed to verify valid proof"
+        );
+
+        let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA");
+        prop_assert!(
+            !verify_inclusion(&Sha256Hasher, &wrong, &proof, &root),
+            "I-SOUND-MALT accepted invalid forged leaf"
+        );
+    }
+
+    #[test]
+    fn k_sound_malt(
+        size in 3usize..64,
+        k in 2usize..5,
+        old_frac in 0.0f64..1.0,
+    ) {
+        let log = build_log(size, 0, k);
+        let ts = log.size();
+        let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
+
+        let old_log = build_log(old_size as usize, 0, k);
+        let old_root = old_log.root_for(0).unwrap();
+        let new_root = log.root_for(0).unwrap();
+
+        let proof = log.consistency_proof_for(0, old_size, ts).unwrap().unwrap();
+
+        prop_assert!(
+            verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
+            "K-SOUND-MALT failed to verify consistency proof"
+        );
+    }
+
+    #[test]
+    fn t_bound_malt(
+        size in 2usize..64,
+        k in 2usize..5,
+        act_frac in 0.01f64..1.0,
+        payload in proptest::collection::vec(any::<u8>(), 1..32),
+    ) {
+        let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
+        let log = build_log(size, activation, k);
+
+        let root = log.root_for(0).unwrap();
+        let null_idx = activation.saturating_sub(1) as u64;
+
+        let forged = Sha256Hasher.leaf(&payload);
+        let proof = log.inclusion_proof_for(0, null_idx, log.size()).unwrap().unwrap();
+
+        prop_assert!(
+            !verify_inclusion(&Sha256Hasher, &forged, &proof, &root),
+            "T-BOUND-MALT accepted forged leaf at null position"
+        );
+    }
+}
+
+// ============================================================================
+// State-Machine fuzzer for multi-epoch, multi-algorithm execution.
+// ============================================================================
+
+#[derive(Debug, Clone)]
+enum Op {
+    AppendLeaf(Vec<u8>),
+    AppendSubtree(Subtree),
+    AddAlg(u64),
+    RemoveAlg(u64),
+    ResumeAlg(u64),
+}
+
+fn subtree_strategy(depth: u32) -> impl Strategy<Value = Subtree> {
+    let leaf = any::<Vec<u8>>().prop_map(Subtree::Leaf);
+    if depth == 0 {
+        leaf.boxed()
+    } else {
+        prop_oneof![
+            leaf,
+            prop::collection::vec(subtree_strategy(depth - 1), 1..=3).prop_map(Subtree::Node)
+        ]
+        .boxed()
+    }
+}
+
+fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
+    prop_oneof![
+        4 => any::<Vec<u8>>().prop_map(Op::AppendLeaf),
+        2 => subtree_strategy(2).prop_map(Op::AppendSubtree),
+        2 => (0..max_algs).prop_map(Op::AddAlg),
+        1 => (0..max_algs).prop_map(Op::RemoveAlg),
+        1 => (0..max_algs).prop_map(Op::ResumeAlg),
+    ]
+}
+
+fn check_state_invariants<S: cyphr_malt::Storage>(
+    log: &NaryMerkleLog<S>,
+    frozen_roots: &BTreeMap<u64, Vec<u8>>,
+    k: usize,
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    let metas = log.storage().load_algorithm_metas().unwrap();
+    let size = if log.size() > 0 {
+        log.size()
+    } else {
+        log.commit_count()
+    };
+
+    for &(alg_id, ref epochs) in &metas {
+        let hasher = new_hasher_for(alg_id);
+        let is_active = epochs.last().is_some_and(|&(_, end)| end == u64::MAX);
+        let tree_size = if is_active {
+            size
+        } else {
+            epochs.last().map_or(0, |&(_, end)| end)
+        };
+
+        let projected = project(log, alg_id, hasher.as_ref());
+
+        // A-STACK: projected len == tree_size
+        prop_assert_eq!(projected.len() as u64, tree_size);
+
+        let incremental = log.root_for(alg_id).unwrap();
+
+        // A-EQUIV: incremental root == batch root
+        let batch = nary_mth(hasher.as_ref(), &projected, k);
+        prop_assert_eq!(&incremental, &batch);
+
+        // SUBTREE-ROOT-EQUIV: recursive root == incremental root
+        let recursive = recursive_subtree_root(hasher.as_ref(), &projected, k);
+        prop_assert_eq!(&incremental, &recursive);
+
+        // Root stability for frozen algorithms
+        if let Some(frozen_root) = frozen_roots.get(&alg_id) {
+            prop_assert_eq!(&incremental, frozen_root);
+        }
+
+        // Proof soundness check
+        if tree_size > 0 {
+            let sample_indices = {
+                let ts = tree_size;
+                let mut v = vec![0, ts - 1];
+                if ts > 2 {
+                    v.push(ts / 2);
+                }
+                v
+            };
+
+            for idx in sample_indices {
+                let proof = log
+                    .inclusion_proof_for(alg_id, idx, tree_size)
+                    .unwrap()
+                    .unwrap();
+                prop_assert!(verify_inclusion(
+                    hasher.as_ref(),
+                    &projected[idx as usize],
+                    &proof,
+                    &incremental
+                ));
+            }
+
+            if tree_size > 1 {
+                let old_size = (tree_size / 2).max(1);
+                let old_projected = &projected[..old_size as usize];
+                let old_root = nary_mth(hasher.as_ref(), old_projected, k);
+
+                let proof = log
+                    .consistency_proof_for(alg_id, old_size, tree_size)
+                    .unwrap()
+                    .unwrap();
+                prop_assert!(verify_consistency(
+                    hasher.as_ref(),
+                    &proof,
+                    &old_root,
+                    &incremental
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    #[test]
+    fn state_machine_malt(
+        ops in proptest::collection::vec(op_strategy(6), 20..50),
+        k in 2usize..4,
+        is_state_mode in any::<bool>(),
+    ) {
+        let config = TreeConfig { log_arity: k };
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config);
+
+        // Seed with algs
+        log.add_algorithm(1, new_hasher_for(1)).unwrap();
+        log.add_algorithm(2, new_hasher_for(2)).unwrap();
+
+        let mut frozen_roots = BTreeMap::new();
+
+        for op in ops {
+            match op {
+                Op::AppendLeaf(data) => {
+                    let has_active = log.storage().load_algorithm_metas().unwrap()
+                        .iter()
+                        .any(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end == u64::MAX));
+                    if has_active {
+                        if is_state_mode {
+                            log.append_leaf(&data).unwrap();
+                        } else {
+                            log.append_subtree(&Subtree::Leaf(data)).unwrap();
+                        }
+                    }
+                }
+                Op::AppendSubtree(subtree) => {
+                    let has_active = log.storage().load_algorithm_metas().unwrap()
+                        .iter()
+                        .any(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end == u64::MAX));
+                    if has_active {
+                        if is_state_mode {
+                            let data = evaluate(&Sha256Hasher, &subtree);
+                            log.append_leaf(&data).unwrap();
+                        } else {
+                            log.append_subtree(&subtree).unwrap();
+                        }
+                    }
+                }
+                Op::AddAlg(id) => {
+                    let exists = log.storage().load_algorithm_metas().unwrap()
+                        .iter()
+                        .any(|(alg_id, _)| *alg_id == id);
+                    if !exists {
+                        log.add_algorithm(id, new_hasher_for(id)).unwrap();
+                    }
+                }
+                Op::RemoveAlg(id) => {
+                    let active = log.storage().load_algorithm_metas().unwrap()
+                        .iter()
+                        .find(|(alg_id, _)| *alg_id == id)
+                        .is_some_and(|(_, epochs)| {
+                            epochs.last().is_some_and(|&(_, end)| end == u64::MAX)
+                        });
+                    if active {
+                        let root = log.root_for(id).unwrap();
+                        log.remove_algorithm(id).unwrap();
+                        frozen_roots.insert(id, root);
+                    }
+                }
+                Op::ResumeAlg(id) => {
+                    let frozen = log.storage().load_algorithm_metas().unwrap()
+                        .iter()
+                        .find(|(alg_id, _)| *alg_id == id)
+                        .is_some_and(|(_, epochs)| {
+                            epochs.last().is_some_and(|&(_, end)| end != u64::MAX)
+                        });
+                    if frozen {
+                        log.resume_algorithm(id).unwrap();
+                        frozen_roots.remove(&id);
+                    }
+                }
+            }
+
+            check_state_invariants(&log, &frozen_roots, k)?;
+        }
+    }
+}

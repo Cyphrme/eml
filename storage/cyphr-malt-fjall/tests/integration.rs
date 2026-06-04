@@ -1,4 +1,4 @@
-use cyphr_malt::{Hasher, NaryMerkleLog, TreeConfig, Storage};
+use cyphr_malt::{Hasher, NaryMerkleLog, Storage, TreeConfig};
 use cyphr_malt_storage_fjall::FjallStorage;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;

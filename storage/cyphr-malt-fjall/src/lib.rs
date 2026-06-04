@@ -26,6 +26,7 @@ pub enum FjallStorageError {
 /// Clones of `FjallStorage` share the same underlying database handle.
 #[derive(Clone)]
 pub struct FjallStorage {
+    #[allow(dead_code)]
     db: Database,
     leaves: Keyspace,
     nodes: Keyspace,
@@ -113,7 +114,11 @@ impl Storage for FjallStorage {
         Ok(value.map(|bytes| bytes.to_vec()))
     }
 
-    fn store_algorithm_meta(&mut self, alg_id: u64, epochs: &[(u64, u64)]) -> Result<(), Self::Error> {
+    fn store_algorithm_meta(
+        &mut self,
+        alg_id: u64,
+        epochs: &[(u64, u64)],
+    ) -> Result<(), Self::Error> {
         let key = alg_id.to_be_bytes();
         let mut bytes = Vec::with_capacity(epochs.len() * 16);
         for &(start, end) in epochs {
@@ -143,16 +148,18 @@ impl Storage for FjallStorage {
 
             let mut epochs = Vec::with_capacity(val_bytes.len() / 16);
             for chunk in val_bytes.chunks_exact(16) {
-                let start_bytes = chunk[0..8]
-                    .try_into()
-                    .map_err(|e: std::array::TryFromSliceError| {
-                        FjallStorageError::MetadataCorruption(e.to_string())
-                    })?;
-                let end_bytes = chunk[8..16]
-                    .try_into()
-                    .map_err(|e: std::array::TryFromSliceError| {
-                        FjallStorageError::MetadataCorruption(e.to_string())
-                    })?;
+                let start_bytes =
+                    chunk[0..8]
+                        .try_into()
+                        .map_err(|e: std::array::TryFromSliceError| {
+                            FjallStorageError::MetadataCorruption(e.to_string())
+                        })?;
+                let end_bytes =
+                    chunk[8..16]
+                        .try_into()
+                        .map_err(|e: std::array::TryFromSliceError| {
+                            FjallStorageError::MetadataCorruption(e.to_string())
+                        })?;
                 let start = u64::from_be_bytes(start_bytes);
                 let end = u64::from_be_bytes(end_bytes);
                 epochs.push((start, end));

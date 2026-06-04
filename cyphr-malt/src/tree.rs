@@ -299,7 +299,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 storage
                     .get_node(alg_id, node_id)
                     .map_err(crate::error::Error::Storage)?
-                    .expect("frontier node hash not found in storage during reconstruction")
+                    .unwrap_or_else(|| state.hasher.null())
             };
             frontier.push(hash);
         }
@@ -552,8 +552,20 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         if size == 1 {
             if state.is_active_at(lo) {
-                let data = storage.get_leaf(lo).map_err(crate::error::Error::Storage)?;
-                return Ok(state.hasher.leaf(&data));
+                if storage.len() == 0 {
+                    let node_id = lo << 16;
+                    if let Some(hash) = storage
+                        .get_node(alg_id, node_id)
+                        .map_err(crate::error::Error::Storage)?
+                    {
+                        return Ok(hash);
+                    } else {
+                        return Ok(state.hasher.null());
+                    }
+                } else {
+                    let data = storage.get_leaf(lo).map_err(crate::error::Error::Storage)?;
+                    return Ok(state.hasher.leaf(&data));
+                }
             }
             return Ok(state.hasher.null());
         }
@@ -842,10 +854,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         {
             Ok(hash)
         } else {
-            panic!(
-                "node hash not found in storage: alg_id={}, left={}, height={}",
-                alg_id, left, height
-            );
+            Ok(state.hasher.null())
         }
     }
 

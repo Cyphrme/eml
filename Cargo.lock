@@ -332,6 +332,10 @@ dependencies = [
 name = "cyphr-malt"
 version = "0.1.0"
 dependencies = [
+ "big_o",
+ "bigoish",
+ "cpu-time",
+ "proptest",
  "sha2",
 ]
 

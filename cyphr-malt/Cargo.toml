@@ -12,3 +12,7 @@ repository    = "https://github.com/Cyphrme/eml"
 
 [dev-dependencies]
 sha2 = "0.10"
+bigoish = "0.1"
+big_o = "0.1"
+cpu-time = "1"
+proptest = "1"
