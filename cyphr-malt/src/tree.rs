@@ -691,11 +691,10 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
 
-        // Store the leaf payload first
-        self.storage
-            .store_leaf(self.size, data)
-            .await
-            .map_err(crate::error::Error::Storage)?;
+        let mut batch_leaves = Vec::new();
+        let mut batch_nodes = Vec::new();
+
+        batch_leaves.push((self.size, data));
 
         for (&alg_id, state) in &mut self.algs {
             if !state.is_active() {
@@ -705,10 +704,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let digest = if state.is_active_at(self.size) {
                 let leaf_hash = state.hasher.leaf(data);
                 let node_id = self.size << 16;
-                self.storage
-                    .store_node(alg_id, node_id, &leaf_hash)
-                    .await
-                    .map_err(crate::error::Error::Storage)?;
+                batch_nodes.push((alg_id, node_id, leaf_hash.clone()));
                 leaf_hash
             } else {
                 state.hasher.null()
@@ -745,10 +741,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let node_id = (parent_left_index << 16) | (parent_height as u64 & 0xFFFF);
 
                 if parent != state.hasher.null() {
-                    self.storage
-                        .store_node(alg_id, node_id, &parent)
-                        .await
-                        .map_err(crate::error::Error::Storage)?;
+                    batch_nodes.push((alg_id, node_id, parent.clone()));
                 }
 
                 state.frontier.push(parent);
@@ -757,6 +750,16 @@ impl<S: Storage> NaryMerkleLog<S> {
                     .push((parent_left_index, parent_height));
             }
         }
+
+        let nodes_ref: Vec<(u64, u64, &[u8])> = batch_nodes
+            .iter()
+            .map(|&(alg_id, node_id, ref hash)| (alg_id, node_id, hash.as_slice()))
+            .collect();
+
+        self.storage
+            .write_batch(&batch_leaves, &nodes_ref)
+            .await
+            .map_err(crate::error::Error::Storage)?;
 
         self.size += 1;
         Ok(())
@@ -768,6 +771,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
 
+        let mut batch_nodes = Vec::new();
+
         for (&alg_id, state) in &mut self.algs {
             if !state.is_active() {
                 continue;
@@ -776,10 +781,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let digest = if state.is_active_at(self.commit_count) {
                 let root_hash = evaluate(state.hasher.as_ref(), subtree);
                 let node_id = self.commit_count << 16;
-                self.storage
-                    .store_node(alg_id, node_id, &root_hash)
-                    .await
-                    .map_err(crate::error::Error::Storage)?;
+                batch_nodes.push((alg_id, node_id, root_hash.clone()));
                 root_hash
             } else {
                 state.hasher.null()
@@ -816,10 +818,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let node_id = (parent_left_index << 16) | (parent_height as u64 & 0xFFFF);
 
                 if parent != state.hasher.null() {
-                    self.storage
-                        .store_node(alg_id, node_id, &parent)
-                        .await
-                        .map_err(crate::error::Error::Storage)?;
+                    batch_nodes.push((alg_id, node_id, parent.clone()));
                 }
 
                 state.frontier.push(parent);
@@ -828,6 +827,16 @@ impl<S: Storage> NaryMerkleLog<S> {
                     .push((parent_left_index, parent_height));
             }
         }
+
+        let nodes_ref: Vec<(u64, u64, &[u8])> = batch_nodes
+            .iter()
+            .map(|&(alg_id, node_id, ref hash)| (alg_id, node_id, hash.as_slice()))
+            .collect();
+
+        self.storage
+            .write_batch(&[], &nodes_ref)
+            .await
+            .map_err(crate::error::Error::Storage)?;
 
         self.commit_count += 1;
         Ok(())

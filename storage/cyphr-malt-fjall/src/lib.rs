@@ -173,4 +173,27 @@ impl Storage for FjallStorage {
         }
         Ok(metas)
     }
+
+    async fn write_batch(
+        &mut self,
+        leaves: &[(u64, &[u8])],
+        nodes: &[(u64, u64, &[u8])],
+    ) -> Result<(), Self::Error> {
+        let mut batch = self.db.batch();
+
+        for &(index, data) in leaves {
+            let key = index.to_be_bytes();
+            batch.insert(&self.leaves, key, data);
+        }
+
+        for &(alg_id, node_id, hash) in nodes {
+            let mut key = [0u8; 16];
+            key[0..8].copy_from_slice(&alg_id.to_be_bytes());
+            key[8..16].copy_from_slice(&node_id.to_be_bytes());
+            batch.insert(&self.nodes, key, hash);
+        }
+
+        batch.commit()?;
+        Ok(())
+    }
 }
