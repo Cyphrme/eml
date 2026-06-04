@@ -1,0 +1,14 @@
+[package]
+name          = "cyphr-malt"
+version       = "0.1.0"
+description   = "Unified n-ary Merkle append-only log tree"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+
+[dependencies]
+# Zero external dependencies.
+
+[dev-dependencies]
+sha2 = "0.10"
