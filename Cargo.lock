@@ -346,6 +346,7 @@ version = "0.1.0"
 dependencies = [
  "cyphr-malt",
  "fjall",
+ "proptest",
  "sha2",
  "smol",
  "tempfile",
