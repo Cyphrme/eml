@@ -19,7 +19,7 @@ pub fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
             } else {
                 hasher.node(children)
             }
-        }
+        },
     }
 }
 
@@ -29,20 +29,18 @@ pub fn evaluate(hasher: &dyn Hasher, subtree: &Subtree) -> Vec<u8> {
     match subtree {
         Subtree::Leaf(data) => hasher.leaf(data),
         Subtree::Node(children) => {
-            let child_hashes: Vec<Vec<u8>> = children
-                .iter()
-                .map(|c| evaluate(hasher, c))
-                .collect();
+            let child_hashes: Vec<Vec<u8>> = children.iter().map(|c| evaluate(hasher, c)).collect();
             let child_refs: Vec<&[u8]> = child_hashes.iter().map(|c| c.as_slice()).collect();
             nary_mr(hasher, &child_refs)
-        }
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest, Sha256};
+
     use super::*;
-    use sha2::{Sha256, Digest};
 
     #[derive(Debug)]
     struct Sha256Hasher;
@@ -65,7 +63,7 @@ mod tests {
         }
 
         fn null(&self) -> Vec<u8> {
-            Sha256::digest(&[0x02]).to_vec()
+            Sha256::digest([0x02]).to_vec()
         }
 
         fn hash(&self, data: &[u8]) -> Vec<u8> {

@@ -64,9 +64,9 @@ impl FjallStorage {
     ///
     /// Returns a [`FjallStorageError`] if keyspace initialization fails.
     pub fn with_database(db: Database) -> Result<Self, FjallStorageError> {
-        let leaves = db.keyspace("eml_leaves", || KeyspaceCreateOptions::default())?;
-        let nodes = db.keyspace("eml_nodes", || KeyspaceCreateOptions::default())?;
-        let metadata = db.keyspace("eml_metadata", || KeyspaceCreateOptions::default())?;
+        let leaves = db.keyspace("eml_leaves", KeyspaceCreateOptions::default)?;
+        let nodes = db.keyspace("eml_nodes", KeyspaceCreateOptions::default)?;
+        let metadata = db.keyspace("eml_metadata", KeyspaceCreateOptions::default)?;
 
         Ok(Self {
             db,
@@ -102,7 +102,7 @@ impl Storage for FjallStorage {
         // Since leaf indices are written sequentially (0, 1, 2...) as big-endian u64,
         // the last key in the partition is the highest index.
         // Seeking to the end of the keyspace is O(1) in Fjall/LSM.
-        if let Some(guard) = self.leaves.iter().rev().next() {
+        if let Some(guard) = self.leaves.iter().next_back() {
             if let Ok(key_bytes) = guard.key() {
                 if let Ok(arr) = key_bytes.as_ref().try_into() {
                     return u64::from_be_bytes(arr) + 1;

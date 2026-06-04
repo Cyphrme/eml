@@ -304,6 +304,7 @@ impl<S: Storage> Log<S> {
             }
         }
 
+        #[allow(clippy::type_complexity)]
         let mut futures: Vec<
             Option<
                 std::pin::Pin<
@@ -2270,7 +2271,7 @@ mod tests {
             let hasher = Sha256Hasher;
             let mut malt_leaves = Vec::new();
             for i in 0..18u8 {
-                if i >= 4 && i < 14 {
+                if (4..14).contains(&i) {
                     malt_leaves.push(hasher.null()); // Null Leaf Hash representing the gap
                 } else {
                     malt_leaves.push(hasher.leaf(&[i])); // Active Leaf Hash

@@ -2,6 +2,12 @@
 
 use std::collections::HashMap;
 
+/// Epoch metadata for a registered algorithm: a sequence of half-open `[start, end)` intervals.
+pub type Epochs = Vec<(u64, u64)>;
+
+/// Reconstructed metadata for registered algorithms: a list of `(alg_id, epochs)` pairs.
+pub type AlgorithmMetas = Vec<(u64, Epochs)>;
+
 /// Backend for persisting and retrieving raw leaf payloads and sealed
 /// internal node hashes.
 pub trait Storage: Send + Sync {
@@ -25,19 +31,10 @@ pub trait Storage: Send + Sync {
     }
 
     /// Persist a sealed internal node hash.
-    fn store_node(
-        &mut self,
-        alg_id: u64,
-        node_id: u64,
-        hash: &[u8],
-    ) -> Result<(), Self::Error>;
+    fn store_node(&mut self, alg_id: u64, node_id: u64, hash: &[u8]) -> Result<(), Self::Error>;
 
     /// Retrieve a sealed internal node hash.
-    fn get_node(
-        &self,
-        alg_id: u64,
-        node_id: u64,
-    ) -> Result<Option<Vec<u8>>, Self::Error>;
+    fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error>;
 
     /// Persist algorithm metadata (epoch boundaries).
     fn store_algorithm_meta(
@@ -47,7 +44,7 @@ pub trait Storage: Send + Sync {
     ) -> Result<(), Self::Error>;
 
     /// Load all persisted algorithm metadata.
-    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error>;
+    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error>;
 }
 
 // ============================================================================
@@ -125,21 +122,12 @@ impl Storage for MemoryStorage {
         self.leaves.len() as u64
     }
 
-    fn store_node(
-        &mut self,
-        alg_id: u64,
-        node_id: u64,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
+    fn store_node(&mut self, alg_id: u64, node_id: u64, hash: &[u8]) -> Result<(), Self::Error> {
         self.nodes.insert((alg_id, node_id), hash.to_vec());
         Ok(())
     }
 
-    fn get_node(
-        &self,
-        alg_id: u64,
-        node_id: u64,
-    ) -> Result<Option<Vec<u8>>, Self::Error> {
+    fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error> {
         Ok(self.nodes.get(&(alg_id, node_id)).cloned())
     }
 
@@ -152,7 +140,7 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> Result<Vec<(u64, Vec<(u64, u64)>)>, Self::Error> {
+    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         Ok(self
             .algorithm_metas
             .iter()
@@ -186,6 +174,9 @@ mod tests {
         assert_eq!(storage.get_node(1, 42).unwrap(), None);
 
         storage.store_node(1, 42, b"node_hash").unwrap();
-        assert_eq!(storage.get_node(1, 42).unwrap(), Some(b"node_hash".to_vec()));
+        assert_eq!(
+            storage.get_node(1, 42).unwrap(),
+            Some(b"node_hash".to_vec())
+        );
     }
 }

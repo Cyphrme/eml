@@ -27,48 +27,33 @@ mod tests {
     fn test_reduction_count_k2() {
         // Equivalent to EML's count_trailing_ones
         let expected = vec![
-            0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4,
-            0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 5,
+            0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0,
+            1, 0, 5,
         ];
         for (n, &exp) in expected.iter().enumerate() {
-            assert_eq!(
-                reduction_count(n as u64, 2),
-                exp,
-                "failed for k=2, n={}",
-                n
-            );
+            assert_eq!(reduction_count(n as u64, 2), exp, "failed for k=2, n={}", n);
         }
     }
 
     #[test]
     fn test_reduction_count_k3() {
         let expected = vec![
-            0, 0, 1, 0, 0, 1, 0, 0, 2, 0, 0, 1, 0, 0, 1, 0,
-            0, 2, 0, 0, 1, 0, 0, 1, 0, 0, 3, 0, 0, 1, 0, 0,
+            0, 0, 1, 0, 0, 1, 0, 0, 2, 0, 0, 1, 0, 0, 1, 0, 0, 2, 0, 0, 1, 0, 0, 1, 0, 0, 3, 0, 0,
+            1, 0, 0,
         ];
         for (n, &exp) in expected.iter().enumerate() {
-            assert_eq!(
-                reduction_count(n as u64, 3),
-                exp,
-                "failed for k=3, n={}",
-                n
-            );
+            assert_eq!(reduction_count(n as u64, 3), exp, "failed for k=3, n={}", n);
         }
     }
 
     #[test]
     fn test_reduction_count_k4() {
         let expected = vec![
-            0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2,
-            0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2,
+            0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 2,
         ];
         for (n, &exp) in expected.iter().enumerate() {
-            assert_eq!(
-                reduction_count(n as u64, 4),
-                exp,
-                "failed for k=4, n={}",
-                n
-            );
+            assert_eq!(reduction_count(n as u64, 4), exp, "failed for k=4, n={}", n);
         }
     }
 

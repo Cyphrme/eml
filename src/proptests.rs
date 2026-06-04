@@ -1042,8 +1042,7 @@ proptest! {
 
             let mut malt_log = malt::Log::new(RealSha256TreeHasher);
 
-            for i in 0..actual_size {
-                let data = &payloads[i];
+            for data in payloads.iter().take(actual_size) {
                 eml_log.append(data).await.unwrap();
                 malt_log.append(data);
             }

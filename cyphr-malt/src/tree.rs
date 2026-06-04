@@ -41,10 +41,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// Create a new empty n-ary Merkle log.
     #[must_use]
     pub fn new(storage: S, hasher: Box<dyn Hasher>, config: TreeConfig) -> Self {
-        assert!(
-            config.log_arity >= 2,
-            "log arity must be >= 2"
-        );
+        assert!(config.log_arity >= 2, "log arity must be >= 2");
         Self {
             storage,
             hasher,
@@ -116,7 +113,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 children.push(
                     self.frontier
                         .pop()
-                        .expect("frontier stack underflow during reduction")
+                        .expect("frontier stack underflow during reduction"),
                 );
             }
             children.reverse();
@@ -151,7 +148,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 children.push(
                     self.frontier
                         .pop()
-                        .expect("frontier stack underflow during reduction")
+                        .expect("frontier stack underflow during reduction"),
                 );
             }
             children.reverse();
