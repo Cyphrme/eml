@@ -347,6 +347,7 @@ dependencies = [
  "cyphr-malt",
  "fjall",
  "sha2",
+ "smol",
  "tempfile",
  "thiserror",
 ]

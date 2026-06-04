@@ -67,13 +67,13 @@ impl FjallStorage {
 impl Storage for FjallStorage {
     type Error = FjallStorageError;
 
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
         let key = index.to_be_bytes();
         self.leaves.insert(key, data)?;
         Ok(())
     }
 
-    fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         let key = index.to_be_bytes();
         let value = self.leaves.get(key)?;
         match value {
@@ -85,7 +85,7 @@ impl Storage for FjallStorage {
         }
     }
 
-    fn len(&self) -> u64 {
+    async fn len(&self) -> u64 {
         if let Some(guard) = self.leaves.iter().next_back() {
             if let Ok(key_bytes) = guard.key() {
                 if let Ok(arr) = key_bytes.as_ref().try_into() {
@@ -96,7 +96,12 @@ impl Storage for FjallStorage {
         0
     }
 
-    fn store_node(&mut self, alg_id: u64, node_id: u64, hash: &[u8]) -> Result<(), Self::Error> {
+    async fn store_node(
+        &mut self,
+        alg_id: u64,
+        node_id: u64,
+        hash: &[u8],
+    ) -> Result<(), Self::Error> {
         let mut key = [0u8; 16];
         key[0..8].copy_from_slice(&alg_id.to_be_bytes());
         key[8..16].copy_from_slice(&node_id.to_be_bytes());
@@ -105,7 +110,7 @@ impl Storage for FjallStorage {
         Ok(())
     }
 
-    fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error> {
+    async fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error> {
         let mut key = [0u8; 16];
         key[0..8].copy_from_slice(&alg_id.to_be_bytes());
         key[8..16].copy_from_slice(&node_id.to_be_bytes());
@@ -114,7 +119,7 @@ impl Storage for FjallStorage {
         Ok(value.map(|bytes| bytes.to_vec()))
     }
 
-    fn store_algorithm_meta(
+    async fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
@@ -129,7 +134,7 @@ impl Storage for FjallStorage {
         Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         let mut metas = Vec::new();
         for item in self.metadata.iter() {
             let (key_bytes, val_bytes) = item.into_inner()?;
