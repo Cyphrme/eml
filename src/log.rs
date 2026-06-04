@@ -2235,6 +2235,57 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_analogy_malt_eml_equivalence() {
+        smol::block_on(async {
+            // EML side:
+            let mut log = Log::new(MemoryStorage::new());
+            log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap(); // Alg 0 (Target/EML)
+            log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap(); // Alg 1 (Keeper)
+
+            // Append first 4 active elements
+            for i in 0..4u8 {
+                log.append(&[i]).await.unwrap();
+            }
+
+            // Deactivate Alg 0 (EML)
+            log.remove_algorithm(0).await.unwrap();
+
+            // Append 10 elements during the gap (Alg 0 is frozen, Alg 1 remains active)
+            for i in 4..14u8 {
+                log.append(&[i]).await.unwrap();
+            }
+
+            // Reactivate Alg 0 (EML)
+            log.resume_algorithm(0).await.unwrap();
+
+            // Append last 4 active elements
+            for i in 14..18u8 {
+                log.append(&[i]).await.unwrap();
+            }
+
+            let eml_root = log.root(0).unwrap();
+
+            // MALT side: We build a standard RFC 9162 tree over the leaves manually.
+            let hasher = Sha256Hasher;
+            let mut malt_leaves = Vec::new();
+            for i in 0..18u8 {
+                if i >= 4 && i < 14 {
+                    malt_leaves.push(hasher.null()); // Null Leaf Hash representing the gap
+                } else {
+                    malt_leaves.push(hasher.leaf(&[i])); // Active Leaf Hash
+                }
+            }
+
+            // Compute standard RFC 9162 Merkle Tree Hash over MALT leaves
+            let malt_root = crate::proof::mth(&hasher, &malt_leaves);
+
+            // Assert they are mathematically equivalent
+            assert_eq!(eml_root, malt_root, "EML root and MALT root are not identical!");
+        });
+    }
+
+
     #[derive(Debug)]
     struct TrackingStorage {
         inner: MemoryStorage,
