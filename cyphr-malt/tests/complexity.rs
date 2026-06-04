@@ -41,13 +41,15 @@ impl Hasher for Sha256Hasher {
 }
 
 fn make_log(n: usize) -> Arc<NaryMerkleLog<MemoryStorage>> {
-    let storage = MemoryStorage::new();
-    let config = TreeConfig { log_arity: 2 };
-    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config);
-    for i in 0..n {
-        log.append_leaf(&(i as u64).to_le_bytes()).unwrap();
-    }
-    Arc::new(log)
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+        for i in 0..n {
+            log.append_leaf(&(i as u64).to_le_bytes()).await.unwrap();
+        }
+        Arc::new(log)
+    })
 }
 
 #[test]
@@ -55,12 +57,14 @@ fn complexity_inclusion_proof_log_n() {
     assert_best_fit(
         LogModel(N),
         |log: Arc<NaryMerkleLog<MemoryStorage>>| {
-            let mut proof = None;
-            let ts = log.size();
-            for _ in 0..100 {
-                proof = Some(log.inclusion_proof(0, ts / 2).unwrap());
-            }
-            proof.unwrap()
+            smol::block_on(async {
+                let mut proof = None;
+                let ts = log.size();
+                for _ in 0..100 {
+                    proof = Some(log.inclusion_proof(0, ts / 2).await.unwrap());
+                }
+                proof.unwrap()
+            })
         },
         growing_inputs(100, make_log, 25),
     );
@@ -71,12 +75,14 @@ fn complexity_consistency_proof_log_n() {
     assert_best_fit(
         LogModel(N),
         |log: Arc<NaryMerkleLog<MemoryStorage>>| {
-            let mut proof = None;
-            let ts = log.size();
-            for _ in 0..100 {
-                proof = Some(log.consistency_proof(ts / 2, ts).unwrap());
-            }
-            proof.unwrap()
+            smol::block_on(async {
+                let mut proof = None;
+                let ts = log.size();
+                for _ in 0..100 {
+                    proof = Some(log.consistency_proof(ts / 2, ts).await.unwrap());
+                }
+                proof.unwrap()
+            })
         },
         growing_inputs(100, make_log, 25),
     );
@@ -125,19 +131,22 @@ fn complexity_append_amortized_constant() {
     for &n in sizes {
         let mut times = Vec::with_capacity(trials);
         for _ in 0..trials {
-            let mut log = NaryMerkleLog::new(
-                MemoryStorage::new(),
-                Box::new(Sha256Hasher),
-                TreeConfig { log_arity: 2 },
-            );
-            for i in 0..n {
-                log.append_leaf(&(i as u64).to_le_bytes()).unwrap();
-            }
-            let start = ThreadTime::now();
-            for i in n..(n + batch) {
-                log.append_leaf(&(i as u64).to_le_bytes()).unwrap();
-            }
-            times.push(start.elapsed().as_nanos());
+            smol::block_on(async {
+                let mut log = NaryMerkleLog::new(
+                    MemoryStorage::new(),
+                    Box::new(Sha256Hasher),
+                    TreeConfig { log_arity: 2 },
+                )
+                .await;
+                for i in 0..n {
+                    log.append_leaf(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                let start = ThreadTime::now();
+                for i in n..(n + batch) {
+                    log.append_leaf(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                times.push(start.elapsed().as_nanos());
+            });
         }
         let per_append = median(&mut times) as f64 / batch as f64;
         data.push((n as f64, per_append));
@@ -156,22 +165,25 @@ fn complexity_resume_algorithm_log_n() {
     for &g in gaps {
         let mut times = Vec::with_capacity(trials);
         for _ in 0..trials {
-            let mut log = NaryMerkleLog::new(
-                MemoryStorage::new(),
-                Box::new(Sha256Hasher),
-                TreeConfig { log_arity: 2 },
-            );
-            log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
-            for i in 0..base_size {
-                log.append_leaf(&(i as u64).to_le_bytes()).unwrap();
-            }
-            log.remove_algorithm(1).unwrap();
-            for i in base_size..(base_size + g) {
-                log.append_leaf(&(i as u64).to_le_bytes()).unwrap();
-            }
-            let start = ThreadTime::now();
-            log.resume_algorithm(1).unwrap();
-            times.push(start.elapsed().as_nanos());
+            smol::block_on(async {
+                let mut log = NaryMerkleLog::new(
+                    MemoryStorage::new(),
+                    Box::new(Sha256Hasher),
+                    TreeConfig { log_arity: 2 },
+                )
+                .await;
+                log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+                for i in 0..base_size {
+                    log.append_leaf(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                log.remove_algorithm(1).await.unwrap();
+                for i in base_size..(base_size + g) {
+                    log.append_leaf(&(i as u64).to_le_bytes()).await.unwrap();
+                }
+                let start = ThreadTime::now();
+                log.resume_algorithm(1).await.unwrap();
+                times.push(start.elapsed().as_nanos());
+            });
         }
         data.push((g as f64, median(&mut times) as f64));
     }

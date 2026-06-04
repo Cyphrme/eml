@@ -331,7 +331,7 @@ The logical model and in-memory implementation of EML are stable and formally ve
 
 Copyright © 2026 [Cyphrme](https://github.com/Cyphrme). All rights reserved.
 
-This source code is distributed under an interim license that permits non-commercial, personal, academic, or research use. Commercial use is strictly prohibited. See the [LICENSE](file:///var/home/nrd/git/github.com/Cyphrme/eml/LICENSE) file for the complete terms.
+This source code is distributed under an interim license that permits non-commercial, personal, academic, or research use. Commercial use is strictly prohibited. See the [LICENSE](./LICENSE) file for the complete terms.
 
 [rfc9162]: https://datatracker.ietf.org/doc/html/rfc9162
 [proptest]: https://crates.io/crates/proptest

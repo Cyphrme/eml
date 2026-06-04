@@ -155,7 +155,12 @@ impl Storage for MemoryStorage {
         self.leaves.len() as u64
     }
 
-    async fn store_node(&mut self, alg_id: u64, node_id: u64, hash: &[u8]) -> Result<(), Self::Error> {
+    async fn store_node(
+        &mut self,
+        alg_id: u64,
+        node_id: u64,
+        hash: &[u8],
+    ) -> Result<(), Self::Error> {
         self.nodes.insert((alg_id, node_id), hash.to_vec());
         Ok(())
     }

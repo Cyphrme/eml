@@ -172,7 +172,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                 &epochs,
                 global_size,
                 k,
-            ).await?;
+            )
+            .await?;
             algs.insert(alg_id, state);
         }
 
@@ -411,7 +412,11 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Register a new algorithm, activating it at the current tree size.
-    pub async fn add_algorithm(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) -> Result<(), S::Error> {
+    pub async fn add_algorithm(
+        &mut self,
+        alg_id: u64,
+        hasher: Box<dyn Hasher>,
+    ) -> Result<(), S::Error> {
         if self.algs.contains_key(&alg_id) {
             return Err(crate::error::Error::DuplicateAlgorithm(alg_id));
         }
@@ -525,7 +530,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                 left + cap,
                 k,
                 true,
-            ).await?;
+            )
+            .await?;
             frontier.push(hash);
         }
 
@@ -543,129 +549,140 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Recursively resolve a subtree root and collect mixed boundary nodes.
-    async fn reconstruct_subtree_root(
-        storage: &mut S,
+    #[allow(clippy::type_complexity)]
+    fn reconstruct_subtree_root<'a>(
+        storage: &'a mut S,
         alg_id: u64,
-        state: &AlgState,
+        state: &'a AlgState,
         lo: u64,
         hi: u64,
         k: u64,
         store_mixed: bool,
-    ) -> Result<Vec<u8>, S::Error> {
-        let size = hi - lo;
-        if size == 0 {
-            return Ok(state.hasher.empty());
-        }
-        if size == 1 {
-            if state.is_active_at(lo) {
-                if storage.len().await == 0 {
-                    let node_id = lo << 16;
-                    if let Some(hash) = storage
-                        .get_node(alg_id, node_id)
-                        .await
-                        .map_err(crate::error::Error::Storage)?
-                    {
-                        return Ok(hash);
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, S::Error>> + Send + 'a>>
+    where
+        S: 'a,
+    {
+        Box::pin(async move {
+            let size = hi - lo;
+            if size == 0 {
+                return Ok(state.hasher.empty());
+            }
+            if size == 1 {
+                if state.is_active_at(lo) {
+                    if storage.len().await == 0 {
+                        let node_id = lo << 16;
+                        if let Some(hash) = storage
+                            .get_node(alg_id, node_id)
+                            .await
+                            .map_err(crate::error::Error::Storage)?
+                        {
+                            return Ok(hash);
+                        } else {
+                            return Ok(state.hasher.null());
+                        }
                     } else {
-                        return Ok(state.hasher.null());
+                        let data = storage
+                            .get_leaf(lo)
+                            .await
+                            .map_err(crate::error::Error::Storage)?;
+                        return Ok(state.hasher.leaf(&data));
                     }
-                } else {
-                    let data = storage.get_leaf(lo).await.map_err(crate::error::Error::Storage)?;
-                    return Ok(state.hasher.leaf(&data));
                 }
+                return Ok(state.hasher.null());
             }
-            return Ok(state.hasher.null());
-        }
 
-        if !state.active_range(lo, hi) {
-            return Ok(state.hasher.null());
-        }
-
-        let is_power_of_k = {
-            let mut temp = size;
-            while temp % k == 0 {
-                temp /= k;
+            if !state.active_range(lo, hi) {
+                return Ok(state.hasher.null());
             }
-            temp == 1
-        };
 
-        if is_power_of_k {
-            let height = {
-                let mut h = 0;
+            let is_power_of_k = {
                 let mut temp = size;
-                while temp > 1 {
+                while temp % k == 0 {
                     temp /= k;
-                    h += 1;
                 }
-                h as u32
+                temp == 1
             };
-            let node_id = (lo << 16) | (height as u64 & 0xFFFF);
-            if let Some(hash) = storage
-                .get_node(alg_id, node_id)
-                .await
-                .map_err(crate::error::Error::Storage)?
-            {
-                return Ok(hash);
-            }
 
-            let child_size = size / k;
-            let mut child_hashes = Vec::with_capacity(k as usize);
-            for j in 0..k {
-                let c_lo = lo + j * child_size;
-                let c_hi = lo + (j + 1) * child_size;
-                let child_hash = Self::reconstruct_subtree_root(
-                    storage,
-                    alg_id,
-                    state,
-                    c_lo,
-                    c_hi,
-                    k,
-                    store_mixed,
-                ).await?;
-                child_hashes.push(child_hash);
-            }
-            let child_refs: Vec<&[u8]> = child_hashes.iter().map(|c| c.as_slice()).collect();
-            let hash = nary_mr(state.hasher.as_ref(), &child_refs);
-
-            if store_mixed {
-                storage
-                    .store_node(alg_id, node_id, &hash)
+            if is_power_of_k {
+                let height = {
+                    let mut h = 0;
+                    let mut temp = size;
+                    while temp > 1 {
+                        temp /= k;
+                        h += 1;
+                    }
+                    h as u32
+                };
+                let node_id = (lo << 16) | (height as u64 & 0xFFFF);
+                if let Some(hash) = storage
+                    .get_node(alg_id, node_id)
                     .await
-                    .map_err(crate::error::Error::Storage)?;
-            }
-            Ok(hash)
-        } else {
-            let coords = frontier_for_size(size, k);
-            let mut component_hashes = Vec::with_capacity(coords.len());
-            for &(part_left, part_height) in &coords {
-                let cap = k.pow(part_height);
-                let c_lo = lo + part_left;
-                let c_hi = c_lo + cap;
-                let part_root = Self::reconstruct_subtree_root(
-                    storage,
-                    alg_id,
-                    state,
-                    c_lo,
-                    c_hi,
-                    k,
-                    store_mixed,
-                ).await?;
-                component_hashes.push(part_root);
-            }
+                    .map_err(crate::error::Error::Storage)?
+                {
+                    return Ok(hash);
+                }
 
-            let mut current = component_hashes;
-            let k_usize = k as usize;
-            while current.len() > k_usize {
-                let split_idx = current.len() - k_usize;
-                let right_elements = &current[split_idx..];
-                let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-                let merged = nary_mr(state.hasher.as_ref(), &refs);
-                current.truncate(split_idx);
-                current.push(merged);
+                let child_size = size / k;
+                let mut child_hashes = Vec::with_capacity(k as usize);
+                for j in 0..k {
+                    let c_lo = lo + j * child_size;
+                    let c_hi = lo + (j + 1) * child_size;
+                    let child_hash = Self::reconstruct_subtree_root(
+                        storage,
+                        alg_id,
+                        state,
+                        c_lo,
+                        c_hi,
+                        k,
+                        store_mixed,
+                    )
+                    .await?;
+                    child_hashes.push(child_hash);
+                }
+                let child_refs: Vec<&[u8]> = child_hashes.iter().map(|c| c.as_slice()).collect();
+                let hash = nary_mr(state.hasher.as_ref(), &child_refs);
+
+                if store_mixed {
+                    storage
+                        .store_node(alg_id, node_id, &hash)
+                        .await
+                        .map_err(crate::error::Error::Storage)?;
+                }
+                Ok(hash)
+            } else {
+                let coords = frontier_for_size(size, k);
+                let mut component_hashes = Vec::with_capacity(coords.len());
+                for &(part_left, part_height) in &coords {
+                    let cap = k.pow(part_height);
+                    let c_lo = lo + part_left;
+                    let c_hi = c_lo + cap;
+                    let part_root = Self::reconstruct_subtree_root(
+                        storage,
+                        alg_id,
+                        state,
+                        c_lo,
+                        c_hi,
+                        k,
+                        store_mixed,
+                    )
+                    .await?;
+                    component_hashes.push(part_root);
+                }
+
+                let mut current = component_hashes;
+                let k_usize = k as usize;
+                while current.len() > k_usize {
+                    let split_idx = current.len() - k_usize;
+                    let right_elements = &current[split_idx..];
+                    let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
+                    let merged = nary_mr(state.hasher.as_ref(), &refs);
+                    current.truncate(split_idx);
+                    current.push(merged);
+                }
+                let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+                Ok(nary_mr(state.hasher.as_ref(), &refs))
             }
-            let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-            Ok(nary_mr(state.hasher.as_ref(), &refs))
-        }
+        })
     }
 
     /// Append a single leaf to the log (State Tree Mode).
@@ -850,7 +867,12 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Retrieve a node hash from storage, or return the null constant if it's inactive.
-    async fn get_node_hash(&self, alg_id: u64, left: u64, height: u32) -> Result<Vec<u8>, S::Error> {
+    async fn get_node_hash(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+    ) -> Result<Vec<u8>, S::Error> {
         let state = self
             .algs
             .get(&alg_id)
@@ -922,7 +944,8 @@ impl<S: Storage> NaryMerkleLog<S> {
         };
 
         let mut path = Vec::new();
-        self.log_level_bisection_path_to_height(alg_id, left, height, index, 0, &mut path).await?;
+        self.log_level_bisection_path_to_height(alg_id, left, height, index, 0, &mut path)
+            .await?;
         path.reverse();
 
         let mut hashes = Vec::with_capacity(coords.len());
@@ -1050,7 +1073,9 @@ impl<S: Storage> NaryMerkleLog<S> {
             .last()
             .expect("old_coords cannot be empty since old_size > 0");
 
-        let start_hash = self.get_node_hash(alg_id, boundary_left, boundary_height).await?;
+        let start_hash = self
+            .get_node_hash(alg_id, boundary_left, boundary_height)
+            .await?;
 
         let new_coords = frontier_for_size(new_size, k);
         let mut target_new_f_idx = None;
@@ -1079,7 +1104,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             boundary_left,
             boundary_height,
             &mut path,
-        ).await?;
+        )
+        .await?;
         path.reverse();
 
         let mut hashes = Vec::with_capacity(new_coords.len());

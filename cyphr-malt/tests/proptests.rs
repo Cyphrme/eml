@@ -246,12 +246,12 @@ fn recursive_subtree_root(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> 
 }
 
 // Read leaf projection for given algorithm
-fn project<S: cyphr_malt::Storage>(
+async fn project<S: cyphr_malt::Storage>(
     log: &NaryMerkleLog<S>,
     alg_id: u64,
     hasher: &dyn Hasher,
 ) -> Vec<Vec<u8>> {
-    let metas = log.storage().load_algorithm_metas().unwrap();
+    let metas = log.storage().load_algorithm_metas().await.unwrap();
     let epochs = metas
         .iter()
         .find(|(id, _)| *id == alg_id)
@@ -275,11 +275,16 @@ fn project<S: cyphr_malt::Storage>(
         let active = epochs.iter().any(|&(start, end)| start <= i && i < end);
         if active {
             if log.size() > 0 {
-                let data = log.storage().get_leaf(i).unwrap();
+                let data = log.storage().get_leaf(i).await.unwrap();
                 leaves.push(hasher.leaf(&data));
             } else {
                 let node_id = i << 16;
-                let hash = log.storage().get_node(alg_id, node_id).unwrap().unwrap();
+                let hash = log
+                    .storage()
+                    .get_node(alg_id, node_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 leaves.push(hash);
             }
         } else {
@@ -289,20 +294,20 @@ fn project<S: cyphr_malt::Storage>(
     leaves
 }
 
-fn build_log(size: usize, activation: usize, k: usize) -> NaryMerkleLog<MemoryStorage> {
+async fn build_log(size: usize, activation: usize, k: usize) -> NaryMerkleLog<MemoryStorage> {
     let config = TreeConfig { log_arity: k };
-    let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config);
+    let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config).await;
 
     if activation > 0 {
-        log.add_algorithm(99, Box::new(Sha256Hasher)).unwrap();
-        log.remove_algorithm(0).unwrap();
+        log.add_algorithm(99, Box::new(Sha256Hasher)).await.unwrap();
+        log.remove_algorithm(0).await.unwrap();
     }
 
     for i in 0..size {
         if i == activation && activation > 0 {
-            log.resume_algorithm(0).unwrap();
+            log.resume_algorithm(0).await.unwrap();
         }
-        log.append_leaf(&[i as u8]).unwrap();
+        log.append_leaf(&[i as u8]).await.unwrap();
     }
 
     log
@@ -335,14 +340,17 @@ proptest! {
         k in 2usize..5,
         act_frac in 0.0f64..1.0,
     ) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation, k);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation, k).await;
 
-        let projected = project(&log, 0, &Sha256Hasher);
-        let incremental = log.root_for(0).unwrap();
-        let batch = nary_mth(&Sha256Hasher, &projected, k);
+            let projected = project(&log, 0, &Sha256Hasher).await;
+            let incremental = log.root_for(0).unwrap();
+            let batch = nary_mth(&Sha256Hasher, &projected, k);
 
-        prop_assert_eq!(incremental, batch);
+            prop_assert_eq!(incremental, batch);
+            Ok(())
+        })?;
     }
 
     #[test]
@@ -351,14 +359,17 @@ proptest! {
         k in 2usize..5,
         act_frac in 0.0f64..1.0,
     ) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation, k);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation, k).await;
 
-        let projected = project(&log, 0, &Sha256Hasher);
-        let incremental = log.root_for(0).unwrap();
-        let recursive = recursive_subtree_root(&Sha256Hasher, &projected, k);
+            let projected = project(&log, 0, &Sha256Hasher).await;
+            let incremental = log.root_for(0).unwrap();
+            let recursive = recursive_subtree_root(&Sha256Hasher, &projected, k);
 
-        prop_assert_eq!(incremental, recursive);
+            prop_assert_eq!(incremental, recursive);
+            Ok(())
+        })?;
     }
 
     #[test]
@@ -368,26 +379,29 @@ proptest! {
         act_frac in 0.0f64..1.0,
         idx_frac in 0.0f64..1.0,
     ) {
-        let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
-        let log = build_log(size, activation, k);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).min(size.saturating_sub(1));
+            let log = build_log(size, activation, k).await;
 
-        let ts = log.size();
-        let index = ((idx_frac * ts as f64) as u64).min(ts - 1);
+            let ts = log.size();
+            let index = ((idx_frac * ts as f64) as u64).min(ts - 1);
 
-        let root = log.root_for(0).unwrap();
-        let projected = project(&log, 0, &Sha256Hasher);
-        let proof = log.inclusion_proof_for(0, index, ts).unwrap().unwrap();
+            let root = log.root_for(0).unwrap();
+            let projected = project(&log, 0, &Sha256Hasher).await;
+            let proof = log.inclusion_proof_for(0, index, ts).await.unwrap().unwrap();
 
-        prop_assert!(
-            verify_inclusion(&Sha256Hasher, &projected[index as usize], &proof, &root),
-            "I-SOUND-MALT failed to verify valid proof"
-        );
+            prop_assert!(
+                verify_inclusion(&Sha256Hasher, &projected[index as usize], &proof, &root),
+                "I-SOUND-MALT failed to verify valid proof"
+            );
 
-        let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA");
-        prop_assert!(
-            !verify_inclusion(&Sha256Hasher, &wrong, &proof, &root),
-            "I-SOUND-MALT accepted invalid forged leaf"
-        );
+            let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA");
+            prop_assert!(
+                !verify_inclusion(&Sha256Hasher, &wrong, &proof, &root),
+                "I-SOUND-MALT accepted invalid forged leaf"
+            );
+            Ok(())
+        })?;
     }
 
     #[test]
@@ -396,20 +410,23 @@ proptest! {
         k in 2usize..5,
         old_frac in 0.0f64..1.0,
     ) {
-        let log = build_log(size, 0, k);
-        let ts = log.size();
-        let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
+        smol::block_on(async {
+            let log = build_log(size, 0, k).await;
+            let ts = log.size();
+            let old_size = ((old_frac * (ts - 1) as f64) as u64).max(1).min(ts - 1);
 
-        let old_log = build_log(old_size as usize, 0, k);
-        let old_root = old_log.root_for(0).unwrap();
-        let new_root = log.root_for(0).unwrap();
+            let old_log = build_log(old_size as usize, 0, k).await;
+            let old_root = old_log.root_for(0).unwrap();
+            let new_root = log.root_for(0).unwrap();
 
-        let proof = log.consistency_proof_for(0, old_size, ts).unwrap().unwrap();
+            let proof = log.consistency_proof_for(0, old_size, ts).await.unwrap().unwrap();
 
-        prop_assert!(
-            verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
-            "K-SOUND-MALT failed to verify consistency proof"
-        );
+            prop_assert!(
+                verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
+                "K-SOUND-MALT failed to verify consistency proof"
+            );
+            Ok(())
+        })?;
     }
 
     #[test]
@@ -419,19 +436,22 @@ proptest! {
         act_frac in 0.01f64..1.0,
         payload in proptest::collection::vec(any::<u8>(), 1..32),
     ) {
-        let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
-        let log = build_log(size, activation, k);
+        smol::block_on(async {
+            let activation = ((act_frac * size as f64) as usize).max(1).min(size.saturating_sub(1));
+            let log = build_log(size, activation, k).await;
 
-        let root = log.root_for(0).unwrap();
-        let null_idx = activation.saturating_sub(1) as u64;
+            let root = log.root_for(0).unwrap();
+            let null_idx = activation.saturating_sub(1) as u64;
 
-        let forged = Sha256Hasher.leaf(&payload);
-        let proof = log.inclusion_proof_for(0, null_idx, log.size()).unwrap().unwrap();
+            let forged = Sha256Hasher.leaf(&payload);
+            let proof = log.inclusion_proof_for(0, null_idx, log.size()).await.unwrap().unwrap();
 
-        prop_assert!(
-            !verify_inclusion(&Sha256Hasher, &forged, &proof, &root),
-            "T-BOUND-MALT accepted forged leaf at null position"
-        );
+            prop_assert!(
+                !verify_inclusion(&Sha256Hasher, &forged, &proof, &root),
+                "T-BOUND-MALT accepted forged leaf at null position"
+            );
+            Ok(())
+        })?;
     }
 }
 
@@ -471,12 +491,12 @@ fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
     ]
 }
 
-fn check_state_invariants<S: cyphr_malt::Storage>(
+async fn check_state_invariants<S: cyphr_malt::Storage>(
     log: &NaryMerkleLog<S>,
     frozen_roots: &BTreeMap<u64, Vec<u8>>,
     k: usize,
 ) -> Result<(), proptest::test_runner::TestCaseError> {
-    let metas = log.storage().load_algorithm_metas().unwrap();
+    let metas = log.storage().load_algorithm_metas().await.unwrap();
     let size = if log.size() > 0 {
         log.size()
     } else {
@@ -492,7 +512,7 @@ fn check_state_invariants<S: cyphr_malt::Storage>(
             epochs.last().map_or(0, |&(_, end)| end)
         };
 
-        let projected = project(log, alg_id, hasher.as_ref());
+        let projected = project(log, alg_id, hasher.as_ref()).await;
 
         // A-STACK: projected len == tree_size
         prop_assert_eq!(projected.len() as u64, tree_size);
@@ -526,6 +546,7 @@ fn check_state_invariants<S: cyphr_malt::Storage>(
             for idx in sample_indices {
                 let proof = log
                     .inclusion_proof_for(alg_id, idx, tree_size)
+                    .await
                     .unwrap()
                     .unwrap();
                 prop_assert!(verify_inclusion(
@@ -543,6 +564,7 @@ fn check_state_invariants<S: cyphr_malt::Storage>(
 
                 let proof = log
                     .consistency_proof_for(alg_id, old_size, tree_size)
+                    .await
                     .unwrap()
                     .unwrap();
                 prop_assert!(verify_consistency(
@@ -567,78 +589,98 @@ proptest! {
         k in 2usize..4,
         is_state_mode in any::<bool>(),
     ) {
-        let config = TreeConfig { log_arity: k };
-        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config);
+        smol::block_on(async {
+            let config = TreeConfig { log_arity: k };
+            let mut log = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                config,
+            )
+            .await;
 
-        // Seed with algs
-        log.add_algorithm(1, new_hasher_for(1)).unwrap();
-        log.add_algorithm(2, new_hasher_for(2)).unwrap();
+            // Seed with algs
+            log.add_algorithm(1, new_hasher_for(1)).await.unwrap();
+            log.add_algorithm(2, new_hasher_for(2)).await.unwrap();
 
-        let mut frozen_roots = BTreeMap::new();
+            let mut frozen_roots = BTreeMap::new();
 
-        for op in ops {
-            match op {
-                Op::AppendLeaf(data) => {
-                    let has_active = log.storage().load_algorithm_metas().unwrap()
-                        .iter()
-                        .any(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end == u64::MAX));
-                    if has_active {
-                        if is_state_mode {
-                            log.append_leaf(&data).unwrap();
-                        } else {
-                            log.append_subtree(&Subtree::Leaf(data)).unwrap();
+            for op in ops {
+                match op {
+                    Op::AppendLeaf(data) => {
+                        let has_active = log
+                            .storage()
+                            .load_algorithm_metas()
+                            .await
+                            .unwrap()
+                            .iter()
+                            .any(|(_, epochs)| {
+                                epochs.last().is_some_and(|&(_, end)| end == u64::MAX)
+                            });
+                        if has_active {
+                            if is_state_mode {
+                                log.append_leaf(&data).await.unwrap();
+                            } else {
+                                log.append_subtree(&Subtree::Leaf(data)).await.unwrap();
+                            }
+                        }
+                    }
+                    Op::AppendSubtree(subtree) => {
+                        let has_active = log
+                            .storage()
+                            .load_algorithm_metas()
+                            .await
+                            .unwrap()
+                            .iter()
+                            .any(|(_, epochs)| {
+                                epochs.last().is_some_and(|&(_, end)| end == u64::MAX)
+                            });
+                        if has_active {
+                            if is_state_mode {
+                                let data = evaluate(&Sha256Hasher, &subtree);
+                                log.append_leaf(&data).await.unwrap();
+                            } else {
+                                log.append_subtree(&subtree).await.unwrap();
+                            }
+                        }
+                    }
+                    Op::AddAlg(id) => {
+                        let exists = log.storage().load_algorithm_metas().await.unwrap()
+                            .iter()
+                            .any(|(alg_id, _)| *alg_id == id);
+                        if !exists {
+                            log.add_algorithm(id, new_hasher_for(id)).await.unwrap();
+                        }
+                    }
+                    Op::RemoveAlg(id) => {
+                        let active = log.storage().load_algorithm_metas().await.unwrap()
+                            .iter()
+                            .find(|(alg_id, _)| *alg_id == id)
+                            .is_some_and(|(_, epochs)| {
+                                epochs.last().is_some_and(|&(_, end)| end == u64::MAX)
+                            });
+                        if active {
+                            let root = log.root_for(id).unwrap();
+                            log.remove_algorithm(id).await.unwrap();
+                            frozen_roots.insert(id, root);
+                        }
+                    }
+                    Op::ResumeAlg(id) => {
+                        let frozen = log.storage().load_algorithm_metas().await.unwrap()
+                            .iter()
+                            .find(|(alg_id, _)| *alg_id == id)
+                            .is_some_and(|(_, epochs)| {
+                                epochs.last().is_some_and(|&(_, end)| end != u64::MAX)
+                            });
+                        if frozen {
+                            log.resume_algorithm(id).await.unwrap();
+                            frozen_roots.remove(&id);
                         }
                     }
                 }
-                Op::AppendSubtree(subtree) => {
-                    let has_active = log.storage().load_algorithm_metas().unwrap()
-                        .iter()
-                        .any(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end == u64::MAX));
-                    if has_active {
-                        if is_state_mode {
-                            let data = evaluate(&Sha256Hasher, &subtree);
-                            log.append_leaf(&data).unwrap();
-                        } else {
-                            log.append_subtree(&subtree).unwrap();
-                        }
-                    }
-                }
-                Op::AddAlg(id) => {
-                    let exists = log.storage().load_algorithm_metas().unwrap()
-                        .iter()
-                        .any(|(alg_id, _)| *alg_id == id);
-                    if !exists {
-                        log.add_algorithm(id, new_hasher_for(id)).unwrap();
-                    }
-                }
-                Op::RemoveAlg(id) => {
-                    let active = log.storage().load_algorithm_metas().unwrap()
-                        .iter()
-                        .find(|(alg_id, _)| *alg_id == id)
-                        .is_some_and(|(_, epochs)| {
-                            epochs.last().is_some_and(|&(_, end)| end == u64::MAX)
-                        });
-                    if active {
-                        let root = log.root_for(id).unwrap();
-                        log.remove_algorithm(id).unwrap();
-                        frozen_roots.insert(id, root);
-                    }
-                }
-                Op::ResumeAlg(id) => {
-                    let frozen = log.storage().load_algorithm_metas().unwrap()
-                        .iter()
-                        .find(|(alg_id, _)| *alg_id == id)
-                        .is_some_and(|(_, epochs)| {
-                            epochs.last().is_some_and(|&(_, end)| end != u64::MAX)
-                        });
-                    if frozen {
-                        log.resume_algorithm(id).unwrap();
-                        frozen_roots.remove(&id);
-                    }
-                }
+
+                check_state_invariants(&log, &frozen_roots, k).await?;
             }
-
-            check_state_invariants(&log, &frozen_roots, k)?;
-        }
+            Ok::<(), proptest::test_runner::TestCaseError>(())
+        })?;
     }
 }
