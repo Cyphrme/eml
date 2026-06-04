@@ -100,8 +100,7 @@ pub struct NaryMerkleLog<S: Storage> {
 
 impl<S: Storage> NaryMerkleLog<S> {
     /// Create a new empty n-ary Merkle log.
-    #[must_use]
-    pub fn new(storage: S, hasher: Box<dyn Hasher>, config: TreeConfig) -> Self {
+    pub async fn new(storage: S, hasher: Box<dyn Hasher>, config: TreeConfig) -> Self {
         assert!(config.log_arity >= 2, "log arity must be >= 2");
         let mut log = Self {
             storage,
@@ -111,7 +110,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             commit_count: 0,
         };
         // Eagerly register algorithm 0 as active from index 0
-        log.add_algorithm(0, hasher).unwrap_or_else(|_| {
+        log.add_algorithm(0, hasher).await.unwrap_or_else(|_| {
             panic!("failed to initialize default algorithm");
         });
         log
@@ -122,11 +121,11 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// # Errors
     ///
     /// Returns a storage error or validation error if the reconstruction fails.
-    pub fn from_storage(
+    pub async fn from_storage(
         storage: S,
         hashers: Vec<(u64, Box<dyn Hasher>)>,
     ) -> Result<Self, S::Error> {
-        Self::from_storage_with_config(storage, hashers, TreeConfig::default())
+        Self::from_storage_with_config(storage, hashers, TreeConfig::default()).await
     }
 
     /// Reconstruct an existing Merkle log from storage with a specific configuration.
@@ -134,13 +133,14 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// # Errors
     ///
     /// Returns a storage error or validation error if the reconstruction fails.
-    pub fn from_storage_with_config(
+    pub async fn from_storage_with_config(
         storage: S,
         hashers: Vec<(u64, Box<dyn Hasher>)>,
         config: TreeConfig,
     ) -> Result<Self, S::Error> {
         let metas = storage
             .load_algorithm_metas()
+            .await
             .map_err(crate::error::Error::Storage)?;
 
         let mut hasher_map: std::collections::HashMap<u64, Box<dyn Hasher>> =
@@ -159,7 +159,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         }
 
-        let global_size = Self::determine_global_size(&storage, &metas)?;
+        let global_size = Self::determine_global_size(&storage, &metas).await?;
 
         let mut algs = std::collections::HashMap::new();
         let k = config.log_arity as u64;
@@ -172,12 +172,12 @@ impl<S: Storage> NaryMerkleLog<S> {
                 &epochs,
                 global_size,
                 k,
-            )?;
+            ).await?;
             algs.insert(alg_id, state);
         }
 
         // Determine if we are in Commit Tree Mode or State Tree Mode.
-        let is_state_mode = storage.len() > 0;
+        let is_state_mode = storage.len().await > 0;
         let size = if is_state_mode { global_size } else { 0 };
         let commit_count = if is_state_mode { 0 } else { global_size };
 
@@ -191,11 +191,11 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Probe storage to find the current global size.
-    fn determine_global_size(
+    async fn determine_global_size(
         storage: &S,
         metas: &[(u64, Vec<(u64, u64)>)],
     ) -> Result<u64, S::Error> {
-        let leaf_len = storage.len();
+        let leaf_len = storage.len().await;
         if leaf_len > 0 {
             return Ok(leaf_len);
         }
@@ -224,6 +224,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let node_id = high << 16;
             if storage
                 .get_node(alg_id, node_id)
+                .await
                 .map_err(crate::error::Error::Storage)?
                 .is_none()
             {
@@ -247,6 +248,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let node_id = mid << 16;
             if storage
                 .get_node(alg_id, node_id)
+                .await
                 .map_err(crate::error::Error::Storage)?
                 .is_some()
             {
@@ -260,7 +262,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Reconstruct algorithm state from storage.
-    fn reconstruct_algorithm_state(
+    async fn reconstruct_algorithm_state(
         storage: &S,
         alg_id: u64,
         hasher: Box<dyn Hasher>,
@@ -298,6 +300,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let node_id = (left << 16) | (height as u64 & 0xFFFF);
                 storage
                     .get_node(alg_id, node_id)
+                    .await
                     .map_err(crate::error::Error::Storage)?
                     .unwrap_or_else(|| state.hasher.null())
             };
@@ -408,7 +411,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Register a new algorithm, activating it at the current tree size.
-    pub fn add_algorithm(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) -> Result<(), S::Error> {
+    pub async fn add_algorithm(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) -> Result<(), S::Error> {
         if self.algs.contains_key(&alg_id) {
             return Err(crate::error::Error::DuplicateAlgorithm(alg_id));
         }
@@ -424,6 +427,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         // Persist metadata BEFORE committing in-memory state.
         self.storage
             .store_algorithm_meta(alg_id, &epochs)
+            .await
             .map_err(crate::error::Error::Storage)?;
 
         let k = self.config.log_arity as u64;
@@ -444,7 +448,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Deactivate (freeze) an algorithm at the current tree size.
-    pub fn remove_algorithm(&mut self, alg_id: u64) -> Result<(), S::Error> {
+    pub async fn remove_algorithm(&mut self, alg_id: u64) -> Result<(), S::Error> {
         let current_size = if self.size > 0 {
             self.size
         } else {
@@ -467,6 +471,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         self.storage
             .store_algorithm_meta(alg_id, &new_epochs)
+            .await
             .map_err(crate::error::Error::Storage)?;
 
         state.epochs = new_epochs;
@@ -474,7 +479,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Reactivate a frozen algorithm at the current tree size.
-    pub fn resume_algorithm(&mut self, alg_id: u64) -> Result<(), S::Error> {
+    pub async fn resume_algorithm(&mut self, alg_id: u64) -> Result<(), S::Error> {
         let current_size = if self.size > 0 {
             self.size
         } else {
@@ -520,12 +525,13 @@ impl<S: Storage> NaryMerkleLog<S> {
                 left + cap,
                 k,
                 true,
-            )?;
+            ).await?;
             frontier.push(hash);
         }
 
         self.storage
             .store_algorithm_meta(alg_id, &new_epochs)
+            .await
             .map_err(crate::error::Error::Storage)?;
 
         let state = self.algs.get_mut(&alg_id).unwrap();
@@ -537,7 +543,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Recursively resolve a subtree root and collect mixed boundary nodes.
-    fn reconstruct_subtree_root(
+    async fn reconstruct_subtree_root(
         storage: &mut S,
         alg_id: u64,
         state: &AlgState,
@@ -552,10 +558,11 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         if size == 1 {
             if state.is_active_at(lo) {
-                if storage.len() == 0 {
+                if storage.len().await == 0 {
                     let node_id = lo << 16;
                     if let Some(hash) = storage
                         .get_node(alg_id, node_id)
+                        .await
                         .map_err(crate::error::Error::Storage)?
                     {
                         return Ok(hash);
@@ -563,7 +570,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                         return Ok(state.hasher.null());
                     }
                 } else {
-                    let data = storage.get_leaf(lo).map_err(crate::error::Error::Storage)?;
+                    let data = storage.get_leaf(lo).await.map_err(crate::error::Error::Storage)?;
                     return Ok(state.hasher.leaf(&data));
                 }
             }
@@ -595,6 +602,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let node_id = (lo << 16) | (height as u64 & 0xFFFF);
             if let Some(hash) = storage
                 .get_node(alg_id, node_id)
+                .await
                 .map_err(crate::error::Error::Storage)?
             {
                 return Ok(hash);
@@ -613,7 +621,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                     c_hi,
                     k,
                     store_mixed,
-                )?;
+                ).await?;
                 child_hashes.push(child_hash);
             }
             let child_refs: Vec<&[u8]> = child_hashes.iter().map(|c| c.as_slice()).collect();
@@ -622,6 +630,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             if store_mixed {
                 storage
                     .store_node(alg_id, node_id, &hash)
+                    .await
                     .map_err(crate::error::Error::Storage)?;
             }
             Ok(hash)
@@ -640,7 +649,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                     c_hi,
                     k,
                     store_mixed,
-                )?;
+                ).await?;
                 component_hashes.push(part_root);
             }
 
@@ -660,7 +669,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Append a single leaf to the log (State Tree Mode).
-    pub fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
+    pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
         if !self.algs.values().any(|s| s.is_active()) {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
@@ -668,6 +677,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         // Store the leaf payload first
         self.storage
             .store_leaf(self.size, data)
+            .await
             .map_err(crate::error::Error::Storage)?;
 
         for (&alg_id, state) in &mut self.algs {
@@ -680,6 +690,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let node_id = self.size << 16;
                 self.storage
                     .store_node(alg_id, node_id, &leaf_hash)
+                    .await
                     .map_err(crate::error::Error::Storage)?;
                 leaf_hash
             } else {
@@ -719,6 +730,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 if parent != state.hasher.null() {
                     self.storage
                         .store_node(alg_id, node_id, &parent)
+                        .await
                         .map_err(crate::error::Error::Storage)?;
                 }
 
@@ -734,7 +746,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Append a structured subtree to the log (Commit Tree Mode).
-    pub fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
+    pub async fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
         if !self.algs.values().any(|s| s.is_active()) {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
@@ -749,6 +761,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let node_id = self.commit_count << 16;
                 self.storage
                     .store_node(alg_id, node_id, &root_hash)
+                    .await
                     .map_err(crate::error::Error::Storage)?;
                 root_hash
             } else {
@@ -788,6 +801,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 if parent != state.hasher.null() {
                     self.storage
                         .store_node(alg_id, node_id, &parent)
+                        .await
                         .map_err(crate::error::Error::Storage)?;
                 }
 
@@ -836,7 +850,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Retrieve a node hash from storage, or return the null constant if it's inactive.
-    fn get_node_hash(&self, alg_id: u64, left: u64, height: u32) -> Result<Vec<u8>, S::Error> {
+    async fn get_node_hash(&self, alg_id: u64, left: u64, height: u32) -> Result<Vec<u8>, S::Error> {
         let state = self
             .algs
             .get(&alg_id)
@@ -850,6 +864,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         if let Some(hash) = self
             .storage
             .get_node(alg_id, node_id)
+            .await
             .map_err(crate::error::Error::Storage)?
         {
             Ok(hash)
@@ -859,16 +874,16 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Generate an inclusion proof for the item at `index` in a tree of size `tree_size`.
-    pub fn inclusion_proof(
+    pub async fn inclusion_proof(
         &self,
         index: u64,
         tree_size: u64,
     ) -> Result<Option<crate::proof::InclusionProof>, S::Error> {
-        self.inclusion_proof_for(0, index, tree_size)
+        self.inclusion_proof_for(0, index, tree_size).await
     }
 
     /// Generate an inclusion proof for a specific algorithm.
-    pub fn inclusion_proof_for(
+    pub async fn inclusion_proof_for(
         &self,
         alg_id: u64,
         index: u64,
@@ -907,12 +922,12 @@ impl<S: Storage> NaryMerkleLog<S> {
         };
 
         let mut path = Vec::new();
-        self.log_level_bisection_path_to_height(alg_id, left, height, index, 0, &mut path)?;
+        self.log_level_bisection_path_to_height(alg_id, left, height, index, 0, &mut path).await?;
         path.reverse();
 
         let mut hashes = Vec::with_capacity(coords.len());
         for &(l, h) in &coords {
-            let hash = self.get_node_hash(alg_id, l, h)?;
+            let hash = self.get_node_hash(alg_id, l, h).await?;
             hashes.push(hash);
         }
 
@@ -999,16 +1014,16 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Generate a consistency proof between `old_size` and `new_size`.
-    pub fn consistency_proof(
+    pub async fn consistency_proof(
         &self,
         old_size: u64,
         new_size: u64,
     ) -> Result<Option<crate::proof::ConsistencyProof>, S::Error> {
-        self.consistency_proof_for(0, old_size, new_size)
+        self.consistency_proof_for(0, old_size, new_size).await
     }
 
     /// Generate a consistency proof for a specific algorithm.
-    pub fn consistency_proof_for(
+    pub async fn consistency_proof_for(
         &self,
         alg_id: u64,
         old_size: u64,
@@ -1035,7 +1050,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .last()
             .expect("old_coords cannot be empty since old_size > 0");
 
-        let start_hash = self.get_node_hash(alg_id, boundary_left, boundary_height)?;
+        let start_hash = self.get_node_hash(alg_id, boundary_left, boundary_height).await?;
 
         let new_coords = frontier_for_size(new_size, k);
         let mut target_new_f_idx = None;
@@ -1064,12 +1079,12 @@ impl<S: Storage> NaryMerkleLog<S> {
             boundary_left,
             boundary_height,
             &mut path,
-        )?;
+        ).await?;
         path.reverse();
 
         let mut hashes = Vec::with_capacity(new_coords.len());
         for &(l, h) in &new_coords {
-            let hash = self.get_node_hash(alg_id, l, h)?;
+            let hash = self.get_node_hash(alg_id, l, h).await?;
             hashes.push(hash);
         }
 
@@ -1157,7 +1172,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         }))
     }
 
-    fn log_level_bisection_path_to_height(
+    async fn log_level_bisection_path_to_height(
         &self,
         alg_id: u64,
         left_index: u64,
@@ -1181,7 +1196,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                     continue;
                 }
                 let c_left = curr_left + j_u64 * child_capacity;
-                let hash = self.get_node_hash(alg_id, c_left, curr_height - 1)?;
+                let hash = self.get_node_hash(alg_id, c_left, curr_height - 1).await?;
                 siblings.push(hash);
             }
 
@@ -1251,18 +1266,20 @@ mod tests {
 
     #[test]
     fn test_structural_node_id_storage() {
-        let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
-        let mut log = NaryMerkleLog::new(storage, Box::new(TestHasher), config);
+        smol::block_on(async {
+            let storage = MemoryStorage::new();
+            let config = TreeConfig { log_arity: 2 };
+            let mut log = NaryMerkleLog::new(storage, Box::new(TestHasher), config).await;
 
-        log.append_leaf(b"a").unwrap();
-        log.append_leaf(b"b").unwrap();
+            log.append_leaf(b"a").await.unwrap();
+            log.append_leaf(b"b").await.unwrap();
 
-        let storage_ref = log.storage();
-        let node_hash = storage_ref.get_node(0, 1).unwrap();
-        assert!(
-            node_hash.is_some(),
-            "node at ID 1 (left_index 0, height 1) should be stored"
-        );
+            let storage_ref = log.storage();
+            let node_hash = storage_ref.get_node(0, 1).await.unwrap();
+            assert!(
+                node_hash.is_some(),
+                "node at ID 1 (left_index 0, height 1) should be stored"
+            );
+        });
     }
 }
