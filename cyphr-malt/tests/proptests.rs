@@ -584,6 +584,98 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
     #[test]
+    fn metamorphic_registration_order(
+        leaves in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..32), 1..10),
+        k in 2usize..5,
+    ) {
+        smol::block_on(async {
+            let config = TreeConfig { log_arity: k };
+            let alg_ids = [10, 20, 30];
+
+            let mut log1 = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                config,
+            )
+            .await;
+            log1.add_algorithm(alg_ids[0], new_hasher_for(alg_ids[0])).await.unwrap();
+            log1.add_algorithm(alg_ids[1], new_hasher_for(alg_ids[1])).await.unwrap();
+            log1.add_algorithm(alg_ids[2], new_hasher_for(alg_ids[2])).await.unwrap();
+
+            let mut log2 = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                config,
+            )
+            .await;
+            log2.add_algorithm(alg_ids[2], new_hasher_for(alg_ids[2])).await.unwrap();
+            log2.add_algorithm(alg_ids[0], new_hasher_for(alg_ids[0])).await.unwrap();
+            log2.add_algorithm(alg_ids[1], new_hasher_for(alg_ids[1])).await.unwrap();
+
+            for leaf in &leaves {
+                log1.append_leaf(leaf).await.unwrap();
+                log2.append_leaf(leaf).await.unwrap();
+            }
+
+            for &id in &alg_ids {
+                let r1 = log1.root_for(id).unwrap();
+                let r2 = log2.root_for(id).unwrap();
+                prop_assert_eq!(r1, r2);
+            }
+            Ok::<(), proptest::test_runner::TestCaseError>(())
+        })?;
+    }
+
+    #[test]
+    fn metamorphic_mid_stream_registration(
+        first_batch in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..32), 1..10),
+        second_batch in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..32), 1..10),
+        k in 2usize..5,
+    ) {
+        smol::block_on(async {
+            let config = TreeConfig { log_arity: k };
+            let alg_ids = [40, 50];
+
+            let mut log1 = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                config,
+            )
+            .await;
+
+            let mut log2 = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                config,
+            )
+            .await;
+
+            for leaf in &first_batch {
+                log1.append_leaf(leaf).await.unwrap();
+                log2.append_leaf(leaf).await.unwrap();
+            }
+
+            log1.add_algorithm(alg_ids[0], new_hasher_for(alg_ids[0])).await.unwrap();
+            log1.add_algorithm(alg_ids[1], new_hasher_for(alg_ids[1])).await.unwrap();
+
+            log2.add_algorithm(alg_ids[1], new_hasher_for(alg_ids[1])).await.unwrap();
+            log2.add_algorithm(alg_ids[0], new_hasher_for(alg_ids[0])).await.unwrap();
+
+            for leaf in &second_batch {
+                log1.append_leaf(leaf).await.unwrap();
+                log2.append_leaf(leaf).await.unwrap();
+            }
+
+            for &id in &alg_ids {
+                let r1 = log1.root_for(id).unwrap();
+                let r2 = log2.root_for(id).unwrap();
+                prop_assert_eq!(r1, r2);
+            }
+            Ok::<(), proptest::test_runner::TestCaseError>(())
+        })?;
+    }
+
+    #[test]
     fn state_machine_malt(
         ops in proptest::collection::vec(op_strategy(6), 20..50),
         k in 2usize..4,
