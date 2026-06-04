@@ -336,6 +336,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyphr-malt-storage-fjall"
+version = "0.1.0"
+dependencies = [
+ "cyphr-malt",
+ "fjall",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "dashmap"
 version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

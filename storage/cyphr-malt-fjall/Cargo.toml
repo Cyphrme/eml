@@ -1,0 +1,16 @@
+[package]
+name          = "cyphr-malt-storage-fjall"
+version       = "0.1.0"
+description   = "Fjall-backed storage implementation for cyphr-malt"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../../LICENSE"
+
+[dependencies]
+cyphr-malt = { version = "0.1.0", path = "../../cyphr-malt" }
+fjall      = "3"
+thiserror  = "2"
+
+[dev-dependencies]
+sha2 = "0.10"
+tempfile = "3"

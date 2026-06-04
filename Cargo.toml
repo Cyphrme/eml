@@ -38,6 +38,7 @@ members = [
     ".",
     "storage/fjall",
     "cyphr-malt",
+    "storage/cyphr-malt-fjall",
 ]
 
 

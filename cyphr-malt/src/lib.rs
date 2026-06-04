@@ -16,6 +16,6 @@ pub use proof::{
     ConsistencyProof, InclusionProof, ProofStep, verify_consistency, verify_inclusion,
 };
 pub use schedule::reduction_count;
-pub use storage::{MemoryStorage, Storage};
+pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use subtree::Subtree;
 pub use tree::{NaryMerkleLog, TreeConfig};
