@@ -6,6 +6,9 @@ edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../../LICENSE"
 
+[lib]
+doctest = false
+
 [dependencies]
 cyphr-malt = { version = "0.1.0", path = "../../cyphr-malt" }
 fjall      = "3"
