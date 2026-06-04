@@ -6,6 +6,9 @@ edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../../LICENSE"
 
+[lib]
+doctest = false
+
 [dependencies]
 eml       = { version = "0.10.0", path = "../.." }
 fjall     = "3"
