@@ -31,6 +31,8 @@ pub struct ConsistencyProof {
     pub old_size: u64,
     /// Size of the newer tree.
     pub new_size: u64,
+    /// The log arity (k) of the tree.
+    pub log_arity: u64,
     /// Starting hash (representing the boundary node of the old tree).
     pub start_hash: Vec<u8>,
     /// Path steps from the boundary to the root.
@@ -81,6 +83,26 @@ pub fn verify_inclusion(
     current == root
 }
 
+/// Helper function to reconstruct the coordinates (left_index, height) of the frontier for a given
+/// tree size.
+fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
+    let mut frontier = Vec::new();
+    let mut curr_left = 0;
+    let mut temp_n = n;
+    while temp_n > 0 {
+        let mut height = 0;
+        let mut cap = 1;
+        while cap * k <= temp_n {
+            cap *= k;
+            height += 1;
+        }
+        frontier.push((curr_left, height));
+        curr_left += cap;
+        temp_n -= cap;
+    }
+    frontier
+}
+
 /// Verify a consistency proof.
 ///
 /// Proves that the tree of size `old_size` with `old_root` is an append-only
@@ -96,42 +118,278 @@ pub fn verify_consistency(
         return false;
     }
 
-    let mut fr = proof.start_hash.clone();
-    let mut sr = proof.start_hash.clone();
+    let k = proof.log_arity;
 
-    for step in &proof.path {
+    let old_coords = frontier_for_size(proof.old_size, k);
+    let new_coords = frontier_for_size(proof.new_size, k);
+
+    let &(boundary_left, boundary_height) = match old_coords.last() {
+        Some(coords) => coords,
+        None => return false,
+    };
+
+    let mut target_new_f_idx = None;
+    for (f_idx, &(new_left, new_height)) in new_coords.iter().enumerate() {
+        let cap = k.pow(new_height);
+        if boundary_left >= new_left && boundary_left < new_left + cap {
+            target_new_f_idx = Some((f_idx, new_left, new_height));
+            break;
+        }
+    }
+
+    let (f_idx, _new_left, new_height) = match target_new_f_idx {
+        Some(val) => val,
+        None => return false,
+    };
+
+    if new_height < boundary_height {
+        return false;
+    }
+
+    // We will populate a map from coordinate (left, height) to its hash
+    use std::collections::HashMap;
+    let mut map = HashMap::new();
+    map.insert((boundary_left, boundary_height), proof.start_hash.clone());
+
+    let bisection_steps = (new_height - boundary_height) as usize;
+    if proof.path.len() < bisection_steps {
+        return false;
+    }
+
+    // 1. Trace the bisection steps (first bisection_steps of proof.path)
+    let mut curr_left = boundary_left;
+    let mut curr_height = boundary_height;
+    for i in 0..bisection_steps {
+        let step = &proof.path[i];
         if step.siblings.is_empty() {
-            // Promoted node — current hashes pass through unchanged
+            // Promoted node
+            curr_height += 1;
+            let current_hash = match map.get(&(curr_left, curr_height - 1)) {
+                Some(h) => h.clone(),
+                None => return false,
+            };
+            map.insert((curr_left, curr_height), current_hash);
             continue;
         }
         if step.position > step.siblings.len() {
             return false;
         }
 
-        let idx = step.position;
-        let left_sibs = &step.siblings[0..idx];
-        let right_sibs = &step.siblings[idx..];
+        let child_capacity = k.pow(curr_height);
+        let parent_left = match curr_left.checked_sub(step.position as u64 * child_capacity) {
+            Some(val) => val,
+            None => return false,
+        };
+        let parent_height = curr_height + 1;
 
-        // Reconstruct old parent children: left siblings + old child
-        let mut old_children = Vec::with_capacity(left_sibs.len() + 1);
-        for sib in left_sibs {
-            old_children.push(sib.as_slice());
-        }
-        old_children.push(fr.as_slice());
+        let current_hash = match map.get(&(curr_left, curr_height)) {
+            Some(h) => h.clone(),
+            None => return false,
+        };
 
-        // Reconstruct new parent children: left siblings + new child + right siblings
-        let mut new_children = Vec::with_capacity(step.siblings.len() + 1);
-        for sib in left_sibs {
-            new_children.push(sib.as_slice());
+        // Reconstruct children
+        let mut children = Vec::with_capacity(step.siblings.len() + 1);
+        for (j, sib) in step.siblings.iter().enumerate() {
+            let j_u64 = j as u64;
+            let c_left = if j_u64 < step.position as u64 {
+                parent_left + j_u64 * child_capacity
+            } else {
+                parent_left + (j_u64 + 1) * child_capacity
+            };
+            map.insert((c_left, curr_height), sib.clone());
+
+            if j == step.position {
+                children.push(current_hash.as_slice());
+            }
+            children.push(sib.as_slice());
         }
-        new_children.push(sr.as_slice());
-        for sib in right_sibs {
-            new_children.push(sib.as_slice());
+        if step.position == step.siblings.len() {
+            children.push(current_hash.as_slice());
         }
 
-        fr = nary_mr(hasher, &old_children);
-        sr = nary_mr(hasher, &new_children);
+        let parent_hash = nary_mr(hasher, &children);
+        map.insert((parent_left, parent_height), parent_hash);
+
+        curr_left = parent_left;
+        curr_height = parent_height;
     }
 
-    fr == old_root && sr == new_root
+    // 2. Trace the dynamic merge steps
+    #[derive(Debug, Clone)]
+    struct FrontierNode {
+        left: u64,
+        height: u32,
+        hash: Option<Vec<u8>>,
+    }
+
+    let mut current_frontier: Vec<FrontierNode> = new_coords
+        .iter()
+        .enumerate()
+        .map(|(idx, &(l, h))| {
+            let hash = if idx == f_idx {
+                map.get(&(l, h)).cloned()
+            } else {
+                None
+            };
+            FrontierNode {
+                left: l,
+                height: h,
+                hash,
+            }
+        })
+        .collect();
+
+    let mut target_idx = f_idx;
+    let mut proof_idx = bisection_steps;
+
+    let k_usize = k as usize;
+    while current_frontier.len() > k_usize {
+        let split_idx = current_frontier.len() - k_usize;
+        let is_target_merged = target_idx >= split_idx;
+
+        if is_target_merged {
+            if proof_idx >= proof.path.len() {
+                return false;
+            }
+            let step = &proof.path[proof_idx];
+            proof_idx += 1;
+
+            if step.position != target_idx - split_idx || step.siblings.len() != k_usize - 1 {
+                return false;
+            }
+
+            let mut children_hashes = Vec::with_capacity(k_usize);
+            for j in 0..k_usize {
+                let node_idx = split_idx + j;
+                let hash = if node_idx == target_idx {
+                    match &current_frontier[node_idx].hash {
+                        Some(h) => h.clone(),
+                        None => return false,
+                    }
+                } else {
+                    let sib_idx = if j < step.position { j } else { j - 1 };
+                    let sib_hash = step.siblings[sib_idx].clone();
+                    map.insert(
+                        (
+                            current_frontier[node_idx].left,
+                            current_frontier[node_idx].height,
+                        ),
+                        sib_hash.clone(),
+                    );
+                    sib_hash
+                };
+                children_hashes.push(hash);
+            }
+
+            let refs: Vec<&[u8]> = children_hashes.iter().map(|v| v.as_slice()).collect();
+            let parent_hash = nary_mr(hasher, &refs);
+
+            let parent_left = current_frontier[split_idx].left;
+            let parent_height = current_frontier[split_idx].height + 1;
+            map.insert((parent_left, parent_height), parent_hash.clone());
+
+            current_frontier.truncate(split_idx);
+            current_frontier.push(FrontierNode {
+                left: parent_left,
+                height: parent_height,
+                hash: Some(parent_hash),
+            });
+            target_idx = split_idx;
+        } else {
+            // Target is not merged, so we simulate the coordinate merge without consuming a proof
+            // step
+            let parent_left = current_frontier[split_idx].left;
+            let parent_height = current_frontier[split_idx].height + 1;
+
+            current_frontier.truncate(split_idx);
+            current_frontier.push(FrontierNode {
+                left: parent_left,
+                height: parent_height,
+                hash: None,
+            });
+        }
+    }
+
+    if current_frontier.len() > 1 {
+        // Final root merge
+        if proof_idx >= proof.path.len() {
+            return false;
+        }
+        let step = &proof.path[proof_idx];
+        proof_idx += 1;
+
+        if step.position != target_idx || step.siblings.len() != current_frontier.len() - 1 {
+            return false;
+        }
+
+        let mut children_hashes = Vec::with_capacity(current_frontier.len());
+        for (j, node) in current_frontier.iter().enumerate() {
+            let hash = if j == target_idx {
+                match &node.hash {
+                    Some(h) => h.clone(),
+                    None => return false,
+                }
+            } else {
+                let sib_idx = if j < step.position { j } else { j - 1 };
+                let sib_hash = step.siblings[sib_idx].clone();
+                map.insert(
+                    (node.left, node.height),
+                    sib_hash.clone(),
+                );
+                sib_hash
+            };
+            children_hashes.push(hash);
+        }
+
+        let refs: Vec<&[u8]> = children_hashes.iter().map(|v| v.as_slice()).collect();
+        let parent_hash = nary_mr(hasher, &refs);
+
+        current_frontier = vec![FrontierNode {
+            left: 0,
+            height: 9999,
+            hash: Some(parent_hash),
+        }];
+    }
+
+    if proof_idx != proof.path.len() {
+        return false;
+    }
+
+    // 3. Reconstruct old root
+    let mut old_hashes = Vec::with_capacity(old_coords.len());
+    for coord in &old_coords {
+        let hash = match map.get(coord) {
+            Some(h) => h.clone(),
+            None => return false,
+        };
+        old_hashes.push(hash);
+    }
+
+    let computed_old_root = {
+        if old_hashes.is_empty() {
+            hasher.empty()
+        } else if old_hashes.len() == 1 {
+            old_hashes[0].clone()
+        } else {
+            let mut current = old_hashes;
+            while current.len() > k_usize {
+                let split_idx = current.len() - k_usize;
+                let right_elements = &current[split_idx..];
+                let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
+                let merged = nary_mr(hasher, &refs);
+                current.truncate(split_idx);
+                current.push(merged);
+            }
+            let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+            nary_mr(hasher, &refs)
+        }
+    };
+
+    // 4. Reconstruct new root
+    let computed_new_root = match &current_frontier[0].hash {
+        Some(h) => h.clone(),
+        None => return false,
+    };
+
+    computed_old_root == old_root && computed_new_root == new_root
 }

@@ -63,18 +63,15 @@ pub fn within_commit_path(
             } else {
                 None
             }
-        }
+        },
         Subtree::Node(children) => {
             let mut cumulative_leaves = 0;
             for (child_idx, child) in children.iter().enumerate() {
                 let child_leaves = count_leaves(child);
                 if leaf_index < cumulative_leaves + child_leaves {
-                    let mut path = within_commit_path(
-                        hasher,
-                        child,
-                        leaf_index - cumulative_leaves,
-                    )?;
-                    
+                    let mut path =
+                        within_commit_path(hasher, child, leaf_index - cumulative_leaves)?;
+
                     if children.len() == 1 {
                         // Promoted node
                         path.push(ProofStep {
@@ -97,7 +94,7 @@ pub fn within_commit_path(
                 cumulative_leaves += child_leaves;
             }
             None
-        }
+        },
     }
 }
 
@@ -199,6 +196,8 @@ mod tests {
             tree_size: 4,
             path,
         };
-        assert!(crate::proof::verify_inclusion(&hasher, &leaf_hash, &proof, &root));
+        assert!(crate::proof::verify_inclusion(
+            &hasher, &leaf_hash, &proof, &root
+        ));
     }
 }

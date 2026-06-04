@@ -217,3 +217,149 @@ fn test_binary_compatibility_random_sizes() {
         assert_eq!(log.root(), mth_root, "binary MTH mismatch at size {}", size);
     }
 }
+
+#[test]
+fn test_inclusion_and_consistency_proofs_simple() {
+    let hasher = Sha256Hasher;
+    let storage = MemoryStorage::new();
+    let config = TreeConfig { log_arity: 2 };
+    let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config);
+
+    log.append_leaf(b"a").unwrap();
+    log.append_leaf(b"b").unwrap();
+    log.append_leaf(b"c").unwrap();
+    log.append_leaf(b"d").unwrap();
+
+    let proof = log.inclusion_proof(2, 4).unwrap().unwrap();
+    let leaf_hash = Sha256Hasher.leaf(b"c");
+    let root = log.root();
+    assert!(cyphr_malt::verify_inclusion(
+        &Sha256Hasher,
+        &leaf_hash,
+        &proof,
+        &root
+    ));
+
+    let cons_proof = log.consistency_proof(2, 4).unwrap().unwrap();
+    let old_root = {
+        let mut temp_log = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig { log_arity: 2 },
+        );
+        temp_log.append_leaf(b"a").unwrap();
+        temp_log.append_leaf(b"b").unwrap();
+        temp_log.root()
+    };
+    assert!(cyphr_malt::verify_consistency(
+        &Sha256Hasher,
+        &cons_proof,
+        &old_root,
+        &root
+    ));
+}
+
+#[test]
+fn test_inclusion_and_consistency_proofs_various_arities() {
+    for k in 2..=4 {
+        for size in 1..=15 {
+            let storage = MemoryStorage::new();
+            let config = TreeConfig { log_arity: k };
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config);
+
+            let mut leaves = Vec::new();
+            for i in 0..size {
+                let data = format!("leaf_{}_{}", k, i).into_bytes();
+                log.append_leaf(&data).unwrap();
+                leaves.push(Sha256Hasher.leaf(&data));
+            }
+
+            let root = log.root();
+
+            // Verify inclusion proof for every index
+            for idx in 0..size {
+                let proof = log.inclusion_proof(idx, size).unwrap().unwrap();
+                assert!(cyphr_malt::verify_inclusion(
+                    &Sha256Hasher,
+                    &leaves[idx as usize],
+                    &proof,
+                    &root
+                ));
+            }
+
+            // Verify consistency proof for every valid old size
+            for old_size in 1..size {
+                let cons_proof = log.consistency_proof(old_size, size).unwrap().unwrap();
+                let old_root = {
+                    let mut temp_log = NaryMerkleLog::new(
+                        MemoryStorage::new(),
+                        Box::new(Sha256Hasher),
+                        TreeConfig { log_arity: k },
+                    );
+                    for i in 0..old_size {
+                        let data = format!("leaf_{}_{}", k, i).into_bytes();
+                        temp_log.append_leaf(&data).unwrap();
+                    }
+                    temp_log.root()
+                };
+                if !cyphr_malt::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root) {
+                    panic!(
+                        "verify_consistency failed for k={}, size={}, old_size={}, \
+                         cons_proof={:?}, old_root={:?}, root={:?}",
+                        k, size, old_size, cons_proof, old_root, root
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_inclusion_proofs_commit_tree_mode() {
+    let storage = MemoryStorage::new();
+    let config = TreeConfig { log_arity: 2 };
+    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config);
+
+    // Commit 0: Subtree::Node([Leaf("a"), Leaf("b")])
+    let commit0 = Subtree::Node(vec![
+        Subtree::Leaf(b"a".to_vec()),
+        Subtree::Leaf(b"b".to_vec()),
+    ]);
+
+    // Commit 1: Subtree::Node([Node([Leaf("c"), Leaf("d")]), Leaf("e")])
+    let commit1 = Subtree::Node(vec![
+        Subtree::Node(vec![
+            Subtree::Leaf(b"c".to_vec()),
+            Subtree::Leaf(b"d".to_vec()),
+        ]),
+        Subtree::Leaf(b"e".to_vec()),
+    ]);
+
+    log.append_subtree(&commit0).unwrap();
+    log.append_subtree(&commit1).unwrap();
+
+    let root = log.root();
+
+    // Generate within-commit path
+    let mut path = cyphr_malt::within_commit_path(&Sha256Hasher, &commit1, 1).unwrap();
+
+    // Generate log-level inclusion proof for Commit 1
+    let log_proof = log.inclusion_proof(1, 2).unwrap().unwrap();
+
+    // Combine
+    path.extend(log_proof.path);
+
+    let leaf_hash = Sha256Hasher.leaf(b"d");
+    let full_proof = cyphr_malt::InclusionProof {
+        index: 3,
+        tree_size: 5,
+        path,
+    };
+
+    assert!(cyphr_malt::verify_inclusion(
+        &Sha256Hasher,
+        &leaf_hash,
+        &full_proof,
+        &root
+    ));
+}
