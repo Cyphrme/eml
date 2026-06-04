@@ -363,3 +363,237 @@ fn test_inclusion_proofs_commit_tree_mode() {
         &root
     ));
 }
+
+#[test]
+fn test_epoch_from_storage_single_algorithm() {
+    let hasher = Sha256Hasher;
+    let storage = MemoryStorage::new();
+    let config = TreeConfig { log_arity: 2 };
+    let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config);
+
+    for i in 0..20u8 {
+        log.append_leaf(&[i]).unwrap();
+    }
+
+    let original_root = log.root_for(0).unwrap();
+    let original_size = log.size();
+
+    let storage = log.into_storage();
+    let reconstructed =
+        NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
+
+    assert_eq!(reconstructed.size(), original_size);
+    assert_eq!(reconstructed.root_for(0).unwrap(), original_root);
+}
+
+#[test]
+fn test_epoch_from_storage_multi_algorithm_frozen_active() {
+    let storage = MemoryStorage::new();
+    let config = TreeConfig { log_arity: 3 };
+    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config);
+    log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
+
+    for i in 0..10u8 {
+        log.append_leaf(&[i]).unwrap();
+    }
+
+    // Freeze algorithm 1.
+    log.remove_algorithm(1).unwrap();
+
+    for i in 10..20u8 {
+        log.append_leaf(&[i]).unwrap();
+    }
+
+    let root0 = log.root_for(0).unwrap();
+    let root1 = log.root_for(1).unwrap();
+
+    let storage = log.into_storage();
+    let reconstructed = NaryMerkleLog::from_storage_with_config(
+        storage,
+        vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+        config,
+    )
+    .unwrap();
+
+    assert_eq!(reconstructed.root_for(0).unwrap(), root0);
+    assert_eq!(reconstructed.root_for(1).unwrap(), root1);
+}
+
+#[test]
+fn test_epoch_from_storage_resume_after_gap() {
+    let storage = MemoryStorage::new();
+    let config = TreeConfig { log_arity: 2 };
+    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config);
+
+    for i in 0..4u8 {
+        log.append_leaf(&[i]).unwrap();
+    }
+    log.remove_algorithm(0).unwrap();
+
+    // Add a second algorithm to keep appends going.
+    log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
+    for i in 4..8u8 {
+        log.append_leaf(&[i]).unwrap();
+    }
+
+    log.resume_algorithm(0).unwrap();
+    for i in 8..16u8 {
+        log.append_leaf(&[i]).unwrap();
+    }
+
+    let root0 = log.root_for(0).unwrap();
+    let root1 = log.root_for(1).unwrap();
+
+    let storage = log.into_storage();
+    let reconstructed = NaryMerkleLog::from_storage(
+        storage,
+        vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+    )
+    .unwrap();
+
+    assert_eq!(reconstructed.root_for(0).unwrap(), root0);
+    assert_eq!(reconstructed.root_for(1).unwrap(), root1);
+}
+
+#[test]
+fn test_epoch_from_storage_continued_appends() {
+    let mut original = NaryMerkleLog::new(
+        MemoryStorage::new(),
+        Box::new(Sha256Hasher),
+        TreeConfig { log_arity: 2 },
+    );
+    for i in 0..10u8 {
+        original.append_leaf(&[i]).unwrap();
+    }
+
+    let storage = original.into_storage();
+    let mut reconstructed =
+        NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).unwrap();
+
+    let mut reference = NaryMerkleLog::new(
+        MemoryStorage::new(),
+        Box::new(Sha256Hasher),
+        TreeConfig { log_arity: 2 },
+    );
+    for i in 0..10u8 {
+        reference.append_leaf(&[i]).unwrap();
+    }
+
+    for i in 10..20u8 {
+        reconstructed.append_leaf(&[i]).unwrap();
+        reference.append_leaf(&[i]).unwrap();
+    }
+
+    assert_eq!(
+        reconstructed.root_for(0).unwrap(),
+        reference.root_for(0).unwrap()
+    );
+    assert_eq!(reconstructed.size(), reference.size());
+}
+
+#[test]
+fn test_epoch_errors() {
+    let mut log = NaryMerkleLog::new(
+        MemoryStorage::new(),
+        Box::new(Sha256Hasher),
+        TreeConfig { log_arity: 2 },
+    );
+    // Duplicate
+    assert!(matches!(
+        log.add_algorithm(0, Box::new(Sha256Hasher)),
+        Err(cyphr_malt::error::Error::DuplicateAlgorithm(0))
+    ));
+    // Unknown remove
+    assert!(matches!(
+        log.remove_algorithm(999),
+        Err(cyphr_malt::error::Error::UnknownAlgorithm(999))
+    ));
+    // Unknown resume
+    assert!(matches!(
+        log.resume_algorithm(999),
+        Err(cyphr_malt::error::Error::UnknownAlgorithm(999))
+    ));
+
+    log.remove_algorithm(0).unwrap();
+    // Already frozen
+    assert!(matches!(
+        log.remove_algorithm(0),
+        Err(cyphr_malt::error::Error::FrozenAlgorithm(0))
+    ));
+
+    log.resume_algorithm(0).unwrap();
+    // Already active
+    assert!(matches!(
+        log.resume_algorithm(0),
+        Err(cyphr_malt::error::Error::AlgorithmActive(0))
+    ));
+}
+
+#[test]
+fn test_epoch_subtree_commit_mode() {
+    let storage = MemoryStorage::new();
+    let config = TreeConfig { log_arity: 2 };
+    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config);
+    log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
+
+    let commit0 = Subtree::Node(vec![
+        Subtree::Leaf(b"a".to_vec()),
+        Subtree::Leaf(b"b".to_vec()),
+    ]);
+    let commit1 = Subtree::Node(vec![Subtree::Leaf(b"c".to_vec())]);
+
+    log.append_subtree(&commit0).unwrap();
+    log.remove_algorithm(1).unwrap();
+    log.append_subtree(&commit1).unwrap();
+
+    let root0 = log.root_for(0).unwrap();
+    let root1 = log.root_for(1).unwrap();
+
+    let storage = log.into_storage();
+    let reconstructed = NaryMerkleLog::from_storage(
+        storage,
+        vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+    )
+    .unwrap();
+
+    assert_eq!(reconstructed.commit_count(), 2);
+    assert_eq!(reconstructed.root_for(0).unwrap(), root0);
+    assert_eq!(reconstructed.root_for(1).unwrap(), root1);
+}
+
+#[test]
+fn test_epoch_proofs() {
+    let storage = MemoryStorage::new();
+    let config = TreeConfig { log_arity: 2 };
+    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config);
+    log.add_algorithm(1, Box::new(Sha256Hasher)).unwrap();
+
+    log.append_leaf(b"a").unwrap();
+    log.append_leaf(b"b").unwrap();
+    log.remove_algorithm(1).unwrap();
+    log.append_leaf(b"c").unwrap();
+    log.append_leaf(b"d").unwrap();
+
+    // Verify inclusion proof for algorithm 0 (fully active)
+    let proof0 = log.inclusion_proof_for(0, 2, 4).unwrap().unwrap();
+    let root0 = log.root_for(0).unwrap();
+    assert!(cyphr_malt::verify_inclusion(
+        &Sha256Hasher,
+        &Sha256Hasher.leaf(b"c"),
+        &proof0,
+        &root0
+    ));
+
+    // Verify inclusion proof for algorithm 1 (frozen at size 2)
+    let proof1 = log.inclusion_proof_for(1, 1, 2).unwrap().unwrap();
+    let root1 = log.root_for(1).unwrap();
+    assert!(cyphr_malt::verify_inclusion(
+        &Sha256Hasher,
+        &Sha256Hasher.leaf(b"b"),
+        &proof1,
+        &root1
+    ));
+
+    // For algorithm 1, index 2 (which is in inactive range) should be out of bounds/fail.
+    assert!(log.inclusion_proof_for(1, 2, 2).unwrap().is_none());
+}

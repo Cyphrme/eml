@@ -332,10 +332,7 @@ pub fn verify_consistency(
             } else {
                 let sib_idx = if j < step.position { j } else { j - 1 };
                 let sib_hash = step.siblings[sib_idx].clone();
-                map.insert(
-                    (node.left, node.height),
-                    sib_hash.clone(),
-                );
+                map.insert((node.left, node.height), sib_hash.clone());
                 sib_hash
             };
             children_hashes.push(hash);
