@@ -2282,10 +2282,12 @@ mod tests {
             let malt_root = crate::proof::mth(&hasher, &malt_leaves);
 
             // Assert they are mathematically equivalent
-            assert_eq!(eml_root, malt_root, "EML root and MALT root are not identical!");
+            assert_eq!(
+                eml_root, malt_root,
+                "EML root and MALT root are not identical!"
+            );
         });
     }
-
 
     #[derive(Debug)]
     struct TrackingStorage {

@@ -201,7 +201,9 @@ fn complexity_add_algorithm_popcount_k() {
             log.append(&(i as u64).to_le_bytes()).await.unwrap();
         }
         for alg_id in 1..=100 {
-            log.add_algorithm(alg_id, Box::new(Sha256Hasher)).await.unwrap();
+            log.add_algorithm(alg_id, Box::new(Sha256Hasher))
+                .await
+                .unwrap();
         }
     });
 

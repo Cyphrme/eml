@@ -216,8 +216,12 @@ fn deserialize_epochs(bytes: &[u8]) -> Result<Epochs, String> {
     }
     let mut epochs = Vec::with_capacity(bytes.len() / 16);
     for chunk in bytes.chunks_exact(16) {
-        let start_bytes = chunk[0..8].try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?;
-        let end_bytes = chunk[8..16].try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?;
+        let start_bytes = chunk[0..8]
+            .try_into()
+            .map_err(|e: std::array::TryFromSliceError| e.to_string())?;
+        let end_bytes = chunk[8..16]
+            .try_into()
+            .map_err(|e: std::array::TryFromSliceError| e.to_string())?;
         let start = u64::from_be_bytes(start_bytes);
         let end = u64::from_be_bytes(end_bytes);
         epochs.push((start, end));
