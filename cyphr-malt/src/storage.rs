@@ -15,36 +15,69 @@ pub trait Storage: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Persist a raw leaf payload at the given index.
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error>;
+    fn store_leaf(
+        &mut self,
+        index: u64,
+        data: &[u8],
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Retrieve the raw leaf payload at the given index.
-    fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error>;
+    fn get_leaf(
+        &self,
+        index: u64,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send;
 
     /// The number of leaves currently stored.
-    #[must_use]
-    fn len(&self) -> u64;
+    fn len(&self) -> impl std::future::Future<Output = u64> + Send;
 
     /// Whether the storage contains no leaves.
-    #[must_use]
-    fn is_empty(&self) -> bool {
-        self.len() == 0
+    fn is_empty(&self) -> impl std::future::Future<Output = bool> + Send {
+        async move { self.len().await == 0 }
     }
 
     /// Persist a sealed internal node hash.
-    fn store_node(&mut self, alg_id: u64, node_id: u64, hash: &[u8]) -> Result<(), Self::Error>;
+    fn store_node(
+        &mut self,
+        alg_id: u64,
+        node_id: u64,
+        hash: &[u8],
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Retrieve a sealed internal node hash.
-    fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error>;
+    fn get_node(
+        &self,
+        alg_id: u64,
+        node_id: u64,
+    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send;
 
     /// Persist algorithm metadata (epoch boundaries).
     fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error>;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Load all persisted algorithm metadata.
-    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error>;
+    fn load_algorithm_metas(
+        &self,
+    ) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send;
+
+    /// Perform a batch write of multiple leaves and nodes.
+    fn write_batch(
+        &mut self,
+        leaves: &[(u64, &[u8])],
+        nodes: &[(u64, u64, &[u8])],
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            for &(index, data) in leaves {
+                self.store_leaf(index, data).await?;
+            }
+            for &(alg_id, node_id, hash) in nodes {
+                self.store_node(alg_id, node_id, hash).await?;
+            }
+            Ok(())
+        }
+    }
 }
 
 // ============================================================================
@@ -98,7 +131,7 @@ impl std::error::Error for MemoryStorageError {}
 impl Storage for MemoryStorage {
     type Error = MemoryStorageError;
 
-    fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
         debug_assert_eq!(
             index,
             self.leaves.len() as u64,
@@ -108,7 +141,7 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         self.leaves
             .get(index as usize)
             .cloned()
@@ -118,20 +151,20 @@ impl Storage for MemoryStorage {
             })
     }
 
-    fn len(&self) -> u64 {
+    async fn len(&self) -> u64 {
         self.leaves.len() as u64
     }
 
-    fn store_node(&mut self, alg_id: u64, node_id: u64, hash: &[u8]) -> Result<(), Self::Error> {
+    async fn store_node(&mut self, alg_id: u64, node_id: u64, hash: &[u8]) -> Result<(), Self::Error> {
         self.nodes.insert((alg_id, node_id), hash.to_vec());
         Ok(())
     }
 
-    fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error> {
+    async fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error> {
         Ok(self.nodes.get(&(alg_id, node_id)).cloned())
     }
 
-    fn store_algorithm_meta(
+    async fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
         epochs: &[(u64, u64)],
@@ -140,7 +173,7 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         Ok(self
             .algorithm_metas
             .iter()
@@ -155,28 +188,32 @@ mod tests {
 
     #[test]
     fn test_memory_storage_leaves() {
-        let mut storage = MemoryStorage::new();
-        assert!(storage.is_empty());
-        assert_eq!(storage.len(), 0);
+        smol::block_on(async {
+            let mut storage = MemoryStorage::new();
+            assert!(storage.is_empty().await);
+            assert_eq!(storage.len().await, 0);
 
-        storage.store_leaf(0, b"leaf0").unwrap();
-        assert!(!storage.is_empty());
-        assert_eq!(storage.len(), 1);
-        assert_eq!(storage.get_leaf(0).unwrap(), b"leaf0");
+            storage.store_leaf(0, b"leaf0").await.unwrap();
+            assert!(!storage.is_empty().await);
+            assert_eq!(storage.len().await, 1);
+            assert_eq!(storage.get_leaf(0).await.unwrap(), b"leaf0");
 
-        // Out of bounds retrieval
-        assert!(storage.get_leaf(1).is_err());
+            // Out of bounds retrieval
+            assert!(storage.get_leaf(1).await.is_err());
+        });
     }
 
     #[test]
     fn test_memory_storage_nodes() {
-        let mut storage = MemoryStorage::new();
-        assert_eq!(storage.get_node(1, 42).unwrap(), None);
+        smol::block_on(async {
+            let mut storage = MemoryStorage::new();
+            assert_eq!(storage.get_node(1, 42).await.unwrap(), None);
 
-        storage.store_node(1, 42, b"node_hash").unwrap();
-        assert_eq!(
-            storage.get_node(1, 42).unwrap(),
-            Some(b"node_hash".to_vec())
-        );
+            storage.store_node(1, 42, b"node_hash").await.unwrap();
+            assert_eq!(
+                storage.get_node(1, 42).await.unwrap(),
+                Some(b"node_hash".to_vec())
+            );
+        });
     }
 }

@@ -337,6 +337,7 @@ dependencies = [
  "cpu-time",
  "proptest",
  "sha2",
+ "smol",
 ]
 
 [[package]]
