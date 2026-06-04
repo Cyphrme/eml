@@ -11,7 +11,7 @@ pub mod tree;
 
 pub use error::{Error, Result};
 pub use hasher::Hasher;
-pub use mr::{evaluate, nary_mr};
+pub use mr::{count_leaves, evaluate, nary_mr, within_commit_path};
 pub use proof::{ConsistencyProof, InclusionProof, ProofStep, verify_consistency, verify_inclusion};
 pub use schedule::reduction_count;
 pub use storage::{MemoryStorage, Storage};
