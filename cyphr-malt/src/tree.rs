@@ -29,12 +29,12 @@ pub struct NaryMerkleLog<S: Storage> {
     config: TreeConfig,
     /// Frontier stack: holds hashes of completed subtrees along the right edge.
     frontier: Vec<Vec<u8>>,
+    /// Coordinates of each frontier node: (left_index, height)
+    frontier_coords: Vec<(u64, u32)>,
     /// Number of leaves appended (flat state tree mode).
     size: u64,
     /// Number of subtrees (commits) appended.
     commit_count: u64,
-    /// Opaque counter for internal node IDs.
-    next_node_id: u64,
 }
 
 impl<S: Storage> NaryMerkleLog<S> {
@@ -47,9 +47,9 @@ impl<S: Storage> NaryMerkleLog<S> {
             hasher,
             config,
             frontier: Vec::new(),
+            frontier_coords: Vec::new(),
             size: 0,
             commit_count: 0,
-            next_node_id: 0,
         }
     }
 
@@ -105,27 +105,39 @@ impl<S: Storage> NaryMerkleLog<S> {
             .store_leaf(self.size, data)
             .map_err(crate::error::Error::Storage)?;
         self.frontier.push(leaf_hash);
+        self.frontier_coords.push((self.size, 0));
 
         let merges = reduction_count(self.size, self.config.log_arity as u64);
         for _ in 0..merges {
             let mut children = Vec::with_capacity(self.config.log_arity);
+            let mut coords = Vec::with_capacity(self.config.log_arity);
             for _ in 0..self.config.log_arity {
                 children.push(
                     self.frontier
                         .pop()
                         .expect("frontier stack underflow during reduction"),
                 );
+                coords.push(
+                    self.frontier_coords
+                        .pop()
+                        .expect("frontier_coords stack underflow during reduction"),
+                );
             }
             children.reverse();
+            coords.reverse();
             let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
             let parent = nary_mr(&*self.hasher, &child_refs);
 
+            let parent_left_index = coords[0].0;
+            let parent_height = coords[0].1 + 1;
+            let node_id = (parent_left_index << 16) | (parent_height as u64 & 0xFFFF);
+
             self.storage
-                .store_node(0, self.next_node_id, &parent)
+                .store_node(0, node_id, &parent)
                 .map_err(crate::error::Error::Storage)?;
-            self.next_node_id += 1;
 
             self.frontier.push(parent);
+            self.frontier_coords.push((parent_left_index, parent_height));
         }
 
         self.size += 1;
@@ -140,27 +152,39 @@ impl<S: Storage> NaryMerkleLog<S> {
     pub fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
         let root_hash = evaluate(&*self.hasher, subtree);
         self.frontier.push(root_hash);
+        self.frontier_coords.push((self.commit_count, 0));
 
         let merges = reduction_count(self.commit_count, self.config.log_arity as u64);
         for _ in 0..merges {
             let mut children = Vec::with_capacity(self.config.log_arity);
+            let mut coords = Vec::with_capacity(self.config.log_arity);
             for _ in 0..self.config.log_arity {
                 children.push(
                     self.frontier
                         .pop()
                         .expect("frontier stack underflow during reduction"),
                 );
+                coords.push(
+                    self.frontier_coords
+                        .pop()
+                        .expect("frontier_coords stack underflow during reduction"),
+                );
             }
             children.reverse();
+            coords.reverse();
             let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
             let parent = nary_mr(&*self.hasher, &child_refs);
 
+            let parent_left_index = coords[0].0;
+            let parent_height = coords[0].1 + 1;
+            let node_id = (parent_left_index << 16) | (parent_height as u64 & 0xFFFF);
+
             self.storage
-                .store_node(0, self.next_node_id, &parent)
+                .store_node(0, node_id, &parent)
                 .map_err(crate::error::Error::Storage)?;
-            self.next_node_id += 1;
 
             self.frontier.push(parent);
+            self.frontier_coords.push((parent_left_index, parent_height));
         }
 
         self.commit_count += 1;
@@ -188,5 +212,48 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
         nary_mr(&*self.hasher, &refs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::MemoryStorage;
+
+    #[derive(Debug)]
+    struct TestHasher;
+    impl Hasher for TestHasher {
+        fn leaf(&self, data: &[u8]) -> Vec<u8> {
+            data.to_vec()
+        }
+        fn node(&self, children: &[&[u8]]) -> Vec<u8> {
+            children.concat()
+        }
+        fn empty(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn null(&self) -> Vec<u8> {
+            vec![2]
+        }
+        fn hash(&self, data: &[u8]) -> Vec<u8> {
+            data.to_vec()
+        }
+        fn clone_box(&self) -> Box<dyn Hasher> {
+            Box::new(TestHasher)
+        }
+    }
+
+    #[test]
+    fn test_structural_node_id_storage() {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(TestHasher), config);
+
+        log.append_leaf(b"a").unwrap();
+        log.append_leaf(b"b").unwrap();
+
+        let storage_ref = log.storage();
+        let node_hash = storage_ref.get_node(0, 1).unwrap();
+        assert!(node_hash.is_some(), "node at ID 1 (left_index 0, height 1) should be stored");
     }
 }
