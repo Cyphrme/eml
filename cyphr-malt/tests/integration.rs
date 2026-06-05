@@ -897,4 +897,65 @@ fn test_deep_subtree_inclusion_proofs() {
     });
 }
 
+#[test]
+fn test_subtree_appends_k3_k4() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+
+        // k=3 test
+        {
+            let storage = MemoryStorage::new();
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 3 }).await;
+
+            let s0 = Subtree::Node(vec![Subtree::Leaf(b"a".to_vec()), Subtree::Leaf(b"b".to_vec())]);
+            let s1 = Subtree::Leaf(b"c".to_vec());
+            let s2 = Subtree::Node(vec![
+                Subtree::Leaf(b"d".to_vec()),
+                Subtree::Leaf(b"e".to_vec()),
+                Subtree::Leaf(b"f".to_vec()),
+            ]);
+
+            log.append_subtree(&s0).await.unwrap();
+            log.append_subtree(&s1).await.unwrap();
+            log.append_subtree(&s2).await.unwrap();
+
+            let root = log.root();
+
+            let h0 = cyphr_malt::evaluate(&hasher, &s0);
+            let h1 = cyphr_malt::evaluate(&hasher, &s1);
+            let h2 = cyphr_malt::evaluate(&hasher, &s2);
+
+            let expected = hasher.node(&[&h0, &h1, &h2]);
+            assert_eq!(root, expected, "Root mismatch for k=3 subtree appends");
+        }
+
+        // k=4 test
+        {
+            let storage = MemoryStorage::new();
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 4 }).await;
+
+            let s0 = Subtree::Leaf(b"a".to_vec());
+            let s1 = Subtree::Leaf(b"b".to_vec());
+            let s2 = Subtree::Leaf(b"c".to_vec());
+            let s3 = Subtree::Leaf(b"d".to_vec());
+
+            log.append_subtree(&s0).await.unwrap();
+            log.append_subtree(&s1).await.unwrap();
+            log.append_subtree(&s2).await.unwrap();
+            log.append_subtree(&s3).await.unwrap();
+
+            let root = log.root();
+
+            let h0 = cyphr_malt::evaluate(&hasher, &s0);
+            let h1 = cyphr_malt::evaluate(&hasher, &s1);
+            let h2 = cyphr_malt::evaluate(&hasher, &s2);
+            let h3 = cyphr_malt::evaluate(&hasher, &s3);
+
+            let expected = hasher.node(&[&h0, &h1, &h2, &h3]);
+            assert_eq!(root, expected, "Root mismatch for k=4 subtree appends");
+        }
+    });
+}
+
+
 
