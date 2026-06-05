@@ -1064,6 +1064,79 @@ fn test_multi_algorithm_subtree_proofs() {
     });
 }
 
+#[test]
+fn test_proof_error_edge_cases() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+        // 1. Empty tree proof generation
+        assert!(log.inclusion_proof(0, 0).await.unwrap().is_none());
+        assert!(log.inclusion_proof(0, 1).await.unwrap().is_none());
+        assert!(log.consistency_proof(0, 0).await.unwrap().is_none());
+        assert!(log.consistency_proof(0, 1).await.unwrap().is_none());
+
+        // Append one leaf to make it size 1
+        log.append_leaf(b"hello").await.unwrap();
+
+        // 2. OOB/invalid index queries
+        assert!(log.inclusion_proof(1, 1).await.unwrap().is_none());
+        assert!(log.inclusion_proof(0, 2).await.unwrap().is_none());
+        assert!(log.consistency_proof(1, 1).await.unwrap().is_none());
+        assert!(log.consistency_proof(2, 1).await.unwrap().is_none());
+        assert!(log.consistency_proof(0, 1).await.unwrap().is_none());
+
+        // 3. within_commit_path edge cases
+        let leaf_subtree = Subtree::Leaf(b"x".to_vec());
+        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &leaf_subtree, 0).is_some());
+        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &leaf_subtree, 1).is_none());
+
+        let node_subtree = Subtree::Node(vec![
+            Subtree::Leaf(b"a".to_vec()),
+            Subtree::Leaf(b"b".to_vec()),
+        ]);
+        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &node_subtree, 1).is_some());
+        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &node_subtree, 2).is_none());
+
+        // 4. Verifier input validation failures
+        let empty_proof = cyphr_malt::InclusionProof {
+            index: 1,
+            tree_size: 1, // index >= tree_size
+            path: Vec::new(),
+        };
+        assert!(!cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &empty_proof, &vec![0; 32]));
+
+        let empty_cons_proof = cyphr_malt::ConsistencyProof {
+            old_size: 0, // old_size == 0
+            new_size: 2,
+            log_arity: 2,
+            start_hash: vec![0; 32],
+            path: Vec::new(),
+        };
+        assert!(!cyphr_malt::verify_consistency(&Sha256Hasher, &empty_cons_proof, &vec![0; 32], &vec![0; 32]));
+
+        let empty_cons_proof_invalid_sizes = cyphr_malt::ConsistencyProof {
+            old_size: 2, // old_size >= new_size
+            new_size: 2,
+            log_arity: 2,
+            start_hash: vec![0; 32],
+            path: Vec::new(),
+        };
+        assert!(!cyphr_malt::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_sizes, &vec![0; 32], &vec![0; 32]));
+
+        let empty_cons_proof_invalid_arity = cyphr_malt::ConsistencyProof {
+            old_size: 1,
+            new_size: 2,
+            log_arity: 1, // arity < 2
+            start_hash: vec![0; 32],
+            path: Vec::new(),
+        };
+        assert!(!cyphr_malt::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_arity, &vec![0; 32], &vec![0; 32]));
+    });
+}
+
+
 
 
 
