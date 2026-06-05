@@ -957,5 +957,50 @@ fn test_subtree_appends_k3_k4() {
     });
 }
 
+#[test]
+fn test_epoch_resume_subtree_gaps() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+        // 1. Initial subtrees while both algorithms active
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        let s0 = Subtree::Node(vec![Subtree::Leaf(b"a".to_vec()), Subtree::Leaf(b"b".to_vec())]);
+        log.append_subtree(&s0).await.unwrap();
+
+        // 2. Remove algorithm 0
+        log.remove_algorithm(0).await.unwrap();
+
+        // 3. Append subtree (gap for algorithm 0)
+        let s1 = Subtree::Leaf(b"c".to_vec());
+        log.append_subtree(&s1).await.unwrap();
+
+        // 4. Resume algorithm 0
+        log.resume_algorithm(0).await.unwrap();
+
+        // 5. Append more subtrees
+        let s2 = Subtree::Node(vec![Subtree::Leaf(b"d".to_vec())]);
+        log.append_subtree(&s2).await.unwrap();
+
+        let root0 = log.root_for(0).unwrap();
+        let root1 = log.root_for(1).unwrap();
+
+        // 6. Reconstruct from storage and verify roots match
+        let storage = log.into_storage();
+        let reconstructed = NaryMerkleLog::from_storage(
+            storage,
+            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reconstructed.root_for(0).unwrap(), root0);
+        assert_eq!(reconstructed.root_for(1).unwrap(), root1);
+    });
+}
+
+
 
 
