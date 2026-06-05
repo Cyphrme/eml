@@ -743,3 +743,63 @@ fn test_promotion_proofs_malt() {
         assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"z"), &proof, &root));
     });
 }
+
+#[test]
+fn test_subtree_consistency_proofs() {
+    smol::block_on(async {
+        for k in 2..=4 {
+            for size in 2..=15 {
+                let storage = MemoryStorage::new();
+                let config = TreeConfig { log_arity: k };
+                let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+                let mut subtrees = Vec::new();
+                for i in 0..size {
+                    let subtree = if i % 2 == 0 {
+                        Subtree::Node(vec![
+                            Subtree::Leaf(format!("a_{}_{}", k, i).into_bytes()),
+                            Subtree::Leaf(format!("b_{}_{}", k, i).into_bytes()),
+                        ])
+                    } else {
+                        Subtree::Node(vec![
+                            Subtree::Leaf(format!("c_{}_{}", k, i).into_bytes()),
+                        ])
+                    };
+                    log.append_subtree(&subtree).await.unwrap();
+                    subtrees.push(subtree);
+                }
+
+                let root = log.root();
+
+                // Verify consistency proof for every valid old size
+                for old_size in 1..size {
+                    let cons_proof = log
+                        .consistency_proof(old_size, size)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    
+                    let old_root = {
+                        let mut temp_log = NaryMerkleLog::new(
+                            MemoryStorage::new(),
+                            Box::new(Sha256Hasher),
+                            TreeConfig { log_arity: k },
+                        )
+                        .await;
+                        for i in 0..old_size {
+                            temp_log.append_subtree(&subtrees[i as usize]).await.unwrap();
+                        }
+                        temp_log.root()
+                    };
+
+                    assert!(
+                        cyphr_malt::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root),
+                        "verify_consistency failed for subtree log: k={}, size={}, old_size={}",
+                        k, size, old_size
+                    );
+                }
+            }
+        }
+    });
+}
+
