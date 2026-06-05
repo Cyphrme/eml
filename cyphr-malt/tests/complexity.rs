@@ -190,3 +190,182 @@ fn complexity_resume_algorithm_log_n() {
 
     assert_rank_at_most(data, 1000, "resume_algorithm", "O(log n)");
 }
+
+// ============================================================================
+// Subtree complexity tests
+//
+// The tests above only exercise flat leaf appends. The following tests verify
+// the complexity of the operations that are specific to NEML's novel
+// structure: appending recursive subtrees and generating inclusion proofs
+// through them.
+// ============================================================================
+
+use cyphr_malt::Subtree;
+
+/// Build a balanced binary subtree of the given depth.
+///
+/// Depth 0 → a single Leaf.
+/// Depth d → a Node with 2 children, each of depth d-1.
+///
+/// Total nodes = 2^(d+1) - 1.  Total leaves = 2^d.
+fn balanced_subtree(depth: usize, seed: &mut u64) -> Subtree {
+    if depth == 0 {
+        let data = seed.to_le_bytes().to_vec();
+        *seed += 1;
+        Subtree::Leaf(data)
+    } else {
+        Subtree::Node(vec![
+            balanced_subtree(depth - 1, seed),
+            balanced_subtree(depth - 1, seed),
+        ])
+    }
+}
+
+/// `append_subtree` should scale linearly in the number of subtree nodes,
+/// since it must evaluate the entire subtree to compute its root hash.
+#[test]
+fn complexity_append_subtree_linear_in_nodes() {
+    let depths: &[usize] = &[4, 6, 8, 10, 12, 14];
+    let trials = 15;
+    let mut data: Vec<(f64, f64)> = Vec::with_capacity(depths.len());
+
+    for &d in depths {
+        let mut seed = 0u64;
+        let subtree = balanced_subtree(d, &mut seed);
+        let total_nodes = (1u64 << (d + 1)) - 1;
+        let mut times = Vec::with_capacity(trials);
+
+        for _ in 0..trials {
+            smol::block_on(async {
+                let mut log = NaryMerkleLog::new(
+                    MemoryStorage::new(),
+                    Box::new(Sha256Hasher),
+                    TreeConfig { log_arity: 2 },
+                )
+                .await;
+
+                let start = ThreadTime::now();
+                log.append_subtree(&subtree).await.unwrap();
+                times.push(start.elapsed().as_nanos());
+            });
+        }
+        data.push((total_nodes as f64, median(&mut times) as f64));
+    }
+
+    assert_rank_at_most(
+        data,
+        1200,
+        "append_subtree",
+        "O(n) in subtree nodes",
+    );
+}
+
+/// `within_commit_path` should scale linearly in the number of subtree nodes,
+/// because at each level it evaluates all sibling subtrees to collect their
+/// hashes for the proof.
+#[test]
+fn complexity_within_commit_path_linear_in_nodes() {
+    let depths: &[usize] = &[4, 6, 8, 10, 12, 14];
+    let trials = 15;
+    let mut data: Vec<(f64, f64)> = Vec::with_capacity(depths.len());
+
+    for &d in depths {
+        let mut seed = 0u64;
+        let subtree = balanced_subtree(d, &mut seed);
+        let total_nodes = (1u64 << (d + 1)) - 1;
+        let mut times = Vec::with_capacity(trials);
+
+        for _ in 0..trials {
+            let start = ThreadTime::now();
+            for _ in 0..50 {
+                let _ = cyphr_malt::within_commit_path(
+                    &Sha256Hasher,
+                    &subtree,
+                    0,
+                );
+            }
+            times.push(start.elapsed().as_nanos() / 50);
+        }
+        data.push((total_nodes as f64, median(&mut times) as f64));
+    }
+
+    assert_rank_at_most(
+        data,
+        1200,
+        "within_commit_path",
+        "O(n) in subtree nodes",
+    );
+}
+
+/// End-to-end inclusion proof generation through subtrees, varying the log
+/// size while keeping subtree structure fixed.  The subtree-internal cost is
+/// constant, so the growth should be O(log n) in the number of appended
+/// subtrees.
+#[test]
+fn complexity_e2e_inclusion_subtree_log_n() {
+    let subtree_depth = 4; // Fixed: 16 leaves, 31 nodes per subtree.
+
+    let make_subtree_log =
+        |n: usize| -> Arc<(NaryMerkleLog<MemoryStorage>, Subtree)> {
+            smol::block_on(async {
+                let mut log = NaryMerkleLog::new(
+                    MemoryStorage::new(),
+                    Box::new(Sha256Hasher),
+                    TreeConfig { log_arity: 2 },
+                )
+                .await;
+
+                let mut last_subtree = None;
+                for i in 0..n {
+                    let mut seed = (i as u64) * 1000;
+                    let st = balanced_subtree(subtree_depth, &mut seed);
+                    log.append_subtree(&st).await.unwrap();
+                    if i == 0 {
+                        last_subtree = Some(st);
+                    }
+                }
+                Arc::new((log, last_subtree.unwrap()))
+            })
+        };
+
+    let sizes: &[usize] = &[100, 500, 1_000, 2_000, 5_000, 10_000];
+    let trials = 15;
+    let mut data: Vec<(f64, f64)> = Vec::with_capacity(sizes.len());
+
+    for &n in sizes {
+        let setup = make_subtree_log(n);
+        let mut times = Vec::with_capacity(trials);
+
+        for _ in 0..trials {
+            let (ref log, ref first_subtree) = *setup;
+            let start = ThreadTime::now();
+            for _ in 0..50 {
+                // Within-commit path for leaf 0 in subtree 0.
+                let mut path = cyphr_malt::within_commit_path(
+                    &Sha256Hasher,
+                    first_subtree,
+                    0,
+                )
+                .unwrap();
+
+                // Log-level proof for subtree 0.
+                let log_proof = smol::block_on(
+                    log.inclusion_proof(0, n as u64),
+                )
+                .unwrap()
+                .unwrap();
+
+                path.extend(log_proof.path);
+            }
+            times.push(start.elapsed().as_nanos() / 50);
+        }
+        data.push((n as f64, median(&mut times) as f64));
+    }
+
+    assert_rank_at_most(
+        data,
+        1200,
+        "e2e inclusion through subtree",
+        "O(log n) in log size",
+    );
+}
