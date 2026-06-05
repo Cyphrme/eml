@@ -1136,6 +1136,114 @@ fn test_proof_error_edge_cases() {
     });
 }
 
+#[test]
+fn test_power_of_k_boundaries() {
+    smol::block_on(async {
+        // k=3: sizes 3, 9, 27
+        {
+            let storage = MemoryStorage::new();
+            let config = TreeConfig { log_arity: 3 };
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+            let mut leaves = Vec::new();
+            for i in 0..27 {
+                let data = format!("leaf_3_{}", i).into_bytes();
+                log.append_leaf(&data).await.unwrap();
+                leaves.push(Sha256Hasher.leaf(&data));
+            }
+
+            let boundary_sizes = vec![3, 9, 27];
+            for &size in &boundary_sizes {
+                let root = {
+                    let mut temp_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig { log_arity: 3 }).await;
+                    for i in 0..size {
+                        temp_log.append_leaf(&format!("leaf_3_{}", i).into_bytes()).await.unwrap();
+                    }
+                    temp_log.root()
+                };
+
+                for idx in 0..size {
+                    let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
+                    assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &leaves[idx as usize], &proof, &root));
+                }
+            }
+
+            let proof_3_9 = log.consistency_proof(3, 9).await.unwrap().unwrap();
+            let root_3 = {
+                let mut temp_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig { log_arity: 3 }).await;
+                for i in 0..3 {
+                    temp_log.append_leaf(&format!("leaf_3_{}", i).into_bytes()).await.unwrap();
+                }
+                temp_log.root()
+            };
+            let root_9 = {
+                let mut temp_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig { log_arity: 3 }).await;
+                for i in 0..9 {
+                    temp_log.append_leaf(&format!("leaf_3_{}", i).into_bytes()).await.unwrap();
+                }
+                temp_log.root()
+            };
+            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_3_9, &root_3, &root_9));
+
+            let proof_9_27 = log.consistency_proof(9, 27).await.unwrap().unwrap();
+            let root_27 = log.root();
+            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_9_27, &root_9, &root_27));
+        }
+
+        // k=4: sizes 4, 16, 64
+        {
+            let storage = MemoryStorage::new();
+            let config = TreeConfig { log_arity: 4 };
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+            let mut leaves = Vec::new();
+            for i in 0..64 {
+                let data = format!("leaf_4_{}", i).into_bytes();
+                log.append_leaf(&data).await.unwrap();
+                leaves.push(Sha256Hasher.leaf(&data));
+            }
+
+            let boundary_sizes = vec![4, 16, 64];
+            for &size in &boundary_sizes {
+                let root = {
+                    let mut temp_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig { log_arity: 4 }).await;
+                    for i in 0..size {
+                        temp_log.append_leaf(&format!("leaf_4_{}", i).into_bytes()).await.unwrap();
+                    }
+                    temp_log.root()
+                };
+
+                for idx in 0..size {
+                    let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
+                    assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &leaves[idx as usize], &proof, &root));
+                }
+            }
+
+            let proof_4_16 = log.consistency_proof(4, 16).await.unwrap().unwrap();
+            let root_4 = {
+                let mut temp_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig { log_arity: 4 }).await;
+                for i in 0..4 {
+                    temp_log.append_leaf(&format!("leaf_4_{}", i).into_bytes()).await.unwrap();
+                }
+                temp_log.root()
+            };
+            let root_16 = {
+                let mut temp_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig { log_arity: 4 }).await;
+                for i in 0..16 {
+                    temp_log.append_leaf(&format!("leaf_4_{}", i).into_bytes()).await.unwrap();
+                }
+                temp_log.root()
+            };
+            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_4_16, &root_4, &root_16));
+
+            let proof_16_64 = log.consistency_proof(16, 64).await.unwrap().unwrap();
+            let root_64 = log.root();
+            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_16_64, &root_16, &root_64));
+        }
+    });
+}
+
+
 
 
 
