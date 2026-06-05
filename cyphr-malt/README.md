@@ -2,8 +2,6 @@
 
 `neml` is a Rust library implementing the **N-ary Epoch Merkle Log (NEML)** — a unified append-only Merkle log that combines epoch-based multi-algorithm lifecycle management with arbitrary-arity recursive subtrees.
 
-Append operations are amortized $O(1)$. Inclusion proofs, consistency proofs, and root extraction are $O(\log n)$. These bounds are empirically verified by the crate's complexity test suite.
-
 ---
 
 ## Motivation
@@ -101,7 +99,7 @@ The null constant $N_0 = H(\mathtt{0x02})$ uses a dedicated domain prefix (`0x02
 
 ## Literature Foundations
 
-**Crosby-Wallach history trees.** The log-level carry-reduction schedule generalizes Crosby & Wallach's (2009) *Efficient Data Structures for Tamper-Evident Logging*, which provides the $O(\log n)$ append-only consistency and inclusion proof model underlying Certificate Transparency (RFC 9162).
+**Crosby-Wallach history trees.** The log-level carry-reduction schedule generalizes Crosby & Wallach's (2009) *Efficient Data Structures for Tamper-Evident Logging*, which provides the $O(\log_k n)$ append-only consistency and inclusion proof model underlying Certificate Transparency (RFC 9162). For $k=2$, this reduces to the standard binary model.
 
 **Nested Merkle commitments.** Embedding dynamic-arity subtrees inside a fixed-arity log is structurally analogous to the block-transaction decoupling in distributed ledgers. For example, Ethereum's block header chain forms a linear history, but each block commits to the root of a Merkle Patricia Trie (a 16-ary tree). `neml` formalizes this pattern into a single library with a unified proof path, rather than requiring separate codebases and proof models for each layer.
 
@@ -109,13 +107,37 @@ The null constant $N_0 = H(\mathtt{0x02})$ uses a dedicated domain prefix (`0x02
 
 ---
 
-## Soundness
+## Soundness & Complexity
 
-**Log-level consistency proofs only traverse log-level nodes. Is this sound?**
+### Consistency Proofs
 
-Yes. Each appended subtree is reduced to a single root hash $R_i = H(\ldots)$ before entering the log. By collision resistance, $R_i$ uniquely commits to the subtree's contents. The log-level tree hashes these roots together into a global root. A consistency proof showing the log at size $m$ is a prefix of size $n$ proves that subtree roots $R_0, \ldots, R_{m-1}$ are unchanged — and since each $R_i$ is an immutable commitment to its contents, the historical subtrees are also unchanged. This keeps consistency proof size bounded by $O(\log n)$ in the number of appends, independent of the total leaf count across all subtrees.
+Consistency proofs (proving the log at size $m$ is an append-only prefix of size $n$) only traverse log-level nodes. This is sound because each appended subtree is reduced to a single root hash $R_i$ before entering the log. By collision resistance, $R_i$ uniquely commits to the subtree's contents. Proving that the sequence $R_0, \ldots, R_{m-1}$ is unchanged also proves the historical subtrees are unmodified.
 
-**End-to-end leaf inclusion proofs span both layers.** When proving that a specific leaf $L$ belongs to the log, the proof path traverses the subtree internals (reconstructing $R_i$) and then the log-level nodes (reconstructing the global root from $R_i$). Every step is linked via the hash function, forming an unbroken chain of commitments from $L$ to the global root.
+Consistency proof size is $O(\log_k n)$ where $n$ is the number of appends and $k$ is the log-level arity. This bound holds regardless of subtree structure.
+
+### End-to-End Inclusion Proofs
+
+Inclusion proofs for a leaf nested inside a subtree must traverse **both** the subtree internals and the log-level tree. The proof path walks from the leaf up through the subtree (reconstructing the subtree root $R_i$), then continues through the log-level nodes (reconstructing the global root from $R_i$). Every step is linked via the hash function, forming an unbroken chain of commitments from the leaf to the global root.
+
+The actual complexity of an end-to-end inclusion proof is:
+
+$$O(d + \log_k n)$$
+
+where $d$ is the depth of the target leaf within its subtree and $n$ is the number of appends in the log. The subtree depth $d$ is entirely determined by the structure the caller constructed — for a balanced subtree with $m$ leaves and branching factor $b$, $d = O(\log_b m)$.
+
+### Operation Complexity Summary
+
+| Operation | Complexity | Notes |
+|---|---|---|
+| `append_leaf` | Amortized $O(1)$ | Flat leaf, log-level only |
+| `append_subtree` | Amortized $O(s)$ | $s$ = number of nodes in the subtree |
+| Consistency proof | $O(\log_k n)$ | Log-level only; independent of subtree structure |
+| Inclusion proof (flat leaf) | $O(\log_k n)$ | Log-level only |
+| Inclusion proof (within subtree) | $O(d + \log_k n)$ | $d$ = leaf depth in subtree |
+| Root extraction | $O(\log_k n)$ | Frontier folding |
+| `resume_algorithm` | $O(\log_k n)$ | Frontier reconstruction |
+
+The log-level bounds ($O(\log_k n)$ and amortized $O(1)$ append) are empirically verified by the crate's complexity test suite using statistical curve fitting over growing input sizes.
 
 ---
 
