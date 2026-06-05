@@ -803,3 +803,98 @@ fn test_subtree_consistency_proofs() {
     });
 }
 
+#[test]
+fn test_deep_subtree_inclusion_proofs() {
+    smol::block_on(async {
+        // Helper to generate nested structure
+        fn make_nested_subtree(depth: usize, data: &[u8]) -> Subtree {
+            let mut current = Subtree::Leaf(data.to_vec());
+            for _ in 0..depth {
+                current = Subtree::Node(vec![current]);
+            }
+            current
+        }
+
+        // 1. Verify single leaf at depths 1 to 5
+        for depth in 1..=5 {
+            let storage = MemoryStorage::new();
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 }).await;
+
+            let data = format!("depth_{}", depth).into_bytes();
+            let subtree = make_nested_subtree(depth, &data);
+            log.append_subtree(&subtree).await.unwrap();
+
+            let root = log.root();
+            let mut path = cyphr_malt::within_commit_path(&Sha256Hasher, &subtree, 0).unwrap();
+            let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
+            path.extend(log_proof.path);
+
+            let full_proof = cyphr_malt::InclusionProof {
+                index: 0,
+                tree_size: 1,
+                path,
+            };
+
+            assert!(
+                cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(&data), &full_proof, &root),
+                "Failed single nested leaf inclusion proof verification at depth {}", depth
+            );
+        }
+
+        // 2. Verify multiple leaves at mixed depths
+        // Structure:
+        //       Node
+        //      /    \
+        //   Node     c (depth 1)
+        //   /  \
+        //  a    Node (depth 3)
+        //       |
+        //      Node
+        //       |
+        //       b
+        let a_data = b"a_nested".to_vec();
+        let b_data = b"b_nested".to_vec();
+        let c_data = b"c_nested".to_vec();
+
+        let branch_left = Subtree::Node(vec![
+            Subtree::Leaf(a_data.clone()),
+            Subtree::Node(vec![Subtree::Node(vec![Subtree::Leaf(b_data.clone())])]),
+        ]);
+        let subtree = Subtree::Node(vec![
+            branch_left,
+            Subtree::Leaf(c_data.clone()),
+        ]);
+
+        let storage = MemoryStorage::new();
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 3 }).await;
+        log.append_subtree(&subtree).await.unwrap();
+        log.append_subtree(&Subtree::Node(vec![Subtree::Leaf(b"other_leaf".to_vec())])).await.unwrap();
+
+        let root = log.root();
+        
+        let test_cases = vec![
+            (0, a_data),
+            (1, b_data),
+            (2, c_data),
+        ];
+
+        for (leaf_idx, data) in test_cases {
+            let mut path = cyphr_malt::within_commit_path(&Sha256Hasher, &subtree, leaf_idx).unwrap();
+            let log_proof = log.inclusion_proof(0, 2).await.unwrap().unwrap();
+            path.extend(log_proof.path);
+
+            let full_proof = cyphr_malt::InclusionProof {
+                index: leaf_idx,
+                tree_size: 4, // 3 leaves in subtree + 1 flat leaf = 4 total leaves
+                path,
+            };
+
+            assert!(
+                cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(&data), &full_proof, &root),
+                "Failed nested mixed leaf inclusion proof verification for index {}", leaf_idx
+            );
+        }
+    });
+}
+
+
