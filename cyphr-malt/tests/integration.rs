@@ -1001,6 +1001,70 @@ fn test_epoch_resume_subtree_gaps() {
     });
 }
 
+#[test]
+fn test_multi_algorithm_subtree_proofs() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        let s0 = Subtree::Node(vec![
+            Subtree::Leaf(b"a".to_vec()),
+            Subtree::Leaf(b"b".to_vec()),
+        ]);
+        let s1 = Subtree::Leaf(b"c".to_vec());
+
+        log.append_subtree(&s0).await.unwrap();
+        
+        // Remove algorithm 1 (creates a gap/inactive range)
+        log.remove_algorithm(1).await.unwrap();
+        
+        log.append_subtree(&s1).await.unwrap();
+
+        let root0 = log.root_for(0).unwrap();
+        let root1 = log.root_for(1).unwrap(); // frozen at size 1
+
+        // 1. Verify inclusion proof for Algorithm 0 (fully active)
+        let mut path0 = cyphr_malt::within_commit_path(&Sha256Hasher, &s1, 0).unwrap();
+        let log_proof0 = log.inclusion_proof_for(0, 1, 2).await.unwrap().unwrap();
+        path0.extend(log_proof0.path);
+
+        let full_proof0 = cyphr_malt::InclusionProof {
+            index: 2,
+            tree_size: 3,
+            path: path0,
+        };
+        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"c"), &full_proof0, &root0));
+
+        // 2. Verify inclusion proof for Algorithm 1 (frozen at size 1)
+        assert!(log.inclusion_proof_for(1, 1, 2).await.unwrap().is_none());
+
+        let mut path1 = cyphr_malt::within_commit_path(&Sha256Hasher, &s0, 1).unwrap();
+        let log_proof1 = log.inclusion_proof_for(1, 0, 1).await.unwrap().unwrap();
+        path1.extend(log_proof1.path);
+
+        let full_proof1 = cyphr_malt::InclusionProof {
+            index: 1,
+            tree_size: 2,
+            path: path1,
+        };
+        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"b"), &full_proof1, &root1));
+
+        // 3. Consistency proofs
+        let cons0 = log.consistency_proof_for(0, 1, 2).await.unwrap().unwrap();
+        let old_root0 = {
+            let mut temp_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig { log_arity: 2 }).await;
+            temp_log.append_subtree(&s0).await.unwrap();
+            temp_log.root_for(0).unwrap()
+        };
+        assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &cons0, &old_root0, &root0));
+
+        assert!(log.consistency_proof_for(1, 1, 2).await.unwrap().is_none());
+    });
+}
+
+
 
 
 
