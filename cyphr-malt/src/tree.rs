@@ -520,10 +520,11 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         };
 
+        let mut mixed_to_store = Vec::new();
         for &(left, height) in &coords {
             let cap = k.pow(height);
-            let hash = Self::reconstruct_subtree_root(
-                &mut self.storage,
+            let (hash, mixed) = Self::reconstruct_subtree_root(
+                &self.storage,
                 alg_id,
                 &temp_state,
                 left,
@@ -533,7 +534,18 @@ impl<S: Storage> NaryMerkleLog<S> {
             )
             .await?;
             frontier.push(hash);
+            mixed_to_store.extend(mixed);
         }
+
+        let nodes_ref: Vec<(u64, u64, &[u8])> = mixed_to_store
+            .iter()
+            .map(|&(node_id, ref hash)| (alg_id, node_id, hash.as_slice()))
+            .collect();
+
+        self.storage
+            .write_batch(&[], &nodes_ref)
+            .await
+            .map_err(crate::error::Error::Storage)?;
 
         self.storage
             .store_algorithm_meta(alg_id, &new_epochs)
@@ -551,21 +563,27 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// Recursively resolve a subtree root and collect mixed boundary nodes.
     #[allow(clippy::type_complexity)]
     fn reconstruct_subtree_root<'a>(
-        storage: &'a mut S,
+        storage: &'a S,
         alg_id: u64,
         state: &'a AlgState,
         lo: u64,
         hi: u64,
         k: u64,
         store_mixed: bool,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, S::Error>> + Send + 'a>>
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                Output = Result<(Vec<u8>, Vec<(u64, Vec<u8>)>), S::Error>,
+            > + Send + 'a,
+        >,
+    >
     where
         S: 'a,
     {
         Box::pin(async move {
             let size = hi - lo;
             if size == 0 {
-                return Ok(state.hasher.empty());
+                return Ok((state.hasher.empty(), Vec::new()));
             }
             if size == 1 {
                 if state.is_active_at(lo) {
@@ -576,23 +594,23 @@ impl<S: Storage> NaryMerkleLog<S> {
                             .await
                             .map_err(crate::error::Error::Storage)?
                         {
-                            return Ok(hash);
+                            return Ok((hash, Vec::new()));
                         } else {
-                            return Ok(state.hasher.null());
+                            return Ok((state.hasher.null(), Vec::new()));
                         }
                     } else {
                         let data = storage
                             .get_leaf(lo)
                             .await
                             .map_err(crate::error::Error::Storage)?;
-                        return Ok(state.hasher.leaf(&data));
+                        return Ok((state.hasher.leaf(&data), Vec::new()));
                     }
                 }
-                return Ok(state.hasher.null());
+                return Ok((state.hasher.null(), Vec::new()));
             }
 
             if !state.active_range(lo, hi) {
-                return Ok(state.hasher.null());
+                return Ok((state.hasher.null(), Vec::new()));
             }
 
             let is_power_of_k = {
@@ -619,15 +637,16 @@ impl<S: Storage> NaryMerkleLog<S> {
                     .await
                     .map_err(crate::error::Error::Storage)?
                 {
-                    return Ok(hash);
+                    return Ok((hash, Vec::new()));
                 }
 
                 let child_size = size / k;
                 let mut child_hashes = Vec::with_capacity(k as usize);
+                let mut mixed_nodes = Vec::new();
                 for j in 0..k {
                     let c_lo = lo + j * child_size;
                     let c_hi = lo + (j + 1) * child_size;
-                    let child_hash = Self::reconstruct_subtree_root(
+                    let (child_hash, child_mixed) = Self::reconstruct_subtree_root(
                         storage,
                         alg_id,
                         state,
@@ -638,25 +657,24 @@ impl<S: Storage> NaryMerkleLog<S> {
                     )
                     .await?;
                     child_hashes.push(child_hash);
+                    mixed_nodes.extend(child_mixed);
                 }
                 let child_refs: Vec<&[u8]> = child_hashes.iter().map(|c| c.as_slice()).collect();
                 let hash = nary_mr(state.hasher.as_ref(), &child_refs);
 
                 if store_mixed {
-                    storage
-                        .store_node(alg_id, node_id, &hash)
-                        .await
-                        .map_err(crate::error::Error::Storage)?;
+                    mixed_nodes.push((node_id, hash.clone()));
                 }
-                Ok(hash)
+                Ok((hash, mixed_nodes))
             } else {
                 let coords = frontier_for_size(size, k);
                 let mut component_hashes = Vec::with_capacity(coords.len());
+                let mut mixed_nodes = Vec::new();
                 for &(part_left, part_height) in &coords {
                     let cap = k.pow(part_height);
                     let c_lo = lo + part_left;
                     let c_hi = c_lo + cap;
-                    let part_root = Self::reconstruct_subtree_root(
+                    let (part_root, part_mixed) = Self::reconstruct_subtree_root(
                         storage,
                         alg_id,
                         state,
@@ -667,6 +685,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                     )
                     .await?;
                     component_hashes.push(part_root);
+                    mixed_nodes.extend(part_mixed);
                 }
 
                 let mut current = component_hashes;
@@ -680,7 +699,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                     current.push(merged);
                 }
                 let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-                Ok(nary_mr(state.hasher.as_ref(), &refs))
+                Ok((nary_mr(state.hasher.as_ref(), &refs), mixed_nodes))
             }
         })
     }

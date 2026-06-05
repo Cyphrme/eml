@@ -645,3 +645,101 @@ fn test_epoch_proofs() {
         assert!(log.inclusion_proof_for(1, 2, 2).await.unwrap().is_none());
     });
 }
+
+#[test]
+fn test_resume_persists_mixed_nodes_malt() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+        // Epoch 1 active: 3 leaves (0, 1, 2)
+        for i in 0..3u8 {
+            log.append_leaf(&[i]).await.unwrap();
+        }
+        log.remove_algorithm(0).await.unwrap();
+
+        // Gap: 5 leaves (3, 4, 5, 6, 7)
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+        for i in 3..8u8 {
+            log.append_leaf(&[i]).await.unwrap();
+        }
+
+        // Resume algorithm 0: total size = 8
+        log.resume_algorithm(0).await.unwrap();
+
+        let storage = log.into_storage();
+        
+        // Under size 8 and deactivation 3, mixed nodes are:
+        // - [0, 8) height 3: node_id = (0 << 16) | 3 = 3
+        // - [0, 4) height 2: node_id = (0 << 16) | 2 = 2
+        // - [2, 4) height 1: node_id = (2 << 16) | 1 = 131073
+        // Active node [0, 2) height 1 is also persisted (from initial appends): node_id = (0 << 16) | 1 = 1
+        assert!(storage.nodes.contains_key(&(0, 3)), "mixed node [0, 8) height 3 not persisted");
+        assert!(storage.nodes.contains_key(&(0, 2)), "mixed node [0, 4) height 2 not persisted");
+        assert!(storage.nodes.contains_key(&(0, 131073)), "mixed node [2, 4) height 1 not persisted");
+        assert!(storage.nodes.contains_key(&(0, 1)), "active node [0, 2) height 1 missing");
+
+        fn nary_mr_local(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
+            match children.len() {
+                0 => hasher.empty(),
+                1 => children[0].to_vec(),
+                _ => {
+                    let null_const = hasher.null();
+                    if children.iter().all(|&c| c == null_const) {
+                        null_const
+                    } else {
+                        hasher.node(children)
+                    }
+                }
+            }
+        }
+
+        // Validate hashes match canonical calculation
+        let h0 = Sha256Hasher.leaf(&[0]);
+        let h1 = Sha256Hasher.leaf(&[1]);
+        let h2 = Sha256Hasher.leaf(&[2]);
+        let hn = Sha256Hasher.null();
+
+        let n_0_2 = nary_mr_local(&Sha256Hasher, &[h0.as_slice(), h1.as_slice()]);
+        let n_2_4 = nary_mr_local(&Sha256Hasher, &[h2.as_slice(), hn.as_slice()]);
+        let n_0_4 = nary_mr_local(&Sha256Hasher, &[n_0_2.as_slice(), n_2_4.as_slice()]);
+
+        let n_4_6 = nary_mr_local(&Sha256Hasher, &[hn.as_slice(), hn.as_slice()]);
+        let n_6_8 = nary_mr_local(&Sha256Hasher, &[hn.as_slice(), hn.as_slice()]);
+        let n_4_8 = nary_mr_local(&Sha256Hasher, &[n_4_6.as_slice(), n_6_8.as_slice()]);
+
+        let n_0_8 = nary_mr_local(&Sha256Hasher, &[n_0_4.as_slice(), n_4_8.as_slice()]);
+
+        assert_eq!(storage.nodes.get(&(0, 3)), Some(&n_0_8));
+        assert_eq!(storage.nodes.get(&(0, 2)), Some(&n_0_4));
+        assert_eq!(storage.nodes.get(&(0, 131073)), Some(&n_2_4));
+    });
+}
+
+#[test]
+fn test_promotion_proofs_malt() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 3 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+        log.append_leaf(b"x").await.unwrap();
+        let root = log.root();
+        
+        let proof = log.inclusion_proof_for(0, 0, 1).await.unwrap().unwrap();
+        // Single leaf tree with arity 3 has empty path steps (direct leaf-to-root promotion)
+        assert!(proof.path.is_empty());
+        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &proof, &root));
+
+        // Append two more leaves: size 3 (which fills one 3-ary level)
+        log.append_leaf(b"y").await.unwrap();
+        log.append_leaf(b"z").await.unwrap();
+        let root = log.root();
+
+        // Inclusion proof for index 2
+        let proof = log.inclusion_proof_for(0, 2, 3).await.unwrap().unwrap();
+        assert_eq!(proof.path.len(), 1);
+        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"z"), &proof, &root));
+    });
+}
