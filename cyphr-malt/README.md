@@ -6,9 +6,9 @@
 
 ## Motivation
 
-Traditional append-only Merkle logs (such as RFC 6962 / RFC 9162 Certificate Transparency logs) append flat, unstructured entries. If the application's data is internally structured — for example, a batch of operations grouped into transactions, and transactions grouped into a block — that structure must either be flattened into individual leaf appends, or managed via a separate Merkle tree whose root is then appended to the log.
+Traditional append-only Merkle logs (such as those defined by RFC 6962 / RFC 9162) append flat, unstructured entries. If an application's data is internally structured — a batch of operations grouped into transactions, transactions grouped into a block — that structure must either be flattened into individual leaf appends, or managed via a separate Merkle tree whose root is then appended to the log.
 
-The second approach creates a **structural seam**: verifying that a specific leaf belongs to the log requires two disjoint proofs (one inside the local data tree, one inside the global log), with separate verification logic for each.
+The second approach creates a **structural seam**: verifying that a specific leaf belongs to the log requires two disjoint proofs — one inside the local data tree, one inside the global log — with separate verification logic for each. The verifier must independently check that the inner proof's root matches the outer proof's leaf, introducing a composition boundary that is a source of implementation bugs and conceptual overhead.
 
 `neml` eliminates this seam. A single `InclusionProof` walks from an individual leaf, up through the arbitrarily-structured subtree that contains it, and into the global log — as one uniform path.
 
@@ -16,7 +16,7 @@ The second approach creates a **structural seam**: verifying that a specific lea
 
 ## How It Works
 
-`neml` is a **tree of trees**: a fixed-arity Merkle log with arbitrary-arity recursive subtrees attached at the leaves.
+`neml` is a **tree of trees**. The outer layer is a Merkle log with a fixed arity $k$ (the branching factor at each internal node, default 2). The inner layer is arbitrary: each append is a recursive `Subtree` value whose internal nodes can have any number of children.
 
 ```text
                      [Log Root]                  <-- Log Level: Fixed Arity k=2
@@ -40,9 +40,9 @@ pub enum Subtree {
 }
 ```
 
-**Log level (fixed arity):** The log accumulates subtree roots into a single global history using a fixed arity $k$ (default 2) and a deterministic base-$k$ carry-reduction schedule. This is a direct generalization of the binary carry schedule used by Crosby-Wallach history trees and Certificate Transparency.
+**Log level (fixed arity):** The log accumulates subtree roots into a single global history using a fixed arity $k$ (default 2) and a deterministic base-$k$ carry-reduction schedule. This generalizes the binary carry schedule used by Crosby-Wallach history trees.
 
-**Why separate them?** Consistency proofs (proving the log at size $m$ is an append-only prefix of size $n$) require a deterministic, predictable tree topology. By keeping the log-level arity fixed and deterministic, `neml` preserves standard $O(\log n)$ consistency proofs while giving the application complete freedom over the internal structure of each append.
+**Why two layers?** Consistency proofs (proving the log at size $m$ is an append-only prefix of size $n$) require a deterministic, predictable tree topology — the verifier must be able to reconstruct the expected tree shape from the tree size alone. By keeping the log-level arity fixed, `neml` preserves $O(\log_k n)$ consistency proofs while giving the application complete freedom over the internal structure of each append.
 
 ---
 
@@ -55,9 +55,9 @@ A Merkle log is typically bound to a single hash algorithm for its entire lifeti
 An algorithm's lifetime is partitioned into **epochs**: disjoint intervals during which it actively hashes appended data. Between epochs, the algorithm is frozen: its root is immutable, and new appends produce null constants in its projection.
 
 Three operations govern algorithm lifecycles:
-- **`add_algorithm`**: Register a new algorithm at the current tree size. Its frontier is initialized from null constants in $O(\log n)$.
+- **`add_algorithm`**: Register a new algorithm at the current tree size. Its frontier is initialized from null constants in $O(\log_k n)$.
 - **`remove_algorithm`**: Freeze an algorithm at the current tree size. Future appends do not update it.
-- **`resume_algorithm`**: Reactivate a frozen algorithm. Its frontier is reconstructed from stored nodes and null constants in $O(\log n)$.
+- **`resume_algorithm`**: Reactivate a frozen algorithm. Its frontier is reconstructed from stored nodes and null constants in $O(\log_k n)$.
 
 From the perspective of a verifier holding a single algorithm's root and proof, `neml` is indistinguishable from a standard single-algorithm Merkle tree. Other algorithms' hashes are invisible.
 
@@ -69,9 +69,9 @@ For detailed formal treatment of the epoch model, see the [EML paper](https://em
 
 **Singleton promotion.** If an internal node has exactly one child, it is promoted directly without hashing: $E(\text{Node}([c])) = E(c)$. Degenerate single-child chains collapse to a single evaluation, eliminating unnecessary hash operations.
 
-**Flat null promotion.** All fully-null subtrees — regardless of height — evaluate to a single constant $N_0 = H(\mathtt{0x02})$. Unlike height-dependent null tables (as used in EML's binary model), `neml` uses a flat null constant: if every child of a node is $N_0$, the parent is also $N_0$. This eliminates precomputed null tables entirely.
+**Flat null promotion.** All fully-null subtrees — regardless of height — evaluate to a single constant $N_0 = H(\mathtt{0x02})$. Unlike EML's binary model (which uses height-dependent null tables where $N_h = H(0x01 \| N_{h-1} \| N_{h-1})$), `neml` uses a flat null constant: if every child of a node is $N_0$, the parent is also $N_0$. This eliminates precomputed null ladders entirely.
 
-**Seamless inclusion paths.** A single `InclusionProof` is a flat sequence of `ProofStep` values. Each step specifies sibling hashes and the position of the path node among them. The verifier processes steps uniformly — it does not need to know whether a given step originated inside a subtree or at the log level.
+**Seamless inclusion paths.** A single `InclusionProof` is a flat sequence of `ProofStep` values. Each step specifies sibling hashes and the index of the path node among its siblings. The verifier processes steps uniformly — it does not need to know whether a given step originated inside a subtree or at the log level.
 
 **Atomic batch writes.** All storage mutations from a single append (leaf data, internal nodes, log-level reductions) are written as a single atomic batch, ensuring crash-recovery consistency.
 
@@ -81,25 +81,31 @@ For detailed formal treatment of the epoch model, see the [EML paper](https://em
 
 ### Content Addressing & Prefix-Free Hashing
 
-`neml` uses **prefix-free hashing** — no `0x00` or `0x01` domain separation tags on leaves or nodes. The motivation is **content addressing**: leaf hashes should be standard cryptographic hashes of the data ($H(\text{data})$), independently verifiable as content identifiers without translation. Prefixed leaves ($H(\mathtt{0x00} \parallel \text{data})$) are not standard content hashes and cannot be verified outside the context of the specific Merkle tree that produced them.
+`neml` uses **prefix-free hashing** — no `0x00` or `0x01` domain separation tags on leaves or nodes. Leaf hashes are standard cryptographic hashes of the data: $H(\text{data})$. This means leaf hashes are independently verifiable as content identifiers (content addresses) without knowledge of the tree that produced them. By contrast, Certificate Transparency (RFC 6962/9162) prepends `0x00` to leaf inputs and `0x01` to node inputs; these prefixed hashes are tree-specific and cannot double as content addresses.
+
+Note: domain separation via prefix bytes is not an inherent property of Merkle trees. The original construction (Merkle, 1979) has no such mechanism. Prefix-based domain separation was introduced by Certificate Transparency as a hardening measure for its specific threat model, but it is not the only way to achieve second-preimage resistance. `neml` achieves it structurally.
 
 ### Second-Preimage Protection via Topological Commitments
 
-Standard Merkle trees use prefix bytes to prevent second-preimage attacks (e.g., an adversary presenting an internal node's hash input as a leaf payload). Without prefixes, `neml` prevents this structurally via **topological commitments**:
+The second-preimage threat in a Merkle tree is an adversary presenting an internal node's hash preimage as a leaf payload (or vice versa), causing the verifier to accept a proof for data that was never appended. RFC 6962/9162 prevent this by domain-separating hash inputs so that leaf and node preimages can never collide.
 
-- The signed tree head commits to the tree size $n$ and the arity configuration.
-- A left-filled tree's structure is a bijection of its size and arity — given $n$ and $k$, there is exactly one valid topology.
-- The verifier reconstructs the expected topology and asserts that the proof structure matches. Any attempt to substitute a leaf for an internal node, or to alter a node's arity, produces a topology mismatch and is rejected.
+`neml` prevents this structurally via **topological commitments**:
+
+- The signed tree head commits to the tree size $n$ and the log arity $k$.
+- A left-filled $k$-ary tree's structure is a deterministic function of $n$ and $k$ — given these two values, there is exactly one valid topology (node arities and tree shape).
+- The verifier reconstructs the expected topology from the signed tree head and asserts that the proof structure conforms. Any attempt to substitute a leaf for an internal node, or to alter a node's arity, produces a topology mismatch and is rejected.
+
+This is equivalent in security to prefix-based domain separation — both ensure the verifier can distinguish leaf positions from node positions — provided the verifier has the signed tree head (which is the standard trust assumption in any append-only log protocol). The difference is where the binding happens: in the hash preimage (prefixes) vs. in the proof structure (topological commitment).
 
 ### Null Domain Isolation
 
-The null constant $N_0 = H(\mathtt{0x02})$ uses a dedicated domain prefix (`0x02`). A standard internal node's hash preimage is a concatenation of $m$ digests, totaling $m \cdot B$ bytes (where $B$ is the digest size, e.g. 32 for SHA-256). Since $m \geq 2$, the minimum preimage length of a standard node is $2B = 64$ bytes. The preimage of $N_0$ is 1 byte. These lengths are strictly disjoint, so under a collision-resistant hash function, the null constant can never collide with a standard node hash.
+The null constant $N_0 = H(\mathtt{0x02})$ is the hash of a single byte. An internal node's hash preimage is the concatenation of $m \geq 2$ child digests, totaling $m \cdot B$ bytes (where $B$ is the digest size, e.g. 32 for SHA-256). The minimum node preimage length is therefore $2B = 64$ bytes. Since the null preimage is 1 byte, these lengths are strictly disjoint. Under a collision-resistant hash function, $N_0$ cannot collide with any node hash. The `0x02` byte serves only to distinguish null leaves from empty-string hashes; it is not a domain separation prefix in the RFC 9162 sense.
 
 ---
 
 ## Literature Foundations
 
-**Crosby-Wallach history trees.** The log-level carry-reduction schedule generalizes Crosby & Wallach's (2009) *Efficient Data Structures for Tamper-Evident Logging*, which provides the $O(\log_k n)$ append-only consistency and inclusion proof model underlying Certificate Transparency (RFC 9162). For $k=2$, this reduces to the standard binary model.
+**Crosby-Wallach history trees.** The log-level carry-reduction schedule generalizes Crosby & Wallach's (2009) *Efficient Data Structures for Tamper-Evident Logging*, which introduced the incremental frontier-stack construction for append-only hash trees. Certificate Transparency (RFC 6962/9162) adopted a structurally similar binary Merkle tree. `neml` generalizes the carry schedule from base-2 to base-$k$; for $k=2$ it reduces to the standard binary model.
 
 **Nested Merkle commitments.** Embedding dynamic-arity subtrees inside a fixed-arity log is structurally analogous to the block-transaction decoupling in distributed ledgers. For example, Ethereum's block header chain forms a linear history, but each block commits to the root of a Merkle Patricia Trie (a 16-ary tree). `neml` formalizes this pattern into a single library with a unified proof path, rather than requiring separate codebases and proof models for each layer.
 
@@ -111,7 +117,7 @@ The null constant $N_0 = H(\mathtt{0x02})$ uses a dedicated domain prefix (`0x02
 
 ### Consistency Proofs
 
-Consistency proofs (proving the log at size $m$ is an append-only prefix of size $n$) only traverse log-level nodes. This is sound because each appended subtree is reduced to a single root hash $R_i$ before entering the log. By collision resistance, $R_i$ uniquely commits to the subtree's contents. Proving that the sequence $R_0, \ldots, R_{m-1}$ is unchanged also proves the historical subtrees are unmodified.
+Consistency proofs (proving the log at size $m$ is an append-only prefix of size $n$) only traverse log-level nodes. This is sound because each appended subtree is reduced to a single root hash $R_i$ before entering the log. Under collision resistance, finding two distinct subtrees with the same root hash $R_i$ is computationally infeasible, so $R_i$ binds the subtree's contents. Proving that the sequence $R_0, \ldots, R_{m-1}$ is unchanged also proves the historical subtrees are unmodified.
 
 Consistency proof size is $O(\log_k n)$ where $n$ is the number of appends and $k$ is the log-level arity. This bound holds regardless of subtree structure.
 
@@ -188,5 +194,6 @@ async fn main() {
 ## Further Reading
 
 - [EML Paper](https://eml-paper.netlify.app/) — formal definition of the Polymorphic Merkle Log paradigm and the epoch-based multi-algorithm model that NEML generalizes.
-- [RFC 9162](https://www.rfc-editor.org/rfc/rfc9162) — Certificate Transparency v2, the binary Merkle log standard.
+- [RFC 9162](https://www.rfc-editor.org/rfc/rfc9162) — Certificate Transparency v2, the binary Merkle log standard that introduced 0x00/0x01 domain separation.
 - Crosby & Wallach, *Efficient Data Structures for Tamper-Evident Logging* (2009) — foundational history tree construction.
+- Merkle, *Secrecy, Authentication, and Public Key Systems* (1979) — original hash tree construction.
