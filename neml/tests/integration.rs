@@ -1243,6 +1243,316 @@ fn test_power_of_k_boundaries() {
     });
 }
 
+#[test]
+fn test_combined_root_singleton() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        log.append_leaf(b"test").await.unwrap();
+        let raw_root = log.root();
+        
+        // At size 1, with only default algorithm (0) active,
+        // combined_root() must match raw_root (Singleton Promotion).
+        let comb_root = log.combined_root().await;
+        assert_eq!(comb_root, raw_root);
+    });
+}
+
+#[test]
+fn test_combined_root_multi_alg() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+        log.append_leaf(b"data").await.unwrap();
+
+        // Retrieve raw roots
+        let root_0 = log.root_for_at(0, 1).await.unwrap();
+        let root_1 = log.root_for_at(1, 1).await.unwrap();
+
+        // Reconstruct combined root manually
+        let mut buf = Vec::new();
+        // alg_id = 0
+        buf.extend_from_slice(&0u64.to_be_bytes());
+        buf.extend_from_slice(&(root_0.len() as u64).to_be_bytes());
+        buf.extend_from_slice(&root_0);
+        // alg_id = 1
+        buf.extend_from_slice(&1u64.to_be_bytes());
+        buf.extend_from_slice(&(root_1.len() as u64).to_be_bytes());
+        buf.extend_from_slice(&root_1);
+
+        let expected_combined = Sha256Hasher.hash(&buf);
+
+        let comb_root = log.combined_root_for(0).await.unwrap();
+        assert_eq!(comb_root, expected_combined);
+    });
+}
+
+#[test]
+fn test_combined_root_historical_and_epochs() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        log.append_leaf(b"a").await.unwrap(); // size 1: alg 0 active
+        
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap(); // size 1: alg 0, 1 active
+        log.append_leaf(b"b").await.unwrap(); // size 2
+
+        log.remove_algorithm(1).await.unwrap(); // size 2: alg 0 active (alg 1 frozen)
+        log.append_leaf(b"c").await.unwrap(); // size 3
+
+        // Historical combined root at size 1: only alg 0 active -> Singleton Promotion
+        let comb_1 = log.combined_root_at(0, 1).await.unwrap();
+        let raw_0_at_1 = log.root_for_at(0, 1).await.unwrap();
+        assert_eq!(comb_1, raw_0_at_1);
+
+        // Historical combined root at size 2: alg 0 and 1 active
+        let comb_2 = log.combined_root_at(0, 2).await.unwrap();
+        assert_ne!(comb_2, log.root_for_at(0, 2).await.unwrap());
+
+        // Historical combined root at size 3: alg 1 is frozen, only alg 0 active -> Singleton Promotion
+        let comb_3 = log.combined_root_at(0, 3).await.unwrap();
+        let raw_0_at_3 = log.root_for_at(0, 3).await.unwrap();
+        assert_eq!(comb_3, raw_0_at_3);
+    });
+}
+
+#[test]
+fn test_coupling_proof_verify_validation() {
+    let hasher = Sha256Hasher;
+    let raw_root_0 = vec![0; 32];
+    let raw_root_1 = vec![1; 32];
+
+    let proof = neml::CouplingProof {
+        active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
+    };
+
+    // Correct Combined Root computation
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u64.to_be_bytes());
+    buf.extend_from_slice(&32u64.to_be_bytes());
+    buf.extend_from_slice(&raw_root_0);
+    buf.extend_from_slice(&1u64.to_be_bytes());
+    buf.extend_from_slice(&32u64.to_be_bytes());
+    buf.extend_from_slice(&raw_root_1);
+    let combined_root = hasher.hash(&buf);
+
+    let config = neml::VerifierConfig::default();
+
+    // 1. Success case
+    let target = proof.verify(&hasher, 0, &combined_root, &[0, 1], config);
+    assert_eq!(target.unwrap(), raw_root_0);
+
+    // 2. Reject because of maximum active algorithms limit
+    let strict_config = neml::VerifierConfig { max_active_algorithms: 1 };
+    let target_dos = proof.verify(&hasher, 0, &combined_root, &[0, 1], strict_config);
+    assert!(target_dos.is_none());
+
+    // 3. Reject unsorted algorithm IDs
+    let unsorted_proof = neml::CouplingProof {
+        active_roots: vec![(1, raw_root_1.clone()), (0, raw_root_0.clone())],
+    };
+    assert!(unsorted_proof.verify(&hasher, 0, &combined_root, &[0, 1], config).is_none());
+
+    // 4. Reject duplicate algorithm IDs
+    let duplicate_proof = neml::CouplingProof {
+        active_roots: vec![(0, raw_root_0.clone()), (0, raw_root_1.clone())],
+    };
+    assert!(duplicate_proof.verify(&hasher, 0, &combined_root, &[0, 1], config).is_none());
+
+    // 5. TAMPERED DATA REJECTION (Collision Resistance / Cryptographic Soundness)
+    // Modify one byte in raw_root_0
+    let mut bad_root_0 = raw_root_0.clone();
+    bad_root_0[0] ^= 0xFF;
+    let tampered_proof = neml::CouplingProof {
+        active_roots: vec![(0, bad_root_0), (1, raw_root_1.clone())],
+    };
+    assert!(tampered_proof.verify(&hasher, 0, &combined_root, &[0, 1], config).is_none());
+
+    // Modify combined root itself
+    let mut bad_combined = combined_root.clone();
+    bad_combined[0] ^= 0xFF;
+    assert!(proof.verify(&hasher, 0, &bad_combined, &[0, 1], config).is_none());
+
+    // 6. SPLIT-HORIZON PREVENTION REJECTION
+    // Expected algorithms has different IDs
+    assert!(proof.verify(&hasher, 0, &combined_root, &[0, 2], config).is_none());
+    // Expected algorithms is shorter (missing expected alg 1)
+    assert!(proof.verify(&hasher, 0, &combined_root, &[0], config).is_none());
+    // Expected algorithms is longer (extra expected alg)
+    assert!(proof.verify(&hasher, 0, &combined_root, &[0, 1, 2], config).is_none());
+
+    // 7. TARGET ALGORITHM MISSING FROM PROOF
+    // Requesting target_alg_id = 2, which is not in active_roots
+    assert!(proof.verify(&hasher, 2, &combined_root, &[0, 1], config).is_none());
+
+    // 8. UNSORTED EXPECTED ACTIVE ALGORITHMS
+    assert!(proof.verify(&hasher, 0, &combined_root, &[1, 0], config).is_none());
+
+    // 9. DUPLICATE EXPECTED ACTIVE ALGORITHMS
+    assert!(proof.verify(&hasher, 0, &combined_root, &[0, 0], config).is_none());
+
+    // 10. EMPTY INPUTS HANDLING
+    let empty_proof = neml::CouplingProof { active_roots: vec![] };
+    assert!(empty_proof.verify(&hasher, 0, &combined_root, &[0, 1], config).is_none());
+    assert!(proof.verify(&hasher, 0, &combined_root, &[], config).is_none());
+
+    // 11. VARIABLE LENGTH ROOTS (Length-Ambiguity Check)
+    let var_root_0 = vec![9; 20]; // 20-byte root (e.g. RIPEMD-160)
+    let var_root_1 = vec![5; 32]; // 32-byte root (e.g. SHA-256)
+    let var_proof = neml::CouplingProof {
+        active_roots: vec![(0, var_root_0.clone()), (1, var_root_1.clone())],
+    };
+    let mut var_buf = Vec::new();
+    var_buf.extend_from_slice(&0u64.to_be_bytes());
+    var_buf.extend_from_slice(&20u64.to_be_bytes());
+    var_buf.extend_from_slice(&var_root_0);
+    var_buf.extend_from_slice(&1u64.to_be_bytes());
+    var_buf.extend_from_slice(&32u64.to_be_bytes());
+    var_buf.extend_from_slice(&var_root_1);
+    let var_combined = hasher.hash(&var_buf);
+
+    let target_var = var_proof.verify(&hasher, 0, &var_combined, &[0, 1], config);
+    assert_eq!(target_var.unwrap(), var_root_0);
+
+    // 12. EMPTY ROOTS HANDLING
+    let empty_root_proof = neml::CouplingProof {
+        active_roots: vec![(0, vec![]), (1, var_root_1.clone())],
+    };
+    let mut empty_buf = Vec::new();
+    empty_buf.extend_from_slice(&0u64.to_be_bytes());
+    empty_buf.extend_from_slice(&0u64.to_be_bytes()); // length 0
+    empty_buf.extend_from_slice(&1u64.to_be_bytes());
+    empty_buf.extend_from_slice(&32u64.to_be_bytes());
+    empty_buf.extend_from_slice(&var_root_1);
+    let empty_combined = hasher.hash(&empty_buf);
+
+    let target_empty = empty_root_proof.verify(&hasher, 0, &empty_combined, &[0, 1], config);
+    assert_eq!(target_empty.unwrap(), Vec::<u8>::new());
+}
+
+#[test]
+fn test_verify_inclusion_with_coupling() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        log.append_leaf(b"test").await.unwrap();
+
+        let raw_root = log.root();
+        let combined_root = log.combined_root().await;
+        let inclusion_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
+        let coupling_proof = neml::CouplingProof {
+            active_roots: vec![(0, raw_root.clone())],
+        };
+
+        let verifier_config = neml::VerifierConfig::default();
+        let ok = neml::verify_inclusion_with_coupling(
+            &Sha256Hasher,
+            0,
+            &Sha256Hasher.leaf(b"test"),
+            &inclusion_proof,
+            &coupling_proof,
+            &combined_root,
+            &[0],
+            verifier_config,
+        );
+        assert!(ok);
+    });
+}
+
+#[test]
+fn test_verify_non_divergence() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        log.append_leaf(b"a").await.unwrap();
+        let root_0 = log.root();
+
+        // 1. Success verification from 0 to 1
+        let ok = log.verify_non_divergence(None, &[]).await.unwrap();
+        assert!(ok);
+
+        // 2. Success verification starting from checkpoint size 1
+        let ok_checkpoint = log.verify_non_divergence(Some(1), &[(0, root_0)]).await.unwrap();
+        assert!(ok_checkpoint);
+
+        // 3. Failure verification: passing a mismatching trusted root
+        let bad_root = vec![0x99; 32];
+        let ok_bad_checkpoint = log.verify_non_divergence(Some(1), &[(0, bad_root)]).await.unwrap();
+        assert!(!ok_bad_checkpoint);
+    });
+}
+
+#[test]
+fn test_combined_root_size_0() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        // Size 0 combined root query should return the empty hash
+        let root_at_0 = log.combined_root_at(0, 0).await.unwrap();
+        assert_eq!(root_at_0, Sha256Hasher.empty());
+    });
+}
+
+#[test]
+fn test_verify_consistency_with_coupling() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        log.append_leaf(b"a").await.unwrap();
+        let root_a = log.root();
+        let coupling_a = neml::CouplingProof {
+            active_roots: vec![(0, root_a.clone())],
+        };
+
+        log.append_leaf(b"b").await.unwrap();
+        let root_b = log.root();
+        let coupling_b = neml::CouplingProof {
+            active_roots: vec![(0, root_b.clone())],
+        };
+
+        let consistency_proof = log.consistency_proof(1, 2).await.unwrap().unwrap();
+
+        let verifier_config = neml::VerifierConfig::default();
+        let ok = neml::verify_consistency_with_coupling(
+            &Sha256Hasher,
+            0,
+            &consistency_proof,
+            &coupling_a,
+            &coupling_b,
+            &root_a,
+            &root_b,
+            &[0],
+            &[0],
+            verifier_config,
+        );
+        assert!(ok);
+    });
+}
+
+
+
 
 
 

@@ -1264,6 +1264,36 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         Ok(())
     }
+
+    /// Compute the current combined root hash of the default algorithm (0).
+    pub async fn combined_root(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// Compute the current combined root hash for a specific algorithm.
+    pub async fn combined_root_for(&self, _alg_id: u64) -> Result<Vec<u8>, S::Error> {
+        Ok(Vec::new())
+    }
+
+    /// Compute the combined root hash for a specific algorithm at a historical tree size.
+    pub async fn combined_root_at(&self, _alg_id: u64, _size: u64) -> Result<Vec<u8>, S::Error> {
+        Ok(Vec::new())
+    }
+
+    /// Retrieve the raw root hash for a specific algorithm at a historical tree size.
+    pub async fn root_for_at(&self, _alg_id: u64, _size: u64) -> Result<Vec<u8>, S::Error> {
+        Ok(Vec::new())
+    }
+
+    /// Verify that the trees for all active algorithms have not diverged
+    /// from the underlying leaf data stored in the database.
+    pub async fn verify_non_divergence(
+        &self,
+        _checkpoint_size: Option<u64>,
+        _trusted_roots: &[(u64, Vec<u8>)],
+    ) -> Result<bool, S::Error> {
+        Ok(false)
+    }
 }
 
 /// Reconstruct the coordinates (left_index, height) of the frontier for a given tree size.

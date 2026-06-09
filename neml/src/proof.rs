@@ -407,3 +407,107 @@ pub fn verify_consistency(
 
     computed_old_root == old_root && computed_new_root == new_root
 }
+
+/// Configuration options for proof verification (local node policy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifierConfig {
+    /// Maximum number of active algorithms allowed (DoS mitigation).
+    pub max_active_algorithms: usize,
+}
+
+impl Default for VerifierConfig {
+    fn default() -> Self {
+        Self {
+            max_active_algorithms: 8,
+        }
+    }
+}
+
+/// A coupling proof that binds a set of raw algorithm roots to a Signed Combined Root.
+/// This allows verification of the combined root structure separately from individual trees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CouplingProof {
+    /// The active roots at this tree size: (alg_id, raw_root_hash)
+    pub active_roots: Vec<(u64, Vec<u8>)>,
+}
+
+impl CouplingProof {
+    /// Verify the coupling proof against a signed combined root for a given target algorithm.
+    /// Returns the verified raw root hash for the target algorithm if successful.
+    #[must_use]
+    pub fn verify(
+        &self,
+        _hasher: &dyn Hasher,
+        _target_alg_id: u64,
+        _combined_root: &[u8],
+        _expected_active_algs: &[u64],
+        _config: VerifierConfig,
+    ) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// Reconstruct the raw root from an inclusion proof path.
+#[must_use]
+pub fn reconstruct_inclusion_root(
+    _hasher: &dyn Hasher,
+    _leaf_hash: &[u8],
+    _proof: &InclusionProof,
+) -> Option<Vec<u8>> {
+    None
+}
+
+/// Reconstruct the old and new raw roots from a consistency proof path.
+#[must_use]
+pub fn reconstruct_consistency_roots(
+    _hasher: &dyn Hasher,
+    _proof: &ConsistencyProof,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    None
+}
+
+/// Helper wrapper demonstrating inclusion verification with decoupled coupling proofs.
+#[must_use]
+pub fn verify_inclusion_with_coupling(
+    _hasher: &dyn Hasher,
+    _alg_id: u64,
+    _leaf_hash: &[u8],
+    _inclusion_proof: &InclusionProof,
+    _coupling: &CouplingProof,
+    _combined_root: &[u8],
+    _expected_active_algs: &[u64],
+    _config: VerifierConfig,
+) -> bool {
+    false
+}
+
+/// Helper wrapper demonstrating consistency verification with decoupled coupling proofs.
+#[must_use]
+pub fn verify_consistency_with_coupling(
+    _hasher: &dyn Hasher,
+    _alg_id: u64,
+    _consistency_proof: &ConsistencyProof,
+    _old_coupling: &CouplingProof,
+    _new_coupling: &CouplingProof,
+    _old_combined_root: &[u8],
+    _new_combined_root: &[u8],
+    _old_expected_active_algs: &[u64],
+    _new_expected_active_algs: &[u64],
+    _config: VerifierConfig,
+) -> bool {
+    false
+}
+
+/// The raw payload of an audit verification checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditPayload {
+    /// Identifier of the log being audited.
+    pub log_id: [u8; 32],
+    /// The tree size that was verified.
+    pub tree_size: u64,
+    /// The list of active algorithm IDs at this checkpoint size.
+    pub active_algs: Vec<u64>,
+    /// The Combined Roots of the log at `tree_size` for each active algorithm.
+    pub combined_roots: Vec<(u64, Vec<u8>)>,
+}
+
