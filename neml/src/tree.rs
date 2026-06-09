@@ -138,6 +138,13 @@ impl<S: Storage> NaryMerkleLog<S> {
         hashers: Vec<(u64, Box<dyn Hasher>)>,
         config: TreeConfig,
     ) -> Result<Self, S::Error> {
+        if config.log_arity < 2 {
+            return Err(crate::error::Error::CorruptedMetadata {
+                alg_id: 0,
+                reason: format!("invalid log_arity: must be >= 2, got {}", config.log_arity),
+            });
+        }
+
         let metas = storage
             .load_algorithm_metas()
             .await
@@ -146,8 +153,12 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut hasher_map: std::collections::HashMap<u64, Box<dyn Hasher>> =
             hashers.into_iter().collect();
 
-        // Validate 1:1 correspondence.
+        // Validate 1:1 correspondence and duplicate IDs.
+        let mut seen = std::collections::HashSet::new();
         for &(alg_id, _) in &metas {
+            if !seen.insert(alg_id) {
+                return Err(crate::error::Error::DuplicateAlgorithm(alg_id));
+            }
             if !hasher_map.contains_key(&alg_id) {
                 return Err(crate::error::Error::OrphanedMetadata(alg_id));
             }
@@ -709,6 +720,13 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Append a single leaf to the log (State Tree Mode).
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
+        if self.size >= (1u64 << 47) {
+            return Err(crate::error::Error::CorruptedMetadata {
+                alg_id: 0,
+                reason: "log capacity exceeded (max 2^47 items)".to_string(),
+            });
+        }
+
         if !self.algs.values().any(|s| s.is_active()) {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
@@ -745,13 +763,19 @@ impl<S: Storage> NaryMerkleLog<S> {
                         state
                             .frontier
                             .pop()
-                            .expect("frontier stack underflow during reduction"),
+                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                                alg_id,
+                                reason: "frontier stack underflow during reduction".to_string(),
+                            })?,
                     );
                     coords.push(
                         state
                             .frontier_coords
                             .pop()
-                            .expect("frontier_coords stack underflow during reduction"),
+                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                                alg_id,
+                                reason: "frontier_coords stack underflow during reduction".to_string(),
+                            })?,
                     );
                 }
                 children.reverse();
@@ -791,6 +815,13 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Append a structured subtree to the log (Commit Tree Mode).
     pub async fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
+        if self.commit_count >= (1u64 << 47) {
+            return Err(crate::error::Error::CorruptedMetadata {
+                alg_id: 0,
+                reason: "log capacity exceeded (max 2^47 items)".to_string(),
+            });
+        }
+
         if !self.algs.values().any(|s| s.is_active()) {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
@@ -824,13 +855,19 @@ impl<S: Storage> NaryMerkleLog<S> {
                         state
                             .frontier
                             .pop()
-                            .expect("frontier stack underflow during reduction"),
+                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                                alg_id,
+                                reason: "frontier stack underflow during reduction".to_string(),
+                            })?,
                     );
                     coords.push(
                         state
                             .frontier_coords
                             .pop()
-                            .expect("frontier_coords stack underflow during reduction"),
+                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                                alg_id,
+                                reason: "frontier_coords stack underflow during reduction".to_string(),
+                            })?,
                     );
                 }
                 children.reverse();
@@ -913,8 +950,15 @@ impl<S: Storage> NaryMerkleLog<S> {
             .get(&alg_id)
             .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
         let k = self.config.log_arity as u64;
-        let cap = k.pow(height);
-        if !state.active_range(left, left + cap) {
+        let cap = match k.checked_pow(height) {
+            Some(c) => c,
+            None => return Ok(state.hasher.null()),
+        };
+        let limit = match left.checked_add(cap) {
+            Some(val) => val,
+            None => return Ok(state.hasher.null()),
+        };
+        if !state.active_range(left, limit) {
             return Ok(state.hasher.null());
         }
         let node_id = (left << 16) | (height as u64 & 0xFFFF);
@@ -1627,8 +1671,14 @@ impl<S: Storage> NaryMerkleLog<S> {
                     let mut children = Vec::with_capacity(self.config.log_arity);
                     let mut coords = Vec::with_capacity(self.config.log_arity);
                     for _ in 0..self.config.log_arity {
-                        children.push(frontier.pop().unwrap());
-                        coords.push(frontier_coords.pop().unwrap());
+                        children.push(frontier.pop().ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier underflow".to_string(),
+                        })?);
+                        coords.push(frontier_coords.pop().ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier_coords underflow".to_string(),
+                        })?);
                     }
                     children.reverse();
                     coords.reverse();
