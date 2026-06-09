@@ -552,7 +552,10 @@ impl<S: Storage> NaryMerkleLog<S> {
             .await
             .map_err(crate::error::Error::Storage)?;
 
-        let state = self.algs.get_mut(&alg_id).unwrap();
+        let state = self
+            .algs
+            .get_mut(&alg_id)
+            .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
         state.epochs = new_epochs;
         state.frontier = frontier;
         state.frontier_coords = coords;
