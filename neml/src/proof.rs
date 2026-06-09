@@ -39,6 +39,19 @@ pub struct ConsistencyProof {
     pub path: Vec<ProofStep>,
 }
 
+/// Timing-safe comparison of two byte slices.
+#[inline]
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
 /// Verify an inclusion proof.
 ///
 /// Returns `true` if the proof demonstrates that `leaf_hash` is the leaf at
@@ -50,43 +63,8 @@ pub fn verify_inclusion(
     proof: &InclusionProof,
     root: &[u8],
 ) -> bool {
-    if proof.index >= proof.tree_size {
-        return false;
-    }
-    if proof.path.len() > 256 {
-        return false;
-    }
-
-    let mut current = leaf_hash.to_vec();
-
-    for step in &proof.path {
-        if step.siblings.len() > 256 {
-            return false;
-        }
-        if step.siblings.is_empty() {
-            // Promoted node — current hash passes through unchanged
-            continue;
-        }
-        if step.position > step.siblings.len() {
-            return false;
-        }
-
-        // Reconstruct the parent: insert current at position among siblings
-        let mut children = Vec::with_capacity(step.siblings.len() + 1);
-        for (i, sib) in step.siblings.iter().enumerate() {
-            if i == step.position {
-                children.push(current.as_slice());
-            }
-            children.push(sib.as_slice());
-        }
-        if step.position == step.siblings.len() {
-            children.push(current.as_slice());
-        }
-
-        current = nary_mr(hasher, &children);
-    }
-
-    current == root
+    reconstruct_inclusion_root(hasher, leaf_hash, proof)
+        .map_or(false, |computed| constant_time_eq(&computed, root))
 }
 
 fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
@@ -125,14 +103,170 @@ pub fn verify_consistency(
     old_root: &[u8],
     new_root: &[u8],
 ) -> bool {
-    if proof.old_size == 0 || proof.old_size >= proof.new_size {
-        return false;
+    reconstruct_consistency_roots(hasher, proof)
+        .map_or(false, |(computed_old, computed_new)| {
+            constant_time_eq(&computed_old, old_root) && constant_time_eq(&computed_new, new_root)
+        })
+}
+
+/// Configuration options for proof verification (local node policy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifierConfig {
+    /// Maximum number of active algorithms allowed (DoS mitigation).
+    pub max_active_algorithms: usize,
+}
+
+impl Default for VerifierConfig {
+    fn default() -> Self {
+        Self {
+            max_active_algorithms: 8,
+        }
     }
-    if proof.log_arity < 2 || proof.log_arity > 256 {
-        return false;
+}
+
+/// A coupling proof that binds a set of raw algorithm roots to a Signed Combined Root.
+/// This allows verification of the combined root structure separately from individual trees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CouplingProof {
+    /// The active roots at this tree size: (alg_id, raw_root_hash)
+    pub active_roots: Vec<(u64, Vec<u8>)>,
+}
+
+impl CouplingProof {
+    /// Verify the coupling proof against a signed combined root for a given target algorithm.
+    /// Returns the verified raw root hash for the target algorithm if successful.
+    #[must_use]
+    pub fn verify(
+        &self,
+        hasher: &dyn Hasher,
+        target_alg_id: u64,
+        combined_root: &[u8],
+        expected_active_algs: &[u64],
+        config: VerifierConfig,
+    ) -> Option<Vec<u8>> {
+        // DoS Mitigation: assert active roots count does not exceed configuration limit before allocating
+        if self.active_roots.len() > config.max_active_algorithms {
+            return None;
+        }
+
+        // Validate active roots match expected active algorithms exactly to prevent type-confusion/bypass
+        if self.active_roots.len() != expected_active_algs.len() {
+            return None;
+        }
+        for (i, &expected_id) in expected_active_algs.iter().enumerate() {
+            if self.active_roots[i].0 != expected_id {
+                return None;
+            }
+        }
+
+        // DoS Mitigation: assert individual companion root sizes are within bounds
+        for (_, r) in &self.active_roots {
+            if r.len() > 64 {
+                return None;
+            }
+        }
+
+        // Ensure the active roots list is canonically sorted by algorithm ID (prover requirement)
+        // to prevent duplicate representation vectors or sorting malleability.
+        for i in 1..self.active_roots.len() {
+            if self.active_roots[i - 1].0 >= self.active_roots[i].0 {
+                return None;
+            }
+        }
+
+        // Extract the target algorithm's root
+        let mut target_root = None;
+        for &(id, ref r) in &self.active_roots {
+            if id == target_alg_id {
+                target_root = Some(r.clone());
+                break;
+            }
+        }
+        let target_root = target_root?;
+
+        // Reconstruct the combined root
+        let match_ok = if self.active_roots.len() == 1 {
+            // Singleton Promotion: the combined root is the raw root
+            constant_time_eq(&self.active_roots[0].1, combined_root)
+        } else {
+            let mut buf = Vec::new();
+            for (id, r) in &self.active_roots {
+                buf.extend_from_slice(&id.to_be_bytes());
+                buf.extend_from_slice(&(r.len() as u64).to_be_bytes());
+                buf.extend_from_slice(r);
+            }
+            let computed = hasher.hash(&buf);
+            constant_time_eq(&computed, combined_root)
+        };
+
+        if match_ok {
+            Some(target_root)
+        } else {
+            None
+        }
+    }
+}
+
+/// Reconstruct the raw root from an inclusion proof path.
+#[must_use]
+pub fn reconstruct_inclusion_root(
+    hasher: &dyn Hasher,
+    leaf_hash: &[u8],
+    proof: &InclusionProof,
+) -> Option<Vec<u8>> {
+    if proof.index >= proof.tree_size {
+        return None;
     }
     if proof.path.len() > 256 {
-        return false;
+        return None;
+    }
+
+    let mut current = leaf_hash.to_vec();
+
+    for step in &proof.path {
+        if step.siblings.len() > 256 {
+            return None;
+        }
+        if step.siblings.is_empty() {
+            // Promoted node — current hash passes through unchanged
+            continue;
+        }
+        if step.position > step.siblings.len() {
+            return None;
+        }
+
+        // Reconstruct the parent: insert current at position among siblings
+        let mut children = Vec::with_capacity(step.siblings.len() + 1);
+        for (i, sib) in step.siblings.iter().enumerate() {
+            if i == step.position {
+                children.push(current.as_slice());
+            }
+            children.push(sib.as_slice());
+        }
+        if step.position == step.siblings.len() {
+            children.push(current.as_slice());
+        }
+
+        current = nary_mr(hasher, &children);
+    }
+
+    Some(current)
+}
+
+/// Reconstruct the old and new raw roots from a consistency proof path.
+#[must_use]
+pub fn reconstruct_consistency_roots(
+    hasher: &dyn Hasher,
+    proof: &ConsistencyProof,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    if proof.old_size == 0 || proof.old_size >= proof.new_size {
+        return None;
+    }
+    if proof.log_arity < 2 || proof.log_arity > 256 {
+        return None;
+    }
+    if proof.path.len() > 256 {
+        return None;
     }
 
     let k = proof.log_arity;
@@ -142,12 +276,15 @@ pub fn verify_consistency(
 
     let &(boundary_left, boundary_height) = match old_coords.last() {
         Some(coords) => coords,
-        None => return false,
+        None => return None,
     };
 
     let mut target_new_f_idx = None;
     for (f_idx, &(new_left, new_height)) in new_coords.iter().enumerate() {
-        let cap = k.pow(new_height);
+        let cap = match k.checked_pow(new_height) {
+            Some(c) => c,
+            None => return None,
+        };
         if boundary_left >= new_left && boundary_left < new_left + cap {
             target_new_f_idx = Some((f_idx, new_left, new_height));
             break;
@@ -156,11 +293,11 @@ pub fn verify_consistency(
 
     let (f_idx, _new_left, new_height) = match target_new_f_idx {
         Some(val) => val,
-        None => return false,
+        None => return None,
     };
 
     if new_height < boundary_height {
-        return false;
+        return None;
     }
 
     // We will populate a map from coordinate (left, height) to its hash
@@ -170,7 +307,7 @@ pub fn verify_consistency(
 
     let bisection_steps = (new_height - boundary_height) as usize;
     if proof.path.len() < bisection_steps {
-        return false;
+        return None;
     }
 
     // 1. Trace the bisection steps (first bisection_steps of proof.path)
@@ -183,25 +320,28 @@ pub fn verify_consistency(
             curr_height += 1;
             let current_hash = match map.get(&(curr_left, curr_height - 1)) {
                 Some(h) => h.clone(),
-                None => return false,
+                None => return None,
             };
             map.insert((curr_left, curr_height), current_hash);
             continue;
         }
         if step.position > step.siblings.len() {
-            return false;
+            return None;
         }
 
-        let child_capacity = k.pow(curr_height);
+        let child_capacity = match k.checked_pow(curr_height) {
+            Some(c) => c,
+            None => return None,
+        };
         let parent_left = match curr_left.checked_sub(step.position as u64 * child_capacity) {
             Some(val) => val,
-            None => return false,
+            None => return None,
         };
         let parent_height = curr_height + 1;
 
         let current_hash = match map.get(&(curr_left, curr_height)) {
             Some(h) => h.clone(),
-            None => return false,
+            None => return None,
         };
 
         // Reconstruct children
@@ -266,13 +406,13 @@ pub fn verify_consistency(
 
         if is_target_merged {
             if proof_idx >= proof.path.len() {
-                return false;
+                return None;
             }
             let step = &proof.path[proof_idx];
             proof_idx += 1;
 
             if step.position != target_idx - split_idx || step.siblings.len() != k_usize - 1 {
-                return false;
+                return None;
             }
 
             let mut children_hashes = Vec::with_capacity(k_usize);
@@ -281,7 +421,7 @@ pub fn verify_consistency(
                 let hash = if node_idx == target_idx {
                     match &current_frontier[node_idx].hash {
                         Some(h) => h.clone(),
-                        None => return false,
+                        None => return None,
                     }
                 } else {
                     let sib_idx = if j < step.position { j } else { j - 1 };
@@ -313,8 +453,7 @@ pub fn verify_consistency(
             });
             target_idx = split_idx;
         } else {
-            // Target is not merged, so we simulate the coordinate merge without consuming a proof
-            // step
+            // Target is not merged, so we simulate the coordinate merge without consuming a proof step
             let parent_left = current_frontier[split_idx].left;
             let parent_height = current_frontier[split_idx].height + 1;
 
@@ -330,13 +469,13 @@ pub fn verify_consistency(
     if current_frontier.len() > 1 {
         // Final root merge
         if proof_idx >= proof.path.len() {
-            return false;
+            return None;
         }
         let step = &proof.path[proof_idx];
         proof_idx += 1;
 
         if step.position != target_idx || step.siblings.len() != current_frontier.len() - 1 {
-            return false;
+            return None;
         }
 
         let mut children_hashes = Vec::with_capacity(current_frontier.len());
@@ -344,7 +483,7 @@ pub fn verify_consistency(
             let hash = if j == target_idx {
                 match &node.hash {
                     Some(h) => h.clone(),
-                    None => return false,
+                    None => return None,
                 }
             } else {
                 let sib_idx = if j < step.position { j } else { j - 1 };
@@ -366,7 +505,7 @@ pub fn verify_consistency(
     }
 
     if proof_idx != proof.path.len() {
-        return false;
+        return None;
     }
 
     // 3. Reconstruct old root
@@ -374,7 +513,7 @@ pub fn verify_consistency(
     for coord in &old_coords {
         let hash = match map.get(coord) {
             Some(h) => h.clone(),
-            None => return false,
+            None => return None,
         };
         old_hashes.push(hash);
     }
@@ -402,100 +541,56 @@ pub fn verify_consistency(
     // 4. Reconstruct new root
     let computed_new_root = match &current_frontier[0].hash {
         Some(h) => h.clone(),
-        None => return false,
+        None => return None,
     };
 
-    computed_old_root == old_root && computed_new_root == new_root
-}
-
-/// Configuration options for proof verification (local node policy).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VerifierConfig {
-    /// Maximum number of active algorithms allowed (DoS mitigation).
-    pub max_active_algorithms: usize,
-}
-
-impl Default for VerifierConfig {
-    fn default() -> Self {
-        Self {
-            max_active_algorithms: 8,
-        }
-    }
-}
-
-/// A coupling proof that binds a set of raw algorithm roots to a Signed Combined Root.
-/// This allows verification of the combined root structure separately from individual trees.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CouplingProof {
-    /// The active roots at this tree size: (alg_id, raw_root_hash)
-    pub active_roots: Vec<(u64, Vec<u8>)>,
-}
-
-impl CouplingProof {
-    /// Verify the coupling proof against a signed combined root for a given target algorithm.
-    /// Returns the verified raw root hash for the target algorithm if successful.
-    #[must_use]
-    pub fn verify(
-        &self,
-        _hasher: &dyn Hasher,
-        _target_alg_id: u64,
-        _combined_root: &[u8],
-        _expected_active_algs: &[u64],
-        _config: VerifierConfig,
-    ) -> Option<Vec<u8>> {
-        None
-    }
-}
-
-/// Reconstruct the raw root from an inclusion proof path.
-#[must_use]
-pub fn reconstruct_inclusion_root(
-    _hasher: &dyn Hasher,
-    _leaf_hash: &[u8],
-    _proof: &InclusionProof,
-) -> Option<Vec<u8>> {
-    None
-}
-
-/// Reconstruct the old and new raw roots from a consistency proof path.
-#[must_use]
-pub fn reconstruct_consistency_roots(
-    _hasher: &dyn Hasher,
-    _proof: &ConsistencyProof,
-) -> Option<(Vec<u8>, Vec<u8>)> {
-    None
+    Some((computed_old_root, computed_new_root))
 }
 
 /// Helper wrapper demonstrating inclusion verification with decoupled coupling proofs.
 #[must_use]
 pub fn verify_inclusion_with_coupling(
-    _hasher: &dyn Hasher,
-    _alg_id: u64,
-    _leaf_hash: &[u8],
-    _inclusion_proof: &InclusionProof,
-    _coupling: &CouplingProof,
-    _combined_root: &[u8],
-    _expected_active_algs: &[u64],
-    _config: VerifierConfig,
+    hasher: &dyn Hasher,
+    alg_id: u64,
+    leaf_hash: &[u8],
+    inclusion_proof: &InclusionProof,
+    coupling: &CouplingProof,
+    combined_root: &[u8],
+    expected_active_algs: &[u64],
+    config: VerifierConfig,
 ) -> bool {
-    false
+    let raw_root = match coupling.verify(hasher, alg_id, combined_root, expected_active_algs, config) {
+        Some(r) => r,
+        None => return false,
+    };
+
+    verify_inclusion(hasher, leaf_hash, inclusion_proof, &raw_root)
 }
 
 /// Helper wrapper demonstrating consistency verification with decoupled coupling proofs.
 #[must_use]
 pub fn verify_consistency_with_coupling(
-    _hasher: &dyn Hasher,
-    _alg_id: u64,
-    _consistency_proof: &ConsistencyProof,
-    _old_coupling: &CouplingProof,
-    _new_coupling: &CouplingProof,
-    _old_combined_root: &[u8],
-    _new_combined_root: &[u8],
-    _old_expected_active_algs: &[u64],
-    _new_expected_active_algs: &[u64],
-    _config: VerifierConfig,
+    hasher: &dyn Hasher,
+    alg_id: u64,
+    consistency_proof: &ConsistencyProof,
+    old_coupling: &CouplingProof,
+    new_coupling: &CouplingProof,
+    old_combined_root: &[u8],
+    new_combined_root: &[u8],
+    old_expected_active_algs: &[u64],
+    new_expected_active_algs: &[u64],
+    config: VerifierConfig,
 ) -> bool {
-    false
+    let old_raw_root = match old_coupling.verify(hasher, alg_id, old_combined_root, old_expected_active_algs, config) {
+        Some(r) => r,
+        None => return false,
+    };
+    let new_raw_root = match new_coupling.verify(hasher, alg_id, new_combined_root, new_expected_active_algs, config) {
+        Some(r) => r,
+        None => return false,
+    };
+
+    verify_consistency(hasher, consistency_proof, &old_raw_root, &new_raw_root)
 }
 
 /// The raw payload of an audit verification checkpoint.
