@@ -40,6 +40,36 @@ impl Hasher for Sha256Hasher {
     }
 }
 
+impl eml::Hasher for Sha256Hasher {
+    fn leaf(&self, data: &[u8]) -> Vec<u8> {
+        Sha256::digest(data).to_vec()
+    }
+
+    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update(left);
+        h.update(right);
+        h.finalize().to_vec()
+    }
+
+    fn empty(&self) -> Vec<u8> {
+        Sha256::digest(b"").to_vec()
+    }
+
+    fn null(&self) -> Vec<u8> {
+        Sha256::digest([0x02]).to_vec()
+    }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        Sha256::digest(data).to_vec()
+    }
+
+    fn clone_box(&self) -> Box<dyn eml::Hasher> {
+        Box::new(Sha256Hasher)
+    }
+}
+
+
 // Custom mock hasher to check hasher-independence.
 #[derive(Debug)]
 struct SaltedHasher(u8);
@@ -84,6 +114,47 @@ impl Hasher for SaltedHasher {
         Box::new(SaltedHasher(self.0))
     }
 }
+
+impl eml::Hasher for SaltedHasher {
+    fn leaf(&self, data: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        h.update(data);
+        h.finalize().to_vec()
+    }
+
+    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        h.update(left);
+        h.update(right);
+        h.finalize().to_vec()
+    }
+
+    fn empty(&self) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        h.finalize().to_vec()
+    }
+
+    fn null(&self) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0, 0x02]);
+        h.finalize().to_vec()
+    }
+
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update([self.0]);
+        h.update(data);
+        h.finalize().to_vec()
+    }
+
+    fn clone_box(&self) -> Box<dyn eml::Hasher> {
+        Box::new(SaltedHasher(self.0))
+    }
+}
+
 
 fn new_hasher_for(alg_id: u64) -> Box<dyn Hasher> {
     if alg_id % 2 == 0 {
@@ -853,4 +924,122 @@ proptest! {
         }
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    
+    #[test]
+    fn metamorphic_non_divergence_monotonicity(
+        size in 5usize..40,
+        checkpoint_size in 1usize..39,
+    ) {
+        smol::block_on(async {
+            let k = 2;
+            let checkpoint = checkpoint_size.min(size - 1) as u64;
+            let log = build_log(size, 0, k).await;
+
+            // Compute trusted roots at historical checkpoint size
+            let mut trusted_roots = Vec::new();
+            for &(alg_id, _) in log.storage().load_algorithm_metas().await.unwrap().iter() {
+                if let Ok(root) = log.root_for_at(alg_id, checkpoint).await {
+                    trusted_roots.push((alg_id, root));
+                }
+            }
+
+            // If the full log is consistent:
+            if log.verify_non_divergence(None, &[]).await.unwrap() {
+                // Then auditing the sub-checkpoint MUST also pass
+                prop_assert!(
+                    log.verify_non_divergence(Some(checkpoint), &trusted_roots).await.unwrap(),
+                    "Metamorphic Monotonicity violated: audit failed at checkpoint={}", checkpoint
+                );
+            }
+            Ok(())
+        })?;
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    
+    #[test]
+    fn differential_neml_eml_binary_equivalence(
+        ops in proptest::collection::vec(op_strategy(4), 5..15),
+        is_subtree_mode in any::<bool>(),
+    ) {
+        use eml::Log as EmlLog;
+        use eml::MemoryStorage as EmlMemoryStorage;
+
+        smol::block_on(async {
+            let config = TreeConfig { log_arity: 2 };
+            let mut neml_log = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                config,
+            )
+            .await;
+
+            let mut eml_log = EmlLog::new(EmlMemoryStorage::new());
+            eml_log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
+
+            // Track algorithm IDs to keep them aligned (both logs support algorithm 0 and 1)
+            neml_log.add_algorithm(1, new_hasher_for(1)).await.unwrap();
+            eml_log.add_algorithm(1, Box::new(SaltedHasher(1))).await.unwrap();
+
+
+            for op in ops {
+                match op {
+                    Op::AppendLeaf(data) => {
+                        neml_log.append_leaf(&data).await.unwrap();
+                        eml_log.append(&data).await.unwrap();
+                    }
+                    Op::AppendSubtree(subtree) => {
+                        if is_subtree_mode {
+                            // Subtrees are promoted in NEML. We evaluate the subtree root 
+                            // to append to EML to keep leaf inputs equivalent.
+                            let evaluated = evaluate(&Sha256Hasher, &subtree);
+                            neml_log.append_subtree(&subtree).await.unwrap();
+                            eml_log.append(&evaluated).await.unwrap();
+                        } else {
+                            let evaluated = evaluate(&Sha256Hasher, &subtree);
+                            neml_log.append_leaf(&evaluated).await.unwrap();
+                            eml_log.append(&evaluated).await.unwrap();
+                        }
+                    }
+                    Op::RemoveAlg(id) if id == 0 || id == 1 => {
+                        // Avoid removing all active algorithms to prevent panics
+                        let active_count = neml_log.storage().load_algorithm_metas().await.unwrap()
+                            .iter()
+                            .filter(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end == u64::MAX))
+                            .count();
+                        if active_count > 1 {
+                            neml_log.remove_algorithm(id).await.unwrap();
+                            eml_log.remove_algorithm(id).await.unwrap();
+                        }
+                    }
+                    Op::ResumeAlg(id) if id == 0 || id == 1 => {
+                        let is_frozen = neml_log.storage().load_algorithm_metas().await.unwrap()
+                            .iter()
+                            .find(|(alg_id, _)| *alg_id == id)
+                            .is_some_and(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end != u64::MAX));
+                        if is_frozen {
+                            neml_log.resume_algorithm(id).await.unwrap();
+                            eml_log.resume_algorithm(id).await.unwrap();
+                        }
+                    }
+                    _ => {} // Ignore other algorithms for this differential test
+                }
+
+                // Assert root equivalence for all registered algorithms
+                for id in &[0, 1] {
+                    let neml_root = neml_log.root_for(*id).unwrap();
+                    let eml_root = eml_log.root(*id).unwrap();
+                    prop_assert_eq!(neml_root, eml_root, "Divergence found for alg {}", id);
+                }
+            }
+            Ok::<(), proptest::test_runner::TestCaseError>(())
+        })?;
+    }
+}
+
 

@@ -226,3 +226,65 @@ fn test_mid_batch_failure_recovery() {
         assert_eq!(reconstructed.size(), 11);
     });
 }
+
+#[test]
+fn test_verify_non_divergence_tamper_detection() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config).await;
+
+        // Populate log
+        for i in 0..15u8 {
+            log.append_leaf(&[i]).await.unwrap();
+        }
+        
+        // Assert clean state passes
+        assert!(log.verify_non_divergence(None, &[]).await.unwrap());
+
+        // 1. Leaf data tampering
+        {
+            let mut tampered_storage = log.storage().clone();
+            // Mutate leaf 7 payload
+            tampered_storage.leaves[7] = vec![0xFF; 16];
+            let tampered_log = NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))]).await.unwrap();
+            assert!(
+                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                "Failed to detect tampered leaf data"
+            );
+        }
+
+        // 2. Internal node hash tampering
+        {
+            let mut tampered_storage = log.storage().clone();
+            // Find an internal node and tamper it
+            let key = (0, 3); // (alg_id, node_id)
+            if tampered_storage.nodes.contains_key(&key) {
+                tampered_storage.nodes.insert(key, vec![0x00; 32]);
+                let tampered_log = NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))]).await.unwrap();
+                assert!(
+                    !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                    "Failed to detect tampered internal node hash"
+                );
+            }
+        }
+
+        // 3. Epoch metadata tampering
+        {
+            let mut tampered_storage = log.storage().clone();
+            // Shorten the active epoch interval for algorithm 0
+            if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&0) {
+                if !epochs.is_empty() {
+                    epochs[0].1 = 10; // set arbitrary frozen boundary where it should be active (u64::MAX)
+                }
+            }
+            let tampered_log = NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))]).await.unwrap();
+            assert!(
+                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                "Failed to detect tampered epoch metadata"
+            );
+        }
+    });
+}
+

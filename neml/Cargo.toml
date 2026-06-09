@@ -17,3 +17,5 @@ big_o = "0.1"
 cpu-time = "1"
 proptest = "1"
 smol = "2.0"
+eml = { path = ".." }
+

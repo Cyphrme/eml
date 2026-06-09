@@ -769,6 +769,7 @@ dependencies = [
  "big_o",
  "bigoish",
  "cpu-time",
+ "eml",
  "proptest",
  "sha2",
  "smol",
