@@ -1,4 +1,4 @@
-//! `cyphr-malt` — unified n-ary Merkle append-only log tree.
+//! `neml` — unified n-ary Merkle append-only log tree.
 
 pub mod error;
 pub mod hasher;

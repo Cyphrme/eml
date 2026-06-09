@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use cyphr_malt::{
+use neml::{
     Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig, evaluate,
     verify_consistency, verify_inclusion,
 };
@@ -246,7 +246,7 @@ fn recursive_subtree_root(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> 
 }
 
 // Read leaf projection for given algorithm
-async fn project<S: cyphr_malt::Storage>(
+async fn project<S: neml::Storage>(
     log: &NaryMerkleLog<S>,
     alg_id: u64,
     hasher: &dyn Hasher,
@@ -491,7 +491,7 @@ fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
     ]
 }
 
-async fn check_state_invariants<S: cyphr_malt::Storage>(
+async fn check_state_invariants<S: neml::Storage>(
     log: &NaryMerkleLog<S>,
     frozen_roots: &BTreeMap<u64, Vec<u8>>,
     k: usize,

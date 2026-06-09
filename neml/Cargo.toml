@@ -1,5 +1,5 @@
 [package]
-name          = "cyphr-malt"
+name          = "neml"
 version       = "0.1.0"
 description   = "Unified n-ary Merkle append-only log tree"
 edition       = "2024"

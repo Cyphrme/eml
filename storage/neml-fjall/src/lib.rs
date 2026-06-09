@@ -1,8 +1,8 @@
-//! Fjall-backed persistence implementation for cyphr-malt.
+//! Fjall-backed persistence implementation for neml.
 
 use std::path::Path;
 
-use cyphr_malt::{AlgorithmMetas, Storage};
+use neml::{AlgorithmMetas, Storage};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 
 /// Error type for [`FjallStorage`] operations.
@@ -21,7 +21,7 @@ pub enum FjallStorageError {
     MetadataCorruption(String),
 }
 
-/// A production-grade cyphr-malt storage backend backed by a Fjall database.
+/// A production-grade neml storage backend backed by a Fjall database.
 ///
 /// Clones of `FjallStorage` share the same underlying database handle.
 #[derive(Clone)]
@@ -51,9 +51,9 @@ impl FjallStorage {
     ///
     /// Returns a [`FjallStorageError`] if keyspace initialization fails.
     pub fn with_database(db: Database) -> Result<Self, FjallStorageError> {
-        let leaves = db.keyspace("cyphr_malt_leaves", KeyspaceCreateOptions::default)?;
-        let nodes = db.keyspace("cyphr_malt_nodes", KeyspaceCreateOptions::default)?;
-        let metadata = db.keyspace("cyphr_malt_metadata", KeyspaceCreateOptions::default)?;
+        let leaves = db.keyspace("neml_leaves", KeyspaceCreateOptions::default)?;
+        let nodes = db.keyspace("neml_nodes", KeyspaceCreateOptions::default)?;
+        let metadata = db.keyspace("neml_metadata", KeyspaceCreateOptions::default)?;
 
         Ok(Self {
             db,

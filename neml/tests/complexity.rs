@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bigoish::{Log as LogModel, N, assert_best_fit, growing_inputs};
 use cpu_time::ThreadTime;
-use cyphr_malt::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig};
+use neml::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -200,7 +200,7 @@ fn complexity_resume_algorithm_log_n() {
 // through them.
 // ============================================================================
 
-use cyphr_malt::Subtree;
+use neml::Subtree;
 
 /// Build a balanced binary subtree of the given depth.
 ///
@@ -278,7 +278,7 @@ fn complexity_within_commit_path_linear_in_nodes() {
         for _ in 0..trials {
             let start = ThreadTime::now();
             for _ in 0..50 {
-                let _ = cyphr_malt::within_commit_path(
+                let _ = neml::within_commit_path(
                     &Sha256Hasher,
                     &subtree,
                     0,
@@ -341,7 +341,7 @@ fn complexity_e2e_inclusion_subtree_log_n() {
             let start = ThreadTime::now();
             for _ in 0..50 {
                 // Within-commit path for leaf 0 in subtree 0.
-                let mut path = cyphr_malt::within_commit_path(
+                let mut path = neml::within_commit_path(
                     &Sha256Hasher,
                     first_subtree,
                     0,

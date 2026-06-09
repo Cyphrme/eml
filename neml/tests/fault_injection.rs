@@ -1,7 +1,7 @@
-//! Fault injection crash-recovery tests for cyphr-malt.
+//! Fault injection crash-recovery tests for neml.
 
 use std::sync::{Arc, Mutex};
-use cyphr_malt::{
+use neml::{
     Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig,
 };
 use sha2::{Digest, Sha256};
@@ -157,7 +157,7 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn load_algorithm_metas(&self) -> Result<cyphr_malt::AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<neml::AlgorithmMetas, Self::Error> {
         self.inner
             .load_algorithm_metas()
             .await

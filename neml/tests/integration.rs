@@ -1,4 +1,4 @@
-use cyphr_malt::{Hasher, MemoryStorage, NaryMerkleLog, Subtree, TreeConfig};
+use neml::{Hasher, MemoryStorage, NaryMerkleLog, Subtree, TreeConfig};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -107,7 +107,7 @@ fn test_vector_3_three_leaves_k2() {
 fn test_vector_4_singleton_promotion() {
     let hasher = Sha256Hasher;
     let tree = Subtree::Node(vec![Subtree::Leaf(b"x".to_vec())]);
-    let evaluated = cyphr_malt::evaluate(&hasher, &tree);
+    let evaluated = neml::evaluate(&hasher, &tree);
     let expected = Sha256::digest(b"x").to_vec();
     assert_eq!(evaluated, expected);
 }
@@ -116,7 +116,7 @@ fn test_vector_4_singleton_promotion() {
 fn test_vector_5_nested_promotion() {
     let hasher = Sha256Hasher;
     let tree = Subtree::Node(vec![Subtree::Node(vec![Subtree::Leaf(b"x".to_vec())])]);
-    let evaluated = cyphr_malt::evaluate(&hasher, &tree);
+    let evaluated = neml::evaluate(&hasher, &tree);
     let expected = Sha256::digest(b"x").to_vec();
     assert_eq!(evaluated, expected);
 }
@@ -246,7 +246,7 @@ fn test_inclusion_and_consistency_proofs_simple() {
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf_hash = Sha256Hasher.leaf(b"c");
         let root = log.root();
-        assert!(cyphr_malt::verify_inclusion(
+        assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
             &proof,
@@ -265,7 +265,7 @@ fn test_inclusion_and_consistency_proofs_simple() {
             temp_log.append_leaf(b"b").await.unwrap();
             temp_log.root()
         };
-        assert!(cyphr_malt::verify_consistency(
+        assert!(neml::verify_consistency(
             &Sha256Hasher,
             &cons_proof,
             &old_root,
@@ -295,7 +295,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                 // Verify inclusion proof for every index
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
-                    assert!(cyphr_malt::verify_inclusion(
+                    assert!(neml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
                         &proof,
@@ -323,7 +323,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                         }
                         temp_log.root()
                     };
-                    if !cyphr_malt::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root)
+                    if !neml::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root)
                     {
                         panic!(
                             "verify_consistency failed for k={}, size={}, old_size={}, \
@@ -365,7 +365,7 @@ fn test_inclusion_proofs_commit_tree_mode() {
         let root = log.root();
 
         // Generate within-commit path
-        let mut path = cyphr_malt::within_commit_path(&Sha256Hasher, &commit1, 1).unwrap();
+        let mut path = neml::within_commit_path(&Sha256Hasher, &commit1, 1).unwrap();
 
         // Generate log-level inclusion proof for Commit 1
         let log_proof = log.inclusion_proof(1, 2).await.unwrap().unwrap();
@@ -374,13 +374,13 @@ fn test_inclusion_proofs_commit_tree_mode() {
         path.extend(log_proof.path);
 
         let leaf_hash = Sha256Hasher.leaf(b"d");
-        let full_proof = cyphr_malt::InclusionProof {
+        let full_proof = neml::InclusionProof {
             index: 3,
             tree_size: 5,
             path,
         };
 
-        assert!(cyphr_malt::verify_inclusion(
+        assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
             &full_proof,
@@ -543,31 +543,31 @@ fn test_epoch_errors() {
         // Duplicate
         assert!(matches!(
             log.add_algorithm(0, Box::new(Sha256Hasher)).await,
-            Err(cyphr_malt::error::Error::DuplicateAlgorithm(0))
+            Err(neml::error::Error::DuplicateAlgorithm(0))
         ));
         // Unknown remove
         assert!(matches!(
             log.remove_algorithm(999).await,
-            Err(cyphr_malt::error::Error::UnknownAlgorithm(999))
+            Err(neml::error::Error::UnknownAlgorithm(999))
         ));
         // Unknown resume
         assert!(matches!(
             log.resume_algorithm(999).await,
-            Err(cyphr_malt::error::Error::UnknownAlgorithm(999))
+            Err(neml::error::Error::UnknownAlgorithm(999))
         ));
 
         log.remove_algorithm(0).await.unwrap();
         // Already frozen
         assert!(matches!(
             log.remove_algorithm(0).await,
-            Err(cyphr_malt::error::Error::FrozenAlgorithm(0))
+            Err(neml::error::Error::FrozenAlgorithm(0))
         ));
 
         log.resume_algorithm(0).await.unwrap();
         // Already active
         assert!(matches!(
             log.resume_algorithm(0).await,
-            Err(cyphr_malt::error::Error::AlgorithmActive(0))
+            Err(neml::error::Error::AlgorithmActive(0))
         ));
     });
 }
@@ -624,7 +624,7 @@ fn test_epoch_proofs() {
         // Verify inclusion proof for algorithm 0 (fully active)
         let proof0 = log.inclusion_proof_for(0, 2, 4).await.unwrap().unwrap();
         let root0 = log.root_for(0).unwrap();
-        assert!(cyphr_malt::verify_inclusion(
+        assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
             &proof0,
@@ -634,7 +634,7 @@ fn test_epoch_proofs() {
         // Verify inclusion proof for algorithm 1 (frozen at size 2)
         let proof1 = log.inclusion_proof_for(1, 1, 2).await.unwrap().unwrap();
         let root1 = log.root_for(1).unwrap();
-        assert!(cyphr_malt::verify_inclusion(
+        assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
             &proof1,
@@ -730,7 +730,7 @@ fn test_promotion_proofs_malt() {
         let proof = log.inclusion_proof_for(0, 0, 1).await.unwrap().unwrap();
         // Single leaf tree with arity 3 has empty path steps (direct leaf-to-root promotion)
         assert!(proof.path.is_empty());
-        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &proof, &root));
+        assert!(neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &proof, &root));
 
         // Append two more leaves: size 3 (which fills one 3-ary level)
         log.append_leaf(b"y").await.unwrap();
@@ -740,7 +740,7 @@ fn test_promotion_proofs_malt() {
         // Inclusion proof for index 2
         let proof = log.inclusion_proof_for(0, 2, 3).await.unwrap().unwrap();
         assert_eq!(proof.path.len(), 1);
-        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"z"), &proof, &root));
+        assert!(neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"z"), &proof, &root));
     });
 }
 
@@ -793,7 +793,7 @@ fn test_subtree_consistency_proofs() {
                     };
 
                     assert!(
-                        cyphr_malt::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root),
+                        neml::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root),
                         "verify_consistency failed for subtree log: k={}, size={}, old_size={}",
                         k, size, old_size
                     );
@@ -825,18 +825,18 @@ fn test_deep_subtree_inclusion_proofs() {
             log.append_subtree(&subtree).await.unwrap();
 
             let root = log.root();
-            let mut path = cyphr_malt::within_commit_path(&Sha256Hasher, &subtree, 0).unwrap();
+            let mut path = neml::within_commit_path(&Sha256Hasher, &subtree, 0).unwrap();
             let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
-            let full_proof = cyphr_malt::InclusionProof {
+            let full_proof = neml::InclusionProof {
                 index: 0,
                 tree_size: 1,
                 path,
             };
 
             assert!(
-                cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(&data), &full_proof, &root),
+                neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(&data), &full_proof, &root),
                 "Failed single nested leaf inclusion proof verification at depth {}", depth
             );
         }
@@ -879,18 +879,18 @@ fn test_deep_subtree_inclusion_proofs() {
         ];
 
         for (leaf_idx, data) in test_cases {
-            let mut path = cyphr_malt::within_commit_path(&Sha256Hasher, &subtree, leaf_idx).unwrap();
+            let mut path = neml::within_commit_path(&Sha256Hasher, &subtree, leaf_idx).unwrap();
             let log_proof = log.inclusion_proof(0, 2).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
-            let full_proof = cyphr_malt::InclusionProof {
+            let full_proof = neml::InclusionProof {
                 index: leaf_idx,
                 tree_size: 4, // 3 leaves in subtree + 1 flat leaf = 4 total leaves
                 path,
             };
 
             assert!(
-                cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(&data), &full_proof, &root),
+                neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(&data), &full_proof, &root),
                 "Failed nested mixed leaf inclusion proof verification for index {}", leaf_idx
             );
         }
@@ -921,9 +921,9 @@ fn test_subtree_appends_k3_k4() {
 
             let root = log.root();
 
-            let h0 = cyphr_malt::evaluate(&hasher, &s0);
-            let h1 = cyphr_malt::evaluate(&hasher, &s1);
-            let h2 = cyphr_malt::evaluate(&hasher, &s2);
+            let h0 = neml::evaluate(&hasher, &s0);
+            let h1 = neml::evaluate(&hasher, &s1);
+            let h2 = neml::evaluate(&hasher, &s2);
 
             let expected = hasher.node(&[&h0, &h1, &h2]);
             assert_eq!(root, expected, "Root mismatch for k=3 subtree appends");
@@ -946,10 +946,10 @@ fn test_subtree_appends_k3_k4() {
 
             let root = log.root();
 
-            let h0 = cyphr_malt::evaluate(&hasher, &s0);
-            let h1 = cyphr_malt::evaluate(&hasher, &s1);
-            let h2 = cyphr_malt::evaluate(&hasher, &s2);
-            let h3 = cyphr_malt::evaluate(&hasher, &s3);
+            let h0 = neml::evaluate(&hasher, &s0);
+            let h1 = neml::evaluate(&hasher, &s1);
+            let h2 = neml::evaluate(&hasher, &s2);
+            let h3 = neml::evaluate(&hasher, &s3);
 
             let expected = hasher.node(&[&h0, &h1, &h2, &h3]);
             assert_eq!(root, expected, "Root mismatch for k=4 subtree appends");
@@ -1026,30 +1026,30 @@ fn test_multi_algorithm_subtree_proofs() {
         let root1 = log.root_for(1).unwrap(); // frozen at size 1
 
         // 1. Verify inclusion proof for Algorithm 0 (fully active)
-        let mut path0 = cyphr_malt::within_commit_path(&Sha256Hasher, &s1, 0).unwrap();
+        let mut path0 = neml::within_commit_path(&Sha256Hasher, &s1, 0).unwrap();
         let log_proof0 = log.inclusion_proof_for(0, 1, 2).await.unwrap().unwrap();
         path0.extend(log_proof0.path);
 
-        let full_proof0 = cyphr_malt::InclusionProof {
+        let full_proof0 = neml::InclusionProof {
             index: 2,
             tree_size: 3,
             path: path0,
         };
-        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"c"), &full_proof0, &root0));
+        assert!(neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"c"), &full_proof0, &root0));
 
         // 2. Verify inclusion proof for Algorithm 1 (frozen at size 1)
         assert!(log.inclusion_proof_for(1, 1, 2).await.unwrap().is_none());
 
-        let mut path1 = cyphr_malt::within_commit_path(&Sha256Hasher, &s0, 1).unwrap();
+        let mut path1 = neml::within_commit_path(&Sha256Hasher, &s0, 1).unwrap();
         let log_proof1 = log.inclusion_proof_for(1, 0, 1).await.unwrap().unwrap();
         path1.extend(log_proof1.path);
 
-        let full_proof1 = cyphr_malt::InclusionProof {
+        let full_proof1 = neml::InclusionProof {
             index: 1,
             tree_size: 2,
             path: path1,
         };
-        assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"b"), &full_proof1, &root1));
+        assert!(neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"b"), &full_proof1, &root1));
 
         // 3. Consistency proofs
         let cons0 = log.consistency_proof_for(0, 1, 2).await.unwrap().unwrap();
@@ -1058,7 +1058,7 @@ fn test_multi_algorithm_subtree_proofs() {
             temp_log.append_subtree(&s0).await.unwrap();
             temp_log.root_for(0).unwrap()
         };
-        assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &cons0, &old_root0, &root0));
+        assert!(neml::verify_consistency(&Sha256Hasher, &cons0, &old_root0, &root0));
 
         assert!(log.consistency_proof_for(1, 1, 2).await.unwrap().is_none());
     });
@@ -1089,50 +1089,50 @@ fn test_proof_error_edge_cases() {
 
         // 3. within_commit_path edge cases
         let leaf_subtree = Subtree::Leaf(b"x".to_vec());
-        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &leaf_subtree, 0).is_some());
-        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &leaf_subtree, 1).is_none());
+        assert!(neml::within_commit_path(&Sha256Hasher, &leaf_subtree, 0).is_some());
+        assert!(neml::within_commit_path(&Sha256Hasher, &leaf_subtree, 1).is_none());
 
         let node_subtree = Subtree::Node(vec![
             Subtree::Leaf(b"a".to_vec()),
             Subtree::Leaf(b"b".to_vec()),
         ]);
-        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &node_subtree, 1).is_some());
-        assert!(cyphr_malt::within_commit_path(&Sha256Hasher, &node_subtree, 2).is_none());
+        assert!(neml::within_commit_path(&Sha256Hasher, &node_subtree, 1).is_some());
+        assert!(neml::within_commit_path(&Sha256Hasher, &node_subtree, 2).is_none());
 
         // 4. Verifier input validation failures
-        let empty_proof = cyphr_malt::InclusionProof {
+        let empty_proof = neml::InclusionProof {
             index: 1,
             tree_size: 1, // index >= tree_size
             path: Vec::new(),
         };
-        assert!(!cyphr_malt::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &empty_proof, &vec![0; 32]));
+        assert!(!neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &empty_proof, &vec![0; 32]));
 
-        let empty_cons_proof = cyphr_malt::ConsistencyProof {
+        let empty_cons_proof = neml::ConsistencyProof {
             old_size: 0, // old_size == 0
             new_size: 2,
             log_arity: 2,
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!cyphr_malt::verify_consistency(&Sha256Hasher, &empty_cons_proof, &vec![0; 32], &vec![0; 32]));
+        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof, &vec![0; 32], &vec![0; 32]));
 
-        let empty_cons_proof_invalid_sizes = cyphr_malt::ConsistencyProof {
+        let empty_cons_proof_invalid_sizes = neml::ConsistencyProof {
             old_size: 2, // old_size >= new_size
             new_size: 2,
             log_arity: 2,
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!cyphr_malt::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_sizes, &vec![0; 32], &vec![0; 32]));
+        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_sizes, &vec![0; 32], &vec![0; 32]));
 
-        let empty_cons_proof_invalid_arity = cyphr_malt::ConsistencyProof {
+        let empty_cons_proof_invalid_arity = neml::ConsistencyProof {
             old_size: 1,
             new_size: 2,
             log_arity: 1, // arity < 2
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!cyphr_malt::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_arity, &vec![0; 32], &vec![0; 32]));
+        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_arity, &vec![0; 32], &vec![0; 32]));
     });
 }
 
@@ -1164,7 +1164,7 @@ fn test_power_of_k_boundaries() {
 
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
-                    assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &leaves[idx as usize], &proof, &root));
+                    assert!(neml::verify_inclusion(&Sha256Hasher, &leaves[idx as usize], &proof, &root));
                 }
             }
 
@@ -1183,11 +1183,11 @@ fn test_power_of_k_boundaries() {
                 }
                 temp_log.root()
             };
-            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_3_9, &root_3, &root_9));
+            assert!(neml::verify_consistency(&Sha256Hasher, &proof_3_9, &root_3, &root_9));
 
             let proof_9_27 = log.consistency_proof(9, 27).await.unwrap().unwrap();
             let root_27 = log.root();
-            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_9_27, &root_9, &root_27));
+            assert!(neml::verify_consistency(&Sha256Hasher, &proof_9_27, &root_9, &root_27));
         }
 
         // k=4: sizes 4, 16, 64
@@ -1215,7 +1215,7 @@ fn test_power_of_k_boundaries() {
 
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
-                    assert!(cyphr_malt::verify_inclusion(&Sha256Hasher, &leaves[idx as usize], &proof, &root));
+                    assert!(neml::verify_inclusion(&Sha256Hasher, &leaves[idx as usize], &proof, &root));
                 }
             }
 
@@ -1234,11 +1234,11 @@ fn test_power_of_k_boundaries() {
                 }
                 temp_log.root()
             };
-            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_4_16, &root_4, &root_16));
+            assert!(neml::verify_consistency(&Sha256Hasher, &proof_4_16, &root_4, &root_16));
 
             let proof_16_64 = log.consistency_proof(16, 64).await.unwrap().unwrap();
             let root_64 = log.root();
-            assert!(cyphr_malt::verify_consistency(&Sha256Hasher, &proof_16_64, &root_16, &root_64));
+            assert!(neml::verify_consistency(&Sha256Hasher, &proof_16_64, &root_16, &root_64));
         }
     });
 }

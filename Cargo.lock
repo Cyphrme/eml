@@ -329,31 +329,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cyphr-malt"
-version = "0.1.0"
-dependencies = [
- "big_o",
- "bigoish",
- "cpu-time",
- "proptest",
- "sha2",
- "smol",
-]
-
-[[package]]
-name = "cyphr-malt-storage-fjall"
-version = "0.1.0"
-dependencies = [
- "cyphr-malt",
- "fjall",
- "proptest",
- "sha2",
- "smol",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
 name = "dashmap"
 version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -785,6 +760,31 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "neml"
+version = "0.1.0"
+dependencies = [
+ "big_o",
+ "bigoish",
+ "cpu-time",
+ "proptest",
+ "sha2",
+ "smol",
+]
+
+[[package]]
+name = "neml-storage-fjall"
+version = "0.1.0"
+dependencies = [
+ "fjall",
+ "neml",
+ "proptest",
+ "sha2",
+ "smol",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

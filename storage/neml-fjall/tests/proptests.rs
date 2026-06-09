@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use cyphr_malt::Storage;
-use cyphr_malt_storage_fjall::FjallStorage;
+use neml::Storage;
+use neml_storage_fjall::FjallStorage;
 use proptest::prelude::*;
 use tempfile::tempdir;
 

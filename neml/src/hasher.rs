@@ -1,4 +1,4 @@
-//! Hash abstraction for `cyphr-malt`.
+//! Hash abstraction for `neml`.
 //!
 //! Extends standard n-ary operations with a null constant and prefix-free
 //! hashing semantics.

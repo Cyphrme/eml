@@ -1,7 +1,7 @@
 [package]
-name          = "cyphr-malt-storage-fjall"
+name          = "neml-storage-fjall"
 version       = "0.1.0"
-description   = "Fjall-backed storage implementation for cyphr-malt"
+description   = "Fjall-backed storage implementation for neml"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../../LICENSE"
@@ -10,7 +10,7 @@ license-file  = "../../LICENSE"
 doctest = false
 
 [dependencies]
-cyphr-malt = { version = "0.1.0", path = "../../cyphr-malt" }
+neml = { version = "0.1.0", path = "../../neml" }
 fjall      = "3"
 thiserror  = "2"
 

@@ -37,8 +37,8 @@ malt = "0.1.1"
 members = [
     ".",
     "storage/fjall",
-    "cyphr-malt",
-    "storage/cyphr-malt-fjall",
+    "neml",
+    "storage/neml-fjall",
 ]
 
 

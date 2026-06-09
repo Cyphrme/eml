@@ -3,12 +3,12 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use cyphr_malt::{verify_inclusion, InclusionProof, ProofStep};
+use neml::{verify_inclusion, InclusionProof, ProofStep};
 
 #[derive(Debug)]
 struct FuzzHasher;
 
-impl cyphr_malt::Hasher for FuzzHasher {
+impl neml::Hasher for FuzzHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x00]);
@@ -37,7 +37,7 @@ impl cyphr_malt::Hasher for FuzzHasher {
         Sha256::digest(data).to_vec()
     }
 
-    fn clone_box(&self) -> Box<dyn cyphr_malt::Hasher> {
+    fn clone_box(&self) -> Box<dyn neml::Hasher> {
         Box::new(FuzzHasher)
     }
 }

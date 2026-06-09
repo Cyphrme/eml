@@ -223,7 +223,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cyphr-malt"
+name = "neml"
 version = "0.1.0"
 
 [[package]]
@@ -256,7 +256,7 @@ name = "eml-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
- "cyphr-malt",
+ "neml",
  "eml",
  "libfuzzer-sys",
  "sha2",
