@@ -1642,15 +1642,22 @@ impl<S: Storage> NaryMerkleLog<S> {
 
 /// Reconstruct the coordinates (left_index, height) of the frontier for a given tree size.
 pub fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
+    if k < 2 {
+        return Vec::new();
+    }
     let mut frontier = Vec::new();
     let mut curr_left = 0;
     let mut temp_n = n;
     while temp_n > 0 {
         let mut height = 0;
-        let mut cap = 1;
-        while cap * k <= temp_n {
-            cap *= k;
-            height += 1;
+        let mut cap: u64 = 1;
+        while let Some(next_cap) = cap.checked_mul(k) {
+            if next_cap <= temp_n {
+                cap = next_cap;
+                height += 1;
+            } else {
+                break;
+            }
         }
         frontier.push((curr_left, height));
         curr_left += cap;

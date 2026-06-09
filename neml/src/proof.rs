@@ -67,30 +67,7 @@ pub fn verify_inclusion(
         .map_or(false, |computed| constant_time_eq(&computed, root))
 }
 
-fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
-    if k < 2 {
-        return Vec::new();
-    }
-    let mut frontier = Vec::new();
-    let mut curr_left = 0;
-    let mut temp_n = n;
-    while temp_n > 0 {
-        let mut height = 0;
-        let mut cap: u64 = 1;
-        while let Some(next_cap) = cap.checked_mul(k) {
-            if next_cap <= temp_n {
-                cap = next_cap;
-                height += 1;
-            } else {
-                break;
-            }
-        }
-        frontier.push((curr_left, height));
-        curr_left += cap;
-        temp_n -= cap;
-    }
-    frontier
-}
+use crate::tree::frontier_for_size;
 
 /// Verify a consistency proof.
 ///
