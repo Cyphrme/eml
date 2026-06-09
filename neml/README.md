@@ -14,6 +14,28 @@ The second approach creates a **structural seam**: verifying that a specific lea
 
 ---
 
+## Design Tradeoffs & Protocol Motivations
+
+NEML is designed under a different set of constraints than traditional logging protocols like Certificate Transparency (CT). While CT optimizes for lightweight, single-algorithm browser-side verification of publicly audited logs, NEML is designed to support the **Cyphr** self-sovereign identity protocol. 
+
+Identity histories are long-lived (potentially lasting decades), meaning the cryptographic primitives securing them *must* be capable of evolving over time without breaking historical continuity or splitting the protocol's timeline.
+
+This design shifts the balance of traditional Merkle tree tradeoffs in three key ways:
+
+### 1. Unified Timeline vs. Storage Overhead (Polymorphism)
+*   **The Tradeoff:** Maintaining a Polymorphic Merkle Log requires the storage engine to index separate node sets for each registered algorithm, increasing storage and indexing overhead.
+*   **The Motivation:** Traditional logs handle algorithm migration by creating a new log identity and genesis block. For an identity protocol like Cyphr, this fragments the historical record and forces clients to reconcile disjoint cryptographic timelines. By keeping the topology uniform and binding different algorithms to a shared leaf sequence, NEML permits seamless algorithm transition. The history remains unified, and clients can audit transitions across epoch boundaries using a single, unbroken chain of proofs.
+
+### 2. Null Projections as Cryptographic Inactivity Proofs
+*   **The Tradeoff:** When an algorithm is frozen (inactive), appends generate flat null constants ($N_0$) in its frontier projection, occupying logical tree coordinates without hashing actual data.
+*   **The Auditing Value:** These null nodes are not merely placeholders. In a polymorphic log, a null node within an inclusion proof constitutes an **unforgeable cryptographic proof of temporal inactivity** for that algorithm. It demonstrates to external auditors that the logger did *not* utilize the algorithm during that specific epoch. This prevents retroactive algorithm substitution, backdating attacks, or the silent use of deprecated algorithms during epochs when they were declared inactive.
+
+### 3. Content Addressability vs. Prefix-Based Domain Separation
+*   **The Tradeoff:** RFC 6962 (CT) prepends domain separation bytes (`0x00`/`0x01`) to hash inputs to prevent second-preimage attacks. This makes leaf hashes tree-specific and unsuitable as global content addresses. NEML uses standard leaf hashes ($H(\text{data})$) to enable clean content-addressability, which shifts the second-preimage security burden to the verification of the tree's expected topology.
+*   **The Motivation:** Cyphr relies on direct content-addressable storage where leaf hashes serve as stable, canonical identifiers across multiple systems. To achieve this, NEML removes prefix-based domain separation at the hash level and instead enforces **Topological Commitments** at the verification level. The verifier uses the signed tree head's `tree_size` and `log_arity` to reconstruct the exact expected shape of the tree, rejecting any proof whose topology deviates. This provides equivalent second-preimage resistance without polluting the content-addressing layer.
+
+---
+
 ## How It Works
 
 `neml` is a **tree of trees**. The outer layer is a Merkle log with a fixed arity $k$ (the branching factor at each internal node, default 2). The inner layer is arbitrary: each append is a recursive `Subtree` value whose internal nodes can have any number of children.
