@@ -7,3 +7,5 @@ target
 .antigravitycli
 .agents/
 *.proptest-regressions
+.worktrees/
+
