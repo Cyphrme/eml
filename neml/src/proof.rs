@@ -20,7 +20,8 @@ pub struct InclusionProof {
     pub index: u64,
     /// Size of the tree for which this proof is valid.
     pub tree_size: u64,
-    /// The log arity (k) of the tree. Set to 0 if not enforcing uniform log structure verification.
+    /// The log arity (k) of the tree. Set to 0 if not enforcing uniform log structure
+    /// verification.
     pub log_arity: u64,
     /// Path steps from leaf to root.
     pub path: Vec<ProofStep>,
@@ -82,10 +83,9 @@ pub fn verify_consistency(
     old_root: &[u8],
     new_root: &[u8],
 ) -> bool {
-    reconstruct_consistency_roots(hasher, proof)
-        .is_some_and(|(computed_old, computed_new)| {
-            constant_time_eq(&computed_old, old_root) & constant_time_eq(&computed_new, new_root)
-        })
+    reconstruct_consistency_roots(hasher, proof).is_some_and(|(computed_old, computed_new)| {
+        constant_time_eq(&computed_old, old_root) & constant_time_eq(&computed_new, new_root)
+    })
 }
 
 /// Configuration options for proof verification (local node policy).
@@ -123,12 +123,14 @@ impl CouplingProof {
         expected_active_algs: &[u64],
         config: VerifierConfig,
     ) -> Option<Vec<u8>> {
-        // DoS Mitigation: assert active roots count does not exceed configuration limit before allocating
+        // DoS Mitigation: assert active roots count does not exceed configuration limit before
+        // allocating
         if self.active_roots.len() > config.max_active_algorithms {
             return None;
         }
 
-        // Validate active roots match expected active algorithms exactly to prevent type-confusion/bypass
+        // Validate active roots match expected active algorithms exactly to prevent
+        // type-confusion/bypass
         if self.active_roots.len() != expected_active_algs.len() {
             return None;
         }
@@ -166,8 +168,9 @@ impl CouplingProof {
             // Singleton Promotion: the combined root is the raw root
             constant_time_eq(&self.active_roots[0].1, combined_root)
         } else {
-            // Pre-allocate buffer capacity: each active root needs 8 (ID) + 8 (len) + r.len() (<= 64) bytes.
-            // Using 80 bytes per entry avoids any dynamic heap reallocation under DoS.
+            // Pre-allocate buffer capacity: each active root needs 8 (ID) + 8 (len) + r.len() (<=
+            // 64) bytes. Using 80 bytes per entry avoids any dynamic heap reallocation
+            // under DoS.
             let mut buf = Vec::with_capacity(self.active_roots.len() * 80);
             for (id, r) in &self.active_roots {
                 buf.extend_from_slice(&id.to_be_bytes());
@@ -178,22 +181,15 @@ impl CouplingProof {
             constant_time_eq(&computed, combined_root)
         };
 
-        if match_ok {
-            Some(target_root)
-        } else {
-            None
-        }
+        if match_ok { Some(target_root) } else { None }
     }
 }
 
 /// Reconstruct the leaf index from a uniform State Tree Mode path.
-/// Returns `None` if the path does not match the uniform State Tree Mode structure for `tree_size` and `k`.
+/// Returns `None` if the path does not match the uniform State Tree Mode structure for `tree_size`
+/// and `k`.
 #[must_use]
-pub fn reconstruct_index_from_path(
-    k: u64,
-    tree_size: u64,
-    path: &[ProofStep],
-) -> Option<u64> {
+pub fn reconstruct_index_from_path(k: u64, tree_size: u64, path: &[ProofStep]) -> Option<u64> {
     if k < 2 {
         return None;
     }
@@ -269,7 +265,8 @@ pub fn reconstruct_index_from_path(
     left.checked_add(offset)
 }
 
-/// Validate that the inclusion proof path matches the expected structure, sibling count, and positions.
+/// Validate that the inclusion proof path matches the expected structure, sibling count, and
+/// positions.
 #[must_use]
 pub fn verify_inclusion_path_structure(
     k: usize,
@@ -287,6 +284,9 @@ pub fn reconstruct_inclusion_root(
     leaf_hash: &[u8],
     proof: &InclusionProof,
 ) -> Option<Vec<u8>> {
+    if proof.log_arity == 1 || proof.log_arity > 256 {
+        return None;
+    }
     if proof.index >= proof.tree_size {
         return None;
     }
@@ -520,7 +520,8 @@ pub fn reconstruct_consistency_roots(
             });
             target_idx = split_idx;
         } else {
-            // Target is not merged, so we simulate the coordinate merge without consuming a proof step
+            // Target is not merged, so we simulate the coordinate merge without consuming a proof
+            // step
             let parent_left = current_frontier[split_idx].left;
             let parent_height = current_frontier[split_idx].height + 1;
 
@@ -618,10 +619,11 @@ pub fn verify_inclusion_with_coupling(
     expected_active_algs: &[u64],
     config: VerifierConfig,
 ) -> bool {
-    let raw_root = match coupling.verify(hasher, alg_id, combined_root, expected_active_algs, config) {
-        Some(r) => r,
-        None => return false,
-    };
+    let raw_root =
+        match coupling.verify(hasher, alg_id, combined_root, expected_active_algs, config) {
+            Some(r) => r,
+            None => return false,
+        };
 
     verify_inclusion(hasher, leaf_hash, inclusion_proof, &raw_root)
 }
@@ -641,13 +643,25 @@ pub fn verify_consistency_with_coupling(
     new_expected_active_algs: &[u64],
     config: VerifierConfig,
 ) -> bool {
-    let old_res = old_coupling.verify(hasher, alg_id, old_combined_root, old_expected_active_algs, config);
-    let new_res = new_coupling.verify(hasher, alg_id, new_combined_root, new_expected_active_algs, config);
+    let old_res = old_coupling.verify(
+        hasher,
+        alg_id,
+        old_combined_root,
+        old_expected_active_algs,
+        config,
+    );
+    let new_res = new_coupling.verify(
+        hasher,
+        alg_id,
+        new_combined_root,
+        new_expected_active_algs,
+        config,
+    );
 
     match (old_res, new_res) {
         (Some(old_raw_root), Some(new_raw_root)) => {
             verify_consistency(hasher, consistency_proof, &old_raw_root, &new_raw_root)
-        }
+        },
         _ => false,
     }
 }
@@ -664,4 +678,3 @@ pub struct AuditPayload {
     /// The Combined Roots of the log at `tree_size` for each active algorithm.
     pub combined_roots: Vec<(u64, Vec<u8>)>,
 }
-

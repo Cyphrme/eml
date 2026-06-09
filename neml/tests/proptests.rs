@@ -69,7 +69,6 @@ impl eml::Hasher for Sha256Hasher {
     }
 }
 
-
 // Custom mock hasher to check hasher-independence.
 #[derive(Debug)]
 struct SaltedHasher(u8);
@@ -154,7 +153,6 @@ impl eml::Hasher for SaltedHasher {
         Box::new(SaltedHasher(self.0))
     }
 }
-
 
 fn new_hasher_for(alg_id: u64) -> Box<dyn Hasher> {
     if alg_id % 2 == 0 {
@@ -349,13 +347,7 @@ async fn project<S: neml::Storage>(
                 let data = log.storage().get_leaf(i).await.unwrap();
                 leaves.push(hasher.leaf(&data));
             } else {
-                let node_id = i << 16;
-                let hash = log
-                    .storage()
-                    .get_node(alg_id, node_id)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let hash = log.storage().get_node(alg_id, i, 0).await.unwrap().unwrap();
                 leaves.push(hash);
             }
         } else {
@@ -367,7 +359,9 @@ async fn project<S: neml::Storage>(
 
 async fn build_log(size: usize, activation: usize, k: usize) -> NaryMerkleLog<MemoryStorage> {
     let config = TreeConfig { log_arity: k };
-    let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config).await;
+    let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
+        .await
+        .unwrap();
 
     if activation > 0 {
         log.add_algorithm(99, Box::new(Sha256Hasher)).await.unwrap();
@@ -668,7 +662,7 @@ proptest! {
                 Box::new(Sha256Hasher),
                 config,
             )
-            .await;
+            .await.unwrap();
             log1.add_algorithm(alg_ids[0], new_hasher_for(alg_ids[0])).await.unwrap();
             log1.add_algorithm(alg_ids[1], new_hasher_for(alg_ids[1])).await.unwrap();
             log1.add_algorithm(alg_ids[2], new_hasher_for(alg_ids[2])).await.unwrap();
@@ -678,7 +672,7 @@ proptest! {
                 Box::new(Sha256Hasher),
                 config,
             )
-            .await;
+            .await.unwrap();
             log2.add_algorithm(alg_ids[2], new_hasher_for(alg_ids[2])).await.unwrap();
             log2.add_algorithm(alg_ids[0], new_hasher_for(alg_ids[0])).await.unwrap();
             log2.add_algorithm(alg_ids[1], new_hasher_for(alg_ids[1])).await.unwrap();
@@ -712,14 +706,14 @@ proptest! {
                 Box::new(Sha256Hasher),
                 config,
             )
-            .await;
+            .await.unwrap();
 
             let mut log2 = NaryMerkleLog::new(
                 MemoryStorage::new(),
                 Box::new(Sha256Hasher),
                 config,
             )
-            .await;
+            .await.unwrap();
 
             for leaf in &first_batch {
                 log1.append_leaf(leaf).await.unwrap();
@@ -759,7 +753,7 @@ proptest! {
                 Box::new(Sha256Hasher),
                 config,
             )
-            .await;
+            .await.unwrap();
 
             // Seed with algs
             log.add_algorithm(1, new_hasher_for(1)).await.unwrap();
@@ -927,7 +921,7 @@ proptest! {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
-    
+
     #[test]
     fn metamorphic_non_divergence_monotonicity(
         size in 5usize..40,
@@ -961,7 +955,7 @@ proptest! {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
-    
+
     #[test]
     fn differential_neml_eml_binary_equivalence(
         ops in proptest::collection::vec(op_strategy(4), 5..15),
@@ -976,7 +970,7 @@ proptest! {
                 Box::new(Sha256Hasher),
                 config,
             )
-            .await;
+            .await.unwrap();
 
             let mut eml_log = EmlLog::new(EmlMemoryStorage::new());
             eml_log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
@@ -1015,5 +1009,3 @@ proptest! {
         })?;
     }
 }
-
-

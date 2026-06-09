@@ -53,9 +53,12 @@ fn test_fjall_storage_basic_ops() {
         assert_eq!(storage.get_leaf(1).await.unwrap(), b"leaf1");
 
         // Node ops
-        storage.store_node(0, 100, b"hash100").await.unwrap();
-        assert_eq!(storage.get_node(0, 100).await.unwrap().unwrap(), b"hash100");
-        assert!(storage.get_node(0, 999).await.unwrap().is_none());
+        storage.store_node(0, 100, 0, b"hash100").await.unwrap();
+        assert_eq!(
+            storage.get_node(0, 100, 0).await.unwrap().unwrap(),
+            b"hash100"
+        );
+        assert!(storage.get_node(0, 999, 0).await.unwrap().is_none());
 
         // Metadata ops
         let epochs = vec![(0, 10), (15, 20)];
@@ -78,7 +81,9 @@ fn test_fjall_log_integration_and_recovery() {
         {
             let storage = FjallStorage::open(dir.path()).unwrap();
             let config = TreeConfig { log_arity: 2 };
-            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
+                .await
+                .unwrap();
 
             log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
 

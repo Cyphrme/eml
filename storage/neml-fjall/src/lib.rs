@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use neml::{AlgorithmMetas, Storage};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions};
+use neml::{AlgorithmMetas, Storage};
 
 /// Error type for [`FjallStorage`] operations.
 #[derive(Debug, thiserror::Error)]
@@ -99,21 +99,29 @@ impl Storage for FjallStorage {
     async fn store_node(
         &mut self,
         alg_id: u64,
-        node_id: u64,
+        left: u64,
+        height: u32,
         hash: &[u8],
     ) -> Result<(), Self::Error> {
-        let mut key = [0u8; 16];
+        let mut key = [0u8; 20];
         key[0..8].copy_from_slice(&alg_id.to_be_bytes());
-        key[8..16].copy_from_slice(&node_id.to_be_bytes());
+        key[8..16].copy_from_slice(&left.to_be_bytes());
+        key[16..20].copy_from_slice(&height.to_be_bytes());
 
         self.nodes.insert(key, hash)?;
         Ok(())
     }
 
-    async fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error> {
-        let mut key = [0u8; 16];
+    async fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        let mut key = [0u8; 20];
         key[0..8].copy_from_slice(&alg_id.to_be_bytes());
-        key[8..16].copy_from_slice(&node_id.to_be_bytes());
+        key[8..16].copy_from_slice(&left.to_be_bytes());
+        key[16..20].copy_from_slice(&height.to_be_bytes());
 
         let value = self.nodes.get(key)?;
         Ok(value.map(|bytes| bytes.to_vec()))
@@ -177,7 +185,7 @@ impl Storage for FjallStorage {
     async fn write_batch(
         &mut self,
         leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, &[u8])],
+        nodes: &[(u64, u64, u32, &[u8])],
     ) -> Result<(), Self::Error> {
         let mut batch = self.db.batch();
 
@@ -186,10 +194,11 @@ impl Storage for FjallStorage {
             batch.insert(&self.leaves, key, data);
         }
 
-        for &(alg_id, node_id, hash) in nodes {
-            let mut key = [0u8; 16];
+        for &(alg_id, left, height, hash) in nodes {
+            let mut key = [0u8; 20];
             key[0..8].copy_from_slice(&alg_id.to_be_bytes());
-            key[8..16].copy_from_slice(&node_id.to_be_bytes());
+            key[8..16].copy_from_slice(&left.to_be_bytes());
+            key[16..20].copy_from_slice(&height.to_be_bytes());
             batch.insert(&self.nodes, key, hash);
         }
 

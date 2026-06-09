@@ -39,7 +39,8 @@ pub trait Storage: Send + Sync {
     fn store_node(
         &mut self,
         alg_id: u64,
-        node_id: u64,
+        left: u64,
+        height: u32,
         hash: &[u8],
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
@@ -47,7 +48,8 @@ pub trait Storage: Send + Sync {
     fn get_node(
         &self,
         alg_id: u64,
-        node_id: u64,
+        left: u64,
+        height: u32,
     ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send;
 
     /// Persist algorithm metadata (epoch boundaries).
@@ -66,14 +68,14 @@ pub trait Storage: Send + Sync {
     fn write_batch(
         &mut self,
         leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, &[u8])],
+        nodes: &[(u64, u64, u32, &[u8])],
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         async move {
             for &(index, data) in leaves {
                 self.store_leaf(index, data).await?;
             }
-            for &(alg_id, node_id, hash) in nodes {
-                self.store_node(alg_id, node_id, hash).await?;
+            for &(alg_id, left, height, hash) in nodes {
+                self.store_node(alg_id, left, height, hash).await?;
             }
             Ok(())
         }
@@ -89,8 +91,8 @@ pub trait Storage: Send + Sync {
 pub struct MemoryStorage {
     /// Raw leaf payloads.
     pub leaves: Vec<Vec<u8>>,
-    /// Sealed internal node hashes, keyed by `(alg_id, node_id)`.
-    pub nodes: HashMap<(u64, u64), Vec<u8>>,
+    /// Sealed internal node hashes, keyed by `(alg_id, left, height)`.
+    pub nodes: HashMap<(u64, u64, u32), Vec<u8>>,
     /// Algorithm epoch metadata, keyed by algorithm ID.
     pub algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
 }
@@ -158,15 +160,21 @@ impl Storage for MemoryStorage {
     async fn store_node(
         &mut self,
         alg_id: u64,
-        node_id: u64,
+        left: u64,
+        height: u32,
         hash: &[u8],
     ) -> Result<(), Self::Error> {
-        self.nodes.insert((alg_id, node_id), hash.to_vec());
+        self.nodes.insert((alg_id, left, height), hash.to_vec());
         Ok(())
     }
 
-    async fn get_node(&self, alg_id: u64, node_id: u64) -> Result<Option<Vec<u8>>, Self::Error> {
-        Ok(self.nodes.get(&(alg_id, node_id)).cloned())
+    async fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        Ok(self.nodes.get(&(alg_id, left, height)).cloned())
     }
 
     async fn store_algorithm_meta(
@@ -212,11 +220,11 @@ mod tests {
     fn test_memory_storage_nodes() {
         smol::block_on(async {
             let mut storage = MemoryStorage::new();
-            assert_eq!(storage.get_node(1, 42).await.unwrap(), None);
+            assert_eq!(storage.get_node(1, 42, 0).await.unwrap(), None);
 
-            storage.store_node(1, 42, b"node_hash").await.unwrap();
+            storage.store_node(1, 42, 0, b"node_hash").await.unwrap();
             assert_eq!(
-                storage.get_node(1, 42).await.unwrap(),
+                storage.get_node(1, 42, 0).await.unwrap(),
                 Some(b"node_hash".to_vec())
             );
         });

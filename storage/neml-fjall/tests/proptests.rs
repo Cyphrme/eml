@@ -13,7 +13,8 @@ enum StorageAction {
     },
     StoreNode {
         alg_id: u64,
-        node_id: u64,
+        left: u64,
+        height: u32,
         hash: Vec<u8>,
     },
     StoreAlgorithmMeta {
@@ -22,7 +23,7 @@ enum StorageAction {
     },
     WriteBatch {
         leaves: Vec<(u64, Vec<u8>)>,
-        nodes: Vec<(u64, u64, Vec<u8>)>,
+        nodes: Vec<(u64, u64, u32, Vec<u8>)>,
     },
 }
 
@@ -33,11 +34,13 @@ fn arb_action() -> impl Strategy<Value = StorageAction> {
         (
             any::<u64>(),
             any::<u64>(),
+            any::<u32>(),
             prop::collection::vec(any::<u8>(), 0..32)
         )
-            .prop_map(|(alg_id, node_id, hash)| StorageAction::StoreNode {
+            .prop_map(|(alg_id, left, height, hash)| StorageAction::StoreNode {
                 alg_id,
-                node_id,
+                left,
+                height,
                 hash
             }),
         (
@@ -54,6 +57,7 @@ fn arb_action() -> impl Strategy<Value = StorageAction> {
                 (
                     any::<u64>(),
                     any::<u64>(),
+                    any::<u32>(),
                     prop::collection::vec(any::<u8>(), 0..32)
                 ),
                 0..5
@@ -65,7 +69,7 @@ fn arb_action() -> impl Strategy<Value = StorageAction> {
 
 struct StorageOracle {
     leaves: BTreeMap<u64, Vec<u8>>,
-    nodes: BTreeMap<(u64, u64), Vec<u8>>,
+    nodes: BTreeMap<(u64, u64, u32), Vec<u8>>,
     metadata: BTreeMap<u64, Vec<(u64, u64)>>,
 }
 
@@ -85,10 +89,11 @@ impl StorageOracle {
             },
             StorageAction::StoreNode {
                 alg_id,
-                node_id,
+                left,
+                height,
                 hash,
             } => {
-                self.nodes.insert((*alg_id, *node_id), hash.clone());
+                self.nodes.insert((*alg_id, *left, *height), hash.clone());
             },
             StorageAction::StoreAlgorithmMeta { alg_id, epochs } => {
                 self.metadata.insert(*alg_id, epochs.clone());
@@ -97,8 +102,8 @@ impl StorageOracle {
                 for &(index, ref data) in leaves {
                     self.leaves.insert(index, data.clone());
                 }
-                for &(alg_id, node_id, ref hash) in nodes {
-                    self.nodes.insert((alg_id, node_id), hash.clone());
+                for &(alg_id, left, height, ref hash) in nodes {
+                    self.nodes.insert((alg_id, left, height), hash.clone());
                 }
             },
         }
@@ -126,10 +131,14 @@ async fn run_differential_test(actions: Vec<StorageAction>) {
             },
             StorageAction::StoreNode {
                 alg_id,
-                node_id,
+                left,
+                height,
                 hash,
             } => {
-                storage.store_node(*alg_id, *node_id, hash).await.unwrap();
+                storage
+                    .store_node(*alg_id, *left, *height, hash)
+                    .await
+                    .unwrap();
             },
             StorageAction::StoreAlgorithmMeta { alg_id, epochs } => {
                 storage.store_algorithm_meta(*alg_id, epochs).await.unwrap();
@@ -139,9 +148,9 @@ async fn run_differential_test(actions: Vec<StorageAction>) {
                     .iter()
                     .map(|(index, data)| (*index, data.as_slice()))
                     .collect();
-                let nodes_ref: Vec<(u64, u64, &[u8])> = nodes
+                let nodes_ref: Vec<(u64, u64, u32, &[u8])> = nodes
                     .iter()
-                    .map(|(alg_id, node_id, hash)| (*alg_id, *node_id, hash.as_slice()))
+                    .map(|(alg_id, left, height, hash)| (*alg_id, *left, *height, hash.as_slice()))
                     .collect();
                 storage.write_batch(&leaves_ref, &nodes_ref).await.unwrap();
             },
@@ -165,16 +174,20 @@ async fn run_differential_test(actions: Vec<StorageAction>) {
         }
     }
 
-    for (&(alg_id, node_id), expected_hash) in &oracle.nodes {
-        let actual_hash = storage.get_node(alg_id, node_id).await.unwrap().unwrap();
+    for (&(alg_id, left, height), expected_hash) in &oracle.nodes {
+        let actual_hash = storage
+            .get_node(alg_id, left, height)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(&actual_hash, expected_hash);
     }
 
-    for &(alg_id, node_id) in oracle.nodes.keys() {
-        if !oracle.nodes.contains_key(&(alg_id, node_id + 1)) {
+    for &(alg_id, left, height) in oracle.nodes.keys() {
+        if !oracle.nodes.contains_key(&(alg_id, left, height + 1)) {
             assert!(
                 storage
-                    .get_node(alg_id, node_id + 1)
+                    .get_node(alg_id, left, height + 1)
                     .await
                     .unwrap()
                     .is_none()

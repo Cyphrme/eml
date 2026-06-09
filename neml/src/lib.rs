@@ -13,9 +13,9 @@ pub use error::{Error, Result};
 pub use hasher::Hasher;
 pub use mr::{count_leaves, evaluate, nary_mr, within_commit_path};
 pub use proof::{
-    ConsistencyProof, InclusionProof, ProofStep, verify_consistency, verify_inclusion,
-    VerifierConfig, CouplingProof, reconstruct_inclusion_root, reconstruct_consistency_roots,
-    verify_inclusion_with_coupling, verify_consistency_with_coupling, AuditPayload,
+    AuditPayload, ConsistencyProof, CouplingProof, InclusionProof, ProofStep, VerifierConfig,
+    reconstruct_consistency_roots, reconstruct_inclusion_root, verify_consistency,
+    verify_consistency_with_coupling, verify_inclusion, verify_inclusion_with_coupling,
 };
 pub use schedule::reduction_count;
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};

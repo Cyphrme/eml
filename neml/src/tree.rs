@@ -100,8 +100,24 @@ pub struct NaryMerkleLog<S: Storage> {
 
 impl<S: Storage> NaryMerkleLog<S> {
     /// Create a new empty n-ary Merkle log.
-    pub async fn new(storage: S, hasher: Box<dyn Hasher>, config: TreeConfig) -> Self {
-        assert!(config.log_arity >= 2, "log arity must be >= 2");
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error or validation error if the initialization fails.
+    pub async fn new(
+        storage: S,
+        hasher: Box<dyn Hasher>,
+        config: TreeConfig,
+    ) -> Result<Self, S::Error> {
+        if config.log_arity < 2 || config.log_arity > 256 {
+            return Err(crate::error::Error::CorruptedMetadata {
+                alg_id: 0,
+                reason: format!(
+                    "invalid log_arity: must be between 2 and 256, got {}",
+                    config.log_arity
+                ),
+            });
+        }
         let mut log = Self {
             storage,
             config,
@@ -110,10 +126,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             commit_count: 0,
         };
         // Eagerly register algorithm 0 as active from index 0
-        log.add_algorithm(0, hasher).await.unwrap_or_else(|_| {
-            panic!("failed to initialize default algorithm");
-        });
-        log
+        log.add_algorithm(0, hasher).await?;
+        Ok(log)
     }
 
     /// Reconstruct an existing Merkle log from storage using the default configuration.
@@ -138,10 +152,13 @@ impl<S: Storage> NaryMerkleLog<S> {
         hashers: Vec<(u64, Box<dyn Hasher>)>,
         config: TreeConfig,
     ) -> Result<Self, S::Error> {
-        if config.log_arity < 2 {
+        if config.log_arity < 2 || config.log_arity > 256 {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
-                reason: format!("invalid log_arity: must be >= 2, got {}", config.log_arity),
+                reason: format!(
+                    "invalid log_arity: must be between 2 and 256, got {}",
+                    config.log_arity
+                ),
             });
         }
 
@@ -233,9 +250,8 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut low = start;
         let mut high = start;
         loop {
-            let node_id = high << 16;
             if storage
-                .get_node(alg_id, node_id)
+                .get_node(alg_id, high, 0)
                 .await
                 .map_err(crate::error::Error::Storage)?
                 .is_none()
@@ -257,9 +273,8 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut size = low;
         while low < high {
             let mid = low + (high - low) / 2;
-            let node_id = mid << 16;
             if storage
-                .get_node(alg_id, node_id)
+                .get_node(alg_id, mid, 0)
                 .await
                 .map_err(crate::error::Error::Storage)?
                 .is_some()
@@ -309,9 +324,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             let hash = if !state.active_range(left, left + cap) {
                 state.hasher.null()
             } else {
-                let node_id = (left << 16) | (height as u64 & 0xFFFF);
                 storage
-                    .get_node(alg_id, node_id)
+                    .get_node(alg_id, left, height)
                     .await
                     .map_err(crate::error::Error::Storage)?
                     .unwrap_or_else(|| state.hasher.null())
@@ -548,9 +562,9 @@ impl<S: Storage> NaryMerkleLog<S> {
             mixed_to_store.extend(mixed);
         }
 
-        let nodes_ref: Vec<(u64, u64, &[u8])> = mixed_to_store
+        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = mixed_to_store
             .iter()
-            .map(|&(node_id, ref hash)| (alg_id, node_id, hash.as_slice()))
+            .map(|&(left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
             .collect();
 
         self.storage
@@ -586,9 +600,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         store_mixed: bool,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                Output = Result<(Vec<u8>, Vec<(u64, Vec<u8>)>), S::Error>,
-            > + Send + 'a,
+            dyn std::future::Future<Output = Result<(Vec<u8>, Vec<(u64, u32, Vec<u8>)>), S::Error>>
+                + Send
+                + 'a,
         >,
     >
     where
@@ -602,9 +616,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             if size == 1 {
                 if state.is_active_at(lo) {
                     if storage.len().await == 0 {
-                        let node_id = lo << 16;
                         if let Some(hash) = storage
-                            .get_node(alg_id, node_id)
+                            .get_node(alg_id, lo, 0)
                             .await
                             .map_err(crate::error::Error::Storage)?
                         {
@@ -645,9 +658,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                     }
                     h as u32
                 };
-                let node_id = (lo << 16) | (height as u64 & 0xFFFF);
                 if let Some(hash) = storage
-                    .get_node(alg_id, node_id)
+                    .get_node(alg_id, lo, height)
                     .await
                     .map_err(crate::error::Error::Storage)?
                 {
@@ -677,7 +689,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let hash = nary_mr(state.hasher.as_ref(), &child_refs);
 
                 if store_mixed {
-                    mixed_nodes.push((node_id, hash.clone()));
+                    mixed_nodes.push((lo, height, hash.clone()));
                 }
                 Ok((hash, mixed_nodes))
             } else {
@@ -744,8 +756,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
             let digest = if state.is_active_at(self.size) {
                 let leaf_hash = state.hasher.leaf(data);
-                let node_id = self.size << 16;
-                batch_nodes.push((alg_id, node_id, leaf_hash.clone()));
+                batch_nodes.push((alg_id, self.size, 0, leaf_hash.clone()));
                 leaf_hash
             } else {
                 state.hasher.null()
@@ -759,24 +770,18 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let mut children = Vec::with_capacity(self.config.log_arity);
                 let mut coords = Vec::with_capacity(self.config.log_arity);
                 for _ in 0..self.config.log_arity {
-                    children.push(
-                        state
-                            .frontier
-                            .pop()
-                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
-                                alg_id,
-                                reason: "frontier stack underflow during reduction".to_string(),
-                            })?,
-                    );
-                    coords.push(
-                        state
-                            .frontier_coords
-                            .pop()
-                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
-                                alg_id,
-                                reason: "frontier_coords stack underflow during reduction".to_string(),
-                            })?,
-                    );
+                    children.push(state.frontier.pop().ok_or_else(|| {
+                        crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier stack underflow during reduction".to_string(),
+                        }
+                    })?);
+                    coords.push(state.frontier_coords.pop().ok_or_else(|| {
+                        crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier_coords stack underflow during reduction".to_string(),
+                        }
+                    })?);
                 }
                 children.reverse();
                 coords.reverse();
@@ -785,10 +790,9 @@ impl<S: Storage> NaryMerkleLog<S> {
 
                 let parent_left_index = coords[0].0;
                 let parent_height = coords[0].1 + 1;
-                let node_id = (parent_left_index << 16) | (parent_height as u64 & 0xFFFF);
 
                 if parent != state.hasher.null() {
-                    batch_nodes.push((alg_id, node_id, parent.clone()));
+                    batch_nodes.push((alg_id, parent_left_index, parent_height, parent.clone()));
                 }
 
                 state.frontier.push(parent);
@@ -798,9 +802,9 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         }
 
-        let nodes_ref: Vec<(u64, u64, &[u8])> = batch_nodes
+        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch_nodes
             .iter()
-            .map(|&(alg_id, node_id, ref hash)| (alg_id, node_id, hash.as_slice()))
+            .map(|&(alg_id, left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
             .collect();
 
         self.storage
@@ -836,8 +840,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
             let digest = if state.is_active_at(self.commit_count) {
                 let root_hash = evaluate(state.hasher.as_ref(), subtree);
-                let node_id = self.commit_count << 16;
-                batch_nodes.push((alg_id, node_id, root_hash.clone()));
+                batch_nodes.push((alg_id, self.commit_count, 0, root_hash.clone()));
                 root_hash
             } else {
                 state.hasher.null()
@@ -851,24 +854,18 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let mut children = Vec::with_capacity(self.config.log_arity);
                 let mut coords = Vec::with_capacity(self.config.log_arity);
                 for _ in 0..self.config.log_arity {
-                    children.push(
-                        state
-                            .frontier
-                            .pop()
-                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
-                                alg_id,
-                                reason: "frontier stack underflow during reduction".to_string(),
-                            })?,
-                    );
-                    coords.push(
-                        state
-                            .frontier_coords
-                            .pop()
-                            .ok_or_else(|| crate::error::Error::CorruptedMetadata {
-                                alg_id,
-                                reason: "frontier_coords stack underflow during reduction".to_string(),
-                            })?,
-                    );
+                    children.push(state.frontier.pop().ok_or_else(|| {
+                        crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier stack underflow during reduction".to_string(),
+                        }
+                    })?);
+                    coords.push(state.frontier_coords.pop().ok_or_else(|| {
+                        crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier_coords stack underflow during reduction".to_string(),
+                        }
+                    })?);
                 }
                 children.reverse();
                 coords.reverse();
@@ -877,10 +874,9 @@ impl<S: Storage> NaryMerkleLog<S> {
 
                 let parent_left_index = coords[0].0;
                 let parent_height = coords[0].1 + 1;
-                let node_id = (parent_left_index << 16) | (parent_height as u64 & 0xFFFF);
 
                 if parent != state.hasher.null() {
-                    batch_nodes.push((alg_id, node_id, parent.clone()));
+                    batch_nodes.push((alg_id, parent_left_index, parent_height, parent.clone()));
                 }
 
                 state.frontier.push(parent);
@@ -890,9 +886,9 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         }
 
-        let nodes_ref: Vec<(u64, u64, &[u8])> = batch_nodes
+        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch_nodes
             .iter()
-            .map(|&(alg_id, node_id, ref hash)| (alg_id, node_id, hash.as_slice()))
+            .map(|&(alg_id, left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
             .collect();
 
         self.storage
@@ -961,10 +957,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         if !state.active_range(left, limit) {
             return Ok(state.hasher.null());
         }
-        let node_id = (left << 16) | (height as u64 & 0xFFFF);
         if let Some(hash) = self
             .storage
-            .get_node(alg_id, node_id)
+            .get_node(alg_id, left, height)
             .await
             .map_err(crate::error::Error::Storage)?
         {
@@ -1319,7 +1314,9 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Compute the current combined root hash of the default algorithm (0).
     pub async fn combined_root(&self) -> Vec<u8> {
-        self.combined_root_for(0).await.unwrap_or_else(|_| Vec::new())
+        self.combined_root_for(0)
+            .await
+            .unwrap_or_else(|_| Vec::new())
     }
 
     /// Compute the current combined root hash for a specific algorithm.
@@ -1490,7 +1487,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                     let old_root = if old_alg_size == 0 {
                         state.hasher.empty()
                     } else {
-                        // Trust boundary closed: retrieve starting root from trusted checkpoint parameter
+                        // Trust boundary closed: retrieve starting root from trusted checkpoint
+                        // parameter
                         let mut found = None;
                         for &(tid, ref r) in trusted_roots {
                             if tid == id {
@@ -1503,8 +1501,12 @@ impl<S: Storage> NaryMerkleLog<S> {
                     let new_root = self.root_for_at(id, end).await?;
 
                     if old_alg_size < new_alg_size && old_alg_size > 0 {
-                        // Verify consistency using standard O(log N) verification from old_alg_size to new_alg_size
-                        if let Some(proof) = self.consistency_proof_for(id, old_alg_size, new_alg_size).await? {
+                        // Verify consistency using standard O(log N) verification from old_alg_size
+                        // to new_alg_size
+                        if let Some(proof) = self
+                            .consistency_proof_for(id, old_alg_size, new_alg_size)
+                            .await?
+                        {
                             if !crate::proof::verify_consistency(
                                 state.hasher.as_ref(),
                                 &proof,
@@ -1553,8 +1555,13 @@ impl<S: Storage> NaryMerkleLog<S> {
             if !state.is_active() {
                 let deact_index = state.epochs.last().map_or(0, |&(_, end)| end);
                 if deact_index < end {
-                    let node_id = deact_index << 16;
-                    if self.storage.get_node(alg_id, node_id).await.map_err(crate::error::Error::Storage)?.is_some() {
+                    if self
+                        .storage
+                        .get_node(alg_id, deact_index, 0)
+                        .await
+                        .map_err(crate::error::Error::Storage)?
+                        .is_some()
+                    {
                         return Ok(false); // Tampered: nodes exist beyond deactivation point!
                     }
                 }
@@ -1563,7 +1570,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let mut frontier = Vec::new();
             let mut frontier_coords = Vec::new();
             let k = self.config.log_arity;
-            
+
             let alg_size_at_start = if start <= state.first_activation() {
                 0
             } else if state.is_active_at(start - 1) {
@@ -1605,7 +1612,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                         } else {
                             return Err(crate::error::Error::UnknownAlgorithm(alg_id));
                         }
-                    }
+                    },
                 };
 
                 if !crate::proof::constant_time_eq(&folded, &expected_root) {
@@ -1643,7 +1650,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 }
 
                 let is_active = state.is_active_at(i);
-                
+
                 let digest = if is_active {
                     if let Some(ref d) = data {
                         state.hasher.leaf(d)
@@ -1672,13 +1679,17 @@ impl<S: Storage> NaryMerkleLog<S> {
                     let mut children = Vec::with_capacity(self.config.log_arity);
                     let mut coords = Vec::with_capacity(self.config.log_arity);
                     for _ in 0..self.config.log_arity {
-                        children.push(frontier.pop().ok_or_else(|| crate::error::Error::CorruptedMetadata {
-                            alg_id,
-                            reason: "frontier underflow".to_string(),
+                        children.push(frontier.pop().ok_or_else(|| {
+                            crate::error::Error::CorruptedMetadata {
+                                alg_id,
+                                reason: "frontier underflow".to_string(),
+                            }
                         })?);
-                        coords.push(frontier_coords.pop().ok_or_else(|| crate::error::Error::CorruptedMetadata {
-                            alg_id,
-                            reason: "frontier_coords underflow".to_string(),
+                        coords.push(frontier_coords.pop().ok_or_else(|| {
+                            crate::error::Error::CorruptedMetadata {
+                                alg_id,
+                                reason: "frontier_coords underflow".to_string(),
+                            }
                         })?);
                     }
                     children.reverse();
@@ -1690,7 +1701,9 @@ impl<S: Storage> NaryMerkleLog<S> {
                     let parent_left_index = coords[0].0;
                     let parent_height = coords[0].1 + 1;
 
-                    let stored_parent = self.get_node_hash(alg_id, parent_left_index, parent_height).await?;
+                    let stored_parent = self
+                        .get_node_hash(alg_id, parent_left_index, parent_height)
+                        .await?;
                     if !crate::proof::constant_time_eq(&parent, &stored_parent) {
                         return Ok(false); // Internal node hash mismatch!
                     }
@@ -1703,7 +1716,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // Verify final recomputed roots match the current logger roots
         for (&alg_id, state) in &self.algs {
-            let (frontier, _, _) = &alg_frontiers[&alg_id];
+            let (frontier, ..) = &alg_frontiers[&alg_id];
             let folded = fold_frontier(state.hasher.as_ref(), frontier, self.config.log_arity);
             let final_root = self.root_for_at(alg_id, end).await?;
             if !crate::proof::constant_time_eq(&folded, &final_root) {
@@ -1779,16 +1792,18 @@ mod tests {
         smol::block_on(async {
             let storage = MemoryStorage::new();
             let config = TreeConfig { log_arity: 2 };
-            let mut log = NaryMerkleLog::new(storage, Box::new(TestHasher), config).await;
+            let mut log = NaryMerkleLog::new(storage, Box::new(TestHasher), config)
+                .await
+                .unwrap();
 
             log.append_leaf(b"a").await.unwrap();
             log.append_leaf(b"b").await.unwrap();
 
             let storage_ref = log.storage();
-            let node_hash = storage_ref.get_node(0, 1).await.unwrap();
+            let node_hash = storage_ref.get_node(0, 0, 1).await.unwrap();
             assert!(
                 node_hash.is_some(),
-                "node at ID 1 (left_index 0, height 1) should be stored"
+                "node at coordinate (0, 1) should be stored"
             );
         });
     }
