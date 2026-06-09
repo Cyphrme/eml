@@ -1267,32 +1267,373 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Compute the current combined root hash of the default algorithm (0).
     pub async fn combined_root(&self) -> Vec<u8> {
-        Vec::new()
+        self.combined_root_for(0).await.unwrap_or_else(|_| Vec::new())
     }
 
     /// Compute the current combined root hash for a specific algorithm.
-    pub async fn combined_root_for(&self, _alg_id: u64) -> Result<Vec<u8>, S::Error> {
-        Ok(Vec::new())
+    pub async fn combined_root_for(&self, alg_id: u64) -> Result<Vec<u8>, S::Error> {
+        let tip_size = if self.size > 0 {
+            self.size
+        } else {
+            self.commit_count
+        };
+        self.combined_root_at(alg_id, tip_size).await
     }
 
     /// Compute the combined root hash for a specific algorithm at a historical tree size.
-    pub async fn combined_root_at(&self, _alg_id: u64, _size: u64) -> Result<Vec<u8>, S::Error> {
-        Ok(Vec::new())
+    pub async fn combined_root_at(&self, alg_id: u64, size: u64) -> Result<Vec<u8>, S::Error> {
+        let state = self
+            .algs
+            .get(&alg_id)
+            .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
+
+        if size == 0 {
+            return Ok(state.hasher.empty());
+        }
+
+        // 1. Gather active algorithms at the given historical size
+        let mut active_algs = Vec::new();
+        for (&id, alg_state) in &self.algs {
+            if size > 0 && alg_state.is_active_at(size - 1) {
+                active_algs.push(id);
+            }
+        }
+        active_algs.sort_unstable();
+
+        if active_algs.is_empty() {
+            return Err(crate::error::Error::NoActiveAlgorithms);
+        }
+
+        // Ensure the requested algorithm is active at this size
+        if !active_algs.contains(&alg_id) {
+            return Err(crate::error::Error::FrozenAlgorithm(alg_id));
+        }
+
+        if active_algs.len() == 1 {
+            // Singleton Promotion
+            return self.root_for_at(active_algs[0], size).await;
+        }
+
+        // 2. Concatenate sorted active roots at size
+        let mut buf = Vec::new();
+        for &id in &active_algs {
+            let r = self.root_for_at(id, size).await?;
+            buf.extend_from_slice(&id.to_be_bytes());
+            buf.extend_from_slice(&(r.len() as u64).to_be_bytes());
+            buf.extend_from_slice(&r);
+        }
+
+        // 3. Hash the combined buffer using the target algorithm's hasher
+        Ok(state.hasher.hash(&buf))
     }
 
     /// Retrieve the raw root hash for a specific algorithm at a historical tree size.
-    pub async fn root_for_at(&self, _alg_id: u64, _size: u64) -> Result<Vec<u8>, S::Error> {
-        Ok(Vec::new())
+    pub async fn root_for_at(&self, alg_id: u64, size: u64) -> Result<Vec<u8>, S::Error> {
+        let state = self
+            .algs
+            .get(&alg_id)
+            .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
+
+        let current_global_size = if self.size > 0 {
+            self.size
+        } else {
+            self.commit_count
+        };
+
+        if size > current_global_size {
+            return Err(crate::error::Error::IndexOutOfBounds {
+                index: size,
+                tree_size: current_global_size,
+            });
+        }
+
+        let alg_size = if size <= state.first_activation() {
+            0
+        } else if state.is_active_at(size - 1) {
+            size
+        } else {
+            state
+                .epochs
+                .iter()
+                .filter(|&&(start, end)| end <= size - 1)
+                .map(|&(_, end)| end)
+                .max()
+                .unwrap_or(0)
+        };
+
+        if alg_size == 0 {
+            return Ok(state.hasher.empty());
+        }
+
+        let k = self.config.log_arity;
+        let coords = frontier_for_size(alg_size, k as u64);
+
+        let mut frontier = Vec::with_capacity(coords.len());
+        for &(left, height) in &coords {
+            let hash = self.get_node_hash(alg_id, left, height).await?;
+            frontier.push(hash);
+        }
+
+        if frontier.is_empty() {
+            return Ok(state.hasher.empty());
+        }
+        if frontier.len() == 1 {
+            return Ok(frontier[0].clone());
+        }
+
+        let mut current = frontier;
+        while current.len() > k {
+            let split_idx = current.len() - k;
+            let right_elements = &current[split_idx..];
+            let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
+            let merged = nary_mr(state.hasher.as_ref(), &refs);
+            current.truncate(split_idx);
+            current.push(merged);
+        }
+        let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+        Ok(nary_mr(state.hasher.as_ref(), &refs))
     }
 
     /// Verify that the trees for all active algorithms have not diverged
     /// from the underlying leaf data stored in the database.
     pub async fn verify_non_divergence(
         &self,
-        _checkpoint_size: Option<u64>,
-        _trusted_roots: &[(u64, Vec<u8>)],
+        checkpoint_size: Option<u64>,
+        trusted_roots: &[(u64, Vec<u8>)],
     ) -> Result<bool, S::Error> {
-        Ok(false)
+        let start = checkpoint_size.unwrap_or(0);
+        let end = if self.size > 0 {
+            self.size
+        } else {
+            self.commit_count
+        };
+        if start > end {
+            return Ok(false);
+        }
+
+        // 1. If starting from a checkpoint, verify tree consistency first
+        if start > 0 {
+            for (&id, state) in &self.algs {
+                let check_start = std::cmp::max(start, state.first_activation());
+                if check_start < end {
+                    let get_alg_size = |S: u64| {
+                        if S <= state.first_activation() {
+                            0
+                        } else if state.is_active_at(S - 1) {
+                            S
+                        } else {
+                            state
+                                .epochs
+                                .iter()
+                                .filter(|&&(start, end)| end <= S - 1)
+                                .map(|&(_, end)| end)
+                                .max()
+                                .unwrap_or(0)
+                        }
+                    };
+
+                    let old_alg_size = get_alg_size(check_start);
+                    let new_alg_size = get_alg_size(end);
+
+                    let old_root = if old_alg_size == 0 {
+                        state.hasher.empty()
+                    } else {
+                        // Trust boundary closed: retrieve starting root from trusted checkpoint parameter
+                        let mut found = None;
+                        for &(tid, ref r) in trusted_roots {
+                            if tid == id {
+                                found = Some(r.clone());
+                                break;
+                            }
+                        }
+                        found.ok_or(crate::error::Error::UnknownAlgorithm(id))?
+                    };
+                    let new_root = self.root_for_at(id, end).await?;
+
+                    if old_alg_size < new_alg_size && old_alg_size > 0 {
+                        // Verify consistency using standard O(log N) verification from old_alg_size to new_alg_size
+                        if let Some(proof) = self.consistency_proof_for(id, old_alg_size, new_alg_size).await? {
+                            if !crate::proof::verify_consistency(
+                                state.hasher.as_ref(),
+                                &proof,
+                                &old_root,
+                                &new_root,
+                            ) {
+                                return Ok(false);
+                            }
+                        } else {
+                            return Ok(false);
+                        }
+                    } else if old_alg_size == new_alg_size {
+                        // Ensure the root has not changed for frozen algorithms
+                        if old_root != new_root {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Helper helper to fold a frontier to its root.
+        fn fold_frontier(hasher: &dyn Hasher, frontier: &[Vec<u8>], k: usize) -> Vec<u8> {
+            if frontier.is_empty() {
+                return hasher.empty();
+            }
+            if frontier.len() == 1 {
+                return frontier[0].clone();
+            }
+            let mut current = frontier.to_vec();
+            while current.len() > k {
+                let split_idx = current.len() - k;
+                let right_elements = &current[split_idx..];
+                let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
+                let merged = nary_mr(hasher, &refs);
+                current.truncate(split_idx);
+                current.push(merged);
+            }
+            let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+            nary_mr(hasher, &refs)
+        }
+
+        // Reconstruct frontier stacks at checkpoint size and verify starting boundaries
+        let mut alg_frontiers = std::collections::HashMap::new();
+        for (&alg_id, state) in &self.algs {
+            let mut frontier = Vec::new();
+            let mut frontier_coords = Vec::new();
+            let k = self.config.log_arity;
+            
+            let alg_size_at_start = if start <= state.first_activation() {
+                0
+            } else if state.is_active_at(start - 1) {
+                start
+            } else {
+                state
+                    .epochs
+                    .iter()
+                    .filter(|&&(s, e)| e <= start - 1)
+                    .map(|&(_, e)| e)
+                    .max()
+                    .unwrap_or(0)
+            };
+
+            if alg_size_at_start > 0 {
+                let coords = frontier_for_size(alg_size_at_start, k as u64);
+                for &(left, height) in &coords {
+                    let hash = self.get_node_hash(alg_id, left, height).await?;
+                    frontier.push(hash);
+                    frontier_coords.push((left, height));
+                }
+            }
+
+            if start > 0 {
+                let folded = fold_frontier(state.hasher.as_ref(), &frontier, k);
+                let mut expected_root = None;
+                for &(tid, ref r) in trusted_roots {
+                    if tid == alg_id {
+                        expected_root = Some(r.clone());
+                        break;
+                    }
+                }
+
+                let expected_root = match expected_root {
+                    Some(r) => r,
+                    None => {
+                        if alg_size_at_start == 0 {
+                            state.hasher.empty()
+                        } else {
+                            return Err(crate::error::Error::UnknownAlgorithm(alg_id));
+                        }
+                    }
+                };
+
+                if folded != expected_root {
+                    return Ok(false); // Starting state mismatch!
+                }
+            }
+
+            alg_frontiers.insert(alg_id, (frontier, frontier_coords, alg_size_at_start));
+        }
+
+        // Stream leaf payloads from storage and rebuild stacks incrementally
+        for i in start..end {
+            let data = if self.size > 0 {
+                match self.storage.get_leaf(i).await {
+                    Ok(d) => Some(d),
+                    Err(e) => return Err(crate::error::Error::Storage(e)),
+                }
+            } else {
+                None
+            };
+
+            for (&alg_id, state) in &self.algs {
+                let (frontier, frontier_coords, alg_size) = alg_frontiers
+                    .get_mut(&alg_id)
+                    .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
+
+                let is_active = state.is_active_at(i);
+                
+                let digest = if is_active {
+                    if let Some(ref d) = data {
+                        state.hasher.leaf(d)
+                    } else {
+                        self.get_node_hash(alg_id, i, 0).await?
+                    }
+                } else {
+                    state.hasher.null()
+                };
+
+                // Check leaf/subtree hash tampering
+                let stored_leaf_hash = self.get_node_hash(alg_id, i, 0).await?;
+                if digest != stored_leaf_hash {
+                    return Ok(false); // Leaf/subtree root hash mismatch!
+                }
+
+                frontier.push(digest);
+                frontier_coords.push((i, 0));
+                *alg_size += 1;
+
+                let merges = reduction_count(*alg_size - 1, self.config.log_arity as u64);
+                for _ in 0..merges {
+                    if frontier.len() < self.config.log_arity {
+                        return Ok(false); // Frontier underflow!
+                    }
+                    let mut children = Vec::with_capacity(self.config.log_arity);
+                    let mut coords = Vec::with_capacity(self.config.log_arity);
+                    for _ in 0..self.config.log_arity {
+                        children.push(frontier.pop().unwrap());
+                        coords.push(frontier_coords.pop().unwrap());
+                    }
+                    children.reverse();
+                    coords.reverse();
+
+                    let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
+                    let parent = nary_mr(state.hasher.as_ref(), &child_refs);
+
+                    let parent_left_index = coords[0].0;
+                    let parent_height = coords[0].1 + 1;
+
+                    let stored_parent = self.get_node_hash(alg_id, parent_left_index, parent_height).await?;
+                    if parent != stored_parent {
+                        return Ok(false); // Internal node hash mismatch!
+                    }
+
+                    frontier.push(parent);
+                    frontier_coords.push((parent_left_index, parent_height));
+                }
+            }
+        }
+
+        // Verify final recomputed roots match the current logger roots
+        for (&alg_id, state) in &self.algs {
+            let (frontier, _, _) = &alg_frontiers[&alg_id];
+            let folded = fold_frontier(state.hasher.as_ref(), frontier, self.config.log_arity);
+            let final_root = self.root_for_at(alg_id, end).await?;
+            if folded != final_root {
+                return Ok(false); // Final root mismatch!
+            }
+        }
+
+        Ok(true)
     }
 }
 
