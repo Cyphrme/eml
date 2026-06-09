@@ -192,7 +192,7 @@ impl Hasher for Sha256Hasher {
 async fn main() {
     let storage = neml::MemoryStorage::new();
     let config = TreeConfig { log_arity: 2 };
-    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await.unwrap();
 
     // Append a structured subtree: two batches, one containing two leaves.
     let entry = Subtree::Node(vec![
