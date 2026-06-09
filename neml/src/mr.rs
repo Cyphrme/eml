@@ -125,7 +125,7 @@ mod tests {
         }
 
         fn null(&self) -> Vec<u8> {
-            Sha256::digest([0x02]).to_vec()
+            crate::NULL_DIGEST.to_vec()
         }
 
         fn hash(&self, data: &[u8]) -> Vec<u8> {

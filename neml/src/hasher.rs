@@ -20,7 +20,9 @@ pub trait Hasher: Debug + Send + Sync {
     #[must_use]
     fn empty(&self) -> Vec<u8>;
 
-    /// Null leaf constant: H(0x02). The single byte `0x02` IS the data hashed.
+    /// Null leaf constant: A Nothing-Up-My-Sleeve (NUMS) high-entropy 32-byte constant.
+    /// Under prefix-free hashing, the null constant digest is defined directly as this
+    /// constant without any preimage, preventing collision with any leaf or node digests.
     #[must_use]
     fn null(&self) -> Vec<u8>;
 
