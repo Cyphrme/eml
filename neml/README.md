@@ -151,9 +151,14 @@ To prevent this index spoofing attack while maintaining full support for arbitra
 
 ### Null Domain Isolation
 
-The null constant $N_0$ is defined directly as a Nothing-Up-My-Sleeve (NUMS) high-entropy 32-byte constant (specifically, the first 32 bytes of the fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89`). Under prefix-free hashing, since $N_0$ is high-entropy and has no known preimage under the hash function $H$, it is computationally infeasible under preimage resistance to find a leaf payload or internal node that hashes to $N_0$. 
+The null constant $N_0$ represents an empty or inactive subtree. Under prefix-free hashing, defining the null digest as the output of a hash function on a known preimage would allow an attacker to input that preimage as a leaf payload and trigger a leaf-subtree substitution collision.
 
-This design completely eliminates the flat null promotion collision risk (where a leaf containing a null-preimage payload could have been substituted with a null-promoted node/subtree). We prove this property formally in our Lean 4 proof system.
+To prevent this collision across arbitrary hash sizes, `neml` utilizes **XOF-based Multihash Null Generation**:
+
+*   **Master NUMS Seed**: A Nothing-Up-My-Sleeve (NUMS) high-entropy 32-byte constant based on the hex fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89`.
+*   **Extendable-Output Function (XOF)**: For any hash algorithm with output length $L$ bytes, the null digest is derived dynamically via a counter-mode HKDF-expand function:
+    $$N_0(L) = \text{take}(L, H(\text{Seed} \parallel 0) \parallel H(\text{Seed} \parallel 1) \parallel \dots)$$
+*   **Preimage Resistance**: Because the master seed is high-entropy with no known preimage under $H$, the resulting $L$-byte null digest is guaranteed to have no known preimages. A leaf payload or node can never evaluate to $N_0(L)$, eliminating the flat null promotion collision risk. We prove this property formally in our Lean 4 proof system.
 
 ---
 
