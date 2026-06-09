@@ -706,11 +706,11 @@ fn test_resume_persists_mixed_nodes_malt() {
         let storage = log.into_storage();
 
         // Under size 8 and deactivation 3, mixed nodes are:
-        // - [0, 8) height 3: node_id = (0 << 16) | 3 = 3
-        // - [0, 4) height 2: node_id = (0 << 16) | 2 = 2
-        // - [2, 4) height 1: node_id = (2 << 16) | 1 = 131073
-        // Active node [0, 2) height 1 is also persisted (from initial appends): node_id = (0 << 16)
-        // | 1 = 1
+        // - [0, 8) height 3: coordinate (0, 0, 3)
+        // - [0, 4) height 2: coordinate (0, 0, 2)
+        // - [2, 4) height 1: coordinate (0, 2, 1)
+        // Active node [0, 2) height 1 is also persisted (from initial appends): coordinate (0, 0,
+        // 1)
         assert!(
             storage.nodes.contains_key(&(0, 0, 3)),
             "mixed node [0, 8) height 3 not persisted"
