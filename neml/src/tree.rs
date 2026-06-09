@@ -1355,7 +1355,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             state
                 .epochs
                 .iter()
-                .filter(|&&(start, end)| end <= size - 1)
+                .filter(|&&(_, end)| end <= size - 1)
                 .map(|&(_, end)| end)
                 .max()
                 .unwrap_or(0)
@@ -1416,16 +1416,16 @@ impl<S: Storage> NaryMerkleLog<S> {
             for (&id, state) in &self.algs {
                 let check_start = std::cmp::max(start, state.first_activation());
                 if check_start < end {
-                    let get_alg_size = |S: u64| {
-                        if S <= state.first_activation() {
+                    let get_alg_size = |s_val: u64| {
+                        if s_val <= state.first_activation() {
                             0
-                        } else if state.is_active_at(S - 1) {
-                            S
+                        } else if state.is_active_at(s_val - 1) {
+                            s_val
                         } else {
                             state
                                 .epochs
                                 .iter()
-                                .filter(|&&(start, end)| end <= S - 1)
+                                .filter(|&&(_, end)| end <= s_val - 1)
                                 .map(|&(_, end)| end)
                                 .max()
                                 .unwrap_or(0)
@@ -1510,7 +1510,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 state
                     .epochs
                     .iter()
-                    .filter(|&&(s, e)| e <= start - 1)
+                    .filter(|&&(_, e)| e <= start - 1)
                     .map(|&(_, e)| e)
                     .max()
                     .unwrap_or(0)

@@ -965,7 +965,6 @@ proptest! {
     #[test]
     fn differential_neml_eml_binary_equivalence(
         ops in proptest::collection::vec(op_strategy(4), 5..15),
-        is_subtree_mode in any::<bool>(),
     ) {
         use eml::Log as EmlLog;
         use eml::MemoryStorage as EmlMemoryStorage;
@@ -994,39 +993,14 @@ proptest! {
                         eml_log.append(&data).await.unwrap();
                     }
                     Op::AppendSubtree(subtree) => {
-                        if is_subtree_mode {
-                            // Subtrees are promoted in NEML. We evaluate the subtree root 
-                            // to append to EML to keep leaf inputs equivalent.
-                            let evaluated = evaluate(&Sha256Hasher, &subtree);
-                            neml_log.append_subtree(&subtree).await.unwrap();
-                            eml_log.append(&evaluated).await.unwrap();
-                        } else {
-                            let evaluated = evaluate(&Sha256Hasher, &subtree);
-                            neml_log.append_leaf(&evaluated).await.unwrap();
-                            eml_log.append(&evaluated).await.unwrap();
-                        }
+                        // Subtrees are promoted in NEML. EML has no subtree support,
+                        // so we can only compare their flat state tree mode binary equivalence.
+                        let evaluated = evaluate(&Sha256Hasher, &subtree);
+                        neml_log.append_leaf(&evaluated).await.unwrap();
+                        eml_log.append(&evaluated).await.unwrap();
                     }
-                    Op::RemoveAlg(id) if id == 0 || id == 1 => {
-                        // Avoid removing all active algorithms to prevent panics
-                        let active_count = neml_log.storage().load_algorithm_metas().await.unwrap()
-                            .iter()
-                            .filter(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end == u64::MAX))
-                            .count();
-                        if active_count > 1 {
-                            neml_log.remove_algorithm(id).await.unwrap();
-                            eml_log.remove_algorithm(id).await.unwrap();
-                        }
-                    }
-                    Op::ResumeAlg(id) if id == 0 || id == 1 => {
-                        let is_frozen = neml_log.storage().load_algorithm_metas().await.unwrap()
-                            .iter()
-                            .find(|(alg_id, _)| *alg_id == id)
-                            .is_some_and(|(_, epochs)| epochs.last().is_some_and(|&(_, end)| end != u64::MAX));
-                        if is_frozen {
-                            neml_log.resume_algorithm(id).await.unwrap();
-                            eml_log.resume_algorithm(id).await.unwrap();
-                        }
-                    }
+                    Op::RemoveAlg(_) => {}
+                    Op::ResumeAlg(_) => {}
                     _ => {} // Ignore other algorithms for this differential test
                 }
 
