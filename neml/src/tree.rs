@@ -1781,7 +1781,7 @@ mod tests {
         }
 
         fn null(&self) -> Vec<u8> {
-            crate::NULL_DIGEST.to_vec()
+            crate::generate_nums_null(self, 32)
         }
 
         fn hash(&self, data: &[u8]) -> Vec<u8> {

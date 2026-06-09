@@ -29,3 +29,22 @@ pub const NULL_DIGEST: &[u8; 32] = &[
     0xa4, 0x09, 0x38, 0x22, 0x29, 0x9f, 0x31, 0xd0,
     0x08, 0x2e, 0xfa, 0x98, 0xec, 0x4e, 0x6c, 0x89,
 ];
+
+/// Generate a Nothing-Up-My-Sleeve (NUMS) null digest of a specific target length `digest_len`
+/// utilizing a counter-based HKDF-like expansion on the 32-byte `NULL_DIGEST` master seed.
+/// This dynamically supports arbitrary multihash sizes without known preimages.
+#[must_use]
+pub fn generate_nums_null(hasher: &dyn Hasher, digest_len: usize) -> Vec<u8> {
+    let mut null_digest = Vec::with_capacity(digest_len);
+    let mut counter = 0u64;
+    while null_digest.len() < digest_len {
+        let mut buf = Vec::with_capacity(32 + 8);
+        buf.extend_from_slice(NULL_DIGEST);
+        buf.extend_from_slice(&counter.to_be_bytes());
+        let chunk = hasher.hash(&buf);
+        null_digest.extend_from_slice(&chunk);
+        counter += 1;
+    }
+    null_digest.truncate(digest_len);
+    null_digest
+}

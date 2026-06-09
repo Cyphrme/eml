@@ -28,7 +28,7 @@ impl Hasher for Sha256Hasher {
     }
 
     fn null(&self) -> Vec<u8> {
-        neml::NULL_DIGEST.to_vec()
+        neml::generate_nums_null(self, 32)
     }
 
     fn hash(&self, data: &[u8]) -> Vec<u8> {
