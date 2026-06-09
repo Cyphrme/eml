@@ -61,6 +61,15 @@ Three operations govern algorithm lifecycles:
 
 From the perspective of a verifier holding a single algorithm's root and proof, `neml` is indistinguishable from a standard single-algorithm Merkle tree. Other algorithms' hashes are invisible.
 
+### Multi-Hash Coupling & Coupled Verification
+
+To prevent **split-horizon attacks** (where a compromised or malicious logger serves different log contents under different algorithms for the same size), `neml` implements cryptographic **multi-hash coupling**:
+
+*   **Signed Combined Roots:** For all active algorithms, their raw roots are serialized (in sorted order of algorithm ID) and hashed to produce a **Combined Root** ($CR$). If only one algorithm is active, it collapses back to the raw root (Singleton Promotion).
+*   **Decoupled Verification (`CouplingProof`):** Rather than bloating standard inclusion or consistency proofs with companion algorithm roots, `neml` decouples the multi-algorithm binding. A lightweight `CouplingProof` maps the Combined Root to the active roots. The verifier validates the `CouplingProof` once to extract the trusted raw root for their target algorithm, then verifies the standard single-algorithm proof against it.
+*   **Non-Divergence Auditing (`verify_non_divergence`):** Auditors and clients can verify that parallel algorithm logs have not diverged (either in metadata or leaf data) by comparing the combined roots at historical checkpoint sizes.
+*   **Coz-Compliant Checkpoints (`AuditPayload`):** Checkpoints are serialized as `AuditPayload` (containing `log_id`, `tree_size`, `active_algs`, and `combined_roots`), which is easily wrapped in Coz cryptographic envelopes to bootstrap Web of Trust consensus among validating peers.
+
 For detailed formal treatment of the epoch model, see the [EML paper](https://eml-paper.netlify.app/), which defines the Polymorphic Merkle Log paradigm that NEML generalizes to n-ary topologies.
 
 ---
@@ -96,6 +105,16 @@ The second-preimage threat in a Merkle tree is an adversary presenting an intern
 - The verifier reconstructs the expected topology from the signed tree head and asserts that the proof structure conforms. Any attempt to substitute a leaf for an internal node, or to alter a node's arity, produces a topology mismatch and is rejected.
 
 This is equivalent in security to prefix-based domain separation — both ensure the verifier can distinguish leaf positions from node positions — provided the verifier has the signed tree head (which is the standard trust assumption in any append-only log protocol). The difference is where the binding happens: in the hash preimage (prefixes) vs. in the proof structure (topological commitment).
+
+### Selective Index & Path Verification
+
+In an N-ary Merkle tree, inclusion proofs explicitly store the position of the target leaf and siblings at each level (`ProofStep::position`). A malicious prover could attempt to spoof the leaf's sequence number by altering `InclusionProof::index` without modifying the path (since the index field is not used in raw hash reconstruction). 
+
+To prevent this index spoofing attack while maintaining full support for arbitrary, non-uniform subtrees, `neml` uses **Selective Index & Path Verification**:
+
+*   **InclusionProof `log_arity` field:** The `InclusionProof` contains a `log_arity` field indicating the arity configuration of the log.
+*   **State Tree Mode (`log_arity >= 2`):** When verifying a proof from a uniform log, `log_arity` is set to the log arity (e.g. 2 or 3). The verifier performs strict structural validation (`verify_inclusion_path_structure` and `reconstruct_index_from_path`) to assert that the step positions and sibling counts match the deterministic topology for the claimed `index` and `tree_size`. If they mismatch, verification is rejected.
+*   **Commit Tree Mode (`log_arity == 0`):** When verifying a proof that includes arbitrary nested subtrees (Commit Tree Mode), the log structure is non-uniform and the global leaf index cannot be deterministically verified from the path steps alone. In this case, `log_arity` is set to `0`, which tells the verifier to bypass the uniform topology check and perform standard membership/inclusion verification.
 
 ### Null Domain Isolation
 
