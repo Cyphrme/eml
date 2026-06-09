@@ -84,6 +84,7 @@ Three operations govern algorithm lifecycles:
 - **`add_algorithm`**: Register a new algorithm at the current tree size. Its frontier is initialized from null constants in $O(\log_k n)$.
 - **`remove_algorithm`**: Freeze an algorithm at the current tree size. Future appends do not update it.
 - **`resume_algorithm`**: Reactivate a frozen algorithm. Its frontier is reconstructed from stored nodes and null constants in $O(\log_k n)$.
+  *   **Root Hash Resumption Shift:** Because updates to a frozen algorithm's frontier are skipped during appends, the algorithm's root at size $N$ remains the deactivated root $R_M$ (where $M \leq N$ is the deactivation size). When resumed at size $N$, the frontier is reconstructed by filling the inactive range $[M, N)$ with null constants $N_0$, shifting the active root from $R_M$ to the null-promoted root $R_N$. Clients must account for this root hash shift at the resumption boundary.
 
 From the perspective of a verifier holding a single algorithm's root and proof, `neml` is indistinguishable from a standard single-algorithm Merkle tree. Other algorithms' hashes are invisible.
 
@@ -92,7 +93,9 @@ From the perspective of a verifier holding a single algorithm's root and proof, 
 To prevent **split-horizon attacks** (where a compromised or malicious logger serves different log contents under different algorithms for the same size), `neml` implements cryptographic **multi-hash coupling**:
 
 *   **Signed Combined Roots:** For all active algorithms, their raw roots are serialized (in sorted order of algorithm ID) and hashed to produce a **Combined Root** ($CR$). If only one algorithm is active, it collapses back to the raw root (Singleton Promotion).
+    *   **Frozen Algorithm Omission:** Combined Roots only bind algorithms that are active at that tree size. Frozen algorithms are excluded, meaning the Combined Root does not cryptographically bind historical frozen data. A compromised logger could tamper with historical frozen nodes in storage without violating Combined Root checks unless clients independently verify the historical checkpoints.
 *   **Decoupled Verification (`CouplingProof`):** Rather than bloating standard inclusion or consistency proofs with companion algorithm roots, `neml` decouples the multi-algorithm binding. A lightweight `CouplingProof` maps the Combined Root to the active roots. The verifier validates the `CouplingProof` once to extract the trusted raw root for their target algorithm, then verifies the standard single-algorithm proof against it.
+    *   **Transition Bridge Limitation:** The `verify_consistency_with_coupling` helper assumes the target algorithm is active in both states. If the algorithm's active status changes (activation or deactivation) across the boundary, the helper returns `false` because the coupling proof cannot resolve the root of the inactive algorithm. Callers must verify consistency and coupling proofs manually in this scenario.
 *   **Non-Divergence Auditing (`verify_non_divergence`):** Auditors and clients can verify that parallel algorithm logs have not diverged (either in metadata or leaf data) by comparing the combined roots at historical checkpoint sizes.
 *   **Coz-Compliant Checkpoints (`AuditPayload`):** Checkpoints are serialized as `AuditPayload` (containing `log_id`, `tree_size`, `active_algs`, and `combined_roots`), which is easily wrapped in Coz cryptographic envelopes to bootstrap Web of Trust consensus among validating peers.
 
@@ -133,6 +136,7 @@ The second-preimage threat in a Merkle tree is an adversary presenting an intern
 This is equivalent in security to prefix-based domain separation — both ensure the verifier can distinguish leaf positions from node positions — provided the verifier has the signed tree head (which is the standard trust assumption in any append-only log protocol). The difference is where the binding happens: in the hash preimage (prefixes) vs. in the proof structure (topological commitment).
 
 **Critical Limitation:** Topological commitments require a trusted `tree_size` and `log_arity` at the verification layer. If the verifier does not have an authenticated tree size, or if the log is verified in Commit Tree Mode (`log_arity == 0`), topological verification is bypassed. Because NEML hashes are prefix-free, second-preimage resistance is completely absent in these scenarios unless the caller enforces domain separation externally.
+Additionally, verification of inclusion proofs containing nested subtree steps fails under State Tree Mode (`log_arity >= 2`) because the subtree steps violate the uniform arity check. Thus, nested-leaf inclusion proofs must be verified using Commit Tree Mode (`log_arity == 0`), which lacks second-preimage protection.
 
 ### Selective Index & Path Verification
 
@@ -148,6 +152,8 @@ To prevent this index spoofing attack while maintaining full support for arbitra
 ### Null Domain Isolation
 
 The null constant $N_0 = H(\mathtt{0x02})$ is the hash of a single byte. An internal node's hash preimage is the concatenation of $m \geq 2$ child digests, totaling $m \cdot B$ bytes (where $B$ is the digest size, e.g. 32 for SHA-256). The minimum node preimage length is therefore $2B = 64$ bytes. Since the null preimage is 1 byte, these lengths are strictly disjoint. Under a collision-resistant hash function, $N_0$ cannot collide with any node hash. The `0x02` byte serves only to distinguish null leaves from empty-string hashes; it is not a domain separation prefix in the RFC 9162 sense.
+
+**Flat Null Promotion Collision Risk:** Because flat null promotion evaluates any internal node containing only null children directly to the null constant $N_0$, a structural collision exists: a leaf containing the raw data payload `[0x02]` and a node with only null children both hash to the exact same digest $N_0$. Under Commit Tree Mode (which bypasses topological structure checks), an attacker could substitute a leaf containing `[0x02]` with a node/subtree containing only null children without changing the root.
 
 ---
 
@@ -172,6 +178,7 @@ Consistency proof size is $O(\log_k n)$ where $n$ is the number of appends and $
 ### End-to-End Inclusion Proofs
 
 Inclusion proofs for a leaf nested inside a subtree must traverse **both** the subtree internals and the log-level tree. The proof path walks from the leaf up through the subtree (reconstructing the subtree root $R_i$), then continues through the log-level nodes (reconstructing the global root from $R_i$). Every step is linked via the hash function, forming an unbroken chain of commitments from the leaf to the global root.
+*   **Verification Mode Restriction:** Because subtree depths and arities are non-uniform, end-to-end inclusion proofs for nested leaves cannot be verified under State Tree Mode (`log_arity >= 2`) and must be verified in Commit Tree Mode (`log_arity == 0`).
 
 The actual complexity of an end-to-end inclusion proof is:
 
