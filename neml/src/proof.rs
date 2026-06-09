@@ -66,7 +66,7 @@ pub fn verify_inclusion(
     root: &[u8],
 ) -> bool {
     reconstruct_inclusion_root(hasher, leaf_hash, proof)
-        .map_or(false, |computed| constant_time_eq(&computed, root))
+        .is_some_and(|computed| constant_time_eq(&computed, root))
 }
 
 use crate::tree::frontier_for_size;
@@ -83,7 +83,7 @@ pub fn verify_consistency(
     new_root: &[u8],
 ) -> bool {
     reconstruct_consistency_roots(hasher, proof)
-        .map_or(false, |(computed_old, computed_new)| {
+        .is_some_and(|(computed_old, computed_new)| {
             constant_time_eq(&computed_old, old_root) & constant_time_eq(&computed_new, new_root)
         })
 }
@@ -254,8 +254,7 @@ pub fn reconstruct_index_from_path(
 
     let mut offset = 0u64;
     let mut power = 1u64;
-    for i in 0..path_idx {
-        let step = &path[i];
+    for step in path.iter().take(path_idx) {
         if step.siblings.len() != k_usize - 1 {
             return None;
         }
@@ -278,8 +277,7 @@ pub fn verify_inclusion_path_structure(
     tree_size: u64,
     path: &[ProofStep],
 ) -> bool {
-    reconstruct_index_from_path(k as u64, tree_size, path)
-        .map_or(false, |expected_idx| expected_idx == index)
+    reconstruct_index_from_path(k as u64, tree_size, path) == Some(index)
 }
 
 /// Reconstruct the raw root from an inclusion proof path.
@@ -296,10 +294,15 @@ pub fn reconstruct_inclusion_root(
         return None;
     }
 
-    if proof.log_arity >= 2 {
-        if !verify_inclusion_path_structure(proof.log_arity as usize, proof.index, proof.tree_size, &proof.path) {
-            return None;
-        }
+    if proof.log_arity >= 2
+        && !verify_inclusion_path_structure(
+            proof.log_arity as usize,
+            proof.index,
+            proof.tree_size,
+            &proof.path,
+        )
+    {
+        return None;
     }
 
     let mut current = leaf_hash.to_vec();
@@ -355,31 +358,19 @@ pub fn reconstruct_consistency_roots(
     let old_coords = frontier_for_size(proof.old_size, k);
     let new_coords = frontier_for_size(proof.new_size, k);
 
-    let &(boundary_left, boundary_height) = match old_coords.last() {
-        Some(coords) => coords,
-        None => return None,
-    };
+    let &(boundary_left, boundary_height) = old_coords.last()?;
 
     let mut target_new_f_idx = None;
     for (f_idx, &(new_left, new_height)) in new_coords.iter().enumerate() {
-        let cap = match k.checked_pow(new_height) {
-            Some(c) => c,
-            None => return None,
-        };
-        let limit = match new_left.checked_add(cap) {
-            Some(val) => val,
-            None => return None,
-        };
+        let cap = k.checked_pow(new_height)?;
+        let limit = new_left.checked_add(cap)?;
         if boundary_left >= new_left && boundary_left < limit {
             target_new_f_idx = Some((f_idx, new_left, new_height));
             break;
         }
     }
 
-    let (f_idx, _new_left, new_height) = match target_new_f_idx {
-        Some(val) => val,
-        None => return None,
-    };
+    let (f_idx, _new_left, new_height) = target_new_f_idx?;
 
     if new_height < boundary_height {
         return None;
@@ -403,10 +394,7 @@ pub fn reconstruct_consistency_roots(
         if step.siblings.is_empty() {
             // Promoted node
             curr_height += 1;
-            let current_hash = match map.get(&(curr_left, curr_height - 1)) {
-                Some(h) => h.clone(),
-                None => return None,
-            };
+            let current_hash = map.get(&(curr_left, curr_height - 1))?.clone();
             map.insert((curr_left, curr_height), current_hash);
             continue;
         }
@@ -417,47 +405,23 @@ pub fn reconstruct_consistency_roots(
             return None;
         }
 
-        let child_capacity = match k.checked_pow(curr_height) {
-            Some(c) => c,
-            None => return None,
-        };
-        let parent_offset = match (step.position as u64).checked_mul(child_capacity) {
-            Some(val) => val,
-            None => return None,
-        };
-        let parent_left = match curr_left.checked_sub(parent_offset) {
-            Some(val) => val,
-            None => return None,
-        };
+        let child_capacity = k.checked_pow(curr_height)?;
+        let parent_offset = (step.position as u64).checked_mul(child_capacity)?;
+        let parent_left = curr_left.checked_sub(parent_offset)?;
         let parent_height = curr_height + 1;
 
-        let current_hash = match map.get(&(curr_left, curr_height)) {
-            Some(h) => h.clone(),
-            None => return None,
-        };
+        let current_hash = map.get(&(curr_left, curr_height))?.clone();
 
         // Reconstruct children
         let mut children = Vec::with_capacity(step.siblings.len() + 1);
         for (j, sib) in step.siblings.iter().enumerate() {
             let j_u64 = j as u64;
-            let offset = match j_u64.checked_mul(child_capacity) {
-                Some(val) => val,
-                None => return None,
-            };
+            let offset = j_u64.checked_mul(child_capacity)?;
             let c_left = if j_u64 < step.position as u64 {
-                match parent_left.checked_add(offset) {
-                    Some(val) => val,
-                    None => return None,
-                }
+                parent_left.checked_add(offset)?
             } else {
-                let next_offset = match offset.checked_add(child_capacity) {
-                    Some(val) => val,
-                    None => return None,
-                };
-                match parent_left.checked_add(next_offset) {
-                    Some(val) => val,
-                    None => return None,
-                }
+                let next_offset = offset.checked_add(child_capacity)?;
+                parent_left.checked_add(next_offset)?
             };
             map.insert((c_left, curr_height), sib.clone());
 
@@ -525,10 +489,7 @@ pub fn reconstruct_consistency_roots(
             for j in 0..k_usize {
                 let node_idx = split_idx + j;
                 let hash = if node_idx == target_idx {
-                    match &current_frontier[node_idx].hash {
-                        Some(h) => h.clone(),
-                        None => return None,
-                    }
+                    current_frontier[node_idx].hash.as_ref()?.clone()
                 } else {
                     let sib_idx = if j < step.position { j } else { j - 1 };
                     let sib_hash = step.siblings[sib_idx].clone();
@@ -587,10 +548,7 @@ pub fn reconstruct_consistency_roots(
         let mut children_hashes = Vec::with_capacity(current_frontier.len());
         for (j, node) in current_frontier.iter().enumerate() {
             let hash = if j == target_idx {
-                match &node.hash {
-                    Some(h) => h.clone(),
-                    None => return None,
-                }
+                node.hash.as_ref()?.clone()
             } else {
                 let sib_idx = if j < step.position { j } else { j - 1 };
                 let sib_hash = step.siblings[sib_idx].clone();
@@ -617,10 +575,7 @@ pub fn reconstruct_consistency_roots(
     // 3. Reconstruct old root
     let mut old_hashes = Vec::with_capacity(old_coords.len());
     for coord in &old_coords {
-        let hash = match map.get(coord) {
-            Some(h) => h.clone(),
-            None => return None,
-        };
+        let hash = map.get(coord)?.clone();
         old_hashes.push(hash);
     }
 
@@ -645,16 +600,14 @@ pub fn reconstruct_consistency_roots(
     };
 
     // 4. Reconstruct new root
-    let computed_new_root = match &current_frontier[0].hash {
-        Some(h) => h.clone(),
-        None => return None,
-    };
+    let computed_new_root = current_frontier[0].hash.as_ref()?.clone();
 
     Some((computed_old_root, computed_new_root))
 }
 
 /// Helper wrapper demonstrating inclusion verification with decoupled coupling proofs.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn verify_inclusion_with_coupling(
     hasher: &dyn Hasher,
     alg_id: u64,
@@ -675,6 +628,7 @@ pub fn verify_inclusion_with_coupling(
 
 /// Helper wrapper demonstrating consistency verification with decoupled coupling proofs.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn verify_consistency_with_coupling(
     hasher: &dyn Hasher,
     alg_id: u64,

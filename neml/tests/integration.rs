@@ -1111,7 +1111,7 @@ fn test_proof_error_edge_cases() {
             log_arity: 2,
             path: Vec::new(),
         };
-        assert!(!neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &empty_proof, &vec![0; 32]));
+        assert!(!neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &empty_proof, &[0; 32]));
 
         let empty_cons_proof = neml::ConsistencyProof {
             old_size: 0, // old_size == 0
@@ -1120,7 +1120,7 @@ fn test_proof_error_edge_cases() {
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof, &vec![0; 32], &vec![0; 32]));
+        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof, &[0; 32], &[0; 32]));
 
         let empty_cons_proof_invalid_sizes = neml::ConsistencyProof {
             old_size: 2, // old_size >= new_size
@@ -1129,7 +1129,7 @@ fn test_proof_error_edge_cases() {
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_sizes, &vec![0; 32], &vec![0; 32]));
+        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_sizes, &[0; 32], &[0; 32]));
 
         let empty_cons_proof_invalid_arity = neml::ConsistencyProof {
             old_size: 1,
@@ -1138,7 +1138,7 @@ fn test_proof_error_edge_cases() {
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_arity, &vec![0; 32], &vec![0; 32]));
+        assert!(!neml::verify_consistency(&Sha256Hasher, &empty_cons_proof_invalid_arity, &[0; 32], &[0; 32]));
     });
 }
 
@@ -1572,7 +1572,7 @@ fn test_consistency_proof_overflow_panic() {
             62
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &vec![0; 32], &vec![0; 32]);
+    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &[0; 32], &[0; 32]);
     assert!(!ok);
 }
 
@@ -1591,7 +1591,7 @@ fn test_consistency_proof_huge_siblings_dos() {
             1
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &vec![0; 32], &vec![0; 32]);
+    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &[0; 32], &[0; 32]);
     assert!(!ok);
 }
 

@@ -260,8 +260,8 @@ fn test_verify_non_divergence_tamper_detection() {
             let mut tampered_storage = log.storage().clone();
             // Find an internal node and tamper it
             let key = (0, 3); // (alg_id, node_id)
-            if tampered_storage.nodes.contains_key(&key) {
-                tampered_storage.nodes.insert(key, vec![0x00; 32]);
+            if let std::collections::hash_map::Entry::Occupied(mut e) = tampered_storage.nodes.entry(key) {
+                e.insert(vec![0x00; 32]);
                 let tampered_log = NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))]).await.unwrap();
                 assert!(
                     !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),

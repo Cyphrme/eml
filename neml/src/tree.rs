@@ -1407,7 +1407,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             state
                 .epochs
                 .iter()
-                .filter(|&&(_, end)| end <= size - 1)
+                .filter(|&&(_, end)| end < size)
                 .map(|&(_, end)| end)
                 .max()
                 .unwrap_or(0)
@@ -1477,7 +1477,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                             state
                                 .epochs
                                 .iter()
-                                .filter(|&&(_, end)| end <= s_val - 1)
+                                .filter(|&&(_, end)| end < s_val)
                                 .map(|&(_, end)| end)
                                 .max()
                                 .unwrap_or(0)
@@ -1572,7 +1572,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 state
                     .epochs
                     .iter()
-                    .filter(|&&(_, e)| e <= start - 1)
+                    .filter(|&&(_, e)| e < start)
                     .map(|&(_, e)| e)
                     .max()
                     .unwrap_or(0)
