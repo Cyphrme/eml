@@ -713,12 +713,13 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
 
+        let mut temp_algs = self.algs.clone();
         let mut batch_leaves = Vec::new();
         let mut batch_nodes = Vec::new();
 
         batch_leaves.push((self.size, data));
 
-        for (&alg_id, state) in &mut self.algs {
+        for (&alg_id, state) in &mut temp_algs {
             if !state.is_active() {
                 continue;
             }
@@ -783,6 +784,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .await
             .map_err(crate::error::Error::Storage)?;
 
+        self.algs = temp_algs;
         self.size += 1;
         Ok(())
     }
@@ -793,9 +795,10 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
 
+        let mut temp_algs = self.algs.clone();
         let mut batch_nodes = Vec::new();
 
-        for (&alg_id, state) in &mut self.algs {
+        for (&alg_id, state) in &mut temp_algs {
             if !state.is_active() {
                 continue;
             }
@@ -860,6 +863,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .await
             .map_err(crate::error::Error::Storage)?;
 
+        self.algs = temp_algs;
         self.commit_count += 1;
         Ok(())
     }
@@ -1501,6 +1505,16 @@ impl<S: Storage> NaryMerkleLog<S> {
         // Reconstruct frontier stacks at checkpoint size and verify starting boundaries
         let mut alg_frontiers = std::collections::HashMap::new();
         for (&alg_id, state) in &self.algs {
+            if !state.is_active() {
+                let deact_index = state.epochs.last().map_or(0, |&(_, end)| end);
+                if deact_index < end {
+                    let node_id = deact_index << 16;
+                    if self.storage.get_node(alg_id, node_id).await.map_err(crate::error::Error::Storage)?.is_some() {
+                        return Ok(false); // Tampered: nodes exist beyond deactivation point!
+                    }
+                }
+            }
+
             let mut frontier = Vec::new();
             let mut frontier_coords = Vec::new();
             let k = self.config.log_arity;
@@ -1572,6 +1586,16 @@ impl<S: Storage> NaryMerkleLog<S> {
                 let (frontier, frontier_coords, alg_size) = alg_frontiers
                     .get_mut(&alg_id)
                     .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
+
+                let deact_index = if state.is_active() {
+                    u64::MAX
+                } else {
+                    state.epochs.last().map_or(0, |&(_, end)| end)
+                };
+
+                if i >= deact_index {
+                    continue;
+                }
 
                 let is_active = state.is_active_at(i);
                 

@@ -288,3 +288,57 @@ fn test_verify_non_divergence_tamper_detection() {
     });
 }
 
+#[test]
+fn test_verify_non_divergence_legitimate_frozen() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await;
+
+        // Add alg 1
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        // Append 5 leaves
+        for i in 0..5 {
+            log.append_leaf(&[i]).await.unwrap();
+        }
+
+        // Deactivate alg 1 at size 5
+        log.remove_algorithm(1).await.unwrap();
+
+        // Append 5 more leaves (so global size is 10, but alg 1 is frozen at 5)
+        for i in 5..10 {
+            log.append_leaf(&[i]).await.unwrap();
+        }
+
+        // Verify clean log: verify_non_divergence should return Ok(true)
+        let metas = vec![
+            (0, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+            (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+        ];
+        let reconstructed = NaryMerkleLog::from_storage(log.storage().clone(), metas).await.unwrap();
+        assert!(
+            reconstructed.verify_non_divergence(None, &[]).await.unwrap(),
+            "Legitimate frozen algorithm failed non-divergence verification"
+        );
+
+        // Tamper test: Modify alg 1's frozen deactivation boundary from 5 to 3
+        {
+            let mut tampered_storage = log.storage().clone();
+            if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&1) {
+                epochs[0].1 = 3;
+            }
+            let metas = vec![
+                (0, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+                (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+            ];
+            let tampered_log = NaryMerkleLog::from_storage(tampered_storage, metas).await.unwrap();
+            assert!(
+                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                "Failed to detect tampered epoch metadata for frozen algorithm"
+            );
+        }
+    });
+}
+
+
