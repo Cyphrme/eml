@@ -151,9 +151,9 @@ To prevent this index spoofing attack while maintaining full support for arbitra
 
 ### Null Domain Isolation
 
-The null constant $N_0 = H(\mathtt{0x02})$ is the hash of a single byte. An internal node's hash preimage is the concatenation of $m \geq 2$ child digests, totaling $m \cdot B$ bytes (where $B$ is the digest size, e.g. 32 for SHA-256). The minimum node preimage length is therefore $2B = 64$ bytes. Since the null preimage is 1 byte, these lengths are strictly disjoint. Under a collision-resistant hash function, $N_0$ cannot collide with any node hash. The `0x02` byte serves only to distinguish null leaves from empty-string hashes; it is not a domain separation prefix in the RFC 9162 sense.
+The null constant $N_0$ is defined directly as a Nothing-Up-My-Sleeve (NUMS) high-entropy 32-byte constant (specifically, the first 32 bytes of the fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89`). Under prefix-free hashing, since $N_0$ is high-entropy and has no known preimage under the hash function $H$, it is computationally infeasible under preimage resistance to find a leaf payload or internal node that hashes to $N_0$. 
 
-**Flat Null Promotion Collision Risk:** Because flat null promotion evaluates any internal node containing only null children directly to the null constant $N_0$, a structural collision exists: a leaf containing the raw data payload `[0x02]` and a node with only null children both hash to the exact same digest $N_0$. Under Commit Tree Mode (which bypasses topological structure checks), an attacker could substitute a leaf containing `[0x02]` with a node/subtree containing only null children without changing the root.
+This design completely eliminates the flat null promotion collision risk (where a leaf containing a null-preimage payload could have been substituted with a null-promoted node/subtree). We prove this property formally in our Lean 4 proof system.
 
 ---
 
@@ -228,7 +228,7 @@ impl Hasher for Sha256Hasher {
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> { Sha256::digest(b"").to_vec() }
-    fn null(&self) -> Vec<u8>  { Sha256::digest([0x02]).to_vec() }
+    fn null(&self) -> Vec<u8>  { neml::NULL_DIGEST.to_vec() }
     fn hash(&self, data: &[u8]) -> Vec<u8> { Sha256::digest(data).to_vec() }
     fn clone_box(&self) -> Box<dyn Hasher> { Box::new(self.clone()) }
 }
