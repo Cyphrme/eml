@@ -32,6 +32,13 @@ inductive NaryTree (α : Type) where
   | node (children : List (NaryTree α))
   deriving Inhabited
 
+/-- Inductive predicate representing that an NaryTree contains at least one leaf node. -/
+inductive ContainsLeaf {α : Type} : NaryTree α → Prop where
+  | leaf (val : α) : ContainsLeaf (NaryTree.leaf val)
+  | node (children : List (NaryTree α)) (c : NaryTree α) (h_mem : c ∈ children)
+      (h_cont : ContainsLeaf c) : ContainsLeaf (NaryTree.node children)
+
+
 /-- Predicate enforcing that a tree has a fixed arity k.
     This is used to model the log-level fixed-arity tree topology. -/
 def HasArity {α : Type} (k : Nat) : NaryTree α → Prop
@@ -165,23 +172,20 @@ theorem eval_eq_null_implies (L : Nat) (t : NaryTree (List UInt8))
         contradiction
 
 /-- **Theorem 3 (Null Path Isolation / Inactivity Binding).**
-    Any tree that contains at least one leaf node with payload data
+    Any tree that recursively contains at least one leaf node with payload data
     can never evaluate to the null digest. This ensures that active data
     cannot be spoofed as or substituted with null/inactive nodes. -/
-theorem contains_leaf_neq_null (L : Nat) (t : NaryTree (List UInt8)) (data : List UInt8) :
-    (t = NaryTree.leaf data ∨
-     ∃ (children : List (NaryTree (List UInt8))),
-       t = NaryTree.node children ∧ ∃ c ∈ children, eval L c ≠ nullDigest L) →
+theorem contains_leaf_neq_null (L : Nat) (t : NaryTree (List UInt8)) (h : ContainsLeaf t) :
     eval L t ≠ nullDigest L := by
-  intro h h_eval
-  rcases h with h_leaf | ⟨children, rfl, c, hc, hc_neq⟩
-  · rw [h_leaf] at h_eval
-    rw [eval_leaf L data] at h_eval
-    have h_neq := leaf_hash_neq_null L data
-    contradiction
-  · cases h_children : children with
+  induction h with
+  | leaf data =>
+    rw [eval_leaf L data]
+    exact leaf_hash_neq_null L data
+  | node children c h_mem h_cont ih =>
+    intro h_eval
+    cases h_children : children with
     | nil =>
-      rw [h_children] at hc
+      rw [h_children] at h_mem
       contradiction
     | cons x xs =>
       cases h_xs : xs with
@@ -192,15 +196,15 @@ theorem contains_leaf_neq_null (L : Nat) (t : NaryTree (List UInt8)) (data : Lis
         have h_eval_x : eval L x = nullDigest L := by
           rw [←h_eval_single, h_eval]
         have h_c_eq_x : c = x := by
-          have hc' : c ∈ [x] := by rw [←h_single]; exact hc
+          have hc' : c ∈ [x] := by rw [←h_single]; exact h_mem
           exact List.mem_singleton.mp hc'
-        rw [h_c_eq_x] at hc_neq
-        exact hc_neq h_eval_x
+        rw [h_c_eq_x] at ih
+        exact ih h_eval_x
       | cons y ys =>
         have h_len : children.length ≥ 2 := by
           rw [h_children, h_xs]
           simp [List.length]
-        have h_exists_neq : ∃ t ∈ children, eval L t ≠ nullDigest L := ⟨c, hc, hc_neq⟩
+        have h_exists_neq : ∃ t ∈ children, eval L t ≠ nullDigest L := ⟨c, h_mem, ih⟩
         have h_eval_node := eval_node_hash L children h_len h_exists_neq
         rw [h_eval] at h_eval_node
         have h_map_len : (children.map (eval L)).length ≥ 2 := by

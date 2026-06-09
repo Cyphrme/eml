@@ -153,12 +153,12 @@ To prevent this index spoofing attack while maintaining full support for arbitra
 
 The null constant $N_0$ represents an empty or inactive subtree. Under prefix-free hashing, defining the null digest as the output of a hash function on a known preimage would allow an attacker to input that preimage as a leaf payload and trigger a leaf-subtree substitution collision.
 
-To prevent this collision across arbitrary hash sizes, `neml` utilizes **XOF-based Multihash Null Generation**:
+To prevent this collision across arbitrary hash sizes, `neml` utilizes a slice-based **Nothing-Up-My-Sleeve (NUMS) Null Stream**:
 
-*   **Master NUMS Seed**: A Nothing-Up-My-Sleeve (NUMS) high-entropy 32-byte constant based on the hex fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89`.
-*   **Extendable-Output Function (XOF)**: For any hash algorithm with output length $L$ bytes, the null digest is derived dynamically via a counter-mode HKDF-expand function:
-    $$N_0(L) = \text{take}(L, H(\text{Seed} \parallel 0) \parallel H(\text{Seed} \parallel 1) \parallel \dots)$$
-*   **Preimage Resistance**: Because the master seed is high-entropy with no known preimage under $H$, the resulting $L$-byte null digest is guaranteed to have no known preimages. A leaf payload or node can never evaluate to $N_0(L)$, eliminating the flat null promotion collision risk. We prove this property formally in our Lean 4 proof system.
+*   **Master NUMS Stream**: A 64-byte Nothing-Up-My-Sleeve high-entropy constant based on the first 128 hex digits of the fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89452821e638d01377be5466cf34e90c6cc0ac29b629b08d7d15d50274017b89b7`.
+*   **Extendable Slice Output**: For any hash algorithm with output length $L \leq 64$ bytes, the null digest is derived dynamically by slicing the first $L$ bytes of the master stream:
+    $$N_0(L) = \text{take}(L, \text{Master Stream})$$
+*   **Preimage Resistance**: Because the master stream is a hardcoded mathematical constant (derived from $\pi$'s fractional expansion) and not the output of the hash function itself, finding a leaf payload whose hash evaluates to $N_0(L)$ requires solving a hard hash preimage challenge. A leaf payload or internal node can never evaluate to $N_0(L)$, eliminating flat null promotion collision risk. We prove this property formally in our Lean 4 proof system.
 
 ---
 

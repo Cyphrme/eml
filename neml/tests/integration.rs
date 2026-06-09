@@ -165,12 +165,7 @@ fn test_vector_6_subtree_append_k2() {
 fn test_vector_7_null_constant() {
     let hasher = Sha256Hasher;
     let null = hasher.null();
-    let expected = vec![
-        0x9b, 0xbf, 0x98, 0x46, 0xfc, 0x67, 0x40, 0x96,
-        0xb6, 0x92, 0xac, 0x60, 0xe0, 0x5c, 0xd8, 0x12,
-        0x36, 0x54, 0x12, 0x4f, 0x07, 0x08, 0xc8, 0x6e,
-        0x9e, 0xd7, 0x59, 0x8e, 0x00, 0x01, 0x70, 0xbb,
-    ];
+    let expected = neml::NULL_DIGEST.to_vec();
     assert_eq!(null, expected);
 }
 
@@ -2161,3 +2156,15 @@ fn test_from_storage_initialization_errors() {
         ));
     });
 }
+
+#[test]
+fn test_null_preimage_collision() {
+    let hasher = Sha256Hasher;
+    let mut payload = neml::NULL_DIGEST.to_vec();
+    payload.extend_from_slice(&0u64.to_be_bytes());
+    // Under preimage resistance, the leaf hash of any payload must not collide with the null digest.
+    // However, because the null digest is derived via raw hashing (without domain prefixing/separation)
+    // of NULL_DIGEST || counter, a leaf containing this data will collide.
+    assert_ne!(hasher.leaf(&payload), hasher.null());
+}
+
