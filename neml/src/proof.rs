@@ -130,8 +130,8 @@ impl CouplingProof {
         if self.active_roots.len() != expected_active_algs.len() {
             return None;
         }
-        for (i, &expected_id) in expected_active_algs.iter().enumerate() {
-            if self.active_roots[i].0 != expected_id {
+        for ((id, _), &expected_id) in self.active_roots.iter().zip(expected_active_algs.iter()) {
+            if *id != expected_id {
                 return None;
             }
         }
@@ -145,10 +145,8 @@ impl CouplingProof {
 
         // Ensure the active roots list is canonically sorted by algorithm ID (prover requirement)
         // to prevent duplicate representation vectors or sorting malleability.
-        for i in 1..self.active_roots.len() {
-            if self.active_roots[i - 1].0 >= self.active_roots[i].0 {
-                return None;
-            }
+        if self.active_roots.windows(2).any(|w| w[0].0 >= w[1].0) {
+            return None;
         }
 
         // Extract the target algorithm's root
@@ -166,7 +164,9 @@ impl CouplingProof {
             // Singleton Promotion: the combined root is the raw root
             constant_time_eq(&self.active_roots[0].1, combined_root)
         } else {
-            let mut buf = Vec::new();
+            // Pre-allocate buffer capacity: each active root needs 8 (ID) + 8 (len) + r.len() (<= 64) bytes.
+            // Using 80 bytes per entry avoids any dynamic heap reallocation under DoS.
+            let mut buf = Vec::with_capacity(self.active_roots.len() * 80);
             for (id, r) in &self.active_roots {
                 buf.extend_from_slice(&id.to_be_bytes());
                 buf.extend_from_slice(&(r.len() as u64).to_be_bytes());
