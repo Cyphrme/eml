@@ -192,7 +192,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut algs = std::collections::HashMap::new();
         let k = config.log_arity as u64;
         for (alg_id, epochs) in metas {
-            let hasher = hasher_map.remove(&alg_id).expect("validated 1:1");
+            let hasher = hasher_map
+                .remove(&alg_id)
+                .ok_or_else(|| crate::error::Error::OrphanedMetadata(alg_id))?;
             let state = Self::reconstruct_algorithm_state(
                 &storage,
                 alg_id,
@@ -1144,9 +1146,13 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         let k = self.config.log_arity as u64;
         let old_coords = frontier_for_size(old_size, k);
-        let &(boundary_left, boundary_height) = old_coords
-            .last()
-            .expect("old_coords cannot be empty since old_size > 0");
+        let &(boundary_left, boundary_height) =
+            old_coords
+                .last()
+                .ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                    alg_id,
+                    reason: "empty old_coords for non-zero old_size".to_string(),
+                })?;
 
         let start_hash = self
             .get_node_hash(alg_id, boundary_left, boundary_height)
