@@ -82,7 +82,7 @@ pub fn verify_consistency(
 ) -> bool {
     reconstruct_consistency_roots(hasher, proof)
         .map_or(false, |(computed_old, computed_new)| {
-            constant_time_eq(&computed_old, old_root) && constant_time_eq(&computed_new, new_root)
+            constant_time_eq(&computed_old, old_root) & constant_time_eq(&computed_new, new_root)
         })
 }
 
@@ -558,16 +558,15 @@ pub fn verify_consistency_with_coupling(
     new_expected_active_algs: &[u64],
     config: VerifierConfig,
 ) -> bool {
-    let old_raw_root = match old_coupling.verify(hasher, alg_id, old_combined_root, old_expected_active_algs, config) {
-        Some(r) => r,
-        None => return false,
-    };
-    let new_raw_root = match new_coupling.verify(hasher, alg_id, new_combined_root, new_expected_active_algs, config) {
-        Some(r) => r,
-        None => return false,
-    };
+    let old_res = old_coupling.verify(hasher, alg_id, old_combined_root, old_expected_active_algs, config);
+    let new_res = new_coupling.verify(hasher, alg_id, new_combined_root, new_expected_active_algs, config);
 
-    verify_consistency(hasher, consistency_proof, &old_raw_root, &new_raw_root)
+    match (old_res, new_res) {
+        (Some(old_raw_root), Some(new_raw_root)) => {
+            verify_consistency(hasher, consistency_proof, &old_raw_root, &new_raw_root)
+        }
+        _ => false,
+    }
 }
 
 /// The raw payload of an audit verification checkpoint.
