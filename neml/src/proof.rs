@@ -262,7 +262,11 @@ pub fn reconstruct_consistency_roots(
             Some(c) => c,
             None => return None,
         };
-        if boundary_left >= new_left && boundary_left < new_left + cap {
+        let limit = match new_left.checked_add(cap) {
+            Some(val) => val,
+            None => return None,
+        };
+        if boundary_left >= new_left && boundary_left < limit {
             target_new_f_idx = Some((f_idx, new_left, new_height));
             break;
         }
@@ -302,6 +306,9 @@ pub fn reconstruct_consistency_roots(
             map.insert((curr_left, curr_height), current_hash);
             continue;
         }
+        if step.siblings.len() > 256 {
+            return None;
+        }
         if step.position > step.siblings.len() {
             return None;
         }
@@ -310,7 +317,11 @@ pub fn reconstruct_consistency_roots(
             Some(c) => c,
             None => return None,
         };
-        let parent_left = match curr_left.checked_sub(step.position as u64 * child_capacity) {
+        let parent_offset = match (step.position as u64).checked_mul(child_capacity) {
+            Some(val) => val,
+            None => return None,
+        };
+        let parent_left = match curr_left.checked_sub(parent_offset) {
             Some(val) => val,
             None => return None,
         };
@@ -325,10 +336,24 @@ pub fn reconstruct_consistency_roots(
         let mut children = Vec::with_capacity(step.siblings.len() + 1);
         for (j, sib) in step.siblings.iter().enumerate() {
             let j_u64 = j as u64;
+            let offset = match j_u64.checked_mul(child_capacity) {
+                Some(val) => val,
+                None => return None,
+            };
             let c_left = if j_u64 < step.position as u64 {
-                parent_left + j_u64 * child_capacity
+                match parent_left.checked_add(offset) {
+                    Some(val) => val,
+                    None => return None,
+                }
             } else {
-                parent_left + (j_u64 + 1) * child_capacity
+                let next_offset = match offset.checked_add(child_capacity) {
+                    Some(val) => val,
+                    None => return None,
+                };
+                match parent_left.checked_add(next_offset) {
+                    Some(val) => val,
+                    None => return None,
+                }
             };
             map.insert((c_left, curr_height), sib.clone());
 

@@ -1551,6 +1551,45 @@ fn test_verify_consistency_with_coupling() {
     });
 }
 
+#[test]
+fn test_consistency_proof_overflow_panic() {
+    let proof = neml::ConsistencyProof {
+        old_size: 1,
+        new_size: 1 << 62,
+        log_arity: 2,
+        start_hash: vec![0; 32],
+        path: vec![
+            neml::ProofStep {
+                siblings: vec![vec![0; 32]; 4],
+                position: 4,
+            };
+            62
+        ],
+    };
+    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &vec![0; 32], &vec![0; 32]);
+    assert!(!ok);
+}
+
+#[test]
+fn test_consistency_proof_huge_siblings_dos() {
+    let proof = neml::ConsistencyProof {
+        old_size: 1,
+        new_size: 2,
+        log_arity: 2,
+        start_hash: vec![0; 32],
+        path: vec![
+            neml::ProofStep {
+                siblings: vec![vec![0; 32]; 100_000],
+                position: 0,
+            };
+            1
+        ],
+    };
+    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &vec![0; 32], &vec![0; 32]);
+    assert!(!ok);
+}
+
+
 
 
 
