@@ -24,15 +24,19 @@ This design shifts the balance of traditional Merkle tree tradeoffs in three key
 
 ### 1. Unified Timeline vs. Storage Overhead (Polymorphism)
 *   **The Tradeoff:** Maintaining a Polymorphic Merkle Log requires the storage engine to index separate node sets for each registered algorithm, increasing storage and indexing overhead.
-*   **The Motivation:** Traditional logs handle algorithm migration by creating a new log identity and genesis block. For an identity protocol like Cyphr, this fragments the historical record and forces clients to reconcile disjoint cryptographic timelines. By keeping the topology uniform and binding different algorithms to a shared leaf sequence, NEML permits seamless algorithm transition. The history remains unified, and clients can audit transitions across epoch boundaries using a single, unbroken chain of proofs.
+*   **The Motivation:** Traditional logs handle algorithm migration by creating a new log identity and genesis block. For an identity protocol like Cyphr, this fragments the historical record and forces clients to reconcile disjoint cryptographic timelines. By keeping the topology uniform and binding different algorithms to a shared leaf sequence, NEML permits seamless algorithm transition.
+*   **Frozen Boundary Limitation:** Because a frozen algorithm is static, append-only consistency proofs for that algorithm cannot cross its deactivation boundary. To audit append-only continuity across algorithm transitions, clients must utilize Multi-Hash Coupling to bridge transitions, verifying consistency of the active algorithm before the transition and the new algorithm after the transition, coupled via signed Combined Roots.
 
 ### 2. Null Projections as Cryptographic Inactivity Proofs
 *   **The Tradeoff:** When an algorithm is frozen (inactive), appends generate flat null constants ($N_0$) in its frontier projection, occupying logical tree coordinates without hashing actual data.
-*   **The Auditing Value:** These null nodes are not merely placeholders. In a polymorphic log, a null node within an inclusion proof constitutes an **unforgeable cryptographic proof of temporal inactivity** for that algorithm. It demonstrates to external auditors that the logger did *not* utilize the algorithm during that specific epoch. This prevents retroactive algorithm substitution, backdating attacks, or the silent use of deprecated algorithms during epochs when they were declared inactive.
+*   **The Auditing Value:** In a polymorphic log, a null node within an inclusion proof constitutes an **unforgeable cryptographic proof of temporal inactivity** for that algorithm. It demonstrates to external auditors that the logger did *not* utilize the algorithm during that specific epoch, preventing retroactive algorithm substitution or backdating attacks.
+*   **Epoch Schedule Trust Assumption:** Since the Combined Root only binds active algorithm roots at any size, the Combined Root itself does not commit to the inactive status of frozen algorithms. Inactivity verification depends on validating the active algorithms list via signed checkpoints, ensuring the epoch schedule cannot be retroactively altered.
+*   **Storage Optimization Tradeoff:** To minimize database size, subtrees consisting entirely of null constants are omitted from storage. Consequently, node retrieval returns the null constant when a coordinate is absent. While this avoids storing sparse null frontiers, it means missing or corrupted non-null nodes within active ranges could reconstruct as nulls, which is cryptographically detected as root mismatches during checkpoint verification.
 
 ### 3. Content Addressability vs. Prefix-Based Domain Separation
 *   **The Tradeoff:** RFC 6962 (CT) prepends domain separation bytes (`0x00`/`0x01`) to hash inputs to prevent second-preimage attacks. This makes leaf hashes tree-specific and unsuitable as global content addresses. NEML uses standard leaf hashes ($H(\text{data})$) to enable clean content-addressability, which shifts the second-preimage security burden to the verification of the tree's expected topology.
-*   **The Motivation:** Cyphr relies on direct content-addressable storage where leaf hashes serve as stable, canonical identifiers across multiple systems. To achieve this, NEML removes prefix-based domain separation at the hash level and instead enforces **Topological Commitments** at the verification level. The verifier uses the signed tree head's `tree_size` and `log_arity` to reconstruct the exact expected shape of the tree, rejecting any proof whose topology deviates. This provides equivalent second-preimage resistance without polluting the content-addressing layer.
+*   **The Motivation:** Cyphr relies on direct content-addressable storage where leaf hashes serve as stable, canonical identifiers across multiple systems. To achieve this, NEML removes prefix-based domain separation at the hash level and instead enforces **Topological Commitments** at the verification level. The verifier uses the signed tree head's `tree_size` and `log_arity` to reconstruct the exact expected shape of the tree, rejecting any proof whose topology deviates.
+*   **Commit Tree Mode Limitation:** In Commit Tree Mode (`log_arity == 0`), the verifier bypasses the topological structure check to support arbitrary recursive subtrees. Because NEML uses prefix-free hashing, bypassing the topology check removes all second-preimage protection, allowing leaf-node substitution attacks. Callers using Commit Tree Mode must enforce second-preimage resistance through out-of-band protocols (e.g., prefixing leaf payloads before appending).
 
 ---
 
@@ -128,6 +132,8 @@ The second-preimage threat in a Merkle tree is an adversary presenting an intern
 
 This is equivalent in security to prefix-based domain separation — both ensure the verifier can distinguish leaf positions from node positions — provided the verifier has the signed tree head (which is the standard trust assumption in any append-only log protocol). The difference is where the binding happens: in the hash preimage (prefixes) vs. in the proof structure (topological commitment).
 
+**Critical Limitation:** Topological commitments require a trusted `tree_size` and `log_arity` at the verification layer. If the verifier does not have an authenticated tree size, or if the log is verified in Commit Tree Mode (`log_arity == 0`), topological verification is bypassed. Because NEML hashes are prefix-free, second-preimage resistance is completely absent in these scenarios unless the caller enforces domain separation externally.
+
 ### Selective Index & Path Verification
 
 In an N-ary Merkle tree, inclusion proofs explicitly store the position of the target leaf and siblings at each level (`ProofStep::position`). A malicious prover could attempt to spoof the leaf's sequence number by altering `InclusionProof::index` without modifying the path (since the index field is not used in raw hash reconstruction). 
@@ -137,6 +143,7 @@ To prevent this index spoofing attack while maintaining full support for arbitra
 *   **InclusionProof `log_arity` field:** The `InclusionProof` contains a `log_arity` field indicating the arity configuration of the log.
 *   **State Tree Mode (`log_arity >= 2`):** When verifying a proof from a uniform log, `log_arity` is set to the log arity (e.g. 2 or 3). The verifier performs strict structural validation (`verify_inclusion_path_structure` and `reconstruct_index_from_path`) to assert that the step positions and sibling counts match the deterministic topology for the claimed `index` and `tree_size`. If they mismatch, verification is rejected.
 *   **Commit Tree Mode (`log_arity == 0`):** When verifying a proof that includes arbitrary nested subtrees (Commit Tree Mode), the log structure is non-uniform and the global leaf index cannot be deterministically verified from the path steps alone. In this case, `log_arity` is set to `0`, which tells the verifier to bypass the uniform topology check and perform standard membership/inclusion verification.
+*   **Consistency Proof Exclusion:** Consistency proofs are unsupported in Commit Tree Mode. The `reconstruct_consistency_roots` verifier immediately returns `None` if `log_arity < 2`.
 
 ### Null Domain Isolation
 
@@ -190,6 +197,15 @@ The log-level bounds ($O(\log_k n)$ and amortized $O(1)$ append) are empirically
 
 ## Quick Start
 
+Add this to your `Cargo.toml`:
+```toml
+[dependencies]
+neml = { path = "path/to/neml" } # or version
+sha2 = "0.10"
+smol = "2.0"
+```
+
+Implement a `Hasher` and initialize a log using `smol::block_on` (the library is async-runtime agnostic):
 ```rust
 use neml::{NaryMerkleLog, Subtree, TreeConfig, Hasher};
 use sha2::{Digest, Sha256};
@@ -210,23 +226,27 @@ impl Hasher for Sha256Hasher {
     fn clone_box(&self) -> Box<dyn Hasher> { Box::new(self.clone()) }
 }
 
-#[tokio::main]
-async fn main() {
-    let storage = neml::MemoryStorage::new();
-    let config = TreeConfig { log_arity: 2 };
-    let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await.unwrap();
+fn main() {
+    smol::block_on(async {
+        let storage = neml::MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config).await.unwrap();
 
-    // Append a structured subtree: two batches, one containing two leaves.
-    let entry = Subtree::Node(vec![
-        Subtree::Node(vec![
-            Subtree::Leaf(b"payload_a".to_vec()),
-            Subtree::Leaf(b"payload_b".to_vec()),
-        ]),
-        Subtree::Leaf(b"payload_c".to_vec()),
-    ]);
+        // Append a structured subtree: two batches, one containing two leaves.
+        let entry = Subtree::Node(vec![
+            Subtree::Node(vec![
+                Subtree::Leaf(b"payload_a".to_vec()),
+                Subtree::Leaf(b"payload_b".to_vec()),
+            ]),
+            Subtree::Leaf(b"payload_c".to_vec()),
+        ]);
 
-    log.append_subtree(&entry).await.unwrap();
-    println!("root: {}", hex::encode(log.root()));
+        log.append_subtree(&entry).await.unwrap();
+
+        // Hex encode root hash
+        let root_hex: String = log.root().iter().map(|b| format!("{:02x}", b)).collect();
+        println!("root: {}", root_hex);
+    });
 }
 ```
 
