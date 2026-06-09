@@ -776,3 +776,81 @@ proptest! {
         })?;
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn test_coupling_proof_properties(
+        // active algs: sorted list of unique u64 (up to 8 elements)
+        active_algs in proptest::collection::vec(0..100u64, 1..=8)
+            .prop_map(|mut v| { v.sort_unstable(); v.dedup(); v }),
+        // roots: matching list of byte vectors (length 0..64)
+        roots in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..64), 1..=8),
+        // target alg index selector
+        target_idx in any::<usize>(),
+    ) {
+        let len = active_algs.len().min(roots.len());
+        if len > 0 {
+            let active_algs = &active_algs[..len];
+            let roots = &roots[..len];
+            let target_idx = target_idx % len;
+            let target_alg_id = active_algs[target_idx];
+            let target_root = &roots[target_idx];
+
+            let hasher = Sha256Hasher;
+            let mut active_roots = Vec::new();
+            for i in 0..len {
+                active_roots.push((active_algs[i], roots[i].clone()));
+            }
+
+            let proof = neml::CouplingProof {
+                active_roots: active_roots.clone(),
+            };
+
+            // Construct combined root
+            let combined_root = if len == 1 {
+                roots[0].clone()
+            } else {
+                let mut buf = Vec::new();
+                for i in 0..len {
+                    buf.extend_from_slice(&active_algs[i].to_be_bytes());
+                    buf.extend_from_slice(&(roots[i].len() as u64).to_be_bytes());
+                    buf.extend_from_slice(&roots[i]);
+                }
+                hasher.hash(&buf)
+            };
+
+            let config = neml::VerifierConfig::default();
+
+            // 1. Success case
+            let verified = proof.verify(&hasher, target_alg_id, &combined_root, active_algs, config);
+            prop_assert_eq!(verified.unwrap(), target_root.clone());
+
+            // 2. Reject tampered root hash
+            let mut tampered_active_roots = active_roots.clone();
+            if !tampered_active_roots[target_idx].1.is_empty() {
+                tampered_active_roots[target_idx].1[0] ^= 0xFF;
+                let tampered_proof = neml::CouplingProof {
+                    active_roots: tampered_active_roots,
+                };
+                prop_assert!(tampered_proof.verify(&hasher, target_alg_id, &combined_root, active_algs, config).is_none());
+            }
+
+            // 3. Reject tampered combined root
+            let mut bad_combined = combined_root.clone();
+            if !bad_combined.is_empty() {
+                bad_combined[0] ^= 0xFF;
+                prop_assert!(proof.verify(&hasher, target_alg_id, &bad_combined, active_algs, config).is_none());
+            }
+
+            // 4. Reject mismatching expected active algs (different length)
+            let mut bad_algs = active_algs.to_vec();
+            bad_algs.push(999);
+            prop_assert!(proof.verify(&hasher, target_alg_id, &combined_root, &bad_algs, config).is_none());
+
+            // 5. Reject mismatching target alg id (not in active set)
+            prop_assert!(proof.verify(&hasher, 999, &combined_root, active_algs, config).is_none());
+        }
+    }
+}
+
