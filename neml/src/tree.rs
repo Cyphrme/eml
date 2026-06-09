@@ -1473,7 +1473,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                         }
                     } else if old_alg_size == new_alg_size {
                         // Ensure the root has not changed for frozen algorithms
-                        if old_root != new_root {
+                        if !crate::proof::constant_time_eq(&old_root, &new_root) {
                             return Ok(false);
                         }
                     }
@@ -1563,7 +1563,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                     }
                 };
 
-                if folded != expected_root {
+                if !crate::proof::constant_time_eq(&folded, &expected_root) {
                     return Ok(false); // Starting state mismatch!
                 }
             }
@@ -1611,7 +1611,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
                 // Check leaf/subtree hash tampering
                 let stored_leaf_hash = self.get_node_hash(alg_id, i, 0).await?;
-                if digest != stored_leaf_hash {
+                if !crate::proof::constant_time_eq(&digest, &stored_leaf_hash) {
                     return Ok(false); // Leaf/subtree root hash mismatch!
                 }
 
@@ -1640,7 +1640,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                     let parent_height = coords[0].1 + 1;
 
                     let stored_parent = self.get_node_hash(alg_id, parent_left_index, parent_height).await?;
-                    if parent != stored_parent {
+                    if !crate::proof::constant_time_eq(&parent, &stored_parent) {
                         return Ok(false); // Internal node hash mismatch!
                     }
 
@@ -1655,7 +1655,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let (frontier, _, _) = &alg_frontiers[&alg_id];
             let folded = fold_frontier(state.hasher.as_ref(), frontier, self.config.log_arity);
             let final_root = self.root_for_at(alg_id, end).await?;
-            if folded != final_root {
+            if !crate::proof::constant_time_eq(&folded, &final_root) {
                 return Ok(false); // Final root mismatch!
             }
         }

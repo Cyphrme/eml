@@ -46,10 +46,10 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     let mut result = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
-        result |= x ^ y;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        result |= std::hint::black_box(x) ^ std::hint::black_box(y);
     }
-    result == 0
+    std::hint::black_box(result) == 0
 }
 
 /// Verify an inclusion proof.
