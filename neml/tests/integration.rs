@@ -377,6 +377,7 @@ fn test_inclusion_proofs_commit_tree_mode() {
         let full_proof = neml::InclusionProof {
             index: 3,
             tree_size: 5,
+            log_arity: 0,
             path,
         };
 
@@ -832,6 +833,7 @@ fn test_deep_subtree_inclusion_proofs() {
             let full_proof = neml::InclusionProof {
                 index: 0,
                 tree_size: 1,
+                log_arity: 0,
                 path,
             };
 
@@ -886,6 +888,7 @@ fn test_deep_subtree_inclusion_proofs() {
             let full_proof = neml::InclusionProof {
                 index: leaf_idx,
                 tree_size: 4, // 3 leaves in subtree + 1 flat leaf = 4 total leaves
+                log_arity: 0,
                 path,
             };
 
@@ -1033,6 +1036,7 @@ fn test_multi_algorithm_subtree_proofs() {
         let full_proof0 = neml::InclusionProof {
             index: 2,
             tree_size: 3,
+            log_arity: 0,
             path: path0,
         };
         assert!(neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"c"), &full_proof0, &root0));
@@ -1047,6 +1051,7 @@ fn test_multi_algorithm_subtree_proofs() {
         let full_proof1 = neml::InclusionProof {
             index: 1,
             tree_size: 2,
+            log_arity: 0,
             path: path1,
         };
         assert!(neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"b"), &full_proof1, &root1));
@@ -1103,6 +1108,7 @@ fn test_proof_error_edge_cases() {
         let empty_proof = neml::InclusionProof {
             index: 1,
             tree_size: 1, // index >= tree_size
+            log_arity: 2,
             path: Vec::new(),
         };
         assert!(!neml::verify_inclusion(&Sha256Hasher, &Sha256Hasher.leaf(b"x"), &empty_proof, &vec![0; 32]));

@@ -1111,6 +1111,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(Some(crate::proof::InclusionProof {
             index,
             tree_size,
+            log_arity: self.config.log_arity as u64,
             path,
         }))
     }

@@ -20,6 +20,8 @@ pub struct InclusionProof {
     pub index: u64,
     /// Size of the tree for which this proof is valid.
     pub tree_size: u64,
+    /// The log arity (k) of the tree. Set to 0 if not enforcing uniform log structure verification.
+    pub log_arity: u64,
     /// Path steps from leaf to root.
     pub path: Vec<ProofStep>,
 }
@@ -184,6 +186,102 @@ impl CouplingProof {
     }
 }
 
+/// Reconstruct the leaf index from a uniform State Tree Mode path.
+/// Returns `None` if the path does not match the uniform State Tree Mode structure for `tree_size` and `k`.
+#[must_use]
+pub fn reconstruct_index_from_path(
+    k: u64,
+    tree_size: u64,
+    path: &[ProofStep],
+) -> Option<u64> {
+    if k < 2 {
+        return None;
+    }
+    let coords = frontier_for_size(tree_size, k);
+    if coords.is_empty() {
+        return None;
+    }
+
+    let mut next_node_id = coords.len();
+    let mut frontier: Vec<usize> = (0..coords.len()).collect();
+    let mut children_map = std::collections::HashMap::new();
+
+    let k_usize = k as usize;
+    while frontier.len() > k_usize {
+        let split_idx = frontier.len() - k_usize;
+        let parent_id = next_node_id;
+        next_node_id += 1;
+        let children = frontier[split_idx..].to_vec();
+        children_map.insert(parent_id, children);
+        frontier.truncate(split_idx);
+        frontier.push(parent_id);
+    }
+    if frontier.len() > 1 {
+        let parent_id = next_node_id;
+        let children = frontier.clone();
+        children_map.insert(parent_id, children);
+        frontier = vec![parent_id];
+    }
+
+    let mut curr_node = frontier[0];
+    let mut path_idx = path.len();
+
+    while children_map.contains_key(&curr_node) {
+        let children = &children_map[&curr_node];
+        if path_idx == 0 {
+            return None;
+        }
+        path_idx -= 1;
+        let step = &path[path_idx];
+        if step.siblings.len() != children.len() - 1 {
+            return None;
+        }
+        if step.position >= children.len() {
+            return None;
+        }
+        curr_node = children[step.position];
+    }
+
+    let f_idx = curr_node;
+    if f_idx >= coords.len() {
+        return None;
+    }
+
+    let (left, height) = coords[f_idx];
+    if path_idx != height as usize {
+        return None;
+    }
+
+    let mut offset = 0u64;
+    let mut power = 1u64;
+    for i in 0..path_idx {
+        let step = &path[i];
+        if step.siblings.len() != k_usize - 1 {
+            return None;
+        }
+        if step.position >= k_usize {
+            return None;
+        }
+        let term = (step.position as u64).checked_mul(power)?;
+        offset = offset.checked_add(term)?;
+        power = power.checked_mul(k)?;
+    }
+
+    left.checked_add(offset)
+}
+
+/// Validate that the inclusion proof path matches the expected structure, sibling count, and positions.
+#[must_use]
+pub fn verify_inclusion_path_structure(
+    k: usize,
+    index: u64,
+    tree_size: u64,
+    path: &[ProofStep],
+) -> bool {
+    reconstruct_index_from_path(k as u64, tree_size, path)
+        .map_or(false, |expected_idx| expected_idx == index)
+}
+
 /// Reconstruct the raw root from an inclusion proof path.
 #[must_use]
 pub fn reconstruct_inclusion_root(
@@ -196,6 +294,12 @@ pub fn reconstruct_inclusion_root(
     }
     if proof.path.len() > 256 {
         return None;
+    }
+
+    if proof.log_arity >= 2 {
+        if !verify_inclusion_path_structure(proof.log_arity as usize, proof.index, proof.tree_size, &proof.path) {
+            return None;
+        }
     }
 
     let mut current = leaf_hash.to_vec();
@@ -306,7 +410,7 @@ pub fn reconstruct_consistency_roots(
             map.insert((curr_left, curr_height), current_hash);
             continue;
         }
-        if step.siblings.len() > 256 {
+        if step.siblings.len() != (k - 1) as usize {
             return None;
         }
         if step.position > step.siblings.len() {
