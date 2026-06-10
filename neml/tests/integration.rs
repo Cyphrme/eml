@@ -390,9 +390,9 @@ fn test_inclusion_proofs_subtree_log_mode() {
 
         let leaf_hash = Sha256Hasher.leaf(b"d");
         let full_proof = neml::InclusionProof {
-            index: 3,
-            tree_size: 5,
-            log_arity: 0,
+            index: 1,
+            tree_size: 2,
+            log_arity: 2,
             path,
         };
 
@@ -897,7 +897,7 @@ fn test_deep_subtree_inclusion_proofs() {
             let full_proof = neml::InclusionProof {
                 index: 0,
                 tree_size: 1,
-                log_arity: 0,
+                log_arity: 2,
                 path,
             };
 
@@ -954,9 +954,9 @@ fn test_deep_subtree_inclusion_proofs() {
             path.extend(log_proof.path);
 
             let full_proof = neml::InclusionProof {
-                index: leaf_idx,
-                tree_size: 4, // 3 leaves in subtree + 1 flat leaf = 4 total leaves
-                log_arity: 0,
+                index: 0,
+                tree_size: 2,
+                log_arity: 3,
                 path,
             };
 
@@ -1124,9 +1124,9 @@ fn test_multi_algorithm_subtree_proofs() {
         path0.extend(log_proof0.path);
 
         let full_proof0 = neml::InclusionProof {
-            index: 2,
-            tree_size: 3,
-            log_arity: 0,
+            index: 1,
+            tree_size: 2,
+            log_arity: 2,
             path: path0,
         };
         assert!(neml::verify_inclusion(
@@ -1144,9 +1144,9 @@ fn test_multi_algorithm_subtree_proofs() {
         path1.extend(log_proof1.path);
 
         let full_proof1 = neml::InclusionProof {
-            index: 1,
-            tree_size: 2,
-            log_arity: 0,
+            index: 0,
+            tree_size: 1,
+            log_arity: 2,
             path: path1,
         };
         assert!(neml::verify_inclusion(
@@ -2361,11 +2361,11 @@ fn test_storage_len_error_masking_overwrite() {
             .await
             .unwrap();
         assert_eq!(corrupted_log.size(), 0);
-        assert_eq!(corrupted_log.commit_count(), 2);
+        assert_eq!(corrupted_log.subtree_count(), 2);
 
-        // Attempting append_leaf in Commit Tree Mode should fail and prevent overwrite.
+        // Attempting append_leaf in Subtree Log Mode should fail and prevent overwrite.
         let append_result = corrupted_log.append_leaf(b"leaf_overwrite").await;
-        assert!(append_result.is_err(), "Expected append_leaf to fail in Commit Tree Mode");
+        assert!(append_result.is_err(), "Expected append_leaf to fail in Subtree Log Mode");
 
         // The original leaf0 remains untouched
         let untouched_leaf = corrupted_log.storage().get_leaf(0).await.unwrap();
