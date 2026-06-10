@@ -25,12 +25,15 @@ In a standard Merkle tree (like Certificate Transparency), inputs are domain-sep
 `neml` uses **prefix-free hashing** to allow leaf digests to double as content addresses (so a leaf is just the hash of the raw data, without prepended tags). The hashing functions are defined as:
 * **Leaf Hash:** $H(\text{data})$
 * **Internal Node Hash:** $H(\text{child}_1 \mathbin{\Vert} \text{child}_2 \mathbin{\Vert} \dots \mathbin{\Vert} \text{child}_m)$
+* **Null Digest:** A constant digest representing inactivity/absence. The parameter `L` represents the target digest length of the active hash algorithm (e.g. 32 bytes for SHA-256):
 
 ```lean
 noncomputable def leafHash (d : List UInt8) : Digest := H d
 
 noncomputable def nodeHash (children : List Digest) : Digest :=
   H (children.flatMap digestToBytes)
+
+noncomputable def nullDigest (L : Nat) : Digest := xof numsSeed L
 ```
 
 ### C. Tree Evaluation (`eval`)
@@ -38,8 +41,8 @@ Evaluating a tree reduces the structure recursively to a single cryptographic di
 1. A leaf evaluates to the leaf hash of its data.
 2. An empty node evaluates to a constant empty hash.
 3. A singleton node (one child) evaluates directly to the child's digest (singleton promotion).
-4. A node of arity $\ge 2$ where all children are empty evaluates to the `nullDigest` (flat null promotion).
-5. A node of arity $\ge 2$ with at least one active child evaluates to the `nodeHash` of its children's digests.
+4. A node of arity $\ge 2$ where all children evaluate to the `nullDigest` evaluates directly to the `nullDigest` (flat null promotion).
+5. A node of arity $\ge 2$ with at least one active child (i.e. at least one child evaluates to a digest other than `nullDigest`) evaluates to the `nodeHash` of its children's digests.
 
 ```lean
 axiom eval_leaf : ∀ (L : Nat) (data : List UInt8),
@@ -98,9 +101,8 @@ def PrefixNullModel (L : Nat) (prefix_data : List UInt8) : Prop :=
 theorem soundness_violation (L : Nat) (prefix_data : List UInt8)
     (h_model : PrefixNullModel L prefix_data) :
     ∃ (t : NaryTree (List UInt8)), ContainsLeaf t ∧ eval L t = nullDigest L := by
-  -- Construct the tree with a single leaf containing the prefix data
-  let t := NaryTree.leaf prefix_data
-  use t
+  -- Pass the leaf directly to avoid let-binding unfolding issues in Lean 4 rw tactics
+  use NaryTree.leaf prefix_data
   constructor
   · -- Prove that this tree contains a leaf
     exact ContainsLeaf.leaf prefix_data

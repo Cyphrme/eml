@@ -4,7 +4,7 @@ namespace NEML
 
 /--
 A "prefix null" model assumes that the null digest is the hash of some known preimage.
-We represent this by an definition stating that there exists a prefix
+We represent this by a definition stating that there exists a prefix
 such that its leaf hash equals the null digest.
 -/
 def PrefixNullModel (L : Nat) (prefix_data : List UInt8) : Prop :=
@@ -18,9 +18,8 @@ but evaluates to the null digest, which is a contradiction.
 theorem soundness_violation (L : Nat) (prefix_data : List UInt8)
     (h_model : PrefixNullModel L prefix_data) :
     ∃ (t : NaryTree (List UInt8)), ContainsLeaf t ∧ eval L t = nullDigest L := by
-  -- Construct the tree with a single leaf containing the prefix data
-  let t := NaryTree.leaf prefix_data
-  use t
+  -- Pass the leaf directly to avoid let-binding unfolding issues in Lean 4 rw tactics
+  use NaryTree.leaf prefix_data
   constructor
   · -- Prove that this tree contains a leaf
     exact ContainsLeaf.leaf prefix_data
