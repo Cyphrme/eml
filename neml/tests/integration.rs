@@ -2199,7 +2199,6 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
 #[test]
 fn test_determine_global_size_probing_out_of_sync() {
     smol::block_on(async {
-        let hasher = Sha256Hasher;
         let mut storage = MemoryStorage::new();
 
         // Setup metadata for alg 0 and alg 1, both active starting at size 0
@@ -2335,4 +2334,66 @@ fn test_storage_len_error_masking_overwrite() {
         assert_eq!(overwritten_leaf, b"leaf_overwrite");
     });
 }
+
+#[test]
+fn test_boundary_sizes_and_high_arities() {
+    smol::block_on(async {
+        for &k in &[3u64, 5, 128, 256] {
+            let config = TreeConfig { log_arity: k as usize };
+            
+            // Boundary sizes around K^1 and K^2
+            let mut sizes = vec![k - 1, k, k + 1];
+            if k * k <= 512 {
+                sizes.extend_from_slice(&[k * k - 1, k * k, k * k + 1]);
+            }
+            sizes.retain(|&s| s > 0);
+            sizes.sort_unstable();
+            sizes.dedup();
+            
+            let max_size = *sizes.last().unwrap();
+            let storage = MemoryStorage::new();
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
+                .await
+                .unwrap();
+                
+            let mut leaves = Vec::new();
+            for i in 0..max_size {
+                let data = format!("leaf_{}_{}", k, i).into_bytes();
+                log.append_leaf(&data).await.unwrap();
+                leaves.push(Sha256Hasher.leaf(&data));
+            }
+            
+            for &size in &sizes {
+                let root = log.root_for_at(0, size).await.unwrap();
+                
+                // Verify inclusion proof for every index in the tree of this size
+                for idx in 0..size {
+                    let proof = log.inclusion_proof_for(0, idx, size).await.unwrap().unwrap();
+                    assert!(neml::verify_inclusion(
+                        &Sha256Hasher,
+                        &leaves[idx as usize],
+                        &proof,
+                        &root
+                    ), "Inclusion failed for k={}, size={}, idx={}", k, size, idx);
+                }
+                
+                // Verify consistency proofs between all smaller valid sizes
+                for &old_size in &sizes {
+                    if old_size >= size {
+                        break;
+                    }
+                    let old_root = log.root_for_at(0, old_size).await.unwrap();
+                    let proof = log.consistency_proof_for(0, old_size, size).await.unwrap().unwrap();
+                    assert!(neml::verify_consistency(
+                        &Sha256Hasher,
+                        &proof,
+                        &old_root,
+                        &root
+                    ), "Consistency failed for k={}, old_size={}, new_size={}", k, old_size, size);
+                }
+            }
+        }
+    });
+}
+
 
