@@ -2,13 +2,13 @@
 
 This document provides a self-contained, mathematically rigorous walkthrough of why a **Nothing-Up-My-Sleeve (NUMS)** constant is required to guarantee the soundness of a prefix-free Merkle log, and why defining a null digest via a known hash preimage (a "prefix null") is insecure.
 
-The corresponding machine-checked Lean 4 proof is located in [`EMLProof/Unsoundness.lean`](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/Unsoundness.lean).
+The corresponding machine-checked Lean 4 proof is located in [EMLProof/Unsoundness.lean](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/Unsoundness.lean).
 
 ---
 
 ## 1. How the Merkle Log is Modeled
 
-To understand the proof, we must look at how the Merkle tree structure, hashing, and evaluations are modeled in the Lean formalization ([`EMLProof/NEML.lean`](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/NEML.lean)).
+To understand the proof, we must look at how the Merkle tree structure, hashing, and evaluations are modeled in the Lean formalization ([EMLProof/NEML.lean](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/NEML.lean)).
 
 ### A. The N-ary Tree Model
 A Merkle tree is defined as an inductive data type `NaryTree`, which can either be a leaf holding data, or a node containing a list of subtrees:
@@ -123,7 +123,7 @@ $$\text{leafHash}(\text{prefix}) = H(\text{prefix})$$
 
 This creates a collision where the hash of a real, physical leaf payload is identical to the null digest representation. 
 
-We have formalized this as a theorem in [`Unsoundness.lean`](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/Unsoundness.lean):
+We have formalized this as a theorem in [Unsoundness.lean](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/Unsoundness.lean):
 
 ```lean
 def PrefixNullModel (L : Nat) (prefix_data : List UInt8) : Prop :=
@@ -162,7 +162,7 @@ theorem soundness_violation (L : Nat) (prefix_data : List UInt8)
 
 To prevent this collision, the null digest must be preimage-resistant:
 * **NUMS Definition:** The null constant is derived from a mathematical constant (the digits of $\pi$) rather than hashing a known preimage.
-* **No Known Preimage:** Finding an input $X$ such that $H(X) = \text{NUMS}$ requires solving a hard preimage challenge ($2^{256}$ operations for SHA-256).
-* **Perfect Separation:** Because no one can find an input $X$ that evaluates to the NUMS constant, no user can ever submit a leaf payload whose hash equals the null digest.
+* **No Known Preimage:** Finding an input $X$ such that $H(X) = \text{nullDigest}(L)$ requires solving a hard preimage challenge ($2^{256}$ operations for SHA-256).
+* **Perfect Separation:** Because no one can find an input $X$ that evaluates to the $\text{nullDigest}(L)$ constant, no user can ever submit a leaf payload whose hash equals the null digest.
 
 This guarantees that the domain of active leaf hashes and the null digest remain completely disjoint, ensuring that the `leaf_hash_neq_null` axiom holds, and preventing a prover from ever substituting active data for a null node.
