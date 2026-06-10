@@ -265,6 +265,69 @@ pub fn reconstruct_index_from_path(k: u64, tree_size: u64, path: &[ProofStep]) -
     left.checked_add(offset)
 }
 
+fn path_length_to_frontier_node(k: u64, coords_len: usize, target_f_idx: usize) -> Option<usize> {
+    if target_f_idx >= coords_len {
+        return None;
+    }
+
+    let mut next_node_id = coords_len;
+    let mut frontier: Vec<usize> = (0..coords_len).collect();
+    let mut children_map = std::collections::HashMap::new();
+    let mut spans = std::collections::HashMap::new();
+
+    for i in 0..coords_len {
+        spans.insert(i, (i, i));
+    }
+
+    let k_usize = k as usize;
+    while frontier.len() > k_usize {
+        let split_idx = frontier.len() - k_usize;
+        let parent_id = next_node_id;
+        next_node_id += 1;
+        let children = frontier[split_idx..].to_vec();
+
+        let min_idx = spans[&children[0]].0;
+        let max_idx = spans[children.last()?].1;
+        spans.insert(parent_id, (min_idx, max_idx));
+
+        children_map.insert(parent_id, children);
+        frontier.truncate(split_idx);
+        frontier.push(parent_id);
+    }
+    if frontier.len() > 1 {
+        let parent_id = next_node_id;
+        let children = frontier.clone();
+
+        let min_idx = spans[&children[0]].0;
+        let max_idx = spans[children.last()?].1;
+        spans.insert(parent_id, (min_idx, max_idx));
+
+        children_map.insert(parent_id, children);
+        frontier = vec![parent_id];
+    }
+
+    let root = frontier[0];
+    let mut curr = root;
+    let mut depth = 0;
+    while children_map.contains_key(&curr) {
+        let children = &children_map[&curr];
+        let mut found = false;
+        for &child in children {
+            let (min_val, max_val) = spans[&child];
+            if target_f_idx >= min_val && target_f_idx <= max_val {
+                curr = child;
+                depth += 1;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return None;
+        }
+    }
+    Some(depth)
+}
+
 /// Validate that the inclusion proof path matches the expected structure, sibling count, and
 /// positions.
 #[must_use]
@@ -274,7 +337,41 @@ pub fn verify_inclusion_path_structure(
     tree_size: u64,
     path: &[ProofStep],
 ) -> bool {
-    reconstruct_index_from_path(k as u64, tree_size, path) == Some(index)
+    if k < 2 {
+        return false;
+    }
+    let k_u64 = k as u64;
+    let coords = frontier_for_size(tree_size, k_u64);
+    if coords.is_empty() {
+        return false;
+    }
+
+    let mut target_f_idx = None;
+    for (f_idx, &(left, height)) in coords.iter().enumerate() {
+        if let Some(cap) = k_u64.checked_pow(height) {
+            if index >= left && index < left + cap {
+                target_f_idx = Some((f_idx, height));
+                break;
+            }
+        }
+    }
+    let (f_idx, height) = match target_f_idx {
+        Some(val) => val,
+        None => return false,
+    };
+
+    let c = match path_length_to_frontier_node(k_u64, coords.len(), f_idx) {
+        Some(depth) => depth,
+        None => return false,
+    };
+
+    let expected_len = c + height as usize;
+    if path.len() < expected_len {
+        return false;
+    }
+
+    let d = path.len() - expected_len;
+    reconstruct_index_from_path(k_u64, tree_size, &path[d..]) == Some(index)
 }
 
 /// Reconstruct the raw root from an inclusion proof path.
@@ -291,7 +388,7 @@ pub fn reconstruct_inclusion_root(
     if leaf_hash.len() != digest_len {
         return None;
     }
-    if proof.log_arity == 1 || proof.log_arity > 256 {
+    if proof.log_arity < 2 || proof.log_arity > 256 {
         return None;
     }
     if proof.index >= proof.tree_size {
@@ -301,14 +398,12 @@ pub fn reconstruct_inclusion_root(
         return None;
     }
 
-    if proof.log_arity >= 2
-        && !verify_inclusion_path_structure(
-            proof.log_arity as usize,
-            proof.index,
-            proof.tree_size,
-            &proof.path,
-        )
-    {
+    if !verify_inclusion_path_structure(
+        proof.log_arity as usize,
+        proof.index,
+        proof.tree_size,
+        &proof.path,
+    ) {
         return None;
     }
 
