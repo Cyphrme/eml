@@ -2221,7 +2221,7 @@ fn test_determine_global_size_probing_out_of_sync() {
             (1, Box::new(Sha256Hasher)),
         ];
 
-        // This succeeds silently! (Demonstrates R5 correctness bug)
+        // This fails with CorruptedMetadata as expected under R10.
         let reconstructed = NaryMerkleLog::from_storage_with_config(
             storage.clone(),
             hashers,
@@ -2229,7 +2229,7 @@ fn test_determine_global_size_probing_out_of_sync() {
         )
         .await;
 
-        assert!(reconstructed.is_ok(), "Expected from_storage to succeed due to silent null() fallback");
+        assert!(reconstructed.is_err(), "Expected from_storage to fail due to out of sync algorithm frontier nodes");
     });
 }
 
@@ -2298,10 +2298,12 @@ impl neml::Storage for ErrorMaskingStorage {
 #[test]
 fn test_storage_len_error_masking_overwrite() {
     smol::block_on(async {
-        let mut inner = MemoryStorage::new();
-        inner.store_leaf(0, b"leaf0").await.unwrap();
-        inner.store_leaf(1, b"leaf1").await.unwrap();
-        inner.store_algorithm_meta(0, &[(0, u64::MAX)]).await.unwrap();
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig::default())
+            .await
+            .unwrap();
+        log.append_leaf(b"leaf0").await.unwrap();
+        log.append_leaf(b"leaf1").await.unwrap();
+        let inner = log.into_storage();
 
         let mask = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let storage = ErrorMaskingStorage {
@@ -2320,18 +2322,20 @@ fn test_storage_len_error_masking_overwrite() {
         // Now mask len to zero, simulating a transient error
         mask.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        // Reconstruct from storage. It silently falls back to size 0!
+        // Reconstruct from storage.
         let mut corrupted_log = NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
             .await
             .unwrap();
         assert_eq!(corrupted_log.size(), 0);
+        assert_eq!(corrupted_log.commit_count(), 2);
 
-        // Append a new leaf "leaf_overwrite". Because size is 0, it writes to index 0.
-        corrupted_log.append_leaf(b"leaf_overwrite").await.unwrap();
+        // Attempting append_leaf in Commit Tree Mode should fail and prevent overwrite.
+        let append_result = corrupted_log.append_leaf(b"leaf_overwrite").await;
+        assert!(append_result.is_err(), "Expected append_leaf to fail in Commit Tree Mode");
 
-        // The original leaf0 is overwritten!
-        let overwritten_leaf = corrupted_log.storage().get_leaf(0).await.unwrap();
-        assert_eq!(overwritten_leaf, b"leaf_overwrite");
+        // The original leaf0 remains untouched
+        let untouched_leaf = corrupted_log.storage().get_leaf(0).await.unwrap();
+        assert_eq!(untouched_leaf, b"leaf0");
     });
 }
 

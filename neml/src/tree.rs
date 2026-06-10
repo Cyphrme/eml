@@ -84,6 +84,13 @@ impl AlgState {
             .iter()
             .any(|&(start, end)| start < hi && end > lo)
     }
+
+    /// Whether the range `[lo, hi)` is fully contained within the active epochs.
+    pub fn fully_active(&self, lo: u64, hi: u64) -> bool {
+        self.epochs
+            .iter()
+            .any(|&(start, end)| start <= lo && hi <= end)
+    }
 }
 
 /// An n-ary Merkle Append-Only Log.
@@ -330,7 +337,15 @@ impl<S: Storage> NaryMerkleLog<S> {
                     .get_node(alg_id, left, height)
                     .await
                     .map_err(crate::error::Error::Storage)?
-                    .unwrap_or_else(|| state.hasher.null())
+                    .ok_or_else(|| {
+                        crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: format!(
+                                "missing frontier node for algorithm {} at left {} height {}",
+                                alg_id, left, height
+                            ),
+                        }
+                    })?
             };
             frontier.push(hash);
         }
@@ -660,12 +675,14 @@ impl<S: Storage> NaryMerkleLog<S> {
                     }
                     h as u32
                 };
-                if let Some(hash) = storage
-                    .get_node(alg_id, lo, height)
-                    .await
-                    .map_err(crate::error::Error::Storage)?
-                {
-                    return Ok((hash, Vec::new()));
+                if state.fully_active(lo, hi) {
+                    if let Some(hash) = storage
+                        .get_node(alg_id, lo, height)
+                        .await
+                        .map_err(crate::error::Error::Storage)?
+                    {
+                        return Ok((hash, Vec::new()));
+                    }
                 }
 
                 let child_size = size / k;
@@ -734,6 +751,13 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Append a single leaf to the log (State Tree Mode).
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
+        if self.commit_count > 0 {
+            return Err(crate::error::Error::CorruptedMetadata {
+                alg_id: 0,
+                reason: "cannot append leaf in Commit Tree Mode".to_string(),
+            });
+        }
+
         if self.size >= (1u64 << 47) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
@@ -966,6 +990,14 @@ impl<S: Storage> NaryMerkleLog<S> {
             .map_err(crate::error::Error::Storage)?
         {
             Ok(hash)
+        } else if state.fully_active(left, limit) {
+            Err(crate::error::Error::CorruptedMetadata {
+                alg_id,
+                reason: format!(
+                    "missing internal node for algorithm {} at left {} height {}",
+                    alg_id, left, height
+                ),
+            })
         } else {
             Ok(state.hasher.null())
         }
