@@ -85,3 +85,10 @@ impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
 
 /// A specialized Result alias for the crate.
 pub type Result<T, E> = std::result::Result<T, Error<E>>;
+
+impl<E> From<E> for Error<E> {
+    fn from(err: E) -> Self {
+        Self::Storage(err)
+    }
+}
+
