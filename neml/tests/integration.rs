@@ -2168,3 +2168,171 @@ fn test_null_preimage_collision() {
     assert_ne!(hasher.leaf(&payload), hasher.null());
 }
 
+#[test]
+fn test_inclusion_proof_arity_zero_index_spoofing() {
+    let hasher = Sha256Hasher;
+    let leaf_a = hasher.leaf(b"A");
+    let leaf_b = hasher.leaf(b"B");
+
+    // root = nary_mr(&[leaf_a, leaf_b])
+    let root = neml::mr::nary_mr(&hasher, &[&leaf_a, &leaf_b]);
+
+    // This proof asserts leaf_a is at index 1 (which is false, it's at index 0)
+    // By setting log_arity: 0, verify_inclusion_path_structure is bypassed,
+    // and the verifier accepts the proof!
+    let spoofed_proof = neml::InclusionProof {
+        index: 1, // spoofed index
+        tree_size: 2,
+        log_arity: 0,
+        path: vec![neml::ProofStep {
+            siblings: vec![leaf_b.clone()],
+            position: 0, // position 0 means leaf_a is at the left (index 0)
+        }],
+    };
+
+    // The verifier accepts this proof even though the declared index (1)
+    // does not match the actual path position (0) of the leaf!
+    let is_valid = neml::verify_inclusion(&hasher, &leaf_a, &spoofed_proof, &root);
+    assert!(is_valid);
+}
+
+#[test]
+fn test_determine_global_size_probing_out_of_sync() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let mut storage = MemoryStorage::new();
+
+        // Setup metadata for alg 0 and alg 1, both active starting at size 0
+        storage.store_algorithm_meta(0, &[(0, u64::MAX)]).await.unwrap();
+        storage.store_algorithm_meta(1, &[(0, u64::MAX)]).await.unwrap();
+
+        // Write nodes for alg 0 up to index 2 (size 3)
+        let node_val = vec![1; 32];
+        storage.store_node(0, 0, 0, &node_val).await.unwrap();
+        storage.store_node(0, 1, 0, &node_val).await.unwrap();
+        storage.store_node(0, 2, 0, &node_val).await.unwrap();
+
+        // Write nodes for alg 1 only up to index 1 (size 2, index 2 is missing!)
+        storage.store_node(1, 0, 0, &node_val).await.unwrap();
+        storage.store_node(1, 1, 0, &node_val).await.unwrap();
+
+        // Load tree from storage
+        let hashers: Vec<(u64, Box<dyn neml::Hasher>)> = vec![
+            (0, Box::new(Sha256Hasher)),
+            (1, Box::new(Sha256Hasher)),
+        ];
+
+        // This succeeds silently! (Demonstrates R5 correctness bug)
+        let reconstructed = NaryMerkleLog::from_storage_with_config(
+            storage.clone(),
+            hashers,
+            TreeConfig { log_arity: 2 },
+        )
+        .await;
+
+        assert!(reconstructed.is_ok(), "Expected from_storage to succeed due to silent null() fallback");
+    });
+}
+
+#[derive(Clone)]
+struct ErrorMaskingStorage {
+    inner: MemoryStorage,
+    mask_len_to_zero: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl neml::Storage for ErrorMaskingStorage {
+    type Error = neml::storage::MemoryStorageError;
+
+    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
+        if index < self.inner.leaves.len() as u64 {
+            self.inner.leaves[index as usize] = data.to_vec();
+            Ok(())
+        } else {
+            self.inner.store_leaf(index, data).await
+        }
+    }
+
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
+        self.inner.get_leaf(index).await
+    }
+
+    async fn len(&self) -> u64 {
+        if self.mask_len_to_zero.load(std::sync::atomic::Ordering::SeqCst) {
+            0
+        } else {
+            self.inner.len().await
+        }
+    }
+
+    async fn store_node(
+        &mut self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+        hash: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.inner.store_node(alg_id, left, height, hash).await
+    }
+
+    async fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        self.inner.get_node(alg_id, left, height).await
+    }
+
+    async fn store_algorithm_meta(
+        &mut self,
+        alg_id: u64,
+        epochs: &[(u64, u64)],
+    ) -> Result<(), Self::Error> {
+        self.inner.store_algorithm_meta(alg_id, epochs).await
+    }
+
+    async fn load_algorithm_metas(&self) -> Result<neml::AlgorithmMetas, Self::Error> {
+        self.inner.load_algorithm_metas().await
+    }
+}
+
+#[test]
+fn test_storage_len_error_masking_overwrite() {
+    smol::block_on(async {
+        let mut inner = MemoryStorage::new();
+        inner.store_leaf(0, b"leaf0").await.unwrap();
+        inner.store_leaf(1, b"leaf1").await.unwrap();
+        inner.store_algorithm_meta(0, &[(0, u64::MAX)]).await.unwrap();
+
+        let mask = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let storage = ErrorMaskingStorage {
+            inner,
+            mask_len_to_zero: mask.clone(),
+        };
+
+        // Initially we reconstruct size 2
+        {
+            let reconstructed = NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
+                .await
+                .unwrap();
+            assert_eq!(reconstructed.size(), 2);
+        }
+
+        // Now mask len to zero, simulating a transient error
+        mask.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // Reconstruct from storage. It silently falls back to size 0!
+        let mut corrupted_log = NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
+            .await
+            .unwrap();
+        assert_eq!(corrupted_log.size(), 0);
+
+        // Append a new leaf "leaf_overwrite". Because size is 0, it writes to index 0.
+        corrupted_log.append_leaf(b"leaf_overwrite").await.unwrap();
+
+        // The original leaf0 is overwritten!
+        let overwritten_leaf = corrupted_log.storage().get_leaf(0).await.unwrap();
+        assert_eq!(overwritten_leaf, b"leaf_overwrite");
+    });
+}
+
