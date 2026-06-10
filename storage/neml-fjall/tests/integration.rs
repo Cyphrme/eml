@@ -116,3 +116,126 @@ fn test_fjall_log_integration_and_recovery() {
         }
     });
 }
+
+#[test]
+fn test_fjall_metadata_corruption() {
+    smol::block_on(async {
+        let dir = tempdir().unwrap();
+        
+        // 1. Write corrupted key length (< 8 bytes)
+        {
+            let db = fjall::Database::builder(dir.path()).open().unwrap();
+            let metadata = db.keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default).unwrap();
+            metadata.insert(b"short", &[0; 16]).unwrap();
+        }
+        
+        let storage = FjallStorage::open(dir.path()).unwrap();
+        let metas_res = storage.load_algorithm_metas().await;
+        assert!(metas_res.is_err());
+
+        // Try from_storage
+        let log_res = NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).await;
+        assert!(log_res.is_err());
+    });
+
+    smol::block_on(async {
+        let dir = tempdir().unwrap();
+        
+        // 2. Write corrupted value length (not a multiple of 16)
+        {
+            let db = fjall::Database::builder(dir.path()).open().unwrap();
+            let metadata = db.keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default).unwrap();
+            metadata.insert(0u64.to_be_bytes(), &[0; 15]).unwrap();
+        }
+        
+        let storage = FjallStorage::open(dir.path()).unwrap();
+        let metas_res = storage.load_algorithm_metas().await;
+        assert!(metas_res.is_err());
+
+        // Try from_storage
+        let log_res = NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))]).await;
+        assert!(log_res.is_err());
+    });
+}
+
+#[test]
+fn test_fjall_concurrent_access() {
+    let dir = tempdir().unwrap();
+    let storage = FjallStorage::open(dir.path()).unwrap();
+    
+    let num_tasks = 8;
+    let ops_per_task = 50;
+    
+    let mut tasks = Vec::new();
+    for t_idx in 0..num_tasks {
+        let mut storage_clone = storage.clone();
+        let handle = std::thread::spawn(move || {
+            smol::block_on(async {
+                for i in 0..ops_per_task {
+                    let leaf_index = t_idx * ops_per_task + i;
+                    let payload = format!("payload-{}-{}", t_idx, i);
+                    
+                    // store leaf
+                    storage_clone.store_leaf(leaf_index, payload.as_bytes()).await.unwrap();
+                    
+                    // store node
+                    let node_hash = Sha256::digest(payload.as_bytes()).to_vec();
+                    storage_clone.store_node(0, leaf_index, 1, &node_hash).await.unwrap();
+                    
+                    // read back leaf
+                    let read_leaf = storage_clone.get_leaf(leaf_index).await.unwrap();
+                    assert_eq!(read_leaf, payload.as_bytes());
+                    
+                    // read back node
+                    let read_node = storage_clone.get_node(0, leaf_index, 1).await.unwrap().unwrap();
+                    assert_eq!(read_node, node_hash);
+                }
+            });
+        });
+        tasks.push(handle);
+    }
+    
+    for handle in tasks {
+        handle.join().unwrap();
+    }
+    
+    // Assert length is correct
+    smol::block_on(async {
+        assert_eq!(storage.len().await, num_tasks * ops_per_task);
+    });
+}
+
+#[test]
+fn test_fjall_out_of_order_and_sparse() {
+    smol::block_on(async {
+        let dir = tempdir().unwrap();
+        let mut storage = FjallStorage::open(dir.path()).unwrap();
+
+        // Store index 10 first
+        storage.store_leaf(10, b"index10").await.unwrap();
+        
+        // len() should return 11 (highest key + 1)
+        assert_eq!(storage.len().await, 11);
+
+        // index 10 should be found
+        assert_eq!(storage.get_leaf(10).await.unwrap(), b"index10");
+
+        // indices 0..10 should return NotFound
+        for i in 0..10 {
+            assert!(storage.get_leaf(i).await.is_err());
+        }
+
+        // Store index 5
+        storage.store_leaf(5, b"index5").await.unwrap();
+
+        // len() should still be 11
+        assert_eq!(storage.len().await, 11);
+
+        // index 5 should be found
+        assert_eq!(storage.get_leaf(5).await.unwrap(), b"index5");
+        
+        // index 10 should still be found
+        assert_eq!(storage.get_leaf(10).await.unwrap(), b"index10");
+    });
+}
+
