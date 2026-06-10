@@ -1,129 +1,61 @@
 # Formal Proof Walkthrough: Merkle Log Null Soundness & Unsoundness
 
-This document provides a self-contained, mathematically rigorous walkthrough of why a **Nothing-Up-My-Sleeve (NUMS)** constant is required to guarantee the soundness of a prefix-free Merkle log, and why defining a null digest via a known hash preimage (a "prefix null") is insecure.
+This document provides a self-contained walkthrough of how the combination of **prefix-free hashing** and **null subtree reduction to a single constant** creates a structural vulnerability if the null digest is a known preimage, and why a **Nothing-Up-My-Sleeve (NUMS)** constant is mathematically required to prevent provers from lying about the log structure.
 
 The corresponding machine-checked Lean 4 proof is located in [EMLProof/Unsoundness.lean](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/Unsoundness.lean).
 
 ---
 
-## 1. How the Merkle Log is Modeled
+## 1. The Core Threat: Structural Substitution Collisions
 
-To understand the proof, we must look at how the Merkle tree structure, hashing, and evaluations are modeled in the Lean formalization ([EMLProof/NEML.lean](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/NEML.lean)).
-
-### A. The N-ary Tree Model
-A Merkle tree is defined as an inductive data type `NaryTree`, which can either be a leaf holding data, or a node containing a list of subtrees:
-
-```lean
-inductive NaryTree (α : Type) where
-  | leaf (val : α)
-  | node (children : List (NaryTree α))
-```
-
-To assert that a tree contains at least one leaf node containing actual user data, we define the inductive predicate `ContainsLeaf`:
-
-```lean
-inductive ContainsLeaf {α : Type} : NaryTree α → Prop where
-  | leaf (val : α) : ContainsLeaf (NaryTree.leaf val)
-  | node (children : List (NaryTree α)) (c : NaryTree α) (h_mem : c ∈ children)
-      (h_cont : ContainsLeaf c) : ContainsLeaf (NaryTree.node children)
-```
-
-### B. Prefix-Free Hashing & Basic Types
-In a standard Merkle tree (like Certificate Transparency), inputs are domain-separated by prepending `0x00` to leaves and `0x01` to internal nodes. 
-
-`neml` uses **prefix-free hashing** to allow leaf digests to double as content addresses (so a leaf is just the hash of the raw data, without prepended tags). The hashing environment is defined using the following types and axioms:
-
-```lean
--- Digest is the abstract type of cryptographic hashes
-axiom Digest : Type
-
--- H is the underlying hash function mapping bytes to a Digest
-axiom H : List UInt8 → Digest
-
--- digestToBytes represents the serialization of a Digest to bytes
-axiom digestToBytes : Digest → List UInt8
-
--- numsSeed is the Nothing-Up-My-Sleeve master seed (based on fractional digits of pi)
-axiom numsSeed : List UInt8
-
--- xof is an Extendable-Output Function expanding a seed to length L
-axiom xof : List UInt8 → Nat → Digest
-```
-
-Using these primitives, the specific digests are defined as:
+In a prefix-free Merkle tree (such as `neml`'s structure), there are no domain separation tags (e.g., prepended bytes) to distinguish a leaf node from an internal node or subtree. The hashing rules are simple:
 * **Leaf Hash:** $\text{leafHash}(\text{data}) = H(\text{data})$
-* **Internal Node Hash:** $\text{nodeHash}(\text{children}) = H(\text{child}_1 \mathbin{\Vert} \text{child}_2 \mathbin{\Vert} \dots \mathbin{\Vert} \text{child}_m)$
-* **Empty Hash:** The constant hash of an empty node ($H([])$).
-* **Null Digest:** A constant digest representing inactivity/absence. The parameter `L` represents the target digest length of the active hash algorithm (e.g. 32 bytes for SHA-256):
+* **Internal Node Hash:** $\text{nodeHash}(\text{children}) = H(\text{child}_1 \mathbin{\Vert} \text{child}_2 \mathbin{\Vert} \dots)$
 
-```lean
-noncomputable def leafHash (d : List UInt8) : Digest := H d
+To represent empty or inactive slots efficiently in $k$-ary trees, `neml` utilizes **null subtree reduction**:
+* Any subtree containing only inactive/empty leaves is reduced directly to a single constant digest: $\text{nullDigest}(L)$. 
+* This reduction occurs regardless of the subtree's arity or height.
 
-noncomputable def nodeHash (children : List Digest) : Digest :=
-  H (children.flatMap digestToBytes)
+### The Vulnerability of a "Prefix-Null" (Known Preimage)
+If we define the null digest by hashing a known constant or prefix (e.g. `0x00` or the string `"null"`):
+$$\text{nullDigest}(L) = H(\text{prefix\_data})$$
 
-noncomputable def emptyHash : Digest := H []
+This creates a severe structural collision:
+1. A single active leaf containing the data `prefix_data` has a digest of $\text{leafHash}(\text{prefix\_data}) = H(\text{prefix\_data}) = \text{nullDigest}(L)$.
+2. An inactive subtree of any height or depth also evaluates to the digest $\text{nullDigest}(L)$.
 
-noncomputable def nullDigest (L : Nat) : Digest := xof numsSeed L
-```
-
-### C. Tree Evaluation (`eval`)
-Evaluating a tree reduces the structure recursively to a single cryptographic digest:
-1. A leaf evaluates to the leaf hash of its data.
-2. An empty node evaluates to a constant empty hash.
-3. A singleton node (one child) evaluates directly to the child's digest (singleton promotion).
-4. A node of arity $\ge 2$ where all children evaluate to the `nullDigest` evaluates directly to the `nullDigest` (flat null promotion).
-5. A node of arity $\ge 2$ with at least one active child (i.e. at least one child evaluates to a digest other than `nullDigest`) evaluates to the `nodeHash` of its children's digests.
-
-```lean
-axiom eval_leaf : ∀ (L : Nat) (data : List UInt8),
-  eval L (NaryTree.leaf data) = leafHash data
-
-axiom eval_flat_null_node : ∀ (L : Nat) (children : List (NaryTree (List UInt8))),
-  children.length ≥ 2 →
-  (∀ t ∈ children, eval L t = nullDigest L) →
-  eval L (NaryTree.node children) = nullDigest L
-
-axiom eval_node_hash : ∀ (L : Nat) (children : List (NaryTree (List UInt8))),
-  children.length ≥ 2 →
-  (∃ t ∈ children, eval L t ≠ nullDigest L) →
-  eval L (NaryTree.node children) = nodeHash (children.map (eval L))
-```
+Because the hashing is prefix-free, **a single active leaf containing `prefix_data` is cryptographically and syntactically indistinguishable from an empty subtree of arbitrary height.**
 
 ---
 
-## 2. The Core Security Invariant: Soundness
+## 2. How This Combination Allows Provers to Lie
 
-In an append-only log, **soundness** means a verifier will never accept an invalid proof. For an epoch-based Merkle tree, a verifier must be guaranteed that:
-* Storing actual active data can **never** be spoofed as an empty/inactive (null) node.
-* An empty/inactive node can **never** be promoted or substituted for an active data leaf.
+If an attacker can exploit this collision, they can present a forged proof that lies about the existence of data, the active boundaries, and the physical shape of the tree:
 
-In the formal Lean specification, this is captured by **Theorem 3 (Null Path Isolation / Inactivity Binding)**:
+### A. Substituting a Leaf for a Subtree
+Suppose the log contains a single active leaf at index $i$ with the payload `prefix_data`. 
+* Because $\text{leafHash}(\text{prefix\_data}) = \text{nullDigest}(L)$, the prover can swap this leaf for an empty subtree of height $H$.
+* The verifier computes the parent hashes. Because both structures evaluate to the exact same digest, the computed root matches.
+* The verifier accepts the proof, believing that a large inactive subtree exists at that position, when in reality there was a single active leaf containing data. The prover has successfully lied and deleted active data.
+
+### B. Substituting a Subtree for a Leaf
+Conversely, if an index range is completely inactive (empty), it evaluates to `nullDigest(L)`.
+* The prover can swap this empty subtree with a single active leaf containing the data `prefix_data`.
+* The verifier accepts the proof, believing that the user stored the data `prefix_data` at that position, when in fact the slot was empty. The prover has successfully fabricated history.
+
+---
+
+## 3. The Lean Formalization of the Contradiction
+
+To mathematically guarantee soundness, the log must satisfy **Theorem 3 (Null Path Isolation / Inactivity Binding)**:
 
 ```lean
 theorem contains_leaf_neq_null (L : Nat) (t : NaryTree (List UInt8)) (h : ContainsLeaf t) :
     eval L t ≠ nullDigest L
 ```
-In plain English: *If a tree `t` recursively contains at least one leaf node with payload data, the evaluation of the tree's hash can never equal the null digest for any algorithm digest length `L`.*
+*In plain English: If a tree `t` recursively contains at least one active leaf node, the evaluation of the tree's hash can never equal the null digest.*
 
-For this theorem to be true, it depends on **three preimage resistance axioms**:
-1. `leaf_hash_neq_null`: A leaf hash cannot collide with the null digest ($\forall \text{data}, \text{leafHash}(\text{data}) \neq \text{nullDigest}(L)$).
-2. `node_hash_neq_null`: An internal node hash cannot collide with the null digest.
-3. `empty_hash_neq_null`: The empty hash cannot collide with the null digest.
-
----
-
-## 3. Why Hashing a Known Value is Unsound (The Contradiction)
-
-Suppose we define the null digest by hashing a known constant or prefix (e.g. `0x00` or the string `"null"`):
-$$\text{nullDigest}(L) = H(\text{prefix})$$
-
-Because the log uses prefix-free hashing, the hash of a leaf containing `prefix` is computed as:
-$$\text{leafHash}(\text{prefix}) = H(\text{prefix})$$
-
-This creates a collision where the hash of a real, physical leaf payload is identical to the null digest representation. 
-
-We have formalized this as a theorem in [Unsoundness.lean](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/Unsoundness.lean):
+In [Unsoundness.lean](file:///var/home/nrd/git/github.com/Cyphrme/eml/proofs/lean/EMLProof/Unsoundness.lean), we prove that if the null digest is a known preimage, this theorem is refuted:
 
 ```lean
 def PrefixNullModel (L : Nat) (prefix_data : List UInt8) : Prop :=
@@ -132,37 +64,22 @@ def PrefixNullModel (L : Nat) (prefix_data : List UInt8) : Prop :=
 theorem soundness_violation (L : Nat) (prefix_data : List UInt8)
     (h_model : PrefixNullModel L prefix_data) :
     ∃ (t : NaryTree (List UInt8)), ContainsLeaf t ∧ eval L t = nullDigest L := by
-  -- Pass the leaf directly to avoid let-binding unfolding issues in Lean 4 rw tactics
   use NaryTree.leaf prefix_data
   constructor
-  · -- Prove that this tree contains a leaf
-    exact ContainsLeaf.leaf prefix_data
-  · -- Prove that this tree evaluates to the null digest
-    rw [eval_leaf L prefix_data]
+  · exact ContainsLeaf.leaf prefix_data
+  · rw [eval_leaf L prefix_data]
     exact h_model.symm
 ```
 
-### The Breakdown of the Proof:
-1. **The Hypothesis:** Assume the null digest is defined as the hash of a known prefix (`PrefixNullModel`).
-2. **The Counter-Example:** We construct a tree `t` that consists of a single leaf holding `prefix_data`.
-3. **Contains Active Data:** Because `t` is a leaf, it satisfies the predicate `ContainsLeaf t` (proven via `ContainsLeaf.leaf`).
-4. **Identical Digest:** The evaluation of `t` reduces to `leafHash prefix_data` (via the `eval_leaf` axiom). Under the hypothesis, this is exactly equal to `nullDigest L`.
-5. **The Violation:** We have proven that $\exists t, \text{ContainsLeaf}(t) \wedge \text{eval}(L, t) = \text{nullDigest}(L)$, which directly contradicts Theorem 3. The proof system is now **unsound**.
-
-### The Concrete Attack Scenario
-* **Step 1:** A user appends a transaction or record to the Merkle log containing the bytes of `prefix_data`.
-* **Step 2:** A malicious server (prover) wants to delete or hide this record from the client.
-* **Step 3:** Because the leaf hash of `prefix_data` is exactly equal to the null digest, the prover substitutes the user's active leaf with an empty/inactive subtree in the inclusion proof.
-* **Step 4:** The verifier calculates the root hash using the inactive subtree. Because the digests are identical, the computed root matches the signed head.
-* **Step 5:** The verifier accepts the proof. The user's active data has been silently deleted/hidden, and the proof system is compromised.
+By constructing a single-leaf tree containing `prefix_data`, we show that `ContainsLeaf t` is true, yet it evaluates to `nullDigest L`, establishing a direct contradiction.
 
 ---
 
-## 4. Why the NUMS Constant is Sound
+## 4. How the NUMS Constant Prevents the Attack
 
-To prevent this collision, the null digest must be preimage-resistant:
-* **NUMS Definition:** The null constant is derived from a mathematical constant (the digits of $\pi$) rather than hashing a known preimage.
-* **No Known Preimage:** Finding an input $X$ such that $H(X) = \text{nullDigest}(L)$ requires solving a hard preimage challenge ($2^{8L}$ operations in general, or $2^{256}$ operations for SHA-256 where $L = 32$).
-* **Perfect Separation:** Because no one can find an input $X$ that evaluates to the $\text{nullDigest}(L)$ constant, no user can ever submit a leaf payload whose hash equals the null digest.
+A **Nothing-Up-My-Sleeve (NUMS)** constant is derived from a mathematical sequence (the digits of $\pi$) rather than hashing a known preimage.
 
-This guarantees that the domain of active leaf hashes and the null digest remain completely disjoint, ensuring that the `leaf_hash_neq_null` axiom holds, and preventing a prover from ever substituting active data for a null node.
+* **Preimage Resistance:** Finding any input $X$ such that $H(X) = \text{nullDigest}(L)$ requires solving a hard preimage challenge ($2^{8L}$ hash operations in general, or $2^{256}$ operations for SHA-256 where $L = 32$).
+* **Perfect Separation:** Because it is computationally impossible to find a payload that hashes to the NUMS constant, no user can ever submit a leaf payload whose hash evaluates to the null digest.
+
+By keeping the domain of active leaf hashes and inactive null digests strictly disjoint, the verifier is guaranteed that no structural substitution can occur, making it impossible for a prover to lie about the tree's data or topology.
