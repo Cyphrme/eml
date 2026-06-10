@@ -214,4 +214,199 @@ theorem contains_leaf_neq_null (L : Nat) (t : NaryTree (List UInt8)) (h : Contai
         rw [h_eval_node] at h_neq
         contradiction
 
+set_option linter.style.longLine false
+
+/-- Inserts an element at a given position in a list. -/
+def insertAt {α : Type} (n : Nat) (x : α) : List α → List α
+  | [] => [x]
+  | y :: ys =>
+    match n with
+    | 0 => x :: y :: ys
+    | n + 1 => y :: insertAt n x ys
+
+structure ProofStep where
+  siblings : List Digest
+  position : Nat
+  deriving Inhabited
+
+structure InclusionProof where
+  index : Nat
+  treeSize : Nat
+  logArity : Nat
+  path : List ProofStep
+  deriving Inhabited
+
+/-- Helper to safely get an element from a list, returning default if out of bounds. -/
+def getL {α : Type} [Inhabited α] : List α → Nat → α
+  | [], _ => default
+  | x :: _, 0 => x
+  | _ :: xs, n + 1 => getL xs n
+
+/-- Reconstructs the root hash from a leaf and a proof path. -/
+noncomputable def reconstructPathRoot (leafHash : Digest) (path : List ProofStep) : Digest :=
+  path.foldl (fun current step =>
+    if step.siblings.isEmpty then
+      current
+    else
+      nodeHash (insertAt step.position current step.siblings)
+  ) leafHash
+
+/-- Reconstruct the coordinates (left_index, height) of the frontier for a given tree size. -/
+partial def frontierForSize (n : Nat) (k : Nat) : List (Nat × Nat) :=
+  if k < 2 then []
+  else
+    let rec loop (temp_n : Nat) (curr_left : Nat) (acc : List (Nat × Nat)) : List (Nat × Nat) :=
+      if temp_n = 0 then acc.reverse
+      else
+        let rec find_height (cap : Nat) (height : Nat) : Nat × Nat :=
+          let next_cap := cap * k
+          if next_cap ≤ temp_n then
+            find_height next_cap (height + 1)
+          else
+            (cap, height)
+        let (cap, height) := find_height 1 0
+        loop (temp_n - cap) (curr_left + cap) ((curr_left, height) :: acc)
+    loop n 0 []
+
+structure TreeBuildResult where
+  childrenMap : List (Nat × List Nat)
+  spans : List (Nat × (Nat × Nat))
+  root : Nat
+  deriving Inhabited
+
+def lookupSpan (spans : List (Nat × (Nat × Nat))) (key : Nat) : Nat × Nat :=
+  match spans with
+  | [] => (0, 0)
+  | (k, v) :: xs => if k = key then v else lookupSpan xs key
+
+def lookupChildren (childrenMap : List (Nat × List Nat)) (key : Nat) : Option (List Nat) :=
+  match childrenMap with
+  | [] => none
+  | (k, v) :: xs => if k = key then some v else lookupChildren xs key
+
+partial def buildTree (k : Nat) (coords_len : Nat) : TreeBuildResult :=
+  let initial_spans := List.range coords_len |>.map (fun i => (i, (i, i)))
+  let initial_frontier := List.range coords_len
+  let rec loop (frontier : List Nat) (next_id : Nat) (cmap : List (Nat × List Nat)) (spans : List (Nat × (Nat × Nat))) : TreeBuildResult :=
+    if frontier.length > k then
+      let split_idx := frontier.length - k
+      let children := frontier.drop split_idx
+      let parent_id := next_id
+      let first_child := children.headD 0
+      let last_child := children.getLastD 0
+      let (min_val, _) := lookupSpan spans first_child
+      let (_, max_val) := lookupSpan spans last_child
+      let next_frontier := (frontier.take split_idx) ++ [parent_id]
+      loop next_frontier (parent_id + 1) ((parent_id, children) :: cmap) ((parent_id, (min_val, max_val)) :: spans)
+    else if frontier.length > 1 then
+      let parent_id := next_id
+      let first_child := frontier.headD 0
+      let last_child := frontier.getLastD 0
+      let (min_val, _) := lookupSpan spans first_child
+      let (_, max_val) := lookupSpan spans last_child
+      let cmap_final := (parent_id, frontier) :: cmap
+      let spans_final := (parent_id, (min_val, max_val)) :: spans
+      TreeBuildResult.mk cmap_final spans_final parent_id
+    else
+      TreeBuildResult.mk cmap spans (frontier.headD 0)
+  loop initial_frontier coords_len [] initial_spans
+
+partial def pathLengthToFrontierNode (k : Nat) (coords_len : Nat) (target_f_idx : Nat) : Option Nat :=
+  if target_f_idx ≥ coords_len then none
+  else
+    let res : TreeBuildResult := buildTree k coords_len
+    let rec trace (curr : Nat) (depth : Nat) : Option Nat :=
+      match lookupChildren res.childrenMap curr with
+      | none => some depth
+      | some children =>
+        let rec find_child (lst : List Nat) : Option Nat :=
+          match lst with
+          | [] => none
+          | c :: cs =>
+            let (min_val, max_val) := lookupSpan res.spans c
+            if target_f_idx ≥ min_val ∧ target_f_idx ≤ max_val then
+              trace c (depth + 1)
+            else
+              find_child cs
+        find_child children
+    trace res.root 0
+
+partial def reconstructIndexFromPath (k : Nat) (treeSize : Nat) (path : List ProofStep) : Option Nat :=
+  if k < 2 then none
+  else
+    let coords := frontierForSize treeSize k
+    if coords.isEmpty then none
+    else
+      let res : TreeBuildResult := buildTree k coords.length
+      let rec loop (curr : Nat) (path_idx : Nat) : Option (Nat × Nat) :=
+        match lookupChildren res.childrenMap curr with
+        | some children =>
+          if path_idx = 0 then none
+          else
+            let step : ProofStep := getL path (path_idx - 1)
+            if step.siblings.length ≠ children.length - 1 then none
+            else if step.position ≥ children.length then none
+            else
+              let next_node := getL children step.position
+              loop next_node (path_idx - 1)
+        | none => some (curr, path_idx)
+      
+      match loop res.root path.length with
+      | none => none
+      | some (curr, path_idx) =>
+        if curr ≥ coords.length then none
+        else
+          let (left, height) := getL coords curr
+          if path_idx ≠ height then none
+          else
+            let rec loop_offset (i : Nat) (offset : Nat) (power : Nat) : Option Nat :=
+              if i = path_idx then some (left + offset)
+              else
+                let step : ProofStep := getL path i
+                if step.siblings.length ≠ k - 1 then none
+                else if step.position ≥ k then none
+                else
+                  loop_offset (i + 1) (offset + step.position * power) (power * k)
+            loop_offset 0 0 1
+
+def verifyInclusionPathStructure (k : Nat) (index : Nat) (treeSize : Nat) (path : List ProofStep) : Bool :=
+  match reconstructIndexFromPath k treeSize path with
+  | some idx => idx = index
+  | none => false
+
+noncomputable def verifyInclusion (leafHash : Digest) (proof : InclusionProof) (root : Digest) : Bool :=
+  let k := proof.logArity
+  let T := proof.treeSize
+  let S_I := proof.index
+  let P := proof.path.length
+  if k < 2 then false
+  else
+    let coords := frontierForSize T k
+    let rec find_f_idx (lst : List (Nat × Nat)) (idx : Nat) : Option (Nat × Nat × Nat) :=
+      match lst with
+      | [] => none
+      | (left, height) :: xs =>
+        let cap := k ^ height
+        if S_I ≥ left ∧ S_I < left + cap then
+          some (idx, left, height)
+        else
+          find_f_idx xs (idx + 1)
+    
+    match find_f_idx coords 0 with
+    | none => false
+    | some (target_f_idx, _, height) =>
+      match pathLengthToFrontierNode k coords.length target_f_idx with
+      | none => false
+      | some C =>
+        let H := height
+        if P < C + H then false
+        else
+          let d := P - C - H
+          let log_path := proof.path.drop d
+          if verifyInclusionPathStructure k S_I T log_path then
+            let computed_root := reconstructPathRoot leafHash proof.path
+            computed_root = root
+          else
+            false
+
 end NEML
