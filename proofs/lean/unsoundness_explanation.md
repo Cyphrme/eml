@@ -19,12 +19,41 @@ inductive NaryTree (α : Type) where
   | node (children : List (NaryTree α))
 ```
 
-### B. Prefix-Free Hashing
+To assert that a tree contains at least one leaf node containing actual user data, we define the inductive predicate `ContainsLeaf`:
+
+```lean
+inductive ContainsLeaf {α : Type} : NaryTree α → Prop where
+  | leaf (val : α) : ContainsLeaf (NaryTree.leaf val)
+  | node (children : List (NaryTree α)) (c : NaryTree α) (h_mem : c ∈ children)
+      (h_cont : ContainsLeaf c) : ContainsLeaf (NaryTree.node children)
+```
+
+### B. Prefix-Free Hashing & Basic Types
 In a standard Merkle tree (like Certificate Transparency), inputs are domain-separated by prepending `0x00` to leaves and `0x01` to internal nodes. 
 
-`neml` uses **prefix-free hashing** to allow leaf digests to double as content addresses (so a leaf is just the hash of the raw data, without prepended tags). The hashing functions are defined as:
-* **Leaf Hash:** $H(\text{data})$
-* **Internal Node Hash:** $H(\text{child}_1 \mathbin{\Vert} \text{child}_2 \mathbin{\Vert} \dots \mathbin{\Vert} \text{child}_m)$
+`neml` uses **prefix-free hashing** to allow leaf digests to double as content addresses (so a leaf is just the hash of the raw data, without prepended tags). The hashing environment is defined using the following types and axioms:
+
+```lean
+-- Digest is the abstract type of cryptographic hashes
+axiom Digest : Type
+
+-- H is the underlying hash function mapping bytes to a Digest
+axiom H : List UInt8 → Digest
+
+-- digestToBytes represents the serialization of a Digest to bytes
+axiom digestToBytes : Digest → List UInt8
+
+-- numsSeed is the Nothing-Up-My-Sleeve master seed (based on fractional digits of pi)
+axiom numsSeed : List UInt8
+
+-- xof is an Extendable-Output Function expanding a seed to length L
+axiom xof : List UInt8 → Nat → Digest
+```
+
+Using these primitives, the specific digests are defined as:
+* **Leaf Hash:** $\text{leafHash}(\text{data}) = H(\text{data})$
+* **Internal Node Hash:** $\text{nodeHash}(\text{children}) = H(\text{child}_1 \mathbin{\Vert} \text{child}_2 \mathbin{\Vert} \dots \mathbin{\Vert} \text{child}_m)$
+* **Empty Hash:** The constant hash of an empty node ($H([])$).
 * **Null Digest:** A constant digest representing inactivity/absence. The parameter `L` represents the target digest length of the active hash algorithm (e.g. 32 bytes for SHA-256):
 
 ```lean
@@ -32,6 +61,8 @@ noncomputable def leafHash (d : List UInt8) : Digest := H d
 
 noncomputable def nodeHash (children : List Digest) : Digest :=
   H (children.flatMap digestToBytes)
+
+noncomputable def emptyHash : Digest := H []
 
 noncomputable def nullDigest (L : Nat) : Digest := xof numsSeed L
 ```
@@ -73,10 +104,10 @@ In the formal Lean specification, this is captured by **Theorem 3 (Null Path Iso
 theorem contains_leaf_neq_null (L : Nat) (t : NaryTree (List UInt8)) (h : ContainsLeaf t) :
     eval L t ≠ nullDigest L
 ```
-In plain English: *If a tree `t` recursively contains at least one leaf node with payload data, the evaluation of the tree's hash can never equal the null digest.*
+In plain English: *If a tree `t` recursively contains at least one leaf node with payload data, the evaluation of the tree's hash can never equal the null digest for any algorithm digest length `L`.*
 
 For this theorem to be true, it depends on **three preimage resistance axioms**:
-1. `leaf_hash_neq_null`: A leaf hash cannot collide with the null digest ($\forall \text{data}, \text{leafHash}(\text{data}) \neq \text{nullDigest}$).
+1. `leaf_hash_neq_null`: A leaf hash cannot collide with the null digest ($\forall \text{data}, \text{leafHash}(\text{data}) \neq \text{nullDigest}(L)$).
 2. `node_hash_neq_null`: An internal node hash cannot collide with the null digest.
 3. `empty_hash_neq_null`: The empty hash cannot collide with the null digest.
 
@@ -85,7 +116,7 @@ For this theorem to be true, it depends on **three preimage resistance axioms**:
 ## 3. Why Hashing a Known Value is Unsound (The Contradiction)
 
 Suppose we define the null digest by hashing a known constant or prefix (e.g. `0x00` or the string `"null"`):
-$$N_0 = H(\text{prefix})$$
+$$\text{nullDigest}(L) = H(\text{prefix})$$
 
 Because the log uses prefix-free hashing, the hash of a leaf containing `prefix` is computed as:
 $$\text{leafHash}(\text{prefix}) = H(\text{prefix})$$
@@ -116,7 +147,7 @@ theorem soundness_violation (L : Nat) (prefix_data : List UInt8)
 2. **The Counter-Example:** We construct a tree `t` that consists of a single leaf holding `prefix_data`.
 3. **Contains Active Data:** Because `t` is a leaf, it satisfies the predicate `ContainsLeaf t` (proven via `ContainsLeaf.leaf`).
 4. **Identical Digest:** The evaluation of `t` reduces to `leafHash prefix_data` (via the `eval_leaf` axiom). Under the hypothesis, this is exactly equal to `nullDigest L`.
-5. **The Violation:** We have proven that $\exists t, \text{ContainsLeaf}(t) \wedge \text{eval}(t) = \text{nullDigest}$, which directly contradicts Theorem 3. The proof system is now **unsound**.
+5. **The Violation:** We have proven that $\exists t, \text{ContainsLeaf}(t) \wedge \text{eval}(L, t) = \text{nullDigest}(L)$, which directly contradicts Theorem 3. The proof system is now **unsound**.
 
 ### The Concrete Attack Scenario
 * **Step 1:** A user appends a transaction or record to the Merkle log containing the bytes of `prefix_data`.
