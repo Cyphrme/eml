@@ -162,7 +162,7 @@ theorem soundness_violation (L : Nat) (prefix_data : List UInt8)
 
 To prevent this collision, the null digest must be preimage-resistant:
 * **NUMS Definition:** The null constant is derived from a mathematical constant (the digits of $\pi$) rather than hashing a known preimage.
-* **No Known Preimage:** Finding an input $X$ such that $H(X) = \text{nullDigest}(L)$ requires solving a hard preimage challenge ($2^{256}$ operations for SHA-256).
+* **No Known Preimage:** Finding an input $X$ such that $H(X) = \text{nullDigest}(L)$ requires solving a hard preimage challenge ($2^{8L}$ operations in general, or $2^{256}$ operations for SHA-256 where $L = 32$).
 * **Perfect Separation:** Because no one can find an input $X$ that evaluates to the $\text{nullDigest}(L)$ constant, no user can ever submit a leaf payload whose hash equals the null digest.
 
 This guarantees that the domain of active leaf hashes and the null digest remain completely disjoint, ensuring that the `leaf_hash_neq_null` axiom holds, and preventing a prover from ever substituting active data for a null node.
