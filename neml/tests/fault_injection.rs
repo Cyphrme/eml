@@ -378,3 +378,63 @@ fn test_verify_non_divergence_legitimate_frozen() {
         }
     });
 }
+
+#[test]
+fn test_resume_algorithm_non_atomic_crash_recovery() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
+            .await
+            .unwrap();
+
+        // 1. Append 2 leaves (alg 0 is active)
+        log.append_leaf(b"leaf0").await.unwrap();
+        log.append_leaf(b"leaf1").await.unwrap();
+
+        // Add alg 1 to keep active during log appends while alg 0 is frozen
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        // 2. Freeze alg 0 at size 2
+        log.remove_algorithm(0).await.unwrap();
+
+        // 3. Append 2 more leaves (global size is 4, alg 0 is frozen at 2, alg 1 is active)
+        log.append_leaf(b"leaf2").await.unwrap();
+        log.append_leaf(b"leaf3").await.unwrap();
+
+        // 4. Simulate resume_algorithm crash:
+        // We write the reconstructed frontier nodes for size 4 to storage,
+        // but do NOT update the algorithm metadata.
+        let mut mutated_storage = log.storage().clone();
+        
+        // Write a garbage node to storage at alg 0, left 0, height 2 (root of size 4)
+        // representing a corrupted/partial write.
+        mutated_storage.store_node(0, 0, 2, &[0xAA; 32]).await.unwrap();
+
+        // 5. Recover/from_storage: metadata is still frozen.
+        let metas = vec![
+            (0, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+            (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+        ];
+        let mut recovered_log = NaryMerkleLog::from_storage(mutated_storage, metas)
+            .await
+            .unwrap();
+
+        assert_eq!(recovered_log.size(), 4);
+
+        // 6. Call resume_algorithm again on recovered log.
+        // It must succeed, correctly re-evaluate the frontier root,
+        // write the correct root to storage (overwriting/ignoring the garbage node),
+        // and activate the algorithm.
+        recovered_log.resume_algorithm(0).await.unwrap();
+
+        // 7. Try to resume again. It should fail with AlgorithmActive,
+        // indicating it was successfully reactivated.
+        let res = recovered_log.resume_algorithm(0).await;
+        assert!(matches!(res.unwrap_err(), neml::Error::AlgorithmActive(0)));
+
+        // Append leaf 4, which should hash the correct root of size 4!
+        recovered_log.append_leaf(b"leaf4").await.unwrap();
+        assert_eq!(recovered_log.size(), 5);
+    });
+}
