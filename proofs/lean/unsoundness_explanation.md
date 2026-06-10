@@ -20,14 +20,14 @@ To represent empty or inactive slots efficiently in $k$-ary trees, `neml` utiliz
 If we define the null digest by hashing a known constant or prefix (e.g. `0x00` or the string `"null"`):
 
 $$
-\text{nullDigest}(L) = H(\text{prefix\_data})
+\text{nullDigest}(L) = H(\text{prefix})
 $$
 
 This creates a severe structural collision:
 1. A single active leaf containing the data `prefix_data` has a digest of:
 
 $$
-\text{leafHash}(\text{prefix\_data}) = H(\text{prefix\_data}) = \text{nullDigest}(L)
+\text{leafHash}(\text{prefix}) = H(\text{prefix}) = \text{nullDigest}(L)
 $$
 
 2. Inactive subtrees of any height or depth also evaluate to the digest $\text{nullDigest}(L)$.
@@ -42,7 +42,7 @@ If an attacker can exploit this collision, they can present a forged proof that 
 
 ### A. Substituting a Leaf for a Subtree
 Suppose the log contains a single active leaf at index $i$ with the payload `prefix_data`. 
-* Because $\text{leafHash}(\text{prefix\_data}) = \text{nullDigest}(L)$, the prover can swap this leaf for an empty subtree of height $H$.
+* Because $\text{leafHash}(\text{prefix}) = \text{nullDigest}(L)$, the prover can swap this leaf for an empty subtree of height $H$.
 * The verifier computes the parent hashes. Because both structures evaluate to the exact same digest, the computed root matches.
 * The verifier accepts the proof, believing that a large inactive subtree exists at that position, when in reality there was a single active leaf containing data. The prover has successfully lied and deleted active data.
 
