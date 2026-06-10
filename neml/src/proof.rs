@@ -185,8 +185,8 @@ impl CouplingProof {
     }
 }
 
-/// Reconstruct the leaf index from a uniform State Tree Mode path.
-/// Returns `None` if the path does not match the uniform State Tree Mode structure for `tree_size`
+/// Reconstruct the leaf index from a uniform Flat Log Mode path.
+/// Returns `None` if the path does not match the uniform Flat Log Mode structure for `tree_size`
 /// and `k`.
 #[must_use]
 pub fn reconstruct_index_from_path(k: u64, tree_size: u64, path: &[ProofStep]) -> Option<u64> {

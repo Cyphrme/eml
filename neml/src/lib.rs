@@ -11,7 +11,7 @@ pub mod tree;
 
 pub use error::{Error, Result};
 pub use hasher::Hasher;
-pub use mr::{count_leaves, evaluate, nary_mr, within_commit_path};
+pub use mr::{count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use proof::{
     AuditPayload, ConsistencyProof, CouplingProof, InclusionProof, ProofStep, VerifierConfig,
     reconstruct_consistency_roots, reconstruct_inclusion_root, verify_consistency,

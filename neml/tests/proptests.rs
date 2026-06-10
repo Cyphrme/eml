@@ -329,7 +329,7 @@ async fn project<S: neml::Storage>(
     let global_size = if log.size() > 0 {
         log.size()
     } else {
-        log.commit_count()
+        log.subtree_count()
     };
 
     let is_active = epochs.last().is_some_and(|&(_, end)| end == u64::MAX);
@@ -565,7 +565,7 @@ async fn check_state_invariants<S: neml::Storage>(
     let size = if log.size() > 0 {
         log.size()
     } else {
-        log.commit_count()
+        log.subtree_count()
     };
 
     for &(alg_id, ref epochs) in &metas {
@@ -988,7 +988,7 @@ proptest! {
                     }
                     Op::AppendSubtree(subtree) => {
                         // Subtrees are promoted in NEML. EML has no subtree support,
-                        // so we can only compare their flat state tree mode binary equivalence.
+                        // so we can only compare their flat log mode binary equivalence.
                         let evaluated = evaluate(&Sha256Hasher, &subtree);
                         neml_log.append_leaf(&evaluated).await.unwrap();
                         eml_log.append(&evaluated).await.unwrap();

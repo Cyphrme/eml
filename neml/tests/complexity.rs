@@ -260,11 +260,11 @@ fn complexity_append_subtree_linear_in_nodes() {
     assert_rank_at_most(data, 1200, "append_subtree", "O(n) in subtree nodes");
 }
 
-/// `within_commit_path` should scale linearly in the number of subtree nodes,
+/// `within_subtree_path` should scale linearly in the number of subtree nodes,
 /// because at each level it evaluates all sibling subtrees to collect their
 /// hashes for the proof.
 #[test]
-fn complexity_within_commit_path_linear_in_nodes() {
+fn complexity_within_subtree_path_linear_in_nodes() {
     let depths: &[usize] = &[4, 6, 8, 10, 12, 14];
     let trials = 15;
     let mut data: Vec<(f64, f64)> = Vec::with_capacity(depths.len());
@@ -278,14 +278,14 @@ fn complexity_within_commit_path_linear_in_nodes() {
         for _ in 0..trials {
             let start = ThreadTime::now();
             for _ in 0..50 {
-                let _ = neml::within_commit_path(&Sha256Hasher, &subtree, 0);
+                let _ = neml::within_subtree_path(&Sha256Hasher, &subtree, 0);
             }
             times.push(start.elapsed().as_nanos() / 50);
         }
         data.push((total_nodes as f64, median(&mut times) as f64));
     }
 
-    assert_rank_at_most(data, 1200, "within_commit_path", "O(n) in subtree nodes");
+    assert_rank_at_most(data, 1200, "within_subtree_path", "O(n) in subtree nodes");
 }
 
 /// End-to-end inclusion proof generation through subtrees, varying the log
@@ -331,8 +331,8 @@ fn complexity_e2e_inclusion_subtree_log_n() {
             let (ref log, ref first_subtree) = *setup;
             let start = ThreadTime::now();
             for _ in 0..50 {
-                // Within-commit path for leaf 0 in subtree 0.
-                let mut path = neml::within_commit_path(&Sha256Hasher, first_subtree, 0).unwrap();
+                // Within-subtree path for leaf 0 in subtree 0.
+                let mut path = neml::within_subtree_path(&Sha256Hasher, first_subtree, 0).unwrap();
 
                 // Log-level proof for subtree 0.
                 let log_proof = smol::block_on(log.inclusion_proof(0, n as u64))

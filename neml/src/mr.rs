@@ -51,7 +51,7 @@ pub fn count_leaves(subtree: &Subtree) -> u64 {
 /// Returns `Some(path)` if the leaf index is found in the subtree, otherwise `None`.
 /// The `leaf_index` represents the flat 0-based leaf index inside this subtree.
 #[must_use]
-pub fn within_commit_path(
+pub fn within_subtree_path(
     hasher: &dyn Hasher,
     subtree: &Subtree,
     leaf_index: u64,
@@ -70,7 +70,7 @@ pub fn within_commit_path(
                 let child_leaves = count_leaves(child);
                 if leaf_index < cumulative_leaves + child_leaves {
                     let mut path =
-                        within_commit_path(hasher, child, leaf_index - cumulative_leaves)?;
+                        within_subtree_path(hasher, child, leaf_index - cumulative_leaves)?;
 
                     if children.len() == 1 {
                         // Promoted node
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn test_within_commit_path() {
+    fn test_within_subtree_path() {
         let hasher = Sha256Hasher;
         // Subtree: Node([Leaf("a"), Node([Leaf("b"), Leaf("c")]), Leaf("d")])
         let subtree = Subtree::Node(vec![
@@ -186,7 +186,7 @@ mod tests {
             Subtree::Leaf(b"d".to_vec()),
         ]);
 
-        let path = within_commit_path(&hasher, &subtree, 1).unwrap();
+        let path = within_subtree_path(&hasher, &subtree, 1).unwrap();
         assert_eq!(path.len(), 2);
 
         let leaf_hash = hasher.leaf(b"b");

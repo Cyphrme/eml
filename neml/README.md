@@ -36,7 +36,7 @@ This design shifts the balance of traditional Merkle tree tradeoffs in three key
 ### 3. Content Addressability vs. Prefix-Based Domain Separation
 *   **The Tradeoff:** RFC 6962 (CT) prepends domain separation bytes (`0x00`/`0x01`) to hash inputs to prevent second-preimage attacks. This makes leaf hashes tree-specific and unsuitable as global content addresses. NEML uses standard leaf hashes ($H(\text{data})$) to enable clean content-addressability, which shifts the second-preimage security burden to the verification of the tree's expected topology.
 *   **The Motivation:** Cyphr relies on direct content-addressable storage where leaf hashes serve as stable, canonical identifiers across multiple systems. To achieve this, NEML removes prefix-based domain separation at the hash level and instead enforces **Topological Commitments** at the verification level. The verifier uses the signed tree head's `tree_size` and `log_arity` to reconstruct the exact expected shape of the tree, rejecting any proof whose topology deviates.
-*   **Commit Tree Mode Limitation:** In Commit Tree Mode (`log_arity == 0`), the verifier bypasses the topological structure check to support arbitrary recursive subtrees. Because NEML uses prefix-free hashing, bypassing the topology check removes all second-preimage protection, allowing leaf-node substitution attacks. Callers using Commit Tree Mode must enforce second-preimage resistance through out-of-band protocols (e.g., prefixing leaf payloads before appending).
+*   **Subtree Log Mode Limitation:** In Subtree Log Mode (`log_arity == 0`), the verifier bypasses the topological structure check to support arbitrary recursive subtrees. Because NEML uses prefix-free hashing, bypassing the topology check removes all second-preimage protection, allowing leaf-node substitution attacks. Callers using Subtree Log Mode must enforce second-preimage resistance through out-of-band protocols (e.g., prefixing leaf payloads before appending).
 
 ---
 
@@ -135,8 +135,8 @@ The second-preimage threat in a Merkle tree is an adversary presenting an intern
 
 This is equivalent in security to prefix-based domain separation — both ensure the verifier can distinguish leaf positions from node positions — provided the verifier has the signed tree head (which is the standard trust assumption in any append-only log protocol). The difference is where the binding happens: in the hash preimage (prefixes) vs. in the proof structure (topological commitment).
 
-**Critical Limitation:** Topological commitments require a trusted `tree_size` and `log_arity` at the verification layer. If the verifier does not have an authenticated tree size, or if the log is verified in Commit Tree Mode (`log_arity == 0`), topological verification is bypassed. Because NEML hashes are prefix-free, second-preimage resistance is completely absent in these scenarios unless the caller enforces domain separation externally.
-Additionally, verification of inclusion proofs containing nested subtree steps fails under State Tree Mode (`log_arity >= 2`) because the subtree steps violate the uniform arity check. Thus, nested-leaf inclusion proofs must be verified using Commit Tree Mode (`log_arity == 0`), which lacks second-preimage protection.
+**Critical Limitation:** Topological commitments require a trusted `tree_size` and `log_arity` at the verification layer. If the verifier does not have an authenticated tree size, or if the log is verified in Subtree Log Mode (`log_arity == 0`), topological verification is bypassed. Because NEML hashes are prefix-free, second-preimage resistance is completely absent in these scenarios unless the caller enforces domain separation externally.
+Additionally, verification of inclusion proofs containing nested subtree steps fails under Flat Log Mode (`log_arity >= 2`) because the subtree steps violate the uniform arity check. Thus, nested-leaf inclusion proofs must be verified using Subtree Log Mode (`log_arity == 0`), which lacks second-preimage protection.
 
 ### Selective Index & Path Verification
 
@@ -145,9 +145,9 @@ In an N-ary Merkle tree, inclusion proofs explicitly store the position of the t
 To prevent this index spoofing attack while maintaining full support for arbitrary, non-uniform subtrees, `neml` uses **Selective Index & Path Verification**:
 
 *   **InclusionProof `log_arity` field:** The `InclusionProof` contains a `log_arity` field indicating the arity configuration of the log.
-*   **State Tree Mode (`log_arity >= 2`):** When verifying a proof from a uniform log, `log_arity` is set to the log arity (e.g. 2 or 3). The verifier performs strict structural validation (`verify_inclusion_path_structure` and `reconstruct_index_from_path`) to assert that the step positions and sibling counts match the deterministic topology for the claimed `index` and `tree_size`. If they mismatch, verification is rejected.
-*   **Commit Tree Mode (`log_arity == 0`):** When verifying a proof that includes arbitrary nested subtrees (Commit Tree Mode), the log structure is non-uniform and the global leaf index cannot be deterministically verified from the path steps alone. In this case, `log_arity` is set to `0`, which tells the verifier to bypass the uniform topology check and perform standard membership/inclusion verification.
-*   **Consistency Proof Exclusion:** Consistency proofs are unsupported in Commit Tree Mode. The `reconstruct_consistency_roots` verifier immediately returns `None` if `log_arity < 2`.
+*   **Flat Log Mode (`log_arity >= 2`):** When verifying a proof from a uniform log, `log_arity` is set to the log arity (e.g. 2 or 3). The verifier performs strict structural validation (`verify_inclusion_path_structure` and `reconstruct_index_from_path`) to assert that the step positions and sibling counts match the deterministic topology for the claimed `index` and `tree_size`. If they mismatch, verification is rejected.
+*   **Subtree Log Mode (`log_arity == 0`):** When verifying a proof that includes arbitrary nested subtrees (Subtree Log Mode), the log structure is non-uniform and the global leaf index cannot be deterministically verified from the path steps alone. In this case, `log_arity` is set to `0`, which tells the verifier to bypass the uniform topology check and perform standard membership/inclusion verification.
+*   **Consistency Proof Exclusion:** Consistency proofs are unsupported in Subtree Log Mode. The `reconstruct_consistency_roots` verifier immediately returns `None` if `log_arity < 2`.
 
 ### Null Domain Isolation
 
@@ -183,7 +183,7 @@ Consistency proof size is $O(\log_k n)$ where $n$ is the number of appends and $
 ### End-to-End Inclusion Proofs
 
 Inclusion proofs for a leaf nested inside a subtree must traverse **both** the subtree internals and the log-level tree. The proof path walks from the leaf up through the subtree (reconstructing the subtree root $R_i$), then continues through the log-level nodes (reconstructing the global root from $R_i$). Every step is linked via the hash function, forming an unbroken chain of commitments from the leaf to the global root.
-*   **Verification Mode Restriction:** Because subtree depths and arities are non-uniform, end-to-end inclusion proofs for nested leaves cannot be verified under State Tree Mode (`log_arity >= 2`) and must be verified in Commit Tree Mode (`log_arity == 0`).
+*   **Verification Mode Restriction:** Because subtree depths and arities are non-uniform, end-to-end inclusion proofs for nested leaves cannot be verified under Flat Log Mode (`log_arity >= 2`) and must be verified in Subtree Log Mode (`log_arity == 0`).
 
 The actual complexity of an end-to-end inclusion proof is:
 

@@ -351,7 +351,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
 }
 
 #[test]
-fn test_inclusion_proofs_commit_tree_mode() {
+fn test_inclusion_proofs_subtree_log_mode() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
         let config = TreeConfig { log_arity: 2 };
@@ -359,14 +359,14 @@ fn test_inclusion_proofs_commit_tree_mode() {
             .await
             .unwrap();
 
-        // Commit 0: Subtree::Node([Leaf("a"), Leaf("b")])
-        let commit0 = Subtree::Node(vec![
+        // Subtree 0: Subtree::Node([Leaf("a"), Leaf("b")])
+        let subtree0 = Subtree::Node(vec![
             Subtree::Leaf(b"a".to_vec()),
             Subtree::Leaf(b"b".to_vec()),
         ]);
 
-        // Commit 1: Subtree::Node([Node([Leaf("c"), Leaf("d")]), Leaf("e")])
-        let commit1 = Subtree::Node(vec![
+        // Subtree 1: Subtree::Node([Node([Leaf("c"), Leaf("d")]), Leaf("e")])
+        let subtree1 = Subtree::Node(vec![
             Subtree::Node(vec![
                 Subtree::Leaf(b"c".to_vec()),
                 Subtree::Leaf(b"d".to_vec()),
@@ -374,15 +374,15 @@ fn test_inclusion_proofs_commit_tree_mode() {
             Subtree::Leaf(b"e".to_vec()),
         ]);
 
-        log.append_subtree(&commit0).await.unwrap();
-        log.append_subtree(&commit1).await.unwrap();
+        log.append_subtree(&subtree0).await.unwrap();
+        log.append_subtree(&subtree1).await.unwrap();
 
         let root = log.root();
 
-        // Generate within-commit path
-        let mut path = neml::within_commit_path(&Sha256Hasher, &commit1, 1).unwrap();
+        // Generate within-subtree path
+        let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree1, 1).unwrap();
 
-        // Generate log-level inclusion proof for Commit 1
+        // Generate log-level inclusion proof for Subtree 1
         let log_proof = log.inclusion_proof(1, 2).await.unwrap().unwrap();
 
         // Combine
@@ -598,7 +598,7 @@ fn test_epoch_errors() {
 }
 
 #[test]
-fn test_epoch_subtree_commit_mode() {
+fn test_epoch_subtree_mode() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
         let config = TreeConfig { log_arity: 2 };
@@ -607,18 +607,18 @@ fn test_epoch_subtree_commit_mode() {
             .unwrap();
         log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
 
-        let commit0 = Subtree::Node(vec![
+        let subtree0 = Subtree::Node(vec![
             Subtree::Leaf(b"a".to_vec()),
             Subtree::Leaf(b"b".to_vec()),
         ]);
-        let commit1 = Subtree::Node(vec![Subtree::Leaf(b"c".to_vec())]);
+        let subtree1 = Subtree::Node(vec![Subtree::Leaf(b"c".to_vec())]);
 
-        log.append_subtree(&commit0).await.unwrap();
+        log.append_subtree(&subtree0).await.unwrap();
         log.remove_algorithm(1).await.unwrap();
-        log.append_subtree(&commit1).await.unwrap();
+        log.append_subtree(&subtree1).await.unwrap();
 
         let root0 = log.root_for(0).unwrap();
-        let root1 = log.root_for(1).unwrap();
+        let root1 = log.root_for(1).unwrap(); // frozen at size 1
 
         let storage = log.into_storage();
         let reconstructed = NaryMerkleLog::from_storage(
@@ -628,7 +628,7 @@ fn test_epoch_subtree_commit_mode() {
         .await
         .unwrap();
 
-        assert_eq!(reconstructed.commit_count(), 2);
+        assert_eq!(reconstructed.subtree_count(), 2);
         assert_eq!(reconstructed.root_for(0).unwrap(), root0);
         assert_eq!(reconstructed.root_for(1).unwrap(), root1);
     });
@@ -890,7 +890,7 @@ fn test_deep_subtree_inclusion_proofs() {
             log.append_subtree(&subtree).await.unwrap();
 
             let root = log.root();
-            let mut path = neml::within_commit_path(&Sha256Hasher, &subtree, 0).unwrap();
+            let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
             let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
@@ -949,7 +949,7 @@ fn test_deep_subtree_inclusion_proofs() {
         let test_cases = vec![(0, a_data), (1, b_data), (2, c_data)];
 
         for (leaf_idx, data) in test_cases {
-            let mut path = neml::within_commit_path(&Sha256Hasher, &subtree, leaf_idx).unwrap();
+            let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree, leaf_idx).unwrap();
             let log_proof = log.inclusion_proof(0, 2).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
@@ -1119,7 +1119,7 @@ fn test_multi_algorithm_subtree_proofs() {
         let root1 = log.root_for(1).unwrap(); // frozen at size 1
 
         // 1. Verify inclusion proof for Algorithm 0 (fully active)
-        let mut path0 = neml::within_commit_path(&Sha256Hasher, &s1, 0).unwrap();
+        let mut path0 = neml::within_subtree_path(&Sha256Hasher, &s1, 0).unwrap();
         let log_proof0 = log.inclusion_proof_for(0, 1, 2).await.unwrap().unwrap();
         path0.extend(log_proof0.path);
 
@@ -1139,7 +1139,7 @@ fn test_multi_algorithm_subtree_proofs() {
         // 2. Verify inclusion proof for Algorithm 1 (frozen at size 1)
         assert!(log.inclusion_proof_for(1, 1, 2).await.unwrap().is_none());
 
-        let mut path1 = neml::within_commit_path(&Sha256Hasher, &s0, 1).unwrap();
+        let mut path1 = neml::within_subtree_path(&Sha256Hasher, &s0, 1).unwrap();
         let log_proof1 = log.inclusion_proof_for(1, 0, 1).await.unwrap().unwrap();
         path1.extend(log_proof1.path);
 
@@ -1205,17 +1205,17 @@ fn test_proof_error_edge_cases() {
         assert!(log.consistency_proof(2, 1).await.unwrap().is_none());
         assert!(log.consistency_proof(0, 1).await.unwrap().is_none());
 
-        // 3. within_commit_path edge cases
+        // 3. within_subtree_path edge cases
         let leaf_subtree = Subtree::Leaf(b"x".to_vec());
-        assert!(neml::within_commit_path(&Sha256Hasher, &leaf_subtree, 0).is_some());
-        assert!(neml::within_commit_path(&Sha256Hasher, &leaf_subtree, 1).is_none());
+        assert!(neml::within_subtree_path(&Sha256Hasher, &leaf_subtree, 0).is_some());
+        assert!(neml::within_subtree_path(&Sha256Hasher, &leaf_subtree, 1).is_none());
 
         let node_subtree = Subtree::Node(vec![
             Subtree::Leaf(b"a".to_vec()),
             Subtree::Leaf(b"b".to_vec()),
         ]);
-        assert!(neml::within_commit_path(&Sha256Hasher, &node_subtree, 1).is_some());
-        assert!(neml::within_commit_path(&Sha256Hasher, &node_subtree, 2).is_none());
+        assert!(neml::within_subtree_path(&Sha256Hasher, &node_subtree, 1).is_some());
+        assert!(neml::within_subtree_path(&Sha256Hasher, &node_subtree, 2).is_none());
 
         // 4. Verifier input validation failures
         let empty_proof = neml::InclusionProof {

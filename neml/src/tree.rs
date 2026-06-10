@@ -99,10 +99,10 @@ pub struct NaryMerkleLog<S: Storage> {
     storage: S,
     config: TreeConfig,
     algs: std::collections::HashMap<u64, AlgState>,
-    /// Number of leaves appended (flat state tree mode).
+    /// Number of leaves appended (Flat Log Mode).
     size: u64,
-    /// Number of subtrees (commits) appended.
-    commit_count: u64,
+    /// Number of subtrees appended.
+    subtree_count: u64,
 }
 
 impl<S: Storage> NaryMerkleLog<S> {
@@ -130,7 +130,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             config,
             algs: std::collections::HashMap::new(),
             size: 0,
-            commit_count: 0,
+            subtree_count: 0,
         };
         // Eagerly register algorithm 0 as active from index 0
         log.add_algorithm(0, hasher).await?;
@@ -214,17 +214,17 @@ impl<S: Storage> NaryMerkleLog<S> {
             algs.insert(alg_id, state);
         }
 
-        // Determine if we are in Commit Tree Mode or State Tree Mode.
+        // Determine if we are in Flat Log Mode or Subtree Log Mode.
         let is_state_mode = storage.len().await > 0;
         let size = if is_state_mode { global_size } else { 0 };
-        let commit_count = if is_state_mode { 0 } else { global_size };
+        let subtree_count = if is_state_mode { 0 } else { global_size };
 
         Ok(Self {
             storage,
             config,
             algs,
             size,
-            commit_count,
+            subtree_count,
         })
     }
 
@@ -418,10 +418,10 @@ impl<S: Storage> NaryMerkleLog<S> {
         self.size
     }
 
-    /// Retrieve the number of commits/subtrees stored.
+    /// Retrieve the number of subtrees stored.
     #[must_use]
-    pub fn commit_count(&self) -> u64 {
-        self.commit_count
+    pub fn subtree_count(&self) -> u64 {
+        self.subtree_count
     }
 
     /// Access the frontier stack of the default algorithm (0).
@@ -466,7 +466,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let current_size = if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         };
 
         let epochs = vec![(current_size, u64::MAX)];
@@ -499,7 +499,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let current_size = if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         };
 
         let state = self
@@ -530,7 +530,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let current_size = if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         };
 
         let mut new_epochs = {
@@ -749,7 +749,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         })
     }
 
-    /// Append a single leaf to the log (State Tree Mode).
+    /// Append a single leaf to the log (Flat Log Mode).
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
         if self.commit_count > 0 {
             return Err(crate::error::Error::CorruptedMetadata {
@@ -843,9 +843,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(())
     }
 
-    /// Append a structured subtree to the log (Commit Tree Mode).
+    /// Append a structured subtree to the log (Subtree Log Mode).
     pub async fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
-        if self.commit_count >= (1u64 << 47) {
+        if self.subtree_count >= (1u64 << 47) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: "log capacity exceeded (max 2^47 items)".to_string(),
@@ -864,18 +864,18 @@ impl<S: Storage> NaryMerkleLog<S> {
                 continue;
             }
 
-            let digest = if state.is_active_at(self.commit_count) {
+            let digest = if state.is_active_at(self.subtree_count) {
                 let root_hash = evaluate(state.hasher.as_ref(), subtree);
-                batch_nodes.push((alg_id, self.commit_count, 0, root_hash.clone()));
+                batch_nodes.push((alg_id, self.subtree_count, 0, root_hash.clone()));
                 root_hash
             } else {
                 state.hasher.null()
             };
 
             state.frontier.push(digest);
-            state.frontier_coords.push((self.commit_count, 0));
+            state.frontier_coords.push((self.subtree_count, 0));
 
-            let merges = reduction_count(self.commit_count, self.config.log_arity as u64);
+            let merges = reduction_count(self.subtree_count, self.config.log_arity as u64);
             for _ in 0..merges {
                 let mut children = Vec::with_capacity(self.config.log_arity);
                 let mut coords = Vec::with_capacity(self.config.log_arity);
@@ -923,7 +923,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .map_err(crate::error::Error::Storage)?;
 
         self.algs = temp_algs;
-        self.commit_count += 1;
+        self.subtree_count += 1;
         Ok(())
     }
 
@@ -1027,7 +1027,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let max_size = state.tree_size(if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         });
 
         if tree_size == 0 || index >= tree_size || tree_size > max_size {
@@ -1169,7 +1169,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let max_size = state.tree_size(if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         });
 
         if old_size == 0 || old_size >= new_size || new_size > max_size {
@@ -1362,7 +1362,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let tip_size = if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         };
         self.combined_root_at(alg_id, tip_size).await
     }
@@ -1424,7 +1424,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let current_global_size = if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         };
 
         if size > current_global_size {
@@ -1492,7 +1492,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let end = if self.size > 0 {
             self.size
         } else {
-            self.commit_count
+            self.subtree_count
         };
         if start > end {
             return Ok(false);
