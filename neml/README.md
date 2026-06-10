@@ -155,8 +155,8 @@ The null constant $N_0$ represents an empty or inactive subtree. Under prefix-fr
 
 To prevent this collision across arbitrary hash sizes, `neml` utilizes a slice-based **Nothing-Up-My-Sleeve (NUMS) Null Stream**:
 
-*   **Master NUMS Stream**: A 64-byte Nothing-Up-My-Sleeve high-entropy constant based on the first 128 hex digits of the fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89452821e638d01377be5466cf34e90c6cc0ac29b629b08d7d15d50274017b89b7`.
-*   **Extendable Slice Output**: For any hash algorithm with output length $L \leq 64$ bytes, the null digest is derived dynamically by slicing the first $L$ bytes of the master stream:
+*   **Master NUMS Stream**: A 128-byte Nothing-Up-My-Sleeve high-entropy constant based on the first 256 hex digits of the fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89452821e638d01377be5466cf34e90c6cc0ac29b7c97c50dd3f84d5b5b54709179216d5d98979fb1bd1310ba698dfb5ac2ffd72dbd01adfb7b8e1afed6a267e96ba7c9045f12c7f9924a19947b3916cf70801f2e2858efc16636920d871574e69`.
+*   **Extendable Slice Output**: For any hash algorithm with output length $L \leq 128$ bytes, the null digest is derived dynamically by slicing the first $L$ bytes of the master stream:
     $$N_0(L) = \text{take}(L, \text{Master Stream})$$
 *   **Preimage Resistance**: Because the master stream is a hardcoded mathematical constant (derived from $\pi$'s fractional expansion) and not the output of the hash function itself, finding a leaf payload whose hash evaluates to $N_0(L)$ requires solving a hard hash preimage challenge. A leaf payload or internal node can never evaluate to $N_0(L)$, eliminating flat null promotion collision risk. We prove this property formally in our Lean 4 proof system.
 
