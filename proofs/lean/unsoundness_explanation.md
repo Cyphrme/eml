@@ -18,11 +18,19 @@ To represent empty or inactive slots efficiently in $k$-ary trees, `neml` utiliz
 
 ### The Vulnerability of a "Prefix-Null" (Known Preimage)
 If we define the null digest by hashing a known constant or prefix (e.g. `0x00` or the string `"null"`):
-$$\text{nullDigest}(L) = H(\text{prefix\_data})$$
+
+$$
+\text{nullDigest}(L) = H(\text{prefix\_data})
+$$
 
 This creates a severe structural collision:
-1. A single active leaf containing the data `prefix_data` has a digest of $\text{leafHash}(\text{prefix\_data}) = H(\text{prefix\_data}) = \text{nullDigest}(L)$.
-2. An inactive subtree of any height or depth also evaluates to the digest $\text{nullDigest}(L)$.
+1. A single active leaf containing the data `prefix_data` has a digest of:
+
+$$
+\text{leafHash}(\text{prefix\_data}) = H(\text{prefix\_data}) = \text{nullDigest}(L)
+$$
+
+2. Inactive subtrees of any height or depth also evaluate to the digest $\text{nullDigest}(L)$.
 
 Because the hashing is prefix-free, **a single active leaf containing `prefix_data` is cryptographically and syntactically indistinguishable from an empty subtree of arbitrary height.**
 
