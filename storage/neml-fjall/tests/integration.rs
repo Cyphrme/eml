@@ -239,3 +239,55 @@ fn test_fjall_out_of_order_and_sparse() {
     });
 }
 
+#[test]
+fn test_fjall_len_race_condition() {
+    let dir = tempdir().unwrap();
+    let storage = FjallStorage::open(dir.path()).unwrap();
+
+    let mut storage_writer1 = storage.clone();
+    let mut storage_writer2 = storage.clone();
+    let storage_reader = storage.clone();
+
+    // Use barriers to coordinate the threads
+    let barrier_write = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let barrier_check = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    let b1 = barrier_write.clone();
+    let c1 = barrier_check.clone();
+    let handle1 = std::thread::spawn(move || {
+        smol::block_on(async {
+            b1.wait();
+            // Thread 1 waits a bit to let Thread 2 write first
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            storage_writer1.store_leaf(0, b"leaf0").await.unwrap();
+            c1.wait();
+        });
+    });
+
+    let b2 = barrier_write.clone();
+    let c2 = barrier_check.clone();
+    let handle2 = std::thread::spawn(move || {
+        smol::block_on(async {
+            b2.wait();
+            // Thread 2 writes index 1 first
+            storage_writer2.store_leaf(1, b"leaf1").await.unwrap();
+
+            // Assert that len() reports 2 because index 1 is written
+            let len = storage_reader.len().await;
+            assert_eq!(len, 2);
+
+            // Try to read index 0 which has not been written yet
+            let result = storage_reader.get_leaf(0).await;
+            
+            // This fails because leaf 0 is not yet written, demonstrating the race
+            assert!(result.is_err());
+
+            c2.wait();
+        });
+    });
+
+    handle1.join().unwrap();
+    handle2.join().unwrap();
+}
+
+
