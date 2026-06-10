@@ -1,6 +1,7 @@
 //! Fjall-backed persistence implementation for neml.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 use neml::{AlgorithmMetas, Storage};
@@ -8,9 +9,9 @@ use neml::{AlgorithmMetas, Storage};
 /// Error type for [`FjallStorage`] operations.
 #[derive(Debug, thiserror::Error)]
 pub enum FjallStorageError {
-    /// An error occurred in the underlying Fjall engine.
-    #[error("Fjall database error: {0}")]
-    Fjall(#[from] fjall::Error),
+    /// An error occurred in the underlying database engine.
+    #[error("Database error: {0}")]
+    Database(String),
 
     /// An I/O error occurred.
     #[error("I/O error: {0}")]
@@ -31,6 +32,7 @@ pub struct FjallStorage {
     leaves: Keyspace,
     nodes: Keyspace,
     metadata: Keyspace,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl FjallStorage {
@@ -41,25 +43,30 @@ impl FjallStorage {
     /// Returns a [`FjallStorageError`] if the directory cannot be created or the database
     /// fails to initialize.
     pub fn open(path: &Path) -> Result<Self, FjallStorageError> {
-        let db = Database::builder(path).open()?;
+        let db = Database::builder(path)
+            .open()
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Self::with_database(db)
     }
 
     /// Initialize storage keyspaces using an existing, shared Fjall database.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FjallStorageError`] if keyspace initialization fails.
-    pub fn with_database(db: Database) -> Result<Self, FjallStorageError> {
-        let leaves = db.keyspace("neml_leaves", KeyspaceCreateOptions::default)?;
-        let nodes = db.keyspace("neml_nodes", KeyspaceCreateOptions::default)?;
-        let metadata = db.keyspace("neml_metadata", KeyspaceCreateOptions::default)?;
+    pub(crate) fn with_database(db: Database) -> Result<Self, FjallStorageError> {
+        let leaves = db
+            .keyspace("neml_leaves", KeyspaceCreateOptions::default)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+        let nodes = db
+            .keyspace("neml_nodes", KeyspaceCreateOptions::default)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+        let metadata = db
+            .keyspace("neml_metadata", KeyspaceCreateOptions::default)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
 
         Ok(Self {
             db,
             leaves,
             nodes,
             metadata,
+            write_lock: Arc::new(Mutex::new(())),
         })
     }
 }
@@ -68,14 +75,20 @@ impl Storage for FjallStorage {
     type Error = FjallStorageError;
 
     async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
+        let _guard = self.write_lock.lock().unwrap();
         let key = index.to_be_bytes();
-        self.leaves.insert(key, data)?;
+        self.leaves
+            .insert(key, data)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(())
     }
 
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         let key = index.to_be_bytes();
-        let value = self.leaves.get(key)?;
+        let value = self
+            .leaves
+            .get(key)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         match value {
             Some(bytes) => Ok(bytes.to_vec()),
             None => Err(FjallStorageError::Io(std::io::Error::new(
@@ -103,12 +116,15 @@ impl Storage for FjallStorage {
         height: u32,
         hash: &[u8],
     ) -> Result<(), Self::Error> {
+        let _guard = self.write_lock.lock().unwrap();
         let mut key = [0u8; 20];
         key[0..8].copy_from_slice(&alg_id.to_be_bytes());
         key[8..16].copy_from_slice(&left.to_be_bytes());
         key[16..20].copy_from_slice(&height.to_be_bytes());
 
-        self.nodes.insert(key, hash)?;
+        self.nodes
+            .insert(key, hash)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -123,7 +139,10 @@ impl Storage for FjallStorage {
         key[8..16].copy_from_slice(&left.to_be_bytes());
         key[16..20].copy_from_slice(&height.to_be_bytes());
 
-        let value = self.nodes.get(key)?;
+        let value = self
+            .nodes
+            .get(key)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(value.map(|bytes| bytes.to_vec()))
     }
 
@@ -132,20 +151,25 @@ impl Storage for FjallStorage {
         alg_id: u64,
         epochs: &[(u64, u64)],
     ) -> Result<(), Self::Error> {
+        let _guard = self.write_lock.lock().unwrap();
         let key = alg_id.to_be_bytes();
         let mut bytes = Vec::with_capacity(epochs.len() * 16);
         for &(start, end) in epochs {
             bytes.extend_from_slice(&start.to_be_bytes());
             bytes.extend_from_slice(&end.to_be_bytes());
         }
-        self.metadata.insert(key, bytes)?;
+        self.metadata
+            .insert(key, bytes)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(())
     }
 
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         let mut metas = Vec::new();
         for item in self.metadata.iter() {
-            let (key_bytes, val_bytes) = item.into_inner()?;
+            let (key_bytes, val_bytes) = item
+                .into_inner()
+                .map_err(|e| FjallStorageError::Database(e.to_string()))?;
             let alg_id = {
                 let arr: [u8; 8] = key_bytes.as_ref().try_into().map_err(|_| {
                     FjallStorageError::MetadataCorruption("invalid key length".to_string())
@@ -187,6 +211,7 @@ impl Storage for FjallStorage {
         leaves: &[(u64, &[u8])],
         nodes: &[(u64, u64, u32, &[u8])],
     ) -> Result<(), Self::Error> {
+        let _guard = self.write_lock.lock().unwrap();
         let mut batch = self.db.batch();
 
         for &(index, data) in leaves {
@@ -202,7 +227,9 @@ impl Storage for FjallStorage {
             batch.insert(&self.nodes, key, hash);
         }
 
-        batch.commit()?;
+        batch
+            .commit()
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(())
     }
 }
