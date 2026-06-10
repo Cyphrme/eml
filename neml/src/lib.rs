@@ -54,12 +54,17 @@ pub const NULL_DIGEST: &[u8; 32] = &[
 /// utilizing a slice of the master `NULL_STREAM`.
 /// This dynamically supports arbitrary multihash sizes without known preimages.
 #[must_use]
-pub fn generate_nums_null(_hasher: &dyn Hasher, digest_len: usize) -> Vec<u8> {
-    assert!(
-        digest_len <= NULL_STREAM.len(),
-        "Digest length {} exceeds master NULL_STREAM length {}",
-        digest_len,
-        NULL_STREAM.len()
-    );
-    NULL_STREAM[..digest_len].to_vec()
+pub fn generate_nums_null(hasher: &dyn Hasher, digest_len: usize) -> Vec<u8> {
+    if digest_len <= NULL_STREAM.len() {
+        return NULL_STREAM[..digest_len].to_vec();
+    }
+    let mut out = Vec::with_capacity(digest_len);
+    out.extend_from_slice(NULL_STREAM);
+    let mut last = hasher.hash(NULL_STREAM);
+    while out.len() < digest_len {
+        out.extend_from_slice(&last);
+        last = hasher.hash(&last);
+    }
+    out.truncate(digest_len);
+    out
 }

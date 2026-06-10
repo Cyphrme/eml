@@ -2179,7 +2179,7 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
 
     // This proof asserts leaf_a is at index 1 (which is false, it's at index 0)
     // By setting log_arity: 0, verify_inclusion_path_structure is bypassed,
-    // and the verifier accepts the proof!
+    // but the verifier should reject it because log_arity < 2 is invalid!
     let spoofed_proof = neml::InclusionProof {
         index: 1, // spoofed index
         tree_size: 2,
@@ -2190,10 +2190,44 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
         }],
     };
 
-    // The verifier accepts this proof even though the declared index (1)
-    // does not match the actual path position (0) of the leaf!
-    let is_valid = neml::verify_inclusion(&hasher, &leaf_a, &spoofed_proof, &root);
-    assert!(is_valid);
+    let coupling = neml::CouplingProof {
+        active_roots: vec![(0, root.clone())],
+    };
+    let combined_root = neml::mr::nary_mr(&hasher, &[&root]);
+
+    let is_valid = neml::verify_inclusion_with_coupling(
+        &hasher,
+        0,
+        &leaf_a,
+        &spoofed_proof,
+        &coupling,
+        &combined_root,
+        &[0],
+        neml::VerifierConfig::default(),
+    );
+    assert!(!is_valid, "Expected arity zero proof to be rejected by verifier API");
+}
+
+#[test]
+fn test_proof_sibling_digest_length_mismatch() {
+    let hasher = Sha256Hasher;
+    let leaf_a = hasher.leaf(b"A");
+    let leaf_b = hasher.leaf(b"B");
+    let root = neml::mr::nary_mr(&hasher, &[&leaf_a, &leaf_b]);
+
+    // Proof with malformed sibling digest length (e.g. 16 bytes instead of 32)
+    let malformed_proof = neml::InclusionProof {
+        index: 0,
+        tree_size: 2,
+        log_arity: 2,
+        path: vec![neml::ProofStep {
+            siblings: vec![vec![0; 16]], // invalid sibling size
+            position: 0,
+        }],
+    };
+
+    let is_valid = neml::verify_inclusion(&hasher, &leaf_a, &malformed_proof, &root);
+    assert!(!is_valid, "Expected proof with invalid sibling size to be rejected");
 }
 
 #[test]
@@ -2398,6 +2432,20 @@ fn test_boundary_sizes_and_high_arities() {
             }
         }
     });
+}
+
+#[test]
+fn test_generate_nums_null_no_panic() {
+    let hasher = Sha256Hasher;
+    // Lengths <= 128 (standard)
+    let d1 = neml::generate_nums_null(&hasher, 32);
+    assert_eq!(d1.len(), 32);
+    
+    // Lengths > 128 (XOF derivation)
+    let d2 = neml::generate_nums_null(&hasher, 150);
+    assert_eq!(d2.len(), 150);
+    // Ensure the first 128 bytes are equal to the master NULL_STREAM
+    assert_eq!(&d2[..128], &neml::NULL_STREAM[..]);
 }
 
 

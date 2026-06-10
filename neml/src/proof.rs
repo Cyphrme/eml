@@ -284,6 +284,13 @@ pub fn reconstruct_inclusion_root(
     leaf_hash: &[u8],
     proof: &InclusionProof,
 ) -> Option<Vec<u8>> {
+    let digest_len = hasher.empty().len();
+    if digest_len == 0 || digest_len > 64 {
+        return None;
+    }
+    if leaf_hash.len() != digest_len {
+        return None;
+    }
     if proof.log_arity == 1 || proof.log_arity > 256 {
         return None;
     }
@@ -310,6 +317,11 @@ pub fn reconstruct_inclusion_root(
     for step in &proof.path {
         if step.siblings.len() > 256 {
             return None;
+        }
+        for sib in &step.siblings {
+            if sib.len() != digest_len {
+                return None;
+            }
         }
         if step.siblings.is_empty() {
             // Promoted node — current hash passes through unchanged
@@ -343,6 +355,13 @@ pub fn reconstruct_consistency_roots(
     hasher: &dyn Hasher,
     proof: &ConsistencyProof,
 ) -> Option<(Vec<u8>, Vec<u8>)> {
+    let digest_len = hasher.empty().len();
+    if digest_len == 0 || digest_len > 64 {
+        return None;
+    }
+    if proof.start_hash.len() != digest_len {
+        return None;
+    }
     if proof.old_size == 0 || proof.old_size >= proof.new_size {
         return None;
     }
@@ -351,6 +370,16 @@ pub fn reconstruct_consistency_roots(
     }
     if proof.path.len() > 256 {
         return None;
+    }
+    for step in &proof.path {
+        if step.siblings.len() > 256 {
+            return None;
+        }
+        for sib in &step.siblings {
+            if sib.len() != digest_len {
+                return None;
+            }
+        }
     }
 
     let k = proof.log_arity;
@@ -619,6 +648,9 @@ pub fn verify_inclusion_with_coupling(
     expected_active_algs: &[u64],
     config: VerifierConfig,
 ) -> bool {
+    if inclusion_proof.log_arity < 2 {
+        return false;
+    }
     let raw_root =
         match coupling.verify(hasher, alg_id, combined_root, expected_active_algs, config) {
             Some(r) => r,
