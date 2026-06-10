@@ -751,10 +751,10 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Append a single leaf to the log (Flat Log Mode).
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
-        if self.commit_count > 0 {
+        if self.subtree_count > 0 {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
-                reason: "cannot append leaf in Commit Tree Mode".to_string(),
+                reason: "cannot append leaf in Subtree Log Mode".to_string(),
             });
         }
 

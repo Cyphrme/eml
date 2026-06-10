@@ -192,9 +192,9 @@ mod tests {
         let leaf_hash = hasher.leaf(b"b");
         let root = evaluate(&hasher, &subtree);
         let proof = crate::proof::InclusionProof {
-            index: 1,
-            tree_size: 4,
-            log_arity: 0,
+            index: 0,
+            tree_size: 1,
+            log_arity: 2,
             path,
         };
         assert!(crate::proof::verify_inclusion(
