@@ -2689,10 +2689,11 @@ fn test_proof_malleability_position_spoofing() {
 
 #[test]
 fn test_reduction_count_overflow() {
-    // Assert it returns 0 (since 2^64 does not divide by k=2)
-    // and does not panic or loop infinitely
+    // u64::MAX + 1 == 2^64, which is divisible by 2 exactly 64 times.
+    // Verify the function returns the correct count without panicking or
+    // looping infinitely.
     let res = neml::reduction_count(u64::MAX, 2);
-    assert_eq!(res, 0);
+    assert_eq!(res, 64);
 }
 
 #[test]

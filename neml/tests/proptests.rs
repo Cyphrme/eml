@@ -885,9 +885,16 @@ proptest! {
                 alg_epochs: alg_epochs.clone(),
             };
 
-            // Construct combined root from the canonical metaroot preimage.
-            let combined_root =
-                hasher.hash(&neml::combined_root_preimage(&active_roots, &alg_epochs));
+            // Construct combined root mirroring the genesis-promotion rule:
+            // a registry-singleton with the forced default timeline promotes
+            // to the raw root; otherwise hash the canonical preimage.
+            let is_promoted =
+                alg_epochs.len() == 1 && alg_epochs[0].1 == vec![(0u64, u64::MAX)];
+            let combined_root = if is_promoted {
+                active_roots[0].1.clone()
+            } else {
+                hasher.hash(&neml::combined_root_preimage(&active_roots, &alg_epochs))
+            };
 
             let config = neml::VerifierConfig::default();
 
