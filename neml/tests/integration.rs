@@ -1548,18 +1548,28 @@ fn test_combined_root_single_alg_commits_epochs() {
         log.append_leaf(b"test").await.unwrap();
         let raw_root = log.root();
 
-        // Even with a single active algorithm, the combined root is the hash
-        // of the full snapshot serialization (roots + epoch timeline). A raw
-        // root passthrough would leave the timeline uncommitted exactly in
-        // single-algorithm regions.
+        // Genesis state: sole registry algorithm, default timeline [(0, MAX)].
+        // The metaroot promotes to the raw root — hashing would add no
+        // information (same discipline as singleton node promotion).
         let comb_root = log.combined_root().await;
-        assert_ne!(comb_root, raw_root);
+        assert_eq!(comb_root, raw_root);
 
+        // Adding a second algorithm breaks the registry singleton, so the
+        // combined root permanently switches to the hashed form — even
+        // retroactively for historical sizes where alg 1 was not yet active.
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        let raw_root_at_1 = log.root_for_at(0, 1).await.unwrap();
+        let comb_root_at_1 = log.combined_root_at(0, 1).await.unwrap();
+        assert_ne!(comb_root_at_1, raw_root_at_1);
+
+        // Alg 1's epoch [(1, MAX)] appears in committed_epochs_at(1) even
+        // though alg 1 was not active at position 0.
         let expected = Sha256Hasher.hash(&neml::combined_root_preimage(
-            &[(0, raw_root)],
-            &[(0, vec![(0, u64::MAX)])],
+            &[(0, raw_root_at_1)],
+            &[(0, vec![(0u64, u64::MAX)]), (1, vec![(1u64, u64::MAX)])],
         ));
-        assert_eq!(comb_root, expected);
+        assert_eq!(comb_root_at_1, expected);
     });
 }
 

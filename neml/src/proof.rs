@@ -410,11 +410,19 @@ impl CouplingProof {
             return false;
         }
 
-        // Reconstruct the combined root from its canonical preimage. Always
-        // hashed — no singleton promotion — so the epoch timeline is
-        // committed even in single-algorithm regions.
-        let computed = hasher.hash(&combined_root_preimage(&self.active_roots, &self.alg_epochs));
-        constant_time_eq(&computed, combined_root)
+        // Reconstruct the combined root mirroring the genesis-promotion rule
+        // in combined_root_at: a registry-singleton with the forced default
+        // timeline [(0, MAX)] means the combined root IS the raw root of that
+        // algorithm (promoted form); otherwise hash the canonical preimage.
+        let is_promoted =
+            self.alg_epochs.len() == 1 && self.alg_epochs[0].1 == vec![(0u64, u64::MAX)];
+        if is_promoted {
+            constant_time_eq(&self.active_roots[0].1, combined_root)
+        } else {
+            let computed =
+                hasher.hash(&combined_root_preimage(&self.active_roots, &self.alg_epochs));
+            constant_time_eq(&computed, combined_root)
+        }
     }
 
     /// Verify the coupling proof against a combined root for a given target algorithm.

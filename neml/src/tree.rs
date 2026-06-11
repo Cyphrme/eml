@@ -1418,16 +1418,25 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// The combined root is a metaroot: a structural layer that, like any
     /// node, commits what is below it — except it spans every algorithm's
     /// tree. Its preimage covers the raw roots of all active algorithms AND
-    /// the committed epoch timeline of every registered algorithm (Design
-    /// A+), because the timeline is part of the multi-algorithm structure
-    /// (it decides which cells are null projections). Binding the timeline
-    /// is what makes activity/inactivity claims non-equivocable: without it,
-    /// an active position whose payload hashes to the null constant and a
-    /// genuinely inactive position are byte-identical under the root, so
-    /// inactivity would be forgeable by metadata substitution. The metaroot
-    /// is always the hash of its canonical preimage — even with a single
-    /// active algorithm — since a raw-root passthrough would carry no epoch
-    /// commitment exactly where the log is single-algorithm (its genesis).
+    /// the committed epoch timeline of every registered algorithm, because
+    /// the timeline is part of the multi-algorithm structure (it decides
+    /// which cells are null projections). Binding the timeline makes
+    /// activity/inactivity claims non-equivocable: without it, an active
+    /// position whose payload hashes to the null constant and a genuinely
+    /// inactive position are byte-identical under the root, so inactivity
+    /// would be forgeable by metadata substitution.
+    ///
+    /// **Genesis Promotion:** while the registry has ever contained only one
+    /// algorithm and its timeline is the forced default `[(0, u64::MAX)]`
+    /// (active from position 0, still open), the preimage carries zero
+    /// information beyond the raw root, so the metaroot promotes to the raw
+    /// root — the same discipline as singleton node promotion (hash only when
+    /// hashing adds binding information). Any lifecycle event — a second
+    /// registration, a tip deactivation, or a deactivate/resume — makes the
+    /// timeline information-bearing and permanently switches to the hashed
+    /// form. Promotion is keyed on the REGISTRY (never the active set): a
+    /// sole-active algorithm may carry a pre-activation null prefix, which is
+    /// precisely the case the timeline commitment exists to bind.
     pub async fn combined_root_at(&self, alg_id: u64, size: u64) -> Result<Vec<u8>, S::Error> {
         let state = self
             .algs
@@ -1458,9 +1467,17 @@ impl<S: Storage> NaryMerkleLog<S> {
             active_roots.push((id, r));
         }
         let alg_epochs = self.committed_epochs_at(size);
-        let buf = crate::proof::combined_root_preimage(&active_roots, &alg_epochs);
+
+        // Genesis promotion: registry-singleton with the forced default
+        // timeline carries zero information beyond the raw root — promote.
+        // Any lifecycle event switches permanently to the hashed form.
+        // Keyed on the REGISTRY, not the active set (see doc comment above).
+        if alg_epochs.len() == 1 && alg_epochs[0].1 == vec![(0u64, u64::MAX)] {
+            return Ok(active_roots.into_iter().next().unwrap().1);
+        }
 
         // 3. Hash the snapshot using the target algorithm's hasher
+        let buf = crate::proof::combined_root_preimage(&active_roots, &alg_epochs);
         Ok(state.hasher.hash(&buf))
     }
 
