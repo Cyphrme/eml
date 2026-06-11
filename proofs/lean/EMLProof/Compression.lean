@@ -259,6 +259,9 @@ lemma map_length (L : Nat) (children : List (NaryTree (Option (List UInt8)))) :
 /-- Helper lemma: if a node evaluates to nullDigest L, all of its children
     must evaluate to nullDigest L. -/
 lemma eval_node_eq_null_implies_all_null (L : Nat)
+    (empty_hash_neq_null : emptyHash ≠ nullDigest L)
+    (node_hash_neq_null : ∀ (children : List Digest),
+      children.length ≥ 2 → nodeHash children ≠ nullDigest L)
     (children : List (NaryTree (Option (List UInt8))))
     (h_eval : evalConstructive L (NaryTree.node children) = nullDigest L) :
     ∀ c ∈ children, evalConstructive L c = nullDigest L := by
@@ -266,7 +269,7 @@ lemma eval_node_eq_null_implies_all_null (L : Nat)
   | nil =>
     rw [h_children] at h_eval
     simp only [evalConstructive] at h_eval
-    have h_neq := empty_hash_neq_null L
+    have h_neq := empty_hash_neq_null
     contradiction
   | cons x xs =>
     cases h_xs : xs with
@@ -298,7 +301,7 @@ lemma eval_node_eq_null_implies_all_null (L : Nat)
         rw [if_neg Bool.false_ne_true] at h_eval
         have h_map_len : (evalConstructiveMap L children).length ≥ 2 := by
           rw [map_length]; exact h_len
-        have h_neq := node_hash_neq_null L (evalConstructiveMap L children) h_map_len
+        have h_neq := node_hash_neq_null (evalConstructiveMap L children) h_map_len
         rw [h_children_eq] at h_neq
         simp only [evalConstructiveMap] at h_neq
         simp only [evalConstructiveMap] at h_eval
@@ -335,7 +338,12 @@ lemma map_id_of_all {α : Type} (l : List α) (f : α → α) (h : ∀ y ∈ l, 
 
 /-- Theorem: A compressed perfect k-ary tree of height h can be expanded
     back to its exact original topology. -/
-theorem expand_compress (L : Nat) (k : Nat) (h : Nat) (t : NaryTree (Option (List UInt8)))
+theorem expand_compress (L : Nat) (k : Nat) (h : Nat)
+    (leaf_hash_neq_null : ∀ (data : List UInt8), leafHash data ≠ nullDigest L)
+    (empty_hash_neq_null : emptyHash ≠ nullDigest L)
+    (node_hash_neq_null : ∀ (children : List Digest),
+      children.length ≥ 2 → nodeHash children ≠ nullDigest L)
+    (t : NaryTree (Option (List UInt8)))
     (_hk : k ≥ 1) (h_perf : IsPerfectKary k h t) :
     expand k h (compress L t) = t := by
   induction h generalizing t with
@@ -351,7 +359,7 @@ theorem expand_compress (L : Nat) (k : Nat) (h : Nat) (t : NaryTree (Option (Lis
         | none => rfl
         | some data =>
           simp only [evalConstructive] at h_eq
-          have h_neq := leaf_hash_neq_null L data
+          have h_neq := leaf_hash_neq_null data
           contradiction
       · rfl
     | node children =>
@@ -368,7 +376,8 @@ theorem expand_compress (L : Nat) (k : Nat) (h : Nat) (t : NaryTree (Option (Lis
       · rename_i h_eval
         rw [beq_iff_eq] at h_eval
         have h_eq : evalConstructive L (NaryTree.node children) = nullDigest L := h_eval
-        have h_children_null := eval_node_eq_null_implies_all_null L children h_eq
+        have h_children_null := eval_node_eq_null_implies_all_null L
+          empty_hash_neq_null node_hash_neq_null children h_eq
         simp only [expand]
         have h_map_eq : children = List.replicate k (expand k h' (NaryTree.leaf none)) := by
           have h_c_eq : ∀ c ∈ children, c = expand k h' (NaryTree.leaf none) := by

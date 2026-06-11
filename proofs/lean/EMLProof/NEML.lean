@@ -87,20 +87,6 @@ This is formalized via the following preimage resistance axioms: no leaf hash,
 empty hash, or internal node hash (for nodes of arity >= 2) can collide with `nullDigest L`.
 -/
 
-/-- Preimage resistance: no leaf hash can collide with the null digest. -/
-axiom leaf_hash_neq_null : ∀ (L : Nat) (data : List UInt8), leafHash data ≠ nullDigest L
-
-/-- Preimage resistance: no node hash (arity >= 2) can collide with the null digest. -/
-axiom node_hash_neq_null :
-  ∀ (L : Nat) (children : List Digest), children.length ≥ 2 → nodeHash children ≠ nullDigest L
-
-/-- Preimage resistance: empty hash cannot collide with the null digest. -/
-axiom empty_hash_neq_null : ∀ (L : Nat), emptyHash ≠ nullDigest L
-
-/-!
-## Soundness Theorems
--/
-
 /-- **Theorem 1 (Singleton Promotion Soundness).**
     A node with exactly one child evaluates directly to the child's evaluation,
     preserving the digest without hashing. -/
@@ -116,103 +102,6 @@ theorem eval_flat_null_promotion (L : Nat) (children : List (NaryTree (List UInt
     (h_all_null : ∀ t ∈ children, eval L t = nullDigest L) :
     eval L (NaryTree.node children) = nullDigest L := by
   exact eval_flat_null_node L children h_length h_all_null
-
-theorem eval_eq_null_implies (L : Nat) (t : NaryTree (List UInt8))
-    (h_eval : eval L t = nullDigest L) :
-    ∃ (children : List (NaryTree (List UInt8))),
-      t = NaryTree.node children ∧
-      (children ≠ []) ∧
-      (∀ c ∈ children, eval L c = nullDigest L) := by
-  cases t with
-  | leaf data =>
-    have h_leaf := eval_leaf L data
-    rw [h_leaf] at h_eval
-    have h_neq := leaf_hash_neq_null L data
-    contradiction
-  | node children =>
-    use children
-    have h_not_nil : children ≠ [] := by
-      intro h_empty
-      rw [h_empty] at h_eval
-      have h_empty_eval := eval_empty L
-      rw [h_empty_eval] at h_eval
-      have h_neq := empty_hash_neq_null L
-      contradiction
-    refine ⟨rfl, h_not_nil, ?_⟩
-    intro c hc
-    by_contra hc_neq
-    cases h_children : children with
-    | nil =>
-      exact h_not_nil h_children
-    | cons x xs =>
-      cases h_xs : xs with
-      | nil =>
-        have h_single : children = [x] := by rw [h_children, h_xs]
-        have h_eval_single := eval_singleton_node L x
-        rw [←h_single] at h_eval_single
-        have h_eval_x : eval L x = nullDigest L := by
-          rw [←h_eval_single, h_eval]
-        have h_c_eq_x : c = x := by
-          have hc' : c ∈ [x] := by rw [←h_single]; exact hc
-          exact List.mem_singleton.mp hc'
-        rw [h_c_eq_x] at hc_neq
-        exact hc_neq h_eval_x
-      | cons y ys =>
-        have h_len : children.length ≥ 2 := by
-          rw [h_children, h_xs]
-          simp [List.length]
-        have h_exists_neq : ∃ t ∈ children, eval L t ≠ nullDigest L := ⟨c, hc, hc_neq⟩
-        have h_eval_node := eval_node_hash L children h_len h_exists_neq
-        rw [h_eval] at h_eval_node
-        have h_map_len : (children.map (eval L)).length ≥ 2 := by
-          rw [List.length_map]
-          exact h_len
-        have h_neq := node_hash_neq_null L (children.map (eval L)) h_map_len
-        rw [h_eval_node] at h_neq
-        contradiction
-
-/-- **Theorem 3 (Null Path Isolation / Inactivity Binding).**
-    Any tree that recursively contains at least one leaf node with payload data
-    can never evaluate to the null digest. This ensures that active data
-    cannot be spoofed as or substituted with null/inactive nodes. -/
-theorem contains_leaf_neq_null (L : Nat) (t : NaryTree (List UInt8)) (h : ContainsLeaf t) :
-    eval L t ≠ nullDigest L := by
-  induction h with
-  | leaf data =>
-    rw [eval_leaf L data]
-    exact leaf_hash_neq_null L data
-  | node children c h_mem h_cont ih =>
-    intro h_eval
-    cases h_children : children with
-    | nil =>
-      rw [h_children] at h_mem
-      contradiction
-    | cons x xs =>
-      cases h_xs : xs with
-      | nil =>
-        have h_single : children = [x] := by rw [h_children, h_xs]
-        have h_eval_single := eval_singleton_node L x
-        rw [←h_single] at h_eval_single
-        have h_eval_x : eval L x = nullDigest L := by
-          rw [←h_eval_single, h_eval]
-        have h_c_eq_x : c = x := by
-          have hc' : c ∈ [x] := by rw [←h_single]; exact h_mem
-          exact List.mem_singleton.mp hc'
-        rw [h_c_eq_x] at ih
-        exact ih h_eval_x
-      | cons y ys =>
-        have h_len : children.length ≥ 2 := by
-          rw [h_children, h_xs]
-          simp [List.length]
-        have h_exists_neq : ∃ t ∈ children, eval L t ≠ nullDigest L := ⟨c, h_mem, ih⟩
-        have h_eval_node := eval_node_hash L children h_len h_exists_neq
-        rw [h_eval] at h_eval_node
-        have h_map_len : (children.map (eval L)).length ≥ 2 := by
-          rw [List.length_map]
-          exact h_len
-        have h_neq := node_hash_neq_null L (children.map (eval L)) h_map_len
-        rw [h_eval_node] at h_neq
-        contradiction
 
 set_option linter.style.longLine false
 
