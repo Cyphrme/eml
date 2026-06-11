@@ -2487,4 +2487,124 @@ fn test_null_digest() {
     assert_eq!(d, hasher.hash(b"null"));
 }
 
+#[test]
+fn test_proof_malleability_path_extension() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
+            .await
+            .unwrap();
+
+        log.append_leaf(b"a").await.unwrap();
+        log.append_leaf(b"b").await.unwrap();
+        log.append_leaf(b"c").await.unwrap();
+        log.append_leaf(b"d").await.unwrap();
+
+        let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
+        let leaf_hash = Sha256Hasher.leaf(b"c");
+        let root = log.root();
+
+        // 1. Original proof verifies successfully
+        assert!(neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf_hash,
+            2,
+            4,
+            2,
+            &proof.path,
+            &root
+        ));
+
+        // 2. Prepend a dummy step with empty siblings.
+        let mut malleable_path = vec![
+            neml::ProofStep {
+                siblings: vec![],
+                position: 42,
+            }
+        ];
+        malleable_path.extend(proof.path.clone());
+
+        // 3. Verifies should fail because of path length mismatch or position spoofing
+        let verified = neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf_hash,
+            2,
+            4,
+            2,
+            &malleable_path,
+            &root
+        );
+        assert!(!verified, "Malleable proof verification should fail");
+    });
+}
+
+#[test]
+fn test_proof_malleability_position_spoofing() {
+    smol::block_on(async {
+        let hasher = Sha256Hasher;
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
+            .await
+            .unwrap();
+
+        // Subtree: Node([Leaf("a")]) (promoted node)
+        let subtree = Subtree::Node(vec![Subtree::Leaf(b"a".to_vec())]);
+        log.append_subtree(&subtree).await.unwrap();
+
+        let root = log.root();
+        let path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
+        // Since subtree has 1 leaf, the path has 1 promoted node step with position 0
+        assert_eq!(path[0].siblings.len(), 0);
+        assert_eq!(path[0].position, 0);
+
+        let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
+        let mut full_path = path;
+        full_path.extend(log_proof.path);
+
+        let leaf_hash = Sha256Hasher.leaf(b"a");
+        assert!(neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf_hash,
+            0,
+            1,
+            2,
+            &full_path,
+            &root
+        ));
+
+        // Spoof the promoted node step's position to 42
+        let mut spoofed_path = full_path.clone();
+        spoofed_path[0].position = 42;
+
+        assert!(!neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf_hash,
+            0,
+            1,
+            2,
+            &spoofed_path,
+            &root
+        ), "Spoofed promoted position must be rejected");
+    });
+}
+
+#[test]
+fn test_reduction_count_overflow() {
+    // Assert it returns 0 (since 2^64 does not divide by k=2)
+    // and does not panic or loop infinitely
+    let res = neml::reduction_count(u64::MAX, 2);
+    assert_eq!(res, 0);
+}
+
+#[test]
+fn test_reconstruct_index_oom_dos() {
+    // Large log_arity must be rejected without OOMing or panicking
+    let large_k = 1u64 << 32;
+    let res = neml::reconstruct_consistency_roots(&Sha256Hasher, 1, 2, large_k, &[0; 32], &[]);
+    assert_eq!(res, None);
+}
+
 

@@ -3,7 +3,7 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use neml::{verify_inclusion, InclusionProof, ProofStep};
+use neml::{verify_inclusion, ProofStep};
 
 #[derive(Debug)]
 struct FuzzHasher;
@@ -30,7 +30,7 @@ impl neml::Hasher for FuzzHasher {
     }
 
     fn null(&self) -> Vec<u8> {
-        neml::generate_nums_null(self, 32)
+        neml::null_digest(self)
     }
 
     fn hash(&self, data: &[u8]) -> Vec<u8> {
@@ -52,22 +52,25 @@ struct FuzzProofStep {
 struct Input {
     index: u64,
     tree_size: u64,
+    log_arity: u64,
     path: Vec<FuzzProofStep>,
     leaf_hash: Vec<u8>,
     root: Vec<u8>,
 }
 
 fuzz_target!(|input: Input| {
-    let path = input.path.into_iter().map(|step| ProofStep {
+    let path: Vec<ProofStep> = input.path.into_iter().map(|step| ProofStep {
         siblings: step.siblings,
         position: step.position,
     }).collect();
 
-    let proof = InclusionProof {
-        index: input.index,
-        tree_size: input.tree_size,
-        path,
-    };
-    
-    let _ = verify_inclusion(&FuzzHasher, &input.leaf_hash, &proof, &input.root);
+    let _ = verify_inclusion(
+        &FuzzHasher,
+        &input.leaf_hash,
+        input.index,
+        input.tree_size,
+        input.log_arity,
+        &path,
+        &input.root,
+    );
 });

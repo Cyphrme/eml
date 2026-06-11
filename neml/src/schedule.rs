@@ -11,10 +11,11 @@
 pub fn reduction_count(n: u64, k: u64) -> u32 {
     assert!(k >= 2, "log arity k must be >= 2");
     let mut count = 0;
-    let mut m = n + 1; // 1-based index
-    while m % k == 0 {
+    let mut m = (n as u128) + 1; // 1-based index
+    let k_u128 = k as u128;
+    while m % k_u128 == 0 {
         count += 1;
-        m /= k;
+        m /= k_u128;
     }
     count
 }

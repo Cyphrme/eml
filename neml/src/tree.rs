@@ -1766,7 +1766,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
 /// Reconstruct the coordinates (left_index, height) of the frontier for a given tree size.
 pub fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
-    if k < 2 {
+    if k < 2 || k > 256 {
         return Vec::new();
     }
     let mut frontier = Vec::new();

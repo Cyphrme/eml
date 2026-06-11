@@ -184,7 +184,7 @@ impl CouplingProof {
 /// and `k`.
 #[must_use]
 pub fn reconstruct_index_from_path(k: u64, tree_size: u64, path: &[ProofStep]) -> Option<u64> {
-    if k < 2 {
+    if k < 2 || k > 256 {
         return None;
     }
     let coords = frontier_for_size(tree_size, k);
@@ -260,6 +260,9 @@ pub fn reconstruct_index_from_path(k: u64, tree_size: u64, path: &[ProofStep]) -
 }
 
 fn path_length_to_frontier_node(k: u64, coords_len: usize, target_f_idx: usize) -> Option<usize> {
+    if k < 2 || k > 256 {
+        return None;
+    }
     if target_f_idx >= coords_len {
         return None;
     }
@@ -331,7 +334,7 @@ pub fn verify_inclusion_path_structure(
     tree_size: u64,
     path: &[ProofStep],
 ) -> bool {
-    if k < 2 {
+    if k < 2 || k > 256 {
         return false;
     }
     let k_u64 = k as u64;
@@ -388,6 +391,9 @@ pub fn reconstruct_inclusion_root(
     if log_arity < 2 || log_arity > 256 {
         return None;
     }
+    if tree_size == 0 {
+        return None;
+    }
     if index >= tree_size {
         return None;
     }
@@ -417,6 +423,9 @@ pub fn reconstruct_inclusion_root(
         }
         if step.siblings.is_empty() {
             // Promoted node — current hash passes through unchanged
+            if step.position != 0 {
+                return None;
+            }
             continue;
         }
         if step.position > step.siblings.len() {
@@ -516,13 +525,7 @@ pub fn reconstruct_consistency_roots(
     let mut curr_height = boundary_height;
     for i in 0..bisection_steps {
         let step = &path[i];
-        if step.siblings.is_empty() {
-            // Promoted node
-            curr_height += 1;
-            let current_hash = map.get(&(curr_left, curr_height - 1))?.clone();
-            map.insert((curr_left, curr_height), current_hash);
-            continue;
-        }
+        // Log-level nodes are never promoted (arity >= 2). Skip empty siblings checks.
         if step.siblings.len() != (k - 1) as usize {
             return None;
         }

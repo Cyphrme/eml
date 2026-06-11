@@ -3,7 +3,7 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use neml::{verify_consistency, ConsistencyProof, ProofStep};
+use neml::{verify_consistency, ProofStep};
 
 #[derive(Debug)]
 struct FuzzHasher;
@@ -30,7 +30,7 @@ impl neml::Hasher for FuzzHasher {
     }
 
     fn null(&self) -> Vec<u8> {
-        neml::generate_nums_null(self, 32)
+        neml::null_digest(self)
     }
 
     fn hash(&self, data: &[u8]) -> Vec<u8> {
@@ -60,18 +60,19 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    let path = input.path.into_iter().map(|step| ProofStep {
+    let path: Vec<ProofStep> = input.path.into_iter().map(|step| ProofStep {
         siblings: step.siblings,
         position: step.position,
     }).collect();
 
-    let proof = ConsistencyProof {
-        old_size: input.old_size,
-        new_size: input.new_size,
-        log_arity: input.log_arity,
-        start_hash: input.start_hash,
-        path,
-    };
-    
-    let _ = verify_consistency(&FuzzHasher, &proof, &input.old_root, &input.new_root);
+    let _ = verify_consistency(
+        &FuzzHasher,
+        input.old_size,
+        input.new_size,
+        input.log_arity,
+        &input.start_hash,
+        &path,
+        &input.old_root,
+        &input.new_root,
+    );
 });
