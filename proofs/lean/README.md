@@ -109,24 +109,40 @@ locations in the source files:
   - `stackRoot_segments_eq_mth` (L35–L153): Topological isomorphism inductive step.
   - `bridge_lemma` (L155–L166): Structural incremental-to-batch equivalence.
 - **[Projection.lean](EMLProof/Projection.lean)**:
-  - `generic_projection_equivalence` (L107–L112): Homomorphic projection to any digest space.
-  - `projection_equivalence` (L114–L119): EML Theorem 1 (Projection Equivalence).
-  - `temporal_binding` (L131–L135): EML Theorem 2 (Temporal Binding / ROM separation).
-  - `algorithm_isolation` (L144–L151): EML Theorem 3 (Algorithm Isolation).
+  - `generic_projection_equivalence`: Projection to any digest space (`congrArg` over a tree
+    equality; no algebraic/homomorphism structure is involved).
+  - `projection_equivalence`: EML Theorem 1 (Projection Equivalence).
+  - The former "Temporal Binding" and "Algorithm Isolation" theorems were removed as vacuous
+    (an axiom echo, and two independent copies of Projection Equivalence). Their intended
+    security content is formalized in `NEML.lean`'s committed-epoch (Design A+) layer.
+- **[NEML.lean](EMLProof/NEML.lean)** (security layer):
+  - `eval` and its five evaluation equations (`eval_leaf`/`eval_empty`/`eval_singleton_node`/
+    `eval_flat_null_node`/`eval_node_hash`): a real `def` with proved equations (formerly
+    axioms); `eval_singleton`, `eval_flat_null_promotion`: promotion soundness.
+  - `null_collision`: the faithful `leaf(b"null") = N₀` identity, now expressible and proved.
+  - Design A+: `inferredActiveFromNull_unsound`, `metaroot_binds_timeline`,
+    `real_cell_forces_committed_active`, `committed_inactive_is_null` — activity is read from
+    the committed timeline bound into the combined-root metaroot, not from digest null-ness.
+  - Canonical inclusion: `not_canonical_of_promoted`, `inclusion_soundness` (proved);
+    `inclusion_proof_unique` (non-malleability) is stated with a single flagged `sorry`.
 
 ### 2.1. How to Audit and Verify Axioms (TCB)
-To verify that no axioms or `sorry` placeholders are hidden inside EMLProof's core theorems, a
-reviewer can inspect the Trusted Computing Base (TCB) using Lean's `#print axioms` command:
-1. Append the following diagnostics to the end of [Projection.lean](EMLProof/Projection.lean):
+To verify which axioms and `sorry` placeholders the theorems depend on, a reviewer can inspect
+the Trusted Computing Base (TCB) using Lean's `#print axioms` command:
+1. Append the following diagnostics to the end of [NEML.lean](EMLProof/NEML.lean):
    ```lean
-   #print axioms projection_equivalence
-   #print axioms temporal_binding
-   #print axioms algorithm_isolation
+   #print axioms NEML.projection_equivalence
+   #print axioms NEML.eval_flat_null_promotion
+   #print axioms NEML.metaroot_binds_timeline
+   #print axioms NEML.inclusion_proof_unique
    ```
 2. Build the project. The compiler output will display the exact axioms utilized.
-3. Reviewers can verify that the only printed axioms are the five declared domain constants:
-   `Digest`, `Digest.nonempty`, `H`, `digestToBytes`, and `domain_separation`. This confirms
-   that no unsound rules or unfinished proofs were introduced.
+3. The NEML/Projection layer declares **exactly four** domain constants:
+   `Digest`, `Digest.nonempty`, `H`, and `digestToBytes` (plus Lean built-ins `propext`,
+   `Classical.choice`, `Quot.sound`). This corrects the earlier claim of five — the
+   `domain_separation` axiom and the NEML `numsSeed`/`xof`/`eval`-cluster axioms (thirteen in
+   total before) were removed. Note that `inclusion_proof_unique` currently depends on `sorryAx`
+   (flagged at its definition); every other theorem is `sorry`-free.
 
 
 ### 2.2. Paper-to-Formalization Dictionary
@@ -138,9 +154,9 @@ respective Lean symbols in the source code:
 | **Definition 2** | [mth](EMLProof/Tree.lean#L92) | Batch Merkle Tree Hash |
 | **Definition 3** | [cto](EMLProof/Tree.lean#L112) | Count Trailing Ones count |
 | **Theorem 1** | [bridge_lemma](EMLProof/Bridge.lean#L155) | Structural Bridge Lemma |
-| **Theorem 2** | [projection_equivalence](EMLProof/Projection.lean#L114) | Projection Equivalence |
-| **Theorem 3** | [temporal_binding](EMLProof/Projection.lean#L131) | Temporal Binding |
-| **Theorem 4** | [algorithm_isolation](EMLProof/Projection.lean#L144) | Algorithm Isolation |
+| **Theorem 2** | [projection_equivalence](EMLProof/Projection.lean) | Projection Equivalence |
+| **Temporal Binding** | [metaroot_binds_timeline](EMLProof/NEML.lean), [real_cell_forces_committed_active](EMLProof/NEML.lean) | Inactivity authenticated by the committed epoch timeline (Design A+); supersedes the removed vacuous `temporal_binding` |
+| **Algorithm Isolation** | [metaroot_binds_timeline](EMLProof/NEML.lean) | Per-algorithm commitments bound into the metaroot; supersedes the removed vacuous `algorithm_isolation` |
 | **Theorem 5** | [generalized_bridge_lemma](EMLProof/General/Duality.lean#L444) | Generalized Bridge Lemma |
 
 
@@ -180,12 +196,16 @@ To stress-test the formalization against potential mathematical or semantic expl
 the findings of our formal red-team audit:
 
 ### A. Axiom Minimality and Soundness
-- The codebase relies on exactly five structural/domain axioms declared in `Projection.lean` (e.g.,
-  the existence of `Digest`, a hashing operator `H`, and prefix-based domain separation).
+- The codebase relies on exactly four structural/domain axioms declared in `Projection.lean`: the
+  existence of `Digest`, its non-emptiness, a hashing operator `H`, and a digest serializer
+  `digestToBytes`. (This corrects an earlier claim of five: the `domain_separation` axiom and the
+  NEML `numsSeed`/`xof`/`eval`-cluster axioms — thirteen in total before — were removed.)
 - We assume no structural algebraic properties of `H` (such as associativity or commutativity). The
   proof is purely combinatorial and arithmetic.
-- Domain separation (`nullLeaf ≠ leafHash d`) is modeled as a computational hardness assumption
-  under the Random Oracle Model (ROM).
+- The model does **not** assume the null constant is unreachable. The faithful definition makes the
+  `leaf(b"null") = N₀` collision expressible (`null_collision`); soundness comes instead from
+  reading activity off the committed epoch timeline bound into the metaroot (Design A+), so the
+  collision is inert rather than assumed away.
 
 ### B. Generalized Topology Robustness
 - **Fallback Logic**: If the policy function `f` is invalid (e.g., returns 0 or a split $\ge n$),

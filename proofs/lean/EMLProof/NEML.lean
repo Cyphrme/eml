@@ -682,3 +682,21 @@ theorem inclusion_proof_unique
   sorry
 
 end NEML
+
+/-!
+## Trust base (axiom inventory)
+
+After this realignment the NEML/Projection layer declares **exactly four** axioms,
+all legitimate typing/hashing scaffolding, in `Projection.lean`:
+`Digest`, `Digest.nonempty`, `H`, `digestToBytes`.
+
+This corrects the earlier count of thirteen. Removed: `numsSeed`, `xof`, the
+`eval` axiom and its five `eval_*` equation axioms (now a real `def` with proved
+equations), and `domain_separation` (the deleted vacuous EML theorems were its
+only consumer). `#print axioms` on the NEML/Projection theorems shows only the
+four above plus the Lean built-ins `propext`, `Classical.choice`, `Quot.sound`.
+
+One theorem, `inclusion_proof_unique` (proof-encoding non-malleability), is
+stated but not yet proved — it uses `sorryAx`, flagged at its definition. Every
+other theorem in this file is `sorry`-free.
+-/
