@@ -17,7 +17,7 @@ pub use proof::{
     committed_active_algs, committed_active_at, committed_is_live, combined_root_preimage,
     reconstruct_consistency_roots, reconstruct_inclusion_root, validate_committed_epochs,
     verify_consistency, verify_consistency_with_coupling, verify_epoch_evolution,
-    verify_inclusion, verify_inclusion_with_coupling,
+    verify_inclusion, verify_inclusion_with_coupling, verify_inactivity_with_coupling,
 };
 pub use schedule::reduction_count;
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};

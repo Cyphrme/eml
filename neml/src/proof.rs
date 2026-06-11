@@ -1032,7 +1032,73 @@ pub fn verify_inclusion_with_coupling(
         None => return false,
     };
 
+    // One-directional inactive⇒N₀ check: if the committed timeline marks
+    // this position INACTIVE for alg_id, the leaf hash must equal the null
+    // constant.  Active positions are unconstrained — a legitimate payload
+    // `b"null"` hashes to null() but is never forbidden.  `None` (algorithm
+    // not in the timeline at all) is rejected as an ill-formed proof.
+    match committed_active_at(&coupling.alg_epochs, alg_id, index) {
+        Some(false) => {
+            if !constant_time_eq(leaf_hash, &hasher.null()) {
+                return false;
+            }
+        },
+        Some(true) => {},
+        None => return false,
+    }
+
     verify_inclusion(hasher, leaf_hash, index, tree_size, log_arity, path, &raw_root)
+}
+
+/// Verify an inactivity claim for a leaf at `index` using a coupling proof.
+///
+/// Succeeds iff:
+/// - `index < tree_size`
+/// - The coupling proof authenticates against `combined_root`.
+/// - The committed timeline marks `alg_id` **inactive** at `index`.
+/// - If `alg_id` has a committed root (it appears in `coupling.active_roots`),
+///   an inclusion proof for the null constant at `index` verifies against that
+///   root.  The caller must provide the matching Merkle path.
+/// - If `alg_id` is frozen at `tree_size` (no committed root), `path` must be
+///   empty — the committed timeline alone is sufficient evidence.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn verify_inactivity_with_coupling(
+    hasher: &dyn Hasher,
+    alg_id: u64,
+    index: u64,
+    tree_size: u64,
+    log_arity: u64,
+    path: &[ProofStep],
+    coupling: &CouplingProof,
+    combined_root: &[u8],
+    expected_active_algs: &[u64],
+    config: VerifierConfig,
+) -> bool {
+    if index >= tree_size {
+        return false;
+    }
+
+    if !coupling.authenticate(hasher, tree_size, combined_root, expected_active_algs, config) {
+        return false;
+    }
+
+    // Position must be committed-inactive for this algorithm.
+    match committed_active_at(&coupling.alg_epochs, alg_id, index) {
+        Some(false) => {},
+        _ => return false,
+    }
+
+    // If alg_id has an active committed root, open it with a null-leaf
+    // inclusion proof.  If it is frozen (not in active_roots), the timeline
+    // commitment alone is the evidence and the path must be empty.
+    if let Some((_, raw_root)) =
+        coupling.active_roots.iter().find(|&&(id, _)| id == alg_id)
+    {
+        verify_inclusion(hasher, &hasher.null(), index, tree_size, log_arity, path, raw_root)
+    } else {
+        path.is_empty()
+    }
 }
 
 /// Helper wrapper demonstrating consistency verification with decoupled coupling proofs.

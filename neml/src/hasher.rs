@@ -20,7 +20,19 @@ pub trait Hasher: Debug + Send + Sync {
     #[must_use]
     fn empty(&self) -> Vec<u8>;
 
-    /// Null leaf constant: H(b"null").
+    /// Null leaf constant: `H(b"null")`.
+    ///
+    /// Because `leaf(d) = H(d)`, we have `leaf(b"null") == null()` by
+    /// construction.  This identity is intentional and inert: activity is
+    /// read from the committed epoch timeline, never inferred from digest
+    /// null-ness, so an active cell whose payload is literally `b"null"`
+    /// is indistinguishable from an inactive cell only by an observer who
+    /// ignores the authenticated timeline — a correct verifier never does.
+    ///
+    /// Internal node hashes cannot equal `null()` except by a true hash
+    /// collision: a node's preimage concatenates ≥ 2 digests (total length
+    /// ≥ 2 × digest_len), whereas `b"null"` is 4 bytes; the preimages
+    /// differ in length, so a collision requires breaking the hash function.
     #[must_use]
     fn null(&self) -> Vec<u8> {
         self.hash(b"null")
