@@ -1,4 +1,5 @@
 import EMLProof.Projection
+import Mathlib.Logic.Encodable.Basic
 
 /-!
 # NEML Formal Soundness and Promotion Properties
@@ -213,6 +214,165 @@ theorem eval_flat_null_promotion (L : Nat) (children : List (NaryTree (List UInt
 
 set_option linter.style.longLine false
 
+/-! ## Design A+ — the committed epoch timeline authenticates activity
+
+This section formalizes the Design A+ soundness content. The combined root is a
+structural **metaroot**: a tree layer whose preimage commits every algorithm's
+root **and** the per-algorithm epoch timeline (the timeline is structure — it
+decides which cells are null projections). Two consequences are modeled:
+
+* **Activity is read from the authenticated timeline, never from digest
+  null-ness.** This is what renders the `leaf(b"null") = N₀` collision
+  (`null_collision`) inert: the inference "cell = N₀ ⇒ inactive" is unsound
+  (`inferredActiveFromNull_unsound`), so activity must come from the committed
+  field.
+* **The metaroot binds the timeline** (`metaroot_binds_timeline`): the two
+  histories the collision would conflate — byte-identical trees but timelines
+  disagreeing on activity at some `(X, p)` — cannot share a combined root unless
+  `H` collides. Inactivity is therefore not forgeable by metadata substitution.
+
+Plus the verification-time consistency check `inactive ⇒ N₀`
+(`InactiveImpliesNull`) and its anti-repudiation consequence
+(`real_cell_forces_committed_active`).
+
+Mirrors `neml/src/proof.rs` (`committed_active_at`, `combined_root_preimage`,
+`validate_committed_epochs`) and `neml/src/tree.rs` (`combined_root_at`,
+`verify_audit_payload`). The metaroot is never signature-dependent; signing is an
+orthogonal, snapshot-level act performed after a snapshot's leaves are verified. -/
+
+/-- An algorithm identifier. -/
+abbrev AlgId := Nat
+
+/-- A committed epoch interval `[start, stop)`. `stop = none` encodes an open
+    (still-active) interval — the model analogue of the `u64::MAX` end marker in
+    the Rust `(u64, u64)` encoding. -/
+abbrev CEpoch := Nat × Option Nat
+
+/-- The committed epoch timeline at a snapshot: `(alg_id, intervals)` for every
+    registered algorithm, mirroring `alg_epochs : Vec<(u64, Vec<(u64,u64)>)>`. -/
+abbrev Timeline := List (AlgId × List CEpoch)
+
+/-- Whether position `i` lies in the committed interval `[start, stop)`. -/
+def epochCovers (e : CEpoch) (i : Nat) : Bool :=
+  decide (e.1 ≤ i) && (match e.2 with | none => true | some s => decide (i < s))
+
+/-- Whether any of an algorithm's intervals covers position `i`. -/
+def inAnyEpoch (eps : List CEpoch) (i : Nat) : Bool :=
+  eps.any (fun e => epochCovers e i)
+
+/-- Look up an algorithm's committed intervals. -/
+def lookupTimeline (tl : Timeline) (alg : AlgId) : Option (List CEpoch) :=
+  (tl.find? (fun p => decide (p.1 = alg))).map Prod.snd
+
+/-- Authenticated activity of `alg` at position `i`, read from the committed
+    timeline. `none` iff `alg` has no committed timeline. Mirrors
+    `committed_active_at` (`proof.rs`). -/
+def committedActiveAt (tl : Timeline) (alg i : Nat) : Option Bool :=
+  (lookupTimeline tl alg).map (fun eps => inAnyEpoch eps i)
+
+/-- The *unsound* legacy inference: read activity from digest null-ness
+    (cell ≠ N₀ ⇒ active). Modeled only to prove it unsound. -/
+noncomputable def inferredActiveFromNull (L : Nat)
+    (cells : AlgId → Nat → Digest) (alg i : Nat) : Bool :=
+  !(cells alg i == nullDigest L)
+
+/-- **Null-inference is unsound.** A genuine active leaf can hash to the null
+    constant (`null_collision`), so reading activity from null-ness misclassifies
+    it as inactive: an honest leaf with payload `b"null"` is reported inactive.
+    This is exactly why A+ reads activity from the authenticated timeline. -/
+theorem inferredActiveFromNull_unsound (L : Nat) :
+    ∃ (cells : AlgId → Nat → Digest) (alg i : Nat),
+      cells alg i = leafHash nullPreimage ∧
+      inferredActiveFromNull L cells alg i = false := by
+  refine ⟨(fun _ _ => leafHash nullPreimage), 0, 0, rfl, ?_⟩
+  simp only [inferredActiveFromNull, Bool.not_eq_eq_eq_not, Bool.not_false, beq_iff_eq]
+  exact null_collision L
+
+/-- The verification-time consistency check enforced by `verify_audit_payload`:
+    every position the committed timeline marks *inactive* for an algorithm must
+    hold the null constant in that algorithm's tree. One-directional — it never
+    constrains active cells, so an active cell whose payload is literally
+    `b"null"` (hashing to `N₀`) is permitted; no payload is ever forbidden. -/
+def InactiveImpliesNull (L : Nat) (tl : Timeline) (cells : AlgId → Nat → Digest) : Prop :=
+  ∀ alg i, committedActiveAt tl alg i = some false → cells alg i = nullDigest L
+
+/-- **A+ anti-repudiation.** Under the committed consistency check, a cell that
+    holds a genuine non-null value forces the committed timeline to mark that
+    position active: a logger cannot commit a real leaf and later disown it via
+    the epochs. (The repudiation defense — `inactive ⇒ N₀` read contrapositively.) -/
+theorem real_cell_forces_committed_active
+    (L : Nat) (tl : Timeline) (cells : AlgId → Nat → Digest)
+    (hcheck : InactiveImpliesNull L tl cells) (alg i : Nat)
+    (hreal : cells alg i ≠ nullDigest L) :
+    committedActiveAt tl alg i ≠ some false := by
+  intro hfalse
+  exact hreal (hcheck alg i hfalse)
+
+/-- **A+ revocation side.** Under the consistency check, a committed-inactive
+    position genuinely holds `N₀` — no real leaf hides behind a "retired" claim. -/
+theorem committed_inactive_is_null
+    (L : Nat) (tl : Timeline) (cells : AlgId → Nat → Digest)
+    (hcheck : InactiveImpliesNull L tl cells) (alg i : Nat)
+    (hinactive : committedActiveAt tl alg i = some false) :
+    cells alg i = nullDigest L :=
+  hcheck alg i hinactive
+
+/-- A collision on the hash `H`: distinct preimages with equal digest. -/
+def HashCollision : Prop := ∃ a b : List UInt8, a ≠ b ∧ H a = H b
+
+/-- Self-delimiting byte encoding of a `Nat`: `n` copies of `0x01` terminated by
+    `0x00`. Injective (recoverable from its length). -/
+def uNat (n : Nat) : List UInt8 := List.replicate n 1 ++ [0]
+
+theorem uNat_injective : Function.Injective uNat := by
+  intro m n h
+  have hlen := congrArg List.length h
+  simp only [uNat, List.length_append, List.length_replicate, List.length_cons,
+    List.length_nil] at hlen
+  omega
+
+/-- Injective byte serialization of the committed timeline. The combined-root
+    preimage commits this (`combined_root_preimage` in `proof.rs` uses a concrete
+    fixed-width big-endian framing; here we use any injective serialization, of
+    which that format is one realization). Built as `uNat ∘ encode`, so
+    injectivity is immediate. -/
+def encTimeline (tl : Timeline) : List UInt8 := uNat (Encodable.encode tl)
+
+theorem encTimeline_injective : Function.Injective encTimeline :=
+  uNat_injective.comp Encodable.encode_injective
+
+/-- Byte serialization of the active per-algorithm roots (the rest of the
+    metaroot preimage). Its internal injectivity is irrelevant to the binding
+    argument below, which fixes the active roots and varies only the timeline. -/
+noncomputable def encRoots (ar : List (AlgId × Digest)) : List UInt8 :=
+  uNat ar.length ++ ar.flatMap (fun p => uNat p.1 ++ digestToBytes p.2)
+
+/-- The combined-root metaroot preimage: active roots followed by the committed
+    timeline. -/
+noncomputable def metaPreimage (ar : List (AlgId × Digest)) (tl : Timeline) : List UInt8 :=
+  encRoots ar ++ encTimeline tl
+
+/-- The combined root (metaroot) is `H` of its preimage. -/
+noncomputable def combinedRoot (ar : List (AlgId × Digest)) (tl : Timeline) : Digest :=
+  H (metaPreimage ar tl)
+
+/-- **A+ non-equivocation: the metaroot binds the committed timeline.** The two
+    histories the leaf/null collision would otherwise conflate — byte-identical
+    trees (hence identical active roots `ar`) but timelines disagreeing on
+    activity at some `(X, p)` — cannot share a combined root unless `H` collides.
+    Binding the timeline into the metaroot is exactly what makes inactivity
+    non-forgeable by metadata substitution under a fixed root. -/
+theorem metaroot_binds_timeline
+    (ar : List (AlgId × Digest)) (tl₁ tl₂ : Timeline)
+    (hne : tl₁ ≠ tl₂) (heq : combinedRoot ar tl₁ = combinedRoot ar tl₂) :
+    HashCollision := by
+  refine ⟨metaPreimage ar tl₁, metaPreimage ar tl₂, ?_, heq⟩
+  intro hpre
+  apply hne
+  apply encTimeline_injective
+  simp only [metaPreimage] at hpre
+  exact List.append_cancel_left hpre
+
 /-- Inserts an element at a given position in a list. -/
 def insertAt {α : Type} (n : Nat) (x : α) : List α → List α
   | [] => [x]
@@ -239,7 +399,13 @@ def getL {α : Type} [Inhabited α] : List α → Nat → α
   | x :: _, 0 => x
   | _ :: xs, n + 1 => getL xs n
 
-/-- Reconstructs the root hash from a leaf and a proof path. -/
+/-- Reconstructs the root hash from a leaf and a proof path.
+
+    This is the legacy transcription of the Rust verifier's fold. Under
+    **canonical proof encoding** the `step.siblings.isEmpty` (promoted/zero-
+    sibling) branch is dead: such steps are rejected, not passed through. The
+    canonical model with its proved properties is `foldCanonical` /
+    `CanonicalPath` in the "Canonical inclusion proofs" section below. -/
 noncomputable def reconstructPathRoot (leafHash : Digest) (path : List ProofStep) : Digest :=
   path.foldl (fun current step =>
     if step.siblings.isEmpty then
@@ -405,5 +571,114 @@ noncomputable def verifyInclusion (leafHash : Digest) (proof : InclusionProof) (
             computed_root = root
           else
             false
+
+/-! ## Canonical inclusion proofs — soundness and non-malleability
+
+Under **canonical proof encoding**, zero-sibling ("promoted") steps are
+*rejected*: honest provers omit them, because implicit promotion elevates a
+digest to its parent slot without hashing, so a promoted step is a hash no-op.
+Every step of an accepted proof therefore strictly hashes.
+
+This is distinct from flat null promotion (`eval_flat_null_promotion`), a
+null-*valued* collapse (N₀) that appears as null-*valued* siblings; here we
+reject zero-*sibling* steps. The two mechanisms are independent.
+
+The log skeleton pinned by `(k, index, tree_size)` is the security boundary
+(exact length, per-step position, per-level sibling count). Its concrete
+computation is the shared topology module (`neml/src/topology.rs`); the theorems
+below take it as an abstract predicate `SkeletonValid`, so they hold for whatever
+pinning that module enforces. -/
+
+/-- A step strictly hashes iff it carries at least one sibling. -/
+def StrictStep (s : ProofStep) : Prop := s.siblings ≠ []
+
+/-- A canonical path contains no zero-sibling (promoted) steps. -/
+def CanonicalPath (path : List ProofStep) : Prop := ∀ s ∈ path, StrictStep s
+
+/-- One strictly-hashing fold step: hash the path node into its slot among the
+    siblings. Under `CanonicalPath` this is the only behavior that occurs (the
+    `reconstructPathRoot` pass-through branch is dead). -/
+noncomputable def applyStep (cur : Digest) (s : ProofStep) : Digest :=
+  nodeHash (insertAt s.position cur s.siblings)
+
+/-- Reconstruct the root by strictly hashing along a canonical path. -/
+noncomputable def foldCanonical (leaf : Digest) (path : List ProofStep) : Digest :=
+  path.foldl applyStep leaf
+
+/-- **Canonical encoding rejects promoted steps.** Any path containing a
+    zero-sibling step is non-canonical, hence rejected. This closes the
+    prepend-a-promoted-step malleability: padded proofs are no longer accepted. -/
+theorem not_canonical_of_promoted (path : List ProofStep)
+    (h : ∃ s ∈ path, s.siblings = []) : ¬ CanonicalPath path := by
+  obtain ⟨s, hmem, hs⟩ := h
+  intro hcanon
+  exact (hcanon s hmem) hs
+
+/-- The canonical inclusion verifier's accept relation. Trusted parameters
+    `(k, index, tree_size)` come from a signed tree head. The path splits at
+    `boundary`: the leading steps are the subtree prefix (hashing `leaf` up to
+    its log-position subtree root) and the trailing steps are the log skeleton,
+    pinned to log position `index` by `SkeletonValid`. The whole path is
+    canonical and strictly hashes `leaf` to `root`. -/
+def Accepts (SkeletonValid : Nat → Nat → Nat → List ProofStep → Prop)
+    (k index treeSize : Nat) (leaf root : Digest) (path : List ProofStep) : Prop :=
+  CanonicalPath path ∧
+  foldCanonical leaf path = root ∧
+  ∃ boundary, boundary ≤ path.length ∧ SkeletonValid k index treeSize (path.drop boundary)
+
+/-- **Inclusion soundness (existential).** An accepting canonical proof for
+    `(leaf, index, tree_size, root)` exhibits a subtree root `R` at log position
+    `index` such that `leaf` hashes up to `R` at some depth `d`, and `R` folds
+    through the pinned log skeleton to `root`. Depth is existential: implicit
+    promotion makes a promoted digest equal its parent slot, so the claim binds
+    the log *position*, never the depth (Cyphr SPEC §2.2.12). -/
+theorem inclusion_soundness
+    (SkeletonValid : Nat → Nat → Nat → List ProofStep → Prop)
+    (k index treeSize : Nat) (leaf root : Digest) (path : List ProofStep)
+    (h : Accepts SkeletonValid k index treeSize leaf root path) :
+    ∃ (R : Digest) (d : Nat), d ≤ path.length ∧
+      foldCanonical leaf (path.take d) = R ∧
+      SkeletonValid k index treeSize (path.drop d) ∧
+      foldCanonical R (path.drop d) = root := by
+  obtain ⟨_hcanon, hfolds, boundary, hble, hskel⟩ := h
+  refine ⟨foldCanonical leaf (path.take boundary), boundary, hble, rfl, hskel, ?_⟩
+  have hsplit : foldCanonical leaf (path.take boundary ++ path.drop boundary) = root := by
+    rw [List.take_append_drop]; exact hfolds
+  rw [foldCanonical, List.foldl_append] at hsplit
+  exact hsplit
+
+/-- A collision on the internal node hash: distinct child lists, equal digest.
+    A `nodeHash` collision is in particular an `H` collision. -/
+def NodeHashCollision : Prop := ∃ a b : List Digest, a ≠ b ∧ nodeHash a = nodeHash b
+
+/-- **Inclusion proof-encoding uniqueness (non-malleability).** With zero-sibling
+    steps rejected, every remaining step strictly hashes, and the shared topology
+    module pins the proof *shape* from `(k, index, tree_size)`: the accepted
+    path's length and its per-step position are determined (hypotheses `hlen`,
+    `hpos` — what `topology.rs` guarantees, modeled as premises until that module
+    is ported to Lean). The only remaining freedom is the sibling *values*, which
+    the fold pins to `root`. Hence for a fixed `(leaf, index, tree_size, root)`
+    there is at most one accepting canonical path — modulo a `nodeHash` collision
+    (where the path could be rerouted by colliding an internal node hash).
+
+    Without `hlen`/`hpos` the claim is false (two paths of different lengths can
+    both fold to a fixed point, and a fixed `position` is what makes the
+    per-step `insertAt` recoverable); they encode the injective child-ordering
+    the canonical-encoding decision relies on.
+
+    The full proof (back-to-front induction: each final `nodeHash` is equal, so
+    its preimages either collide or, with `position` pinned, `insertAt` injectivity
+    forces the steps and the running digests equal, recursing on the prefixes) is
+    left for the proof pass.
+    TODO(proof): discharge `inclusion_proof_unique`. -/
+theorem inclusion_proof_unique
+    (SkeletonValid : Nat → Nat → Nat → List ProofStep → Prop)
+    (k index treeSize : Nat) (leaf root : Digest) (p₁ p₂ : List ProofStep)
+    (h₁ : Accepts SkeletonValid k index treeSize leaf root p₁)
+    (h₂ : Accepts SkeletonValid k index treeSize leaf root p₂)
+    (hlen : p₁.length = p₂.length)
+    (hpos : ∀ i : Nat, (p₁[i]?).map ProofStep.position = (p₂[i]?).map ProofStep.position) :
+    p₁ = p₂ ∨ NodeHashCollision := by
+  sorry
 
 end NEML
