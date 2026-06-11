@@ -1464,6 +1464,231 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(crate::proof::CouplingProof { active_roots, alg_epochs })
     }
 
+    /// Verify an `AuditPayload` against the stored log data.
+    ///
+    /// Checks three things in sequence:
+    /// 1. Structural validity: the payload's epoch timeline is well-formed,
+    ///    consistent with the locally registered algorithms, and the derived
+    ///    active set matches `payload.active_algs`.
+    /// 2. Cell integrity: streaming over every position in `0..tree_size`
+    ///    for every registered algorithm; active cells must match the stored
+    ///    leaf or subtree-root hash; committed-inactive cells must be the
+    ///    null constant (a non-null stored cell is a baked tree↔epoch
+    ///    contradiction — the repudiation evidence).
+    /// 3. Root recomputation: each active algorithm's combined root is
+    ///    recomputed from the data seen during the pass and compared to
+    ///    `payload.combined_roots`; all must match.
+    ///
+    /// Activity is read from `payload.alg_epochs` (the committed timeline),
+    /// never from local uncommitted epoch state — using local state would be
+    /// circular and would miss the equivocation.
+    ///
+    /// `verify_non_divergence` is a LOCAL self-integrity check (it trusts
+    /// local epochs and stored roots); use this function to verify a payload
+    /// before signing it.
+    pub async fn verify_audit_payload(
+        &self,
+        payload: &crate::proof::AuditPayload,
+    ) -> Result<bool, S::Error> {
+        let size = payload.tree_size;
+        let current_size = if self.size > 0 { self.size } else { self.subtree_count };
+
+        // ── 1. Structural validation ──────────────────────────────────────
+        if size == 0 || size > current_size {
+            return Ok(false);
+        }
+
+        // Payload alg-ID set must equal the algorithms registered locally
+        // that have any committed epochs at this size.
+        let local_epochs = self.committed_epochs_at(size);
+        let local_ids: Vec<u64> = local_epochs.iter().map(|&(id, _)| id).collect();
+        let payload_ids: Vec<u64> = payload.alg_epochs.iter().map(|&(id, _)| id).collect();
+        if local_ids != payload_ids {
+            return Ok(false);
+        }
+
+        if !crate::proof::validate_committed_epochs(&payload.alg_epochs, size) {
+            return Ok(false);
+        }
+
+        let derived_active = crate::proof::committed_active_algs(&payload.alg_epochs, size);
+        if derived_active != payload.active_algs {
+            return Ok(false);
+        }
+
+        // combined_roots must be indexed by exactly the active alg IDs.
+        if payload.combined_roots.len() != payload.active_algs.len()
+            || payload.combined_roots.iter().zip(payload.active_algs.iter())
+                .any(|((id, _), &expected)| *id != expected)
+        {
+            return Ok(false);
+        }
+
+        // ── 2. Streaming cell check ───────────────────────────────────────
+        let is_flat = self.size > 0;
+        let k = self.config.log_arity;
+        let active_set: std::collections::HashSet<u64> =
+            payload.active_algs.iter().copied().collect();
+
+        // Per-algorithm rolling frontier (active-set only).
+        let mut frontiers: std::collections::HashMap<u64, Vec<Vec<u8>>> =
+            payload.active_algs.iter().map(|&id| (id, Vec::new())).collect();
+
+        for i in 0..size {
+            let leaf_data = if is_flat {
+                match self.storage.get_leaf(i).await {
+                    Ok(d) => Some(d),
+                    Err(e) => return Err(crate::error::Error::Storage(e)),
+                }
+            } else {
+                None
+            };
+
+            for &(alg_id, _) in &payload.alg_epochs {
+                let state = self
+                    .algs
+                    .get(&alg_id)
+                    .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
+
+                let digest = match crate::proof::committed_active_at(
+                    &payload.alg_epochs,
+                    alg_id,
+                    i,
+                ) {
+                    Some(true) => {
+                        if let Some(ref d) = leaf_data {
+                            let expected = state.hasher.leaf(d);
+                            // In flat mode the stored node is a cache; if
+                            // present it must match the recomputed leaf hash.
+                            if let Some(stored) = self
+                                .storage
+                                .get_node(alg_id, i, 0)
+                                .await
+                                .map_err(crate::error::Error::Storage)?
+                            {
+                                if !crate::proof::constant_time_eq(&expected, &stored) {
+                                    return Ok(false);
+                                }
+                            }
+                            expected
+                        } else {
+                            // Subtree mode: stored node is authoritative and
+                            // must exist for active-set algorithms.
+                            match self
+                                .storage
+                                .get_node(alg_id, i, 0)
+                                .await
+                                .map_err(crate::error::Error::Storage)?
+                            {
+                                Some(v) => v,
+                                None if active_set.contains(&alg_id) => return Ok(false),
+                                None => state.hasher.null(),
+                            }
+                        }
+                    },
+                    Some(false) => {
+                        let null = state.hasher.null();
+                        if let Some(stored) = self
+                            .storage
+                            .get_node(alg_id, i, 0)
+                            .await
+                            .map_err(crate::error::Error::Storage)?
+                        {
+                            if !crate::proof::constant_time_eq(&stored, &null) {
+                                return Ok(false);
+                            }
+                        }
+                        null
+                    },
+                    None => return Ok(false),
+                };
+
+                if let Some(frontier) = frontiers.get_mut(&alg_id) {
+                    frontier.push(digest);
+                    let merges = reduction_count(i, k as u64);
+                    for _ in 0..merges {
+                        if frontier.len() < k {
+                            return Ok(false);
+                        }
+                        let mut children = Vec::with_capacity(k);
+                        for _ in 0..k {
+                            children.push(frontier.pop().ok_or_else(|| {
+                                crate::error::Error::CorruptedMetadata {
+                                    alg_id,
+                                    reason: "frontier underflow in audit".to_string(),
+                                }
+                            })?);
+                        }
+                        children.reverse();
+                        let child_refs: Vec<&[u8]> =
+                            children.iter().map(|c| c.as_slice()).collect();
+                        let parent = nary_mr(state.hasher.as_ref(), &child_refs);
+                        frontier.push(parent);
+                    }
+                }
+            }
+        }
+
+        // ── 3. Root recomputation ─────────────────────────────────────────
+        fn fold_to_root(hasher: &dyn Hasher, frontier: &[Vec<u8>], k: usize) -> Vec<u8> {
+            if frontier.is_empty() {
+                return hasher.empty();
+            }
+            if frontier.len() == 1 {
+                return frontier[0].clone();
+            }
+            let mut cur = frontier.to_vec();
+            while cur.len() > k {
+                let split = cur.len() - k;
+                let right: Vec<&[u8]> = cur[split..].iter().map(|v| v.as_slice()).collect();
+                let merged = nary_mr(hasher, &right);
+                cur.truncate(split);
+                cur.push(merged);
+            }
+            let refs: Vec<&[u8]> = cur.iter().map(|v| v.as_slice()).collect();
+            nary_mr(hasher, &refs)
+        }
+
+        let mut recomputed_roots: Vec<(u64, Vec<u8>)> =
+            Vec::with_capacity(payload.active_algs.len());
+        for &id in &payload.active_algs {
+            let state = self
+                .algs
+                .get(&id)
+                .ok_or(crate::error::Error::UnknownAlgorithm(id))?;
+            let frontier = &frontiers[&id];
+            let raw_root = fold_to_root(state.hasher.as_ref(), frontier, k);
+            recomputed_roots.push((id, raw_root));
+        }
+
+        // Apply genesis-promotion rule (mirrors combined_root_at).
+        let is_promoted =
+            payload.alg_epochs.len() == 1 && payload.alg_epochs[0].1 == vec![(0u64, u64::MAX)];
+
+        for (i, &id) in payload.active_algs.iter().enumerate() {
+            let state = self
+                .algs
+                .get(&id)
+                .ok_or(crate::error::Error::UnknownAlgorithm(id))?;
+
+            let computed_cr = if is_promoted {
+                recomputed_roots[i].1.clone()
+            } else {
+                let buf = crate::proof::combined_root_preimage(
+                    &recomputed_roots,
+                    &payload.alg_epochs,
+                );
+                state.hasher.hash(&buf)
+            };
+
+            if !crate::proof::constant_time_eq(&computed_cr, &payload.combined_roots[i].1) {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
     /// The sorted set of algorithms active at the historical `size`
     /// (algorithms whose epochs cover the final position `size - 1`).
     fn active_algs_at(&self, size: u64) -> Vec<u64> {
