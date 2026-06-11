@@ -2646,15 +2646,14 @@ fn test_proof_malleability_position_spoofing() {
             .await
             .unwrap();
 
-        // Subtree: Node([Leaf("a")]) (promoted node)
+        // Subtree wrapping a single leaf: the unary node is promoted, so under
+        // canonical proof encoding it contributes no proof step.
         let subtree = Subtree::Node(vec![Subtree::Leaf(b"a".to_vec())]);
         log.append_subtree(&subtree).await.unwrap();
 
         let root = log.root();
         let path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
-        // Since subtree has 1 leaf, the path has 1 promoted node step with position 0
-        assert_eq!(path[0].siblings.len(), 0);
-        assert_eq!(path[0].position, 0);
+        assert!(path.is_empty(), "promoted unary node must emit no proof step");
 
         let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
         let mut full_path = path;
@@ -2671,19 +2670,168 @@ fn test_proof_malleability_position_spoofing() {
             &root
         ));
 
-        // Spoof the promoted node step's position to 42
-        let mut spoofed_path = full_path.clone();
-        spoofed_path[0].position = 42;
+        // Canonical encoding: a promoted (zero-sibling) step is a hash no-op, so
+        // prepending one leaves the computed root unchanged — yet it must be
+        // rejected to keep the accepting path unique.
+        for position in [0usize, 42] {
+            let mut spoofed = full_path.clone();
+            spoofed.insert(
+                0,
+                neml::ProofStep {
+                    siblings: vec![],
+                    position,
+                },
+            );
+            assert!(
+                !neml::verify_inclusion(&Sha256Hasher, &leaf_hash, 0, 1, 2, &spoofed, &root),
+                "prepended promoted step (position {position}) must be rejected"
+            );
+        }
+    });
+}
 
-        assert!(!neml::verify_inclusion(
-            &Sha256Hasher,
-            &leaf_hash,
-            0,
-            1,
-            2,
-            &spoofed_path,
-            &root
-        ), "Spoofed promoted position must be rejected");
+/// Removing a log-skeleton step must be rejected: the verifier knows the exact
+/// skeleton length from the trusted `(index, tree_size, arity)`.
+#[test]
+fn test_inclusion_truncated_skeleton_rejected() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let mut log =
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 })
+                .await
+                .unwrap();
+        for d in [b"a".as_ref(), b"b", b"c", b"d"] {
+            log.append_leaf(d).await.unwrap();
+        }
+        let root = log.root();
+
+        let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
+        let leaf = Sha256Hasher.leaf(b"c");
+        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &proof.path, &root));
+
+        assert!(!proof.path.is_empty());
+        let truncated = &proof.path[..proof.path.len() - 1];
+        assert!(
+            !neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, truncated, &root),
+            "a proof missing a skeleton step must be rejected"
+        );
+    });
+}
+
+/// The last leaf of a non-full ternary tree reaches the root through a *partial*
+/// (fewer-than-k children) grouping node. Its sibling count is pinned exactly, so
+/// an off-by-one there — the highest-risk forgery — must be rejected.
+#[test]
+fn test_partial_rightmost_node_sibling_count() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let mut log =
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 3 })
+                .await
+                .unwrap();
+        for d in [b"a".as_ref(), b"b", b"c", b"d"] {
+            log.append_leaf(d).await.unwrap();
+        }
+        let root = log.root();
+
+        let proof = log.inclusion_proof(3, 4).await.unwrap().unwrap();
+        let leaf = Sha256Hasher.leaf(b"d");
+        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &proof.path, &root));
+
+        // The root joins two frontier nodes here, so the rightmost step carries
+        // exactly one sibling.
+        let last = proof.path.last().unwrap();
+        assert_eq!(last.siblings.len(), 1);
+
+        // One sibling too many: claiming the root has three children is a forgery.
+        let mut extra = proof.path.clone();
+        extra.last_mut().unwrap().siblings.push(vec![0u8; 32]);
+        assert!(
+            !neml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &extra, &root),
+            "an extra rightmost sibling must be rejected"
+        );
+
+        // One sibling too few (also a zero-sibling step).
+        let mut fewer = proof.path.clone();
+        fewer.last_mut().unwrap().siblings.clear();
+        assert!(
+            !neml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &fewer, &root),
+            "a missing rightmost sibling must be rejected"
+        );
+    });
+}
+
+/// Spoofing a *skeleton* step's position breaks the topological binding to the
+/// trusted index, even though the step still hashes.
+#[test]
+fn test_skeleton_position_spoof_rejected() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let mut log =
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 })
+                .await
+                .unwrap();
+        for d in [b"a".as_ref(), b"b", b"c", b"d"] {
+            log.append_leaf(d).await.unwrap();
+        }
+        let root = log.root();
+
+        let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
+        let leaf = Sha256Hasher.leaf(b"c");
+        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &proof.path, &root));
+
+        let mut spoofed = proof.path.clone();
+        spoofed[0].position ^= 1;
+        assert!(
+            !neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &spoofed, &root),
+            "a spoofed skeleton position must be rejected"
+        );
+    });
+}
+
+/// Canonical encoding: a promotion-heavy subtree verifies with its unary chain
+/// omitted, and a zero-sibling step inserted *anywhere* in the path is rejected.
+#[test]
+fn test_canonical_encoding_promotion_chain() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let mut log =
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 })
+                .await
+                .unwrap();
+        // "x" sits under a two-level unary chain that contributes no proof steps.
+        let subtree = Subtree::Node(vec![
+            Subtree::Node(vec![Subtree::Node(vec![Subtree::Leaf(b"x".to_vec())])]),
+            Subtree::Leaf(b"y".to_vec()),
+        ]);
+        log.append_subtree(&subtree).await.unwrap();
+        log.append_subtree(&Subtree::Node(vec![Subtree::Leaf(b"z".to_vec())]))
+            .await
+            .unwrap();
+        let root = log.root();
+
+        let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
+        assert_eq!(path.len(), 1, "the unary chain above x must be omitted");
+        let log_proof = log.inclusion_proof(0, 2).await.unwrap().unwrap();
+        path.extend(log_proof.path);
+
+        let leaf = Sha256Hasher.leaf(b"x");
+        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 0, 2, 2, &path, &root));
+
+        for pos in 0..=path.len() {
+            let mut tampered = path.clone();
+            tampered.insert(
+                pos,
+                neml::ProofStep {
+                    siblings: vec![],
+                    position: 0,
+                },
+            );
+            assert!(
+                !neml::verify_inclusion(&Sha256Hasher, &leaf, 0, 2, 2, &tampered, &root),
+                "a zero-sibling step at offset {pos} must be rejected"
+            );
+        }
     });
 }
 

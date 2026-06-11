@@ -1,4 +1,31 @@
 //! Inclusion and consistency proof structures and verification algorithms.
+//!
+//! # Security boundary: skeleton-pinned, prefix-chained
+//!
+//! An inclusion proof path runs leaf → root and splits into two regions:
+//!
+//! - The **log skeleton** — the trailing steps along the fixed-arity log spine.
+//!   Their shape (count, per-step position and sibling count) is fully
+//!   determined by `(index, tree_size, log_arity)` and is pinned exactly against
+//!   [`crate::topology::inclusion_skeleton`]. Because there is no per-node domain
+//!   separation, second-preimage safety rests entirely on this exactness: the
+//!   verifier reconstructs the canonical topology and rejects any deviation.
+//! - The **subtree prefix** — the leading steps below the leaf's log position,
+//!   in application-defined (non-uniform) subtrees. These carry no topological
+//!   claim and are verified by hash chaining alone.
+//!
+//! ## Canonical proof encoding
+//!
+//! Every accepted step hashes: it must carry at least one sibling. A zero-sibling
+//! step would represent a *promoted* (singleton) node, whose parent equals its
+//! child without any hashing — an inert no-op. Such steps are therefore rejected
+//! everywhere ([`reconstruct_inclusion_root`]), and honest provers omit them
+//! ([`crate::within_subtree_path`]). Omitting a promoted step never changes the
+//! computed root, so completeness is preserved; in exchange, a fixed
+//! `(leaf_hash, index, tree_size, root)` admits at most one accepting path
+//! (modulo hash collisions), which closes prepend/insert malleability. This
+//! concerns zero-*sibling* steps only; null-*valued* siblings from flat null
+//! promotion are unaffected.
 
 use crate::hasher::Hasher;
 use crate::mr::nary_mr;
@@ -532,11 +559,12 @@ pub fn reconstruct_inclusion_root(
             }
         }
         if step.siblings.is_empty() {
-            // Promoted node — current hash passes through unchanged
-            if step.position != 0 {
-                return None;
-            }
-            continue;
+            // Canonical proof encoding: a zero-sibling step would be a promoted
+            // (singleton) node, whose parent equals the child without hashing.
+            // Such steps are inert no-ops, so honest provers omit them; rejecting
+            // them here makes the accepting path unique for a fixed
+            // (leaf_hash, index, tree_size, root). See the module docs.
+            return None;
         }
         if step.position > step.siblings.len() {
             return None;

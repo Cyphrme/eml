@@ -72,13 +72,11 @@ pub fn within_subtree_path(
                     let mut path =
                         within_subtree_path(hasher, child, leaf_index - cumulative_leaves)?;
 
-                    if children.len() == 1 {
-                        // Promoted node
-                        path.push(ProofStep {
-                            siblings: Vec::new(),
-                            position: 0,
-                        });
-                    } else {
+                    // Canonical proof encoding: a singleton node is promoted to
+                    // its parent without hashing, so it contributes no proof step
+                    // (the recursion already returns the correct sub-path). Only
+                    // genuinely hashing (multi-child) nodes emit a step.
+                    if children.len() > 1 {
                         let mut child_hashes = Vec::with_capacity(children.len());
                         for c in children {
                             child_hashes.push(evaluate(hasher, c));
