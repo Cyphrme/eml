@@ -17,14 +17,34 @@ noncomputable def leafHash (d : List UInt8) : Digest := H d
 noncomputable def nodeHash (children : List Digest) : Digest :=
   H (children.flatMap digestToBytes)
 
-/-- Master Nothing-Up-My-Sleeve seed constant. -/
-axiom numsSeed : List UInt8
+/-- Canonical preimage of the null constant: the literal bytes of `b"null"`.
+    Mirrors `neml/src/hasher.rs` (`null() = hash(b"null")`). -/
+def nullPreimage : List UInt8 := [0x6e, 0x75, 0x6c, 0x6c]
 
-/-- Extendable-Output Function (XOF) expanding a seed to a digest of length L. -/
-axiom xof : List UInt8 → Nat → Digest
+/-- The null digest `N₀`, defined faithfully as `H` of the null preimage —
+    exactly `hash(b"null")` in the Rust hasher.
 
-/-- The null digest is derived by expanding the master seed to length L. -/
-noncomputable def nullDigest (L : Nat) : Digest := xof numsSeed L
+    The digest-length parameter `L` is retained for compatibility with the
+    dynamic-arity evaluator but is vestigial: the shipped `null()` does not
+    depend on it, matching the implementation where the null constant is
+    length-independent.
+
+    Because `leafHash d = H d` (prefix-free) and `nullDigest _ = H nullPreimage`,
+    the identity `leafHash nullPreimage = nullDigest L` holds *by construction*
+    (`null_collision` below). This is the leaf/null collision, now expressible
+    in the model. It is **correct under Design A+**: A+ does not assume the
+    collision away — it renders it inert by reading activity from the
+    authenticated epoch timeline rather than from digest null-ness (see the
+    "Design A+" section). -/
+noncomputable def nullDigest (_L : Nat) : Digest := H nullPreimage
+
+/-- **The leaf/null collision, made expressible — and provable.**
+    A genuine leaf whose payload is the 4-byte string `null` hashes to the null
+    constant. Under prefix-free hashing this is not a negligible-probability
+    event — the preimage is public and trivial. Inactivity therefore cannot be
+    soundly inferred from `cell = N₀`; it must be read from the committed epoch
+    timeline (Design A+, below). -/
+theorem null_collision (L : Nat) : leafHash nullPreimage = nullDigest L := rfl
 
 /-- Inductive N-ary Merkle Tree structure. -/
 inductive NaryTree (α : Type) where
@@ -50,58 +70,146 @@ def HasArity {α : Type} (k : Nat) : NaryTree α → Prop
 def IsNEMLTree {α : Type} (k : Nat) (t : NaryTree (NaryTree α)) : Prop :=
   HasArity k t
 
-/-- Recursive evaluation of an N-ary tree under NEML promotion rules.
-    L represents the digest length of the active hash algorithm. -/
-axiom eval (L : Nat) : NaryTree (List UInt8) → Digest
+/-! ## Constructive evaluation under NEML promotion rules
 
-/-- Leaf evaluation axiom. -/
-axiom eval_leaf : ∀ (L : Nat) (data : List UInt8),
-  eval L (NaryTree.leaf data) = leafHash data
+`eval` was previously an `axiom` together with five `eval_*` equation axioms
+(six axioms in total). It is now a real `def`; the five equations are derived
+lemmas, removing those axioms from the trust base. The case split mirrors
+`nary_mr` in `neml/src/mr.rs` and `Compression.lean`'s `evalConstructive`. -/
 
-/-- Empty node evaluation axiom. -/
-axiom eval_empty : ∀ (L : Nat),
-  eval L (NaryTree.node []) = emptyHash
+/-! Structural size metric for termination of the evaluator (`nsize`/`nlsize`).
+    Local to NEML; `Compression.lean` carries its own `treeSize`/`listSize` for
+    the `Option`-payload variant. -/
+mutual
+  def nsize {α : Type} : NaryTree α → Nat
+    | NaryTree.leaf _ => 1
+    | NaryTree.node children => 1 + nlsize children
+  def nlsize {α : Type} : List (NaryTree α) → Nat
+    | [] => 0
+    | c :: cs => 1 + nsize c + nlsize cs
+end
 
-/-- Singleton promotion evaluation axiom. -/
-axiom eval_singleton_node : ∀ (L : Nat) (t : NaryTree (List UInt8)),
-  eval L (NaryTree.node [t]) = eval L t
+mutual
+  /-- Recursive evaluation of an N-ary tree under NEML promotion rules.
+      `L` is the digest length of the active hash algorithm (vestigial; see
+      `nullDigest`). Arms: leaf hashing; empty node → `emptyHash`; singleton
+      promotion; flat null promotion (all children null, arity ≥ 2); standard
+      node hashing. -/
+  noncomputable def eval (L : Nat) : NaryTree (List UInt8) → Digest
+    | NaryTree.leaf data => leafHash data
+    | NaryTree.node [] => emptyHash
+    | NaryTree.node [c] => eval L c
+    | NaryTree.node children =>
+        if evalAllNull L children then nullDigest L
+        else nodeHash (evalMap L children)
+  termination_by t => nsize t
+  decreasing_by
+    all_goals simp [nsize, nlsize]
+    all_goals omega
 
-/-- Flat null promotion evaluation axiom (for arity >= 2). -/
-axiom eval_flat_null_node : ∀ (L : Nat) (children : List (NaryTree (List UInt8))),
-  children.length ≥ 2 →
-  (∀ t ∈ children, eval L t = nullDigest L) →
-  eval L (NaryTree.node children) = nullDigest L
+  /-- Whether every child of a node evaluates to the null digest. -/
+  noncomputable def evalAllNull (L : Nat) : List (NaryTree (List UInt8)) → Bool
+    | [] => true
+    | c :: cs => (eval L c == nullDigest L) && evalAllNull L cs
+  termination_by cs => nlsize cs
+  decreasing_by
+    all_goals simp [nlsize]
+    all_goals omega
 
-/-- Standard node evaluation axiom (for arity >= 2 with at least one non-null child). -/
-axiom eval_node_hash : ∀ (L : Nat) (children : List (NaryTree (List UInt8))),
-  children.length ≥ 2 →
-  (∃ t ∈ children, eval L t ≠ nullDigest L) →
-  eval L (NaryTree.node children) = nodeHash (children.map (eval L))
+  /-- Map `eval` over a child list (structural; equals `List.map (eval L)`). -/
+  noncomputable def evalMap (L : Nat) : List (NaryTree (List UInt8)) → List Digest
+    | [] => []
+    | c :: cs => eval L c :: evalMap L cs
+  termination_by cs => nlsize cs
+  decreasing_by
+    all_goals simp [nlsize]
+    all_goals omega
+end
 
-/-!
-## Cryptographic Soundness Axioms (Preimage Resistance)
+/-- `evalAllNull` is the decidable reflection of "every child evaluates null". -/
+theorem evalAllNull_eq_true_iff (L : Nat) (children : List (NaryTree (List UInt8))) :
+    evalAllNull L children = true ↔ ∀ t ∈ children, eval L t = nullDigest L := by
+  induction children with
+  | nil => simp [evalAllNull]
+  | cons c cs ih =>
+    simp only [evalAllNull, Bool.and_eq_true, beq_iff_eq, ih, List.mem_cons]
+    constructor
+    · rintro ⟨hc, hcs⟩ x (rfl | hx)
+      · exact hc
+      · exact hcs x hx
+    · intro h
+      exact ⟨h c (Or.inl rfl), fun x hx => h x (Or.inr hx)⟩
 
-Under prefix-free hashing, the soundness of EML/NEML's inactivity binding depends
-on `nullDigest L` being a high-entropy constant with no known preimage under H.
-This is formalized via the following preimage resistance axioms: no leaf hash,
-empty hash, or internal node hash (for nodes of arity >= 2) can collide with `nullDigest L`.
--/
+/-- `evalMap` agrees with `List.map (eval L)`. -/
+theorem evalMap_eq_map (L : Nat) (children : List (NaryTree (List UInt8))) :
+    evalMap L children = children.map (eval L) := by
+  induction children with
+  | nil => simp [evalMap]
+  | cons c cs ih => simp [evalMap, ih]
 
-/-- **Theorem 1 (Singleton Promotion Soundness).**
-    A node with exactly one child evaluates directly to the child's evaluation,
-    preserving the digest without hashing. -/
-theorem eval_singleton (L : Nat) (t : NaryTree (List UInt8)) :
+/-- Leaf evaluation equation (was `axiom eval_leaf`). -/
+theorem eval_leaf (L : Nat) (data : List UInt8) :
+    eval L (NaryTree.leaf data) = leafHash data := by
+  simp [eval]
+
+/-- Empty node evaluation equation (was `axiom eval_empty`). -/
+theorem eval_empty (L : Nat) :
+    eval L (NaryTree.node []) = emptyHash := by
+  simp [eval]
+
+/-- Singleton promotion equation (was `axiom eval_singleton_node`). -/
+theorem eval_singleton_node (L : Nat) (t : NaryTree (List UInt8)) :
     eval L (NaryTree.node [t]) = eval L t := by
-  exact eval_singleton_node L t
+  simp [eval]
 
-/-- **Theorem 2 (Flat Null Promotion Soundness).**
-    A node with two or more children, all of which evaluate to the null digest,
-    evaluates directly to the null digest. -/
-theorem eval_flat_null_promotion (L : Nat) (children : List (NaryTree (List UInt8)))
+/-- Flat null promotion equation, arity ≥ 2 (was `axiom eval_flat_null_node`). -/
+theorem eval_flat_null_node (L : Nat) (children : List (NaryTree (List UInt8)))
     (h_length : children.length ≥ 2)
     (h_all_null : ∀ t ∈ children, eval L t = nullDigest L) :
     eval L (NaryTree.node children) = nullDigest L := by
-  exact eval_flat_null_node L children h_length h_all_null
+  obtain ⟨a, b, rest, rfl⟩ : ∃ a b rest, children = a :: b :: rest := by
+    match children, h_length with
+    | a :: b :: rest, _ => exact ⟨a, b, rest, rfl⟩
+  have hAll : evalAllNull L (a :: b :: rest) = true :=
+    (evalAllNull_eq_true_iff L _).mpr h_all_null
+  simp only [eval]
+  rw [if_pos hAll]
+
+/-- Standard node hashing equation, arity ≥ 2 with a non-null child
+    (was `axiom eval_node_hash`). -/
+theorem eval_node_hash (L : Nat) (children : List (NaryTree (List UInt8)))
+    (h_length : children.length ≥ 2)
+    (h_some : ∃ t ∈ children, eval L t ≠ nullDigest L) :
+    eval L (NaryTree.node children) = nodeHash (children.map (eval L)) := by
+  obtain ⟨a, b, rest, rfl⟩ : ∃ a b rest, children = a :: b :: rest := by
+    match children, h_length with
+    | a :: b :: rest, _ => exact ⟨a, b, rest, rfl⟩
+  have hNot : ¬ evalAllNull L (a :: b :: rest) = true := by
+    rw [evalAllNull_eq_true_iff]
+    intro hall
+    obtain ⟨t, ht, htne⟩ := h_some
+    exact htne (hall t ht)
+  simp only [eval]
+  rw [if_neg hNot, evalMap_eq_map]
+
+/-- **Theorem 1 (Singleton Promotion Soundness).**
+    A node with exactly one child evaluates directly to the child's evaluation,
+    preserving the digest without hashing. Now a real theorem (no longer an
+    `exact <axiom>` restatement). -/
+theorem eval_singleton (L : Nat) (t : NaryTree (List UInt8)) :
+    eval L (NaryTree.node [t]) = eval L t :=
+  eval_singleton_node L t
+
+/-- **Theorem 2 (Flat Null Promotion Soundness).**
+    A node with two or more children, all of which evaluate to the null digest,
+    evaluates directly to the null digest. This is the null-*valued* collapse
+    (N₀); it is unrelated to the rejection of zero-*sibling* proof steps under
+    canonical proof encoding (see the inclusion-verifier section). -/
+theorem eval_flat_null_promotion (L : Nat) (children : List (NaryTree (List UInt8)))
+    (h_length : children.length ≥ 2)
+    (h_all_null : ∀ t ∈ children, eval L t = nullDigest L) :
+    eval L (NaryTree.node children) = nullDigest L :=
+  eval_flat_null_node L children h_length h_all_null
 
 set_option linter.style.longLine false
 
