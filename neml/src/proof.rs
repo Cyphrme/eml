@@ -1089,6 +1089,10 @@ pub fn verify_consistency_with_coupling(
 }
 
 /// The raw payload of an audit verification checkpoint.
+///
+/// This is the Coz `pay` field — Cyphr signs this struct over a Coz
+/// envelope to produce a checkpoint attestation; NEML does not implement
+/// signing or consensus (NEML↔Cyphr boundary).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditPayload {
     /// Identifier of the log being audited.
@@ -1099,6 +1103,12 @@ pub struct AuditPayload {
     pub active_algs: Vec<u64>,
     /// The Combined Roots of the log at `tree_size` for each active algorithm.
     pub combined_roots: Vec<(u64, Vec<u8>)>,
+    /// Committed epoch timeline at `tree_size`: `(alg_id, epochs)` for every
+    /// registered algorithm (active and frozen), sorted by algorithm ID.
+    /// Same value as `committed_epochs_at(tree_size)`.  Binding the timeline
+    /// into the payload lets the signing attestation cover activation/
+    /// deactivation boundaries, making activity claims non-equivocable.
+    pub alg_epochs: Vec<(u64, Vec<(u64, u64)>)>,
 }
 
 #[cfg(test)]

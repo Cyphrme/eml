@@ -1400,6 +1400,70 @@ impl<S: Storage> NaryMerkleLog<S> {
         self.combined_root_at(alg_id, tip_size).await
     }
 
+    /// Build an `AuditPayload` at a historical tree size.
+    ///
+    /// Returns an error if `size == 0` or if no algorithms are active at
+    /// that size.  `combined_roots` contains one entry per active algorithm.
+    pub async fn audit_payload_at(
+        &self,
+        log_id: [u8; 32],
+        size: u64,
+    ) -> Result<crate::proof::AuditPayload, S::Error> {
+        if size == 0 {
+            return Err(crate::error::Error::IndexOutOfBounds { index: 0, tree_size: 0 });
+        }
+        let active_algs = self.active_algs_at(size);
+        if active_algs.is_empty() {
+            return Err(crate::error::Error::NoActiveAlgorithms);
+        }
+        let alg_epochs = self.committed_epochs_at(size);
+        let mut combined_roots = Vec::with_capacity(active_algs.len());
+        for &id in &active_algs {
+            let cr = self.combined_root_at(id, size).await?;
+            combined_roots.push((id, cr));
+        }
+        Ok(crate::proof::AuditPayload {
+            log_id,
+            tree_size: size,
+            active_algs,
+            combined_roots,
+            alg_epochs,
+        })
+    }
+
+    /// Build an `AuditPayload` at the current tip.
+    pub async fn audit_payload(
+        &self,
+        log_id: [u8; 32],
+    ) -> Result<crate::proof::AuditPayload, S::Error> {
+        let tip = if self.size > 0 { self.size } else { self.subtree_count };
+        self.audit_payload_at(log_id, tip).await
+    }
+
+    /// Build a `CouplingProof` at a historical tree size.
+    ///
+    /// `active_roots` are the raw per-algorithm roots at `size`; `alg_epochs`
+    /// is the committed timeline.  Together they open the combined root.
+    pub async fn coupling_proof_at(
+        &self,
+        size: u64,
+    ) -> Result<crate::proof::CouplingProof, S::Error> {
+        if size == 0 {
+            return Err(crate::error::Error::IndexOutOfBounds { index: 0, tree_size: 0 });
+        }
+        let active_algs = self.active_algs_at(size);
+        if active_algs.is_empty() {
+            return Err(crate::error::Error::NoActiveAlgorithms);
+        }
+        let alg_epochs = self.committed_epochs_at(size);
+        let mut active_roots = Vec::with_capacity(active_algs.len());
+        for &id in &active_algs {
+            let r = self.root_for_at(id, size).await?;
+            active_roots.push((id, r));
+        }
+        Ok(crate::proof::CouplingProof { active_roots, alg_epochs })
+    }
+
     /// The sorted set of algorithms active at the historical `size`
     /// (algorithms whose epochs cover the final position `size - 1`).
     fn active_algs_at(&self, size: u64) -> Vec<u64> {
