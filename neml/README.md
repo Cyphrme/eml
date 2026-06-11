@@ -41,7 +41,7 @@ This design shifts the balance of traditional Merkle tree tradeoffs in three key
 
 ## How It Works
 
-`neml` is a **tree of trees**. The outer layer is a Merkle log with a fixed arity $k$ (the branching factor at each internal node, default 2). The inner layer is arbitrary: each append is a recursive `Subtree` value whose internal nodes can have any number of children.
+`neml` is a **tree of trees**. The outer layer is a Merkle log with a fixed arity $k$ (the branching factor at each internal node; $2 \leq k \leq 256$, default 2). The inner layer is arbitrary: each append is a recursive `Subtree` value whose internal nodes can have any number of children.
 
 ```text
                      [Log Root]                  <-- Log Level: Fixed Arity k=2
@@ -95,8 +95,9 @@ To prevent **split-horizon attacks** (where a compromised or malicious logger se
     *   **Frozen Algorithm Root Omission:** Combined Roots bind the raw roots only of algorithms active at that tree size. A frozen algorithm's root is excluded — but its full epoch timeline remains committed, so its activity ranges (including "retired as of this size") stay bound to the root. Historical frozen *node data* is not bound; clients audit it via historical checkpoints.
 *   **Decoupled Verification (`CouplingProof`):** Rather than bloating standard inclusion or consistency proofs with companion algorithm roots, `neml` decouples the multi-algorithm binding. A lightweight `CouplingProof` maps the Combined Root to the active roots. The verifier validates the `CouplingProof` once to extract the trusted raw root for their target algorithm, then verifies the standard single-algorithm proof against it.
     *   **Transition Bridge Limitation:** The `verify_consistency_with_coupling` helper assumes the target algorithm is active in both states. If the algorithm's active status changes (activation or deactivation) across the boundary, the helper returns `false` because the coupling proof cannot resolve the root of the inactive algorithm. Callers must verify consistency and coupling proofs manually in this scenario.
+*   **Inactivity Verification (`verify_inactivity_with_coupling`):** The claim "algorithm $X$ was inactive at position $p$" is verified directly from the Combined Root: the coupling proof authenticates the committed epoch timeline, the timeline must mark the position inactive, and — if the algorithm has a committed root at that size — a null-constant inclusion proof at that position must verify against it (the `inactive ⇒ N₀` consistency check). For a frozen algorithm the authenticated timeline alone is the evidence.
 *   **Non-Divergence Auditing (`verify_non_divergence`):** Auditors and clients can verify that parallel algorithm logs have not diverged (either in metadata or leaf data) by comparing the combined roots at historical checkpoint sizes.
-*   **Coz-Compliant Checkpoints (`AuditPayload`):** Checkpoints are serialized as `AuditPayload` (containing `log_id`, `tree_size`, `active_algs`, and `combined_roots`), which is easily wrapped in Coz cryptographic envelopes to bootstrap Web of Trust consensus among validating peers.
+*   **Coz-Compliant Checkpoints (`AuditPayload`):** Checkpoints are serialized as `AuditPayload` (containing `log_id`, `tree_size`, `active_algs`, `combined_roots`, and the committed epoch timeline `alg_epochs` of every registered algorithm), which is easily wrapped in Coz cryptographic envelopes to bootstrap Web of Trust consensus among validating peers. Carrying the timeline in the payload lets the signing attestation cover activation/deactivation boundaries, making activity claims non-equivocable.
 
 For detailed formal treatment of the epoch model, see the [EML paper](https://eml-paper.netlify.app/), which defines the Polymorphic Merkle Log paradigm that NEML generalizes to n-ary topologies.
 
@@ -106,7 +107,7 @@ For detailed formal treatment of the epoch model, see the [EML paper](https://em
 
 **Singleton promotion.** If an internal node has exactly one child, it is promoted directly without hashing: $E(\text{Node}([c])) = E(c)$. Degenerate single-child chains collapse to a single evaluation, eliminating unnecessary hash operations.
 
-**Flat null promotion.** All fully-null subtrees — regardless of height — evaluate to a single constant $N_0 = H(\mathtt{0x02})$. Unlike EML's binary model (which uses height-dependent null tables where $N_h = H(0x01 \| N_{h-1} \| N_{h-1})$), `neml` uses a flat null constant: if every child of a node is $N_0$, the parent is also $N_0$. This eliminates precomputed null ladders entirely.
+**Flat null promotion.** All fully-null subtrees — regardless of height — evaluate to a single constant $N_0 = H(\texttt{"null"})$ (see [The Null Constant](#the-null-constant--authenticated-inactivity-design-a) below). Unlike EML's binary model (which uses height-dependent null tables where $N_h = H(0x01 \| N_{h-1} \| N_{h-1})$), `neml` uses a flat null constant: if every child of a node is $N_0$, the parent is also $N_0$. This eliminates precomputed null ladders entirely.
 
 **Seamless inclusion paths.** A single `InclusionProof` is a flat sequence of `ProofStep` values. Each step specifies sibling hashes and the index of the path node among its siblings. The verifier processes steps uniformly — it does not need to know whether a given step originated inside a subtree or at the log level.
 
@@ -143,19 +144,33 @@ In an N-ary Merkle tree, inclusion proofs explicitly store the position of the t
 To prevent index spoofing attacks while maintaining full support for arbitrary, non-uniform subtrees, `neml` uses **Selective Index & Path Verification** with trusted parameters:
 
 *   **Decoupled Structs:** The `InclusionProof` and `ConsistencyProof` structs do not contain metadata fields like `index`, `tree_size`, `old_size`, `new_size`, or `log_arity`. Instead, these metadata fields are passed as trusted parameters directly to the verifier functions (`verify_inclusion` and `verify_consistency`) from an authenticated Signed Tree Head (STH) or trusted checkpoint.
-*   **Unified Verification:** The verifier always requires a valid `log_arity` ($k \geq 2$). Given the trusted `index`, `tree_size`, and `log_arity`, the shared topology module (`topology::inclusion_skeleton`) derives the expected **log skeleton** — its length and, per step, the path node's position and sibling count. The proof path is dynamically split: its trailing steps are compared field-by-field against the skeleton, while any leading steps are the **subtree portion**, verified purely by hash chaining (cryptographic membership) without topological assertions, since subtree arities are application-defined and non-uniform. The same module drives proof *generation*, so the producer and verifier cannot drift into disagreeing topologies.
+*   **Unified Verification:** The verifier always requires a valid `log_arity` ($2 \leq k \leq 256$, the same bounds the constructor enforces). Given the trusted `index`, `tree_size`, and `log_arity`, the shared topology module (`topology::inclusion_skeleton`) derives the expected **log skeleton** — its length and, per step, the path node's position and sibling count. The proof path is dynamically split: its trailing steps are compared field-by-field against the skeleton, while any leading steps are the **subtree portion**, verified purely by hash chaining (cryptographic membership) without topological assertions, since subtree arities are application-defined and non-uniform. The same module drives proof *generation*, so the producer and verifier cannot drift into disagreeing topologies.
 *   **Why this is sound:** The log-level topological check anchors the proof to the signed tree head's committed structure. The subtree portion does not need independent topological verification because it terminates at a subtree root $R_i$ whose position in the log skeleton *is* topologically verified — the hash chain is unbroken from leaf to root, and any forgery in the subtree steps would produce a root mismatch at the log-level boundary.
-*   **Canonical proof encoding:** Every accepted step must hash — it carries at least one sibling. A zero-sibling step would represent a *promoted* (singleton) node, whose parent equals its child without hashing; honest provers omit such no-ops and the verifier rejects them. This makes the accepting path unique for a fixed `(leaf_hash, index, tree_size, root)`, closing prepend/insert malleability. (This concerns zero-*sibling* steps; the null-*valued* siblings of flat null promotion are unaffected.)
+*   **Canonical proof encoding:** Every accepted step must hash — it carries at least one sibling. A zero-sibling step would represent a *promoted* (singleton) node, whose parent equals its child without hashing; honest provers omit such no-ops and the verifier rejects them. This makes the accepting path unique for a fixed `(leaf_hash, index, tree_size, root)`, closing prepend/insert malleability. (This concerns zero-*sibling* steps; the null-*valued* siblings of flat null promotion are unaffected.) Both properties are machine-checked as `inclusion_soundness` and `inclusion_proof_unique` — see [Formally Verified Properties](#formally-verified-properties-lean-4).
 
-### Null Domain Isolation
+### The Null Constant & Authenticated Inactivity (Design A+)
 
-The null constant $N_0$ represents an empty or inactive subtree. Under prefix-free hashing, defining the null digest as a static constant or the output of a hash function on a known preimage would allow an adversary to input that preimage as a leaf payload and trigger a leaf-subtree substitution collision.
+The null constant $N_0$ represents an empty or inactive subtree. To stay hash-agile, it is defined per hasher rather than as a global static constant (the `Hasher::null` default, also exposed as the `null_digest` helper):
 
-To prevent this collision while maintaining hash agility, `neml` utilizes a dynamically generated null digest derived via the hasher:
+$$N_0 = \text{Hasher.hash}(\mathtt{"null"})$$
 
-*   **Dynamic Null Generation:** Rather than a global static constant, the null constant is defined dynamically for a given hasher via the `null_digest` helper:
-    $$N_0 = \text{Hasher.hash}(\mathtt{"null"})$$
-*   **Preimage Resistance:** By defining the null constant as a hash output of the domain string $\mathtt{"null"}$, the preimage of the null constant is known to be the string $\mathtt{"null"}$. Because the application restricts leaf payloads from colliding with this preimage or because the probability of an arbitrary leaf payload hash colliding with the null digest is cryptographically negligible (i.e. second-preimage resistance of the hash function), the risk of flat null promotion collision is eliminated. We prove this property formally in our Lean 4 proof system.
+Under prefix-free hashing this definition makes one collision *public and trivial*: a genuine leaf whose payload is the literal 4-byte string `null` hashes to $N_0$. `neml` does not forbid that payload and does not assume the collision away. Instead, the design renders it inert:
+
+*   **Activity is never inferred from digest null-ness.** Whether algorithm $X$ is active at position $p$ is read from the committed epoch timeline bound into the Combined Root (`committed_active_at`) — never by comparing a cell's digest to $N_0$. A verifier that infers inactivity from null-ness is unsound by construction, since the colliding leaf payload is perfectly legal.
+*   **One-directional consistency check.** Verification asserts only `inactive ⇒ N₀`: a position the committed epochs mark inactive must hold the null constant in that algorithm's tree (`verify_inactivity_with_coupling`). It never constrains active cells, so no payload is ever forbidden. Read contrapositively, a non-null cell forces the committed timeline to mark the position active — a logger cannot commit a real leaf and later disown it via the epochs.
+*   **Internal nodes cannot collide with $N_0$** except by a true hash collision: a node preimage concatenates at least two digests (≥ 2 × digest length), while `b"null"` is 4 bytes — the preimages differ in length.
+
+### Formally Verified Properties (Lean 4)
+
+The security core of NEML is machine-checked in the Lean 4 corpus at [`proofs/lean/`](../proofs/lean/) (see its README for a reviewer's guide). What is proved:
+
+*   **Promotion semantics.** The evaluator mirroring `nary_mr` (singleton promotion, flat null promotion) is defined constructively; its evaluation equations are theorems, not axioms.
+*   **Design A+.** `null_collision` (the leaf/null collision is constructible — the model is faithful to the shipped `null()`), `inferredActiveFromNull_unsound` (inferring activity from null-ness is unsound), `metaroot_binds_timeline` (two histories whose timelines disagree on activity anywhere cannot share a Combined Root unless the hash collides), and `real_cell_forces_committed_active` / `committed_inactive_is_null` (both directions of the consistency check).
+*   **Canonical inclusion proofs.** `inclusion_soundness` (an accepting proof binds the leaf to its log *position*; depth is existential by design, since implicit promotion equates a promoted digest with its parent slot) and `inclusion_proof_unique` (at most one accepting canonical path per `(leaf_hash, index, tree_size, root)` statement, modulo an internal-node hash collision).
+
+The trust base is four declared axioms — an abstract digest type, its non-emptiness, the hash function, and digest serialization. Every theorem is `sorry`-free.
+
+**Future formalization work:** `inclusion_proof_unique` currently takes the proof-shape pinning (path length and per-step positions) as premises, mirroring what `topology::inclusion_skeleton` derives from `(k, index, tree_size)`. Porting the topology module to Lean would make that skeleton predicate concrete and discharge the premises as theorems, leaving hash collisions as the only caveat. The full inventory of open formalization gaps is tracked in the [Lean README](../proofs/lean/README.md#6-future-formalization-work).
 
 ---
 
@@ -229,7 +244,7 @@ impl Hasher for Sha256Hasher {
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> { Sha256::digest(b"").to_vec() }
-    fn null(&self) -> Vec<u8>  { neml::null_digest(self) }
+    // `null()` has a default implementation: hash(b"null").
     fn hash(&self, data: &[u8]) -> Vec<u8> { Sha256::digest(data).to_vec() }
     fn clone_box(&self) -> Box<dyn Hasher> { Box::new(self.clone()) }
 }
