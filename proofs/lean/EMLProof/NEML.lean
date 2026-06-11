@@ -651,26 +651,10 @@ theorem inclusion_soundness
     A `nodeHash` collision is in particular an `H` collision. -/
 def NodeHashCollision : Prop := ∃ a b : List Digest, a ≠ b ∧ nodeHash a = nodeHash b
 
-/-- **Inclusion proof-encoding uniqueness (non-malleability).** With zero-sibling
-    steps rejected, every remaining step strictly hashes, and the shared topology
-    module pins the proof *shape* from `(k, index, tree_size)`: the accepted
-    path's length and its per-step position are determined (hypotheses `hlen`,
-    `hpos` — what `topology.rs` guarantees, modeled as premises until that module
-    is ported to Lean). The only remaining freedom is the sibling *values*, which
-    the fold pins to `root`. Hence for a fixed `(leaf, index, tree_size, root)`
-    there is at most one accepting canonical path — modulo a `nodeHash` collision
-    (where the path could be rerouted by colliding an internal node hash).
+/-! Helper lemmas for `inclusion_proof_unique`: injectivity of `insertAt`,
+    back-decomposition of lists, indexing across appends, and the
+    fold-append step. -/
 
-    Without `hlen`/`hpos` the claim is false (two paths of different lengths can
-    both fold to a fixed point, and a fixed `position` is what makes the
-    per-step `insertAt` recoverable); they encode the injective child-ordering
-    the canonical-encoding decision relies on.
-
-    The full proof (back-to-front induction: each final `nodeHash` is equal, so
-    its preimages either collide or, with `position` pinned, `insertAt` injectivity
-    forces the steps and the running digests equal, recursing on the prefixes) is
-    left for the proof pass.
-    TODO(proof): discharge `inclusion_proof_unique`. -/
 theorem insertAt_ne_nil {α : Type} (n : Nat) (x : α) (xs : List α) :
     insertAt n x xs ≠ [] := by
   induction xs generalizing n with
@@ -845,6 +829,25 @@ theorem foldCanonical_unique_of_len (n : Nat) (leaf : Digest) (p₁ p₂ : List 
     have hp_eq : p₁' = p₂' := ih leaf p₁' p₂' hp1'_len hp2'_len hpos' h_fold_eq
     rw [hp1_eq, hp2_eq, hp_eq, h_step_eq]
 
+/-- **Inclusion proof-encoding uniqueness (non-malleability).** With zero-sibling
+    steps rejected, every remaining step strictly hashes, and the shared topology
+    module pins the proof *shape* from `(k, index, tree_size)`: the accepted
+    path's length and its per-step position are determined (hypotheses `hlen`,
+    `hpos` — what `topology.rs` guarantees, modeled as premises until that module
+    is ported to Lean). The only remaining freedom is the sibling *values*, which
+    the fold pins to `root`. Hence for a fixed `(leaf, index, tree_size, root)`
+    there is at most one accepting canonical path — modulo a `nodeHash` collision
+    (where the path could be rerouted by colliding an internal node hash).
+
+    Without `hlen`/`hpos` the claim is false (two paths of different lengths can
+    both fold to a fixed point, and a fixed `position` is what makes the
+    per-step `insertAt` recoverable); they encode the injective child-ordering
+    the canonical-encoding decision relies on.
+
+    Proved by back-to-front induction (`foldCanonical_unique_of_len`): each final
+    `nodeHash` is equal, so its preimages either collide or, with `position`
+    pinned, `insertAt` injectivity forces the steps and the running digests
+    equal, recursing on the prefixes. -/
 theorem inclusion_proof_unique
     (SkeletonValid : Nat → Nat → Nat → List ProofStep → Prop)
     (k index treeSize : Nat) (leaf root : Digest) (p₁ p₂ : List ProofStep)
