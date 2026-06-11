@@ -873,27 +873,26 @@ proptest! {
                 active_roots.push((active_algs[i], roots[i].clone()));
             }
 
+            // Every active algorithm gets an open epoch from genesis.
+            let alg_epochs: Vec<(u64, Vec<(u64, u64)>)> = active_algs
+                .iter()
+                .map(|&id| (id, vec![(0u64, u64::MAX)]))
+                .collect();
+            let tree_size = 1u64;
+
             let proof = neml::CouplingProof {
                 active_roots: active_roots.clone(),
+                alg_epochs: alg_epochs.clone(),
             };
 
-            // Construct combined root
-            let combined_root = if len == 1 {
-                roots[0].clone()
-            } else {
-                let mut buf = Vec::new();
-                for i in 0..len {
-                    buf.extend_from_slice(&active_algs[i].to_be_bytes());
-                    buf.extend_from_slice(&(roots[i].len() as u64).to_be_bytes());
-                    buf.extend_from_slice(&roots[i]);
-                }
-                hasher.hash(&buf)
-            };
+            // Construct combined root from the canonical metaroot preimage.
+            let combined_root =
+                hasher.hash(&neml::combined_root_preimage(&active_roots, &alg_epochs));
 
             let config = neml::VerifierConfig::default();
 
             // 1. Success case
-            let verified = proof.verify(&hasher, target_alg_id, &combined_root, active_algs, config);
+            let verified = proof.verify(&hasher, target_alg_id, tree_size, &combined_root, active_algs, config);
             prop_assert_eq!(verified.unwrap(), target_root.clone());
 
             // 2. Reject tampered root hash
@@ -902,24 +901,35 @@ proptest! {
                 tampered_active_roots[target_idx].1[0] ^= 0xFF;
                 let tampered_proof = neml::CouplingProof {
                     active_roots: tampered_active_roots,
+                    alg_epochs: alg_epochs.clone(),
                 };
-                prop_assert!(tampered_proof.verify(&hasher, target_alg_id, &combined_root, active_algs, config).is_none());
+                prop_assert!(tampered_proof.verify(&hasher, target_alg_id, tree_size, &combined_root, active_algs, config).is_none());
             }
 
             // 3. Reject tampered combined root
             let mut bad_combined = combined_root.clone();
             if !bad_combined.is_empty() {
                 bad_combined[0] ^= 0xFF;
-                prop_assert!(proof.verify(&hasher, target_alg_id, &bad_combined, active_algs, config).is_none());
+                prop_assert!(proof.verify(&hasher, target_alg_id, tree_size, &bad_combined, active_algs, config).is_none());
             }
 
             // 4. Reject mismatching expected active algs (different length)
             let mut bad_algs = active_algs.to_vec();
             bad_algs.push(999);
-            prop_assert!(proof.verify(&hasher, target_alg_id, &combined_root, &bad_algs, config).is_none());
+            prop_assert!(proof.verify(&hasher, target_alg_id, tree_size, &combined_root, &bad_algs, config).is_none());
 
             // 5. Reject mismatching target alg id (not in active set)
-            prop_assert!(proof.verify(&hasher, 999, &combined_root, active_algs, config).is_none());
+            prop_assert!(proof.verify(&hasher, 999, tree_size, &combined_root, active_algs, config).is_none());
+
+            // 6. Reject substituted epoch metadata: the timeline is inside
+            // the preimage, so shifting a boundary breaks the binding.
+            let mut substituted_epochs = alg_epochs.clone();
+            substituted_epochs[target_idx].1 = vec![(0, 1), (1, u64::MAX)];
+            let substituted_proof = neml::CouplingProof {
+                active_roots: active_roots.clone(),
+                alg_epochs: substituted_epochs,
+            };
+            prop_assert!(substituted_proof.verify(&hasher, target_alg_id, tree_size, &combined_root, active_algs, config).is_none());
         }
     }
 }

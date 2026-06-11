@@ -86,13 +86,16 @@ pub fn verify_consistency(
 // Committed epoch timeline (Design A+)
 // ============================================================================
 //
-// The signed snapshot commits, for every algorithm registered at the snapshot
-// size, the full epoch timeline `(activation, deactivation)` as it stood at
-// that size. Activity at a position is read from this authenticated field —
+// The combined root is a metaroot: an extra structural layer that, like any
+// node, commits what is below it — except it spans every algorithm's tree.
+// Under Design A+ its preimage also covers the per-algorithm epoch timeline
+// `(activation, deactivation)` as it stood at that size, because the timeline
+// is part of the multi-algorithm structure (it decides which cells are null
+// projections). Activity at a position is read from this committed field —
 // never inferred from a digest equaling the null constant — which renders the
 // `leaf(b"null") == null()` collision inert without forbidding any payload.
 
-/// Canonical serialization of a snapshot commitment: the combined-root preimage.
+/// Canonical preimage of the combined root (the metaroot).
 ///
 /// Layout (all integers `u64` big-endian; fixed-width counts and lengths make
 /// the encoding unambiguous to parse and therefore injective):
@@ -102,10 +105,10 @@ pub fn verify_consistency(
 /// n_algs   ‖ [ id ‖ n_epochs ‖ (start ‖ end)* ]*
 /// ```
 ///
-/// `active_roots` lists the raw roots of algorithms active at the snapshot
-/// size; `alg_epochs` lists the committed epoch timeline of every registered
-/// algorithm (active and frozen). An epoch open at the snapshot is encoded
-/// with `end == u64::MAX`.
+/// `active_roots` lists the raw roots of algorithms active at the tree size;
+/// `alg_epochs` lists the committed epoch timeline of every registered
+/// algorithm (active and frozen). An epoch open at that size is encoded with
+/// `end == u64::MAX`.
 #[must_use]
 pub fn combined_root_preimage(
     active_roots: &[(u64, Vec<u8>)],
@@ -297,95 +300,144 @@ pub fn verify_epoch_evolution(
 pub struct VerifierConfig {
     /// Maximum number of active algorithms allowed (DoS mitigation).
     pub max_active_algorithms: usize,
+    /// Maximum number of algorithms (active and frozen) in a committed epoch
+    /// timeline (DoS mitigation).
+    pub max_algorithms: usize,
+    /// Maximum number of epoch intervals per algorithm (DoS mitigation).
+    pub max_epochs_per_algorithm: usize,
 }
 
 impl Default for VerifierConfig {
     fn default() -> Self {
         Self {
             max_active_algorithms: 8,
+            max_algorithms: 64,
+            max_epochs_per_algorithm: 1024,
         }
     }
 }
 
-/// A coupling proof that binds a set of raw algorithm roots to a Signed Combined Root.
-/// This allows verification of the combined root structure separately from individual trees.
+/// A coupling proof that opens a combined root (metaroot) to its children:
+/// the raw algorithm roots together with the committed epoch timeline. This
+/// is the metadata-opening segment of inclusion/inactivity proofs: once
+/// authenticated against the combined root, `alg_epochs` is the trusted
+/// source for `active(X, p)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CouplingProof {
     /// The active roots at this tree size: (alg_id, raw_root_hash)
     pub active_roots: Vec<(u64, Vec<u8>)>,
+    /// The committed epoch timeline at this tree size: `(alg_id, epochs)` for
+    /// every registered algorithm (active and frozen), sorted by algorithm
+    /// ID. Authenticated against the combined root together with the roots.
+    pub alg_epochs: Vec<(u64, Vec<(u64, u64)>)>,
 }
 
 impl CouplingProof {
-    /// Verify the coupling proof against a signed combined root for a given target algorithm.
-    /// Returns the verified raw root hash for the target algorithm if successful.
+    /// Authenticate the proof against a combined root at `tree_size`.
+    ///
+    /// Validates structure (canonical ordering, bounds, well-formed epochs,
+    /// active set consistent with the timeline) and reconstructs the
+    /// combined-root preimage via [`combined_root_preimage`]. On success both
+    /// `active_roots` and `alg_epochs` are authenticated by the root.
     #[must_use]
-    pub fn verify(
+    pub fn authenticate(
         &self,
         hasher: &dyn Hasher,
-        target_alg_id: u64,
+        tree_size: u64,
         combined_root: &[u8],
         expected_active_algs: &[u64],
         config: VerifierConfig,
-    ) -> Option<Vec<u8>> {
-        // DoS Mitigation: assert active roots count does not exceed configuration limit before
-        // allocating
+    ) -> bool {
+        // Nothing is committed at size zero.
+        if tree_size == 0 {
+            return false;
+        }
+
+        // DoS Mitigation: assert counts do not exceed configuration limits
+        // before allocating.
         if self.active_roots.len() > config.max_active_algorithms {
-            return None;
+            return false;
+        }
+        if self.alg_epochs.len() > config.max_algorithms {
+            return false;
+        }
+        if self
+            .alg_epochs
+            .iter()
+            .any(|(_, e)| e.len() > config.max_epochs_per_algorithm)
+        {
+            return false;
         }
 
         // Validate active roots match expected active algorithms exactly to prevent
         // type-confusion/bypass
         if self.active_roots.len() != expected_active_algs.len() {
-            return None;
+            return false;
         }
         for ((id, _), &expected_id) in self.active_roots.iter().zip(expected_active_algs.iter()) {
             if *id != expected_id {
-                return None;
+                return false;
             }
         }
 
         // DoS Mitigation: assert individual companion root sizes are within bounds
         for (_, r) in &self.active_roots {
             if r.len() > 64 {
-                return None;
+                return false;
             }
         }
 
         // Ensure the active roots list is canonically sorted by algorithm ID (prover requirement)
         // to prevent duplicate representation vectors or sorting malleability.
         if self.active_roots.windows(2).any(|w| w[0].0 >= w[1].0) {
+            return false;
+        }
+
+        // The committed timeline must be well-formed and must imply exactly
+        // the claimed active set: an algorithm cannot present a root without
+        // a covering epoch, nor claim an epoch covering the tip without a
+        // root.
+        if !validate_committed_epochs(&self.alg_epochs, tree_size) {
+            return false;
+        }
+        let derived = committed_active_algs(&self.alg_epochs, tree_size);
+        if derived.len() != self.active_roots.len()
+            || derived
+                .iter()
+                .zip(self.active_roots.iter())
+                .any(|(&d, &(id, _))| d != id)
+        {
+            return false;
+        }
+
+        // Reconstruct the combined root from its canonical preimage. Always
+        // hashed — no singleton promotion — so the epoch timeline is
+        // committed even in single-algorithm regions.
+        let computed = hasher.hash(&combined_root_preimage(&self.active_roots, &self.alg_epochs));
+        constant_time_eq(&computed, combined_root)
+    }
+
+    /// Verify the coupling proof against a combined root for a given target algorithm.
+    /// Returns the verified raw root hash for the target algorithm if successful.
+    #[must_use]
+    pub fn verify(
+        &self,
+        hasher: &dyn Hasher,
+        target_alg_id: u64,
+        tree_size: u64,
+        combined_root: &[u8],
+        expected_active_algs: &[u64],
+        config: VerifierConfig,
+    ) -> Option<Vec<u8>> {
+        if !self.authenticate(hasher, tree_size, combined_root, expected_active_algs, config) {
             return None;
         }
 
         // Extract the target algorithm's root
-        let mut target_root = None;
-        for &(id, ref r) in &self.active_roots {
-            if id == target_alg_id {
-                target_root = Some(r.clone());
-                break;
-            }
-        }
-        let target_root = target_root?;
-
-        // Reconstruct the combined root
-        let match_ok = if self.active_roots.len() == 1 {
-            // Singleton Promotion: the combined root is the raw root
-            constant_time_eq(&self.active_roots[0].1, combined_root)
-        } else {
-            // Pre-allocate buffer capacity: each active root needs 8 (ID) + 8 (len) + r.len() (<=
-            // 64) bytes. Using 80 bytes per entry avoids any dynamic heap reallocation
-            // under DoS.
-            let mut buf = Vec::with_capacity(self.active_roots.len() * 80);
-            for (id, r) in &self.active_roots {
-                buf.extend_from_slice(&id.to_be_bytes());
-                buf.extend_from_slice(&(r.len() as u64).to_be_bytes());
-                buf.extend_from_slice(r);
-            }
-            let computed = hasher.hash(&buf);
-            constant_time_eq(&computed, combined_root)
-        };
-
-        if match_ok { Some(target_root) } else { None }
+        self.active_roots
+            .iter()
+            .find(|&&(id, _)| id == target_alg_id)
+            .map(|(_, r)| r.clone())
     }
 }
 
@@ -960,11 +1012,17 @@ pub fn verify_inclusion_with_coupling(
     expected_active_algs: &[u64],
     config: VerifierConfig,
 ) -> bool {
-    let raw_root =
-        match coupling.verify(hasher, alg_id, combined_root, expected_active_algs, config) {
-            Some(r) => r,
-            None => return false,
-        };
+    let raw_root = match coupling.verify(
+        hasher,
+        alg_id,
+        tree_size,
+        combined_root,
+        expected_active_algs,
+        config,
+    ) {
+        Some(r) => r,
+        None => return false,
+    };
 
     verify_inclusion(hasher, leaf_hash, index, tree_size, log_arity, path, &raw_root)
 }
@@ -991,6 +1049,7 @@ pub fn verify_consistency_with_coupling(
     let old_res = old_coupling.verify(
         hasher,
         alg_id,
+        old_size,
         old_combined_root,
         old_expected_active_algs,
         config,
@@ -998,6 +1057,7 @@ pub fn verify_consistency_with_coupling(
     let new_res = new_coupling.verify(
         hasher,
         alg_id,
+        new_size,
         new_combined_root,
         new_expected_active_algs,
         config,

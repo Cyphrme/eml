@@ -92,8 +92,8 @@ impl AlgState {
             .any(|&(start, end)| start <= lo && hi <= end)
     }
 
-    /// The epoch timeline as it stood at snapshot `size`, for commitment into
-    /// the signed snapshot (Design A+).
+    /// The epoch timeline as it stood at size `size`, for commitment into
+    /// the combined root and audit checkpoints (Design A+).
     ///
     /// Intervals beginning after `size` are dropped; an interval extending
     /// past `size` is encoded as open (`end == u64::MAX`), matching what the
@@ -1369,9 +1369,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(())
     }
 
-    /// The committed epoch timeline at snapshot `size`: `(alg_id, epochs)`
-    /// for every algorithm registered by that size, sorted by algorithm ID.
-    /// This is the timeline bound into the signed snapshot (Design A+).
+    /// The committed epoch timeline at size `size`: `(alg_id, epochs)` for
+    /// every algorithm registered by that size, sorted by algorithm ID.
+    /// This is the timeline bound into the combined root (Design A+).
     #[must_use]
     pub fn committed_epochs_at(&self, size: u64) -> Vec<(u64, Vec<(u64, u64)>)> {
         let mut out: Vec<_> = self
@@ -1400,7 +1400,34 @@ impl<S: Storage> NaryMerkleLog<S> {
         self.combined_root_at(alg_id, tip_size).await
     }
 
+    /// The sorted set of algorithms active at the historical `size`
+    /// (algorithms whose epochs cover the final position `size - 1`).
+    fn active_algs_at(&self, size: u64) -> Vec<u64> {
+        let mut active_algs = Vec::new();
+        for (&id, alg_state) in &self.algs {
+            if size > 0 && alg_state.is_active_at(size - 1) {
+                active_algs.push(id);
+            }
+        }
+        active_algs.sort_unstable();
+        active_algs
+    }
+
     /// Compute the combined root hash for a specific algorithm at a historical tree size.
+    ///
+    /// The combined root is a metaroot: a structural layer that, like any
+    /// node, commits what is below it — except it spans every algorithm's
+    /// tree. Its preimage covers the raw roots of all active algorithms AND
+    /// the committed epoch timeline of every registered algorithm (Design
+    /// A+), because the timeline is part of the multi-algorithm structure
+    /// (it decides which cells are null projections). Binding the timeline
+    /// is what makes activity/inactivity claims non-equivocable: without it,
+    /// an active position whose payload hashes to the null constant and a
+    /// genuinely inactive position are byte-identical under the root, so
+    /// inactivity would be forgeable by metadata substitution. The metaroot
+    /// is always the hash of its canonical preimage — even with a single
+    /// active algorithm — since a raw-root passthrough would carry no epoch
+    /// commitment exactly where the log is single-algorithm (its genesis).
     pub async fn combined_root_at(&self, alg_id: u64, size: u64) -> Result<Vec<u8>, S::Error> {
         let state = self
             .algs
@@ -1412,13 +1439,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
 
         // 1. Gather active algorithms at the given historical size
-        let mut active_algs = Vec::new();
-        for (&id, alg_state) in &self.algs {
-            if size > 0 && alg_state.is_active_at(size - 1) {
-                active_algs.push(id);
-            }
-        }
-        active_algs.sort_unstable();
+        let active_algs = self.active_algs_at(size);
 
         if active_algs.is_empty() {
             return Err(crate::error::Error::NoActiveAlgorithms);
@@ -1429,21 +1450,17 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::FrozenAlgorithm(alg_id));
         }
 
-        if active_algs.len() == 1 {
-            // Singleton Promotion
-            return self.root_for_at(active_algs[0], size).await;
-        }
-
-        // 2. Concatenate sorted active roots at size
-        let mut buf = Vec::new();
+        // 2. Build the metaroot preimage: sorted active roots plus the
+        //    committed epoch timeline of every registered algorithm.
+        let mut active_roots = Vec::with_capacity(active_algs.len());
         for &id in &active_algs {
             let r = self.root_for_at(id, size).await?;
-            buf.extend_from_slice(&id.to_be_bytes());
-            buf.extend_from_slice(&(r.len() as u64).to_be_bytes());
-            buf.extend_from_slice(&r);
+            active_roots.push((id, r));
         }
+        let alg_epochs = self.committed_epochs_at(size);
+        let buf = crate::proof::combined_root_preimage(&active_roots, &alg_epochs);
 
-        // 3. Hash the combined buffer using the target algorithm's hasher
+        // 3. Hash the snapshot using the target algorithm's hasher
         Ok(state.hasher.hash(&buf))
     }
 

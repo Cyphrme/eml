@@ -1536,7 +1536,7 @@ fn test_power_of_k_boundaries() {
 }
 
 #[test]
-fn test_combined_root_singleton() {
+fn test_combined_root_single_alg_commits_epochs() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
@@ -1548,10 +1548,18 @@ fn test_combined_root_singleton() {
         log.append_leaf(b"test").await.unwrap();
         let raw_root = log.root();
 
-        // At size 1, with only default algorithm (0) active,
-        // combined_root() must match raw_root (Singleton Promotion).
+        // Even with a single active algorithm, the combined root is the hash
+        // of the full snapshot serialization (roots + epoch timeline). A raw
+        // root passthrough would leave the timeline uncommitted exactly in
+        // single-algorithm regions.
         let comb_root = log.combined_root().await;
-        assert_eq!(comb_root, raw_root);
+        assert_ne!(comb_root, raw_root);
+
+        let expected = Sha256Hasher.hash(&neml::combined_root_preimage(
+            &[(0, raw_root)],
+            &[(0, vec![(0, u64::MAX)])],
+        ));
+        assert_eq!(comb_root, expected);
     });
 }
 
@@ -1572,17 +1580,12 @@ fn test_combined_root_multi_alg() {
         let root_0 = log.root_for_at(0, 1).await.unwrap();
         let root_1 = log.root_for_at(1, 1).await.unwrap();
 
-        // Reconstruct combined root manually
-        let mut buf = Vec::new();
-        // alg_id = 0
-        buf.extend_from_slice(&0u64.to_be_bytes());
-        buf.extend_from_slice(&(root_0.len() as u64).to_be_bytes());
-        buf.extend_from_slice(&root_0);
-        // alg_id = 1
-        buf.extend_from_slice(&1u64.to_be_bytes());
-        buf.extend_from_slice(&(root_1.len() as u64).to_be_bytes());
-        buf.extend_from_slice(&root_1);
-
+        // Reconstruct combined root manually from the canonical snapshot
+        // serialization: sorted active roots plus the epoch timeline.
+        let buf = neml::combined_root_preimage(
+            &[(0, root_0), (1, root_1)],
+            &[(0, vec![(0, u64::MAX)]), (1, vec![(0, u64::MAX)])],
+        );
         let expected_combined = Sha256Hasher.hash(&buf);
 
         let comb_root = log.combined_root_for(0).await.unwrap();
@@ -1608,20 +1611,40 @@ fn test_combined_root_historical_and_epochs() {
         log.remove_algorithm(1).await.unwrap(); // size 2: alg 0 active (alg 1 frozen)
         log.append_leaf(b"c").await.unwrap(); // size 3
 
-        // Historical combined root at size 1: only alg 0 active -> Singleton Promotion
+        // Historical combined root at size 1: only alg 0 active. Alg 1's
+        // interval (1, 2) extends past size 1, so it is committed as open.
         let comb_1 = log.combined_root_at(0, 1).await.unwrap();
         let raw_0_at_1 = log.root_for_at(0, 1).await.unwrap();
-        assert_eq!(comb_1, raw_0_at_1);
+        assert_ne!(comb_1, raw_0_at_1);
+        let expected_1 = Sha256Hasher.hash(&neml::combined_root_preimage(
+            &[(0, raw_0_at_1)],
+            &[(0, vec![(0, u64::MAX)]), (1, vec![(1, u64::MAX)])],
+        ));
+        assert_eq!(comb_1, expected_1);
 
-        // Historical combined root at size 2: alg 0 and 1 active
+        // Historical combined root at size 2: alg 0 and 1 active. Alg 1's
+        // interval is closed at 2 by the later deactivation.
         let comb_2 = log.combined_root_at(0, 2).await.unwrap();
         assert_ne!(comb_2, log.root_for_at(0, 2).await.unwrap());
+        let expected_2 = Sha256Hasher.hash(&neml::combined_root_preimage(
+            &[
+                (0, log.root_for_at(0, 2).await.unwrap()),
+                (1, log.root_for_at(1, 2).await.unwrap()),
+            ],
+            &[(0, vec![(0, u64::MAX)]), (1, vec![(1, 2)])],
+        ));
+        assert_eq!(comb_2, expected_2);
 
-        // Historical combined root at size 3: alg 1 is frozen, only alg 0 active -> Singleton
-        // Promotion
+        // Historical combined root at size 3: alg 1 is frozen — its root is
+        // omitted but its closed timeline stays committed.
         let comb_3 = log.combined_root_at(0, 3).await.unwrap();
         let raw_0_at_3 = log.root_for_at(0, 3).await.unwrap();
-        assert_eq!(comb_3, raw_0_at_3);
+        assert_ne!(comb_3, raw_0_at_3);
+        let expected_3 = Sha256Hasher.hash(&neml::combined_root_preimage(
+            &[(0, raw_0_at_3)],
+            &[(0, vec![(0, u64::MAX)]), (1, vec![(1, 2)])],
+        ));
+        assert_eq!(comb_3, expected_3);
     });
 }
 
@@ -1630,51 +1653,53 @@ fn test_coupling_proof_verify_validation() {
     let hasher = Sha256Hasher;
     let raw_root_0 = vec![0; 32];
     let raw_root_1 = vec![1; 32];
+    let tree_size = 4u64;
+    let epochs = vec![(0u64, vec![(0u64, u64::MAX)]), (1, vec![(0, u64::MAX)])];
 
     let proof = neml::CouplingProof {
         active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
+        alg_epochs: epochs.clone(),
     };
 
     // Correct Combined Root computation
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&0u64.to_be_bytes());
-    buf.extend_from_slice(&32u64.to_be_bytes());
-    buf.extend_from_slice(&raw_root_0);
-    buf.extend_from_slice(&1u64.to_be_bytes());
-    buf.extend_from_slice(&32u64.to_be_bytes());
-    buf.extend_from_slice(&raw_root_1);
-    let combined_root = hasher.hash(&buf);
+    let combined_root = hasher.hash(&neml::combined_root_preimage(
+        &proof.active_roots,
+        &proof.alg_epochs,
+    ));
 
     let config = neml::VerifierConfig::default();
 
     // 1. Success case
-    let target = proof.verify(&hasher, 0, &combined_root, &[0, 1], config);
+    let target = proof.verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config);
     assert_eq!(target.unwrap(), raw_root_0);
 
     // 2. Reject because of maximum active algorithms limit
     let strict_config = neml::VerifierConfig {
         max_active_algorithms: 1,
+        ..Default::default()
     };
-    let target_dos = proof.verify(&hasher, 0, &combined_root, &[0, 1], strict_config);
+    let target_dos = proof.verify(&hasher, 0, tree_size, &combined_root, &[0, 1], strict_config);
     assert!(target_dos.is_none());
 
     // 3. Reject unsorted algorithm IDs
     let unsorted_proof = neml::CouplingProof {
         active_roots: vec![(1, raw_root_1.clone()), (0, raw_root_0.clone())],
+        alg_epochs: epochs.clone(),
     };
     assert!(
         unsorted_proof
-            .verify(&hasher, 0, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
             .is_none()
     );
 
     // 4. Reject duplicate algorithm IDs
     let duplicate_proof = neml::CouplingProof {
         active_roots: vec![(0, raw_root_0.clone()), (0, raw_root_1.clone())],
+        alg_epochs: epochs.clone(),
     };
     assert!(
         duplicate_proof
-            .verify(&hasher, 0, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1684,10 +1709,11 @@ fn test_coupling_proof_verify_validation() {
     bad_root_0[0] ^= 0xFF;
     let tampered_proof = neml::CouplingProof {
         active_roots: vec![(0, bad_root_0), (1, raw_root_1.clone())],
+        alg_epochs: epochs.clone(),
     };
     assert!(
         tampered_proof
-            .verify(&hasher, 0, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1696,7 +1722,7 @@ fn test_coupling_proof_verify_validation() {
     bad_combined[0] ^= 0xFF;
     assert!(
         proof
-            .verify(&hasher, 0, &bad_combined, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, &bad_combined, &[0, 1], config)
             .is_none()
     );
 
@@ -1704,19 +1730,19 @@ fn test_coupling_proof_verify_validation() {
     // Expected algorithms has different IDs
     assert!(
         proof
-            .verify(&hasher, 0, &combined_root, &[0, 2], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 2], config)
             .is_none()
     );
     // Expected algorithms is shorter (missing expected alg 1)
     assert!(
         proof
-            .verify(&hasher, 0, &combined_root, &[0], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0], config)
             .is_none()
     );
     // Expected algorithms is longer (extra expected alg)
     assert!(
         proof
-            .verify(&hasher, 0, &combined_root, &[0, 1, 2], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1, 2], config)
             .is_none()
     );
 
@@ -1724,70 +1750,120 @@ fn test_coupling_proof_verify_validation() {
     // Requesting target_alg_id = 2, which is not in active_roots
     assert!(
         proof
-            .verify(&hasher, 2, &combined_root, &[0, 1], config)
+            .verify(&hasher, 2, tree_size, &combined_root, &[0, 1], config)
             .is_none()
     );
 
     // 8. UNSORTED EXPECTED ACTIVE ALGORITHMS
     assert!(
         proof
-            .verify(&hasher, 0, &combined_root, &[1, 0], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[1, 0], config)
             .is_none()
     );
 
     // 9. DUPLICATE EXPECTED ACTIVE ALGORITHMS
     assert!(
         proof
-            .verify(&hasher, 0, &combined_root, &[0, 0], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 0], config)
             .is_none()
     );
 
     // 10. EMPTY INPUTS HANDLING
     let empty_proof = neml::CouplingProof {
         active_roots: vec![],
+        alg_epochs: vec![],
     };
     assert!(
         empty_proof
-            .verify(&hasher, 0, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
             .is_none()
     );
     assert!(
         proof
-            .verify(&hasher, 0, &combined_root, &[], config)
+            .verify(&hasher, 0, tree_size, &combined_root, &[], config)
             .is_none()
     );
 
-    // 11. VARIABLE LENGTH ROOTS (Length-Ambiguity Check)
+    // 11. SUBSTITUTED EPOCH METADATA REJECTION (Design A+)
+    // Shifting an activation boundary must break the combined-root binding:
+    // the timeline is inside the hash coverage, so the substituted proof
+    // cannot verify against the honest root.
+    let substituted_epochs_proof = neml::CouplingProof {
+        active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
+        alg_epochs: vec![(0, vec![(0, u64::MAX)]), (1, vec![(2, u64::MAX)])],
+    };
+    assert!(
+        substituted_epochs_proof
+            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
+            .is_none()
+    );
+
+    // 12. EPOCH / ACTIVE-SET CONSISTENCY REJECTION
+    // A timeline that does not cover the final position for a claimed active
+    // algorithm is rejected before any hashing.
+    let inconsistent_proof = neml::CouplingProof {
+        active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
+        alg_epochs: vec![(0, vec![(0, u64::MAX)]), (1, vec![(0, 2)])],
+    };
+    let inconsistent_root = hasher.hash(&neml::combined_root_preimage(
+        &inconsistent_proof.active_roots,
+        &inconsistent_proof.alg_epochs,
+    ));
+    assert!(
+        inconsistent_proof
+            .verify(&hasher, 0, tree_size, &inconsistent_root, &[0, 1], config)
+            .is_none()
+    );
+
+    // 13. ILL-FORMED EPOCHS REJECTION (overlapping intervals)
+    let ill_formed_proof = neml::CouplingProof {
+        active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
+        alg_epochs: vec![(0, vec![(0, 3), (2, u64::MAX)]), (1, vec![(0, u64::MAX)])],
+    };
+    let ill_formed_root = hasher.hash(&neml::combined_root_preimage(
+        &ill_formed_proof.active_roots,
+        &ill_formed_proof.alg_epochs,
+    ));
+    assert!(
+        ill_formed_proof
+            .verify(&hasher, 0, tree_size, &ill_formed_root, &[0, 1], config)
+            .is_none()
+    );
+
+    // 14. SIZE-ZERO REJECTION (nothing is committed at size zero)
+    assert!(
+        proof
+            .verify(&hasher, 0, 0, &combined_root, &[0, 1], config)
+            .is_none()
+    );
+
+    // 15. VARIABLE LENGTH ROOTS (Length-Ambiguity Check)
     let var_root_0 = vec![9; 20]; // 20-byte root (e.g. RIPEMD-160)
     let var_root_1 = vec![5; 32]; // 32-byte root (e.g. SHA-256)
     let var_proof = neml::CouplingProof {
         active_roots: vec![(0, var_root_0.clone()), (1, var_root_1.clone())],
+        alg_epochs: epochs.clone(),
     };
-    let mut var_buf = Vec::new();
-    var_buf.extend_from_slice(&0u64.to_be_bytes());
-    var_buf.extend_from_slice(&20u64.to_be_bytes());
-    var_buf.extend_from_slice(&var_root_0);
-    var_buf.extend_from_slice(&1u64.to_be_bytes());
-    var_buf.extend_from_slice(&32u64.to_be_bytes());
-    var_buf.extend_from_slice(&var_root_1);
-    let var_combined = hasher.hash(&var_buf);
+    let var_combined = hasher.hash(&neml::combined_root_preimage(
+        &var_proof.active_roots,
+        &var_proof.alg_epochs,
+    ));
 
-    let target_var = var_proof.verify(&hasher, 0, &var_combined, &[0, 1], config);
+    let target_var = var_proof.verify(&hasher, 0, tree_size, &var_combined, &[0, 1], config);
     assert_eq!(target_var.unwrap(), var_root_0);
 
-    // 12. EMPTY ROOTS HANDLING
+    // 16. EMPTY ROOTS HANDLING
     let empty_root_proof = neml::CouplingProof {
         active_roots: vec![(0, vec![]), (1, var_root_1.clone())],
+        alg_epochs: epochs.clone(),
     };
-    let mut empty_buf = Vec::new();
-    empty_buf.extend_from_slice(&0u64.to_be_bytes());
-    empty_buf.extend_from_slice(&0u64.to_be_bytes()); // length 0
-    empty_buf.extend_from_slice(&1u64.to_be_bytes());
-    empty_buf.extend_from_slice(&32u64.to_be_bytes());
-    empty_buf.extend_from_slice(&var_root_1);
-    let empty_combined = hasher.hash(&empty_buf);
+    let empty_combined = hasher.hash(&neml::combined_root_preimage(
+        &empty_root_proof.active_roots,
+        &empty_root_proof.alg_epochs,
+    ));
 
-    let target_empty = empty_root_proof.verify(&hasher, 0, &empty_combined, &[0, 1], config);
+    let target_empty =
+        empty_root_proof.verify(&hasher, 0, tree_size, &empty_combined, &[0, 1], config);
     assert_eq!(target_empty.unwrap(), Vec::<u8>::new());
 }
 
@@ -1808,6 +1884,7 @@ fn test_verify_inclusion_with_coupling() {
         let inclusion_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
         let coupling_proof = neml::CouplingProof {
             active_roots: vec![(0, raw_root.clone())],
+            alg_epochs: log.committed_epochs_at(1),
         };
 
         let verifier_config = neml::VerifierConfig::default();
@@ -1892,13 +1969,18 @@ fn test_verify_consistency_with_coupling() {
         let root_a = log.root();
         let coupling_a = neml::CouplingProof {
             active_roots: vec![(0, root_a.clone())],
+            alg_epochs: log.committed_epochs_at(1),
         };
 
         log.append_leaf(b"b").await.unwrap();
         let root_b = log.root();
         let coupling_b = neml::CouplingProof {
             active_roots: vec![(0, root_b.clone())],
+            alg_epochs: log.committed_epochs_at(2),
         };
+
+        let combined_a = log.combined_root_at(0, 1).await.unwrap();
+        let combined_b = log.combined_root_at(0, 2).await.unwrap();
 
         let consistency_proof = log.consistency_proof(1, 2).await.unwrap().unwrap();
 
@@ -1913,8 +1995,8 @@ fn test_verify_consistency_with_coupling() {
             &consistency_proof.path,
             &coupling_a,
             &coupling_b,
-            &root_a,
-            &root_b,
+            &combined_a,
+            &combined_b,
             &[0],
             &[0],
             verifier_config,
@@ -2231,8 +2313,12 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
 
     let coupling = neml::CouplingProof {
         active_roots: vec![(0, root.clone())],
+        alg_epochs: vec![(0, vec![(0, u64::MAX)])],
     };
-    let combined_root = neml::mr::nary_mr(&hasher, &[&root]);
+    let combined_root = hasher.hash(&neml::combined_root_preimage(
+        &coupling.active_roots,
+        &coupling.alg_epochs,
+    ));
 
     let is_valid = neml::verify_inclusion_with_coupling(
         &hasher,
