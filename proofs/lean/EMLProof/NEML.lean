@@ -671,6 +671,180 @@ def NodeHashCollision : Prop := ∃ a b : List Digest, a ≠ b ∧ nodeHash a = 
     forces the steps and the running digests equal, recursing on the prefixes) is
     left for the proof pass.
     TODO(proof): discharge `inclusion_proof_unique`. -/
+theorem insertAt_ne_nil {α : Type} (n : Nat) (x : α) (xs : List α) :
+    insertAt n x xs ≠ [] := by
+  induction xs generalizing n with
+  | nil =>
+    simp [insertAt]
+  | cons y ys ih =>
+    cases n with
+    | zero =>
+      simp [insertAt]
+    | succ m =>
+      simp [insertAt]
+
+theorem insertAt_injective {α : Type} (n : Nat) (x y : α) (xs ys : List α)
+    (h : insertAt n x xs = insertAt n y ys) : x = y ∧ xs = ys := by
+  induction n generalizing xs ys with
+  | zero =>
+    have hxs : insertAt 0 x xs = x :: xs := by
+      cases xs <;> rfl
+    have hys : insertAt 0 y ys = y :: ys := by
+      cases ys <;> rfl
+    rw [hxs, hys] at h
+    injection h with hxy hxsys
+    exact ⟨hxy, hxsys⟩
+  | succ m ih =>
+    cases xs with
+    | nil =>
+      have hx : insertAt (m + 1) x [] = [x] := rfl
+      rw [hx] at h
+      cases ys with
+      | nil =>
+        have hy : insertAt (m + 1) y [] = [y] := rfl
+        rw [hy] at h
+        injection h with hxy
+        exact ⟨hxy, rfl⟩
+      | cons z zs =>
+        have hy : insertAt (m + 1) y (z :: zs) = z :: insertAt m y zs := rfl
+        rw [hy] at h
+        injection h with _ h2
+        have hne := insertAt_ne_nil m y zs
+        rw [← h2] at hne
+        contradiction
+    | cons z zs =>
+      have hx : insertAt (m + 1) x (z :: zs) = z :: insertAt m x zs := rfl
+      rw [hx] at h
+      cases ys with
+      | nil =>
+        have hy : insertAt (m + 1) y [] = [y] := rfl
+        rw [hy] at h
+        injection h with _ h2
+        have hne := insertAt_ne_nil m x zs
+        rw [h2] at hne
+        contradiction
+      | cons w ws =>
+        have hy : insertAt (m + 1) y (w :: ws) = w :: insertAt m y ws := rfl
+        rw [hy] at h
+        injection h with hzw h2
+        have ih_res := ih zs ws h2
+        obtain ⟨hxy, hzs⟩ := ih_res
+        rw [hzw, hzs]
+        exact ⟨hxy, rfl⟩
+
+theorem list_decomp_last {α : Type} {m : Nat} (l : List α) (h : l.length = m + 1) :
+    ∃ l' x, l = l' ++ [x] ∧ l'.length = m := by
+  induction l generalizing m with
+  | nil =>
+    contradiction
+  | cons y ys ih =>
+    cases m with
+    | zero =>
+      cases ys with
+      | nil =>
+        refine ⟨[], y, rfl, rfl⟩
+      | cons z zs =>
+        simp only [List.length_cons] at h
+        omega
+    | succ k =>
+      have hlen : ys.length = k + 1 := by
+        simp only [List.length_cons] at h
+        omega
+      obtain ⟨ys', x, hys_eq, hys'_len⟩ := ih hlen
+      rw [hys_eq]
+      refine ⟨y :: ys', x, rfl, ?_⟩
+      simp [hys'_len]
+
+theorem get?_append_left {α : Type} (xs : List α) (ys : List α) (i : Nat) (h : i < xs.length) :
+    (xs ++ ys)[i]? = xs[i]? := by
+  induction xs generalizing i with
+  | nil =>
+    contradiction
+  | cons z zs ih =>
+    cases i with
+    | zero =>
+      rfl
+    | succ j =>
+      have h2 : j < zs.length := by
+        simp only [List.length_cons] at h
+        omega
+      exact ih j h2
+
+theorem get?_append_last {α : Type} (xs : List α) (x : α) :
+    (xs ++ [x])[xs.length]? = some x := by
+  induction xs with
+  | nil =>
+    rfl
+  | cons z zs ih =>
+    exact ih
+
+theorem foldCanonical_append_last (leaf : Digest) (p' : List ProofStep) (s : ProofStep) :
+    foldCanonical leaf (p' ++ [s]) = applyStep (foldCanonical leaf p') s := by
+  simp [foldCanonical]
+
+theorem foldCanonical_unique_of_len (n : Nat) (leaf : Digest) (p₁ p₂ : List ProofStep)
+    (hlen1 : p₁.length = n)
+    (hlen2 : p₂.length = n)
+    (hpos : ∀ i < n, (p₁[i]?).map ProofStep.position = (p₂[i]?).map ProofStep.position)
+    (heq : foldCanonical leaf p₁ = foldCanonical leaf p₂)
+    (hcol : ¬ NodeHashCollision) :
+    p₁ = p₂ := by
+  induction n generalizing leaf p₁ p₂ with
+  | zero =>
+    have hp1 : p₁ = [] := by
+      cases p₁ with
+      | nil => rfl
+      | cons x xs =>
+        simp only [List.length_cons] at hlen1
+        omega
+    have hp2 : p₂ = [] := by
+      cases p₂ with
+      | nil => rfl
+      | cons x xs =>
+        simp only [List.length_cons] at hlen2
+        omega
+    rw [hp1, hp2]
+  | succ m ih =>
+    obtain ⟨p₁', s₁, hp1_eq, hp1'_len⟩ := list_decomp_last p₁ hlen1
+    obtain ⟨p₂', s₂, hp2_eq, hp2'_len⟩ := list_decomp_last p₂ hlen2
+    rw [hp1_eq, hp2_eq] at heq
+    rw [foldCanonical_append_last, foldCanonical_append_last] at heq
+    simp only [applyStep] at heq
+    have h_node_eq : insertAt s₁.position (foldCanonical leaf p₁') s₁.siblings = insertAt s₂.position (foldCanonical leaf p₂') s₂.siblings := by
+      by_contra hc
+      apply hcol
+      refine ⟨insertAt s₁.position (foldCanonical leaf p₁') s₁.siblings, insertAt s₂.position (foldCanonical leaf p₂') s₂.siblings, hc, heq⟩
+    have hpos_last : (p₁[m]?).map ProofStep.position = (p₂[m]?).map ProofStep.position := by
+      apply hpos
+      omega
+    rw [hp1_eq, hp2_eq] at hpos_last
+    have hp1_last_eq : (p₁' ++ [s₁])[p₁'.length]? = some s₁ := get?_append_last p₁' s₁
+    have hp2_last_eq : (p₂' ++ [s₂])[p₂'.length]? = some s₂ := get?_append_last p₂' s₂
+    rw [hp1'_len] at hp1_last_eq
+    rw [hp2'_len] at hp2_last_eq
+    rw [hp1_last_eq, hp2_last_eq] at hpos_last
+    simp only [Option.map, Option.some.injEq] at hpos_last
+    rw [hpos_last] at h_node_eq
+    have h_inj := insertAt_injective s₂.position (foldCanonical leaf p₁') (foldCanonical leaf p₂') s₁.siblings s₂.siblings h_node_eq
+    obtain ⟨h_fold_eq, h_sib_eq⟩ := h_inj
+    have h_step_eq : s₁ = s₂ := by
+      cases s₁
+      cases s₂
+      simp only [ProofStep.mk.injEq] at *
+      exact ⟨h_sib_eq, hpos_last⟩
+    have hpos' : ∀ i < m, (p₁'[i]?).map ProofStep.position = (p₂'[i]?).map ProofStep.position := by
+      intro i hi
+      have hpos_i := hpos i (by omega)
+      rw [hp1_eq, hp2_eq] at hpos_i
+      have h_i_len1 : i < p₁'.length := by omega
+      have h_i_len2 : i < p₂'.length := by omega
+      have hp1'_i : (p₁' ++ [s₁])[i]? = p₁'[i]? := get?_append_left p₁' [s₁] i h_i_len1
+      have hp2'_i : (p₂' ++ [s₂])[i]? = p₂'[i]? := get?_append_left p₂' [s₂] i h_i_len2
+      rw [hp1'_i, hp2'_i] at hpos_i
+      exact hpos_i
+    have hp_eq : p₁' = p₂' := ih leaf p₁' p₂' hp1'_len hp2'_len hpos' h_fold_eq
+    rw [hp1_eq, hp2_eq, hp_eq, h_step_eq]
+
 theorem inclusion_proof_unique
     (SkeletonValid : Nat → Nat → Nat → List ProofStep → Prop)
     (k index treeSize : Nat) (leaf root : Digest) (p₁ p₂ : List ProofStep)
@@ -679,7 +853,15 @@ theorem inclusion_proof_unique
     (hlen : p₁.length = p₂.length)
     (hpos : ∀ i : Nat, (p₁[i]?).map ProofStep.position = (p₂[i]?).map ProofStep.position) :
     p₁ = p₂ ∨ NodeHashCollision := by
-  sorry
+  by_cases hcol : NodeHashCollision
+  · exact Or.inr hcol
+  · have hf₁ := h₁.2.1
+    have hf₂ := h₂.2.1
+    have hpos_lim : ∀ i < p₁.length, (p₁[i]?).map ProofStep.position = (p₂[i]?).map ProofStep.position := by
+      intro i _
+      exact hpos i
+    have heq : p₁ = p₂ := foldCanonical_unique_of_len p₁.length leaf p₁ p₂ rfl hlen.symm hpos_lim (hf₁.trans hf₂.symm) hcol
+    exact Or.inl heq
 
 end NEML
 
@@ -696,7 +878,5 @@ equations), and `domain_separation` (the deleted vacuous EML theorems were its
 only consumer). `#print axioms` on the NEML/Projection theorems shows only the
 four above plus the Lean built-ins `propext`, `Classical.choice`, `Quot.sound`.
 
-One theorem, `inclusion_proof_unique` (proof-encoding non-malleability), is
-stated but not yet proved — it uses `sorryAx`, flagged at its definition. Every
-other theorem in this file is `sorry`-free.
+Every theorem in this file is now fully proved and sorry-free.
 -/
