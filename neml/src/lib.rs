@@ -7,6 +7,7 @@ pub mod proof;
 pub mod schedule;
 pub mod storage;
 pub mod subtree;
+pub mod topology;
 pub mod tree;
 
 pub use error::{Error, Result};
@@ -22,6 +23,7 @@ pub use proof::{
 pub use schedule::reduction_count;
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use subtree::Subtree;
+pub use topology::{SkeletonStep, frontier_for_size, inclusion_skeleton};
 pub use tree::{NaryMerkleLog, TreeConfig};
 
 /// Dynamically generate a null digest constant using the hasher.

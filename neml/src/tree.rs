@@ -6,6 +6,7 @@ use crate::mr::{evaluate, nary_mr};
 use crate::schedule::reduction_count;
 use crate::storage::Storage;
 use crate::subtree::Subtree;
+use crate::topology::frontier_for_size;
 
 /// Configuration for the n-ary Merkle tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1162,6 +1163,20 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         path.extend(std::mem::take(&mut current[target_idx].path));
 
+        // The log spine's shape is owned by the topology module; generation must
+        // emit exactly the skeleton the verifier will check against. This holds by
+        // construction — the pin guards against the producer and verifier drifting.
+        debug_assert!(
+            crate::topology::inclusion_skeleton(k, tree_size, index).is_some_and(|skeleton| {
+                skeleton.len() == path.len()
+                    && path.iter().zip(skeleton.iter()).all(|(step, shape)| {
+                        step.position == shape.position
+                            && step.siblings.len() == shape.sibling_count
+                    })
+            }),
+            "generated inclusion proof must match the canonical log skeleton"
+        );
+
         Ok(Some(crate::proof::InclusionProof {
             path,
         }))
@@ -2124,32 +2139,6 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         Ok(true)
     }
-}
-
-/// Reconstruct the coordinates (left_index, height) of the frontier for a given tree size.
-pub fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
-    if k < 2 || k > 256 {
-        return Vec::new();
-    }
-    let mut frontier = Vec::new();
-    let mut curr_left = 0;
-    let mut temp_n = n;
-    while temp_n > 0 {
-        let mut height = 0;
-        let mut cap: u64 = 1;
-        while let Some(next_cap) = cap.checked_mul(k) {
-            if next_cap <= temp_n {
-                cap = next_cap;
-                height += 1;
-            } else {
-                break;
-            }
-        }
-        frontier.push((curr_left, height));
-        curr_left += cap;
-        temp_n -= cap;
-    }
-    frontier
 }
 
 #[cfg(test)]

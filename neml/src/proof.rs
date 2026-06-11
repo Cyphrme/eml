@@ -60,7 +60,7 @@ pub fn verify_inclusion(
         .is_some_and(|computed| constant_time_eq(&computed, root))
 }
 
-use crate::tree::frontier_for_size;
+use crate::topology::{frontier_for_size, inclusion_skeleton};
 
 /// Verify a consistency proof.
 ///
@@ -449,154 +449,15 @@ impl CouplingProof {
     }
 }
 
-/// Reconstruct the leaf index from a uniform Flat Log Mode path.
-/// Returns `None` if the path does not match the uniform Flat Log Mode structure for `tree_size`
-/// and `k`.
-#[must_use]
-pub fn reconstruct_index_from_path(k: u64, tree_size: u64, path: &[ProofStep]) -> Option<u64> {
-    if k < 2 || k > 256 {
-        return None;
-    }
-    let coords = frontier_for_size(tree_size, k);
-    if coords.is_empty() {
-        return None;
-    }
-
-    let mut next_node_id = coords.len();
-    let mut frontier: Vec<usize> = (0..coords.len()).collect();
-    let mut children_map = std::collections::HashMap::new();
-
-    let k_usize = k as usize;
-    while frontier.len() > k_usize {
-        let split_idx = frontier.len() - k_usize;
-        let parent_id = next_node_id;
-        next_node_id += 1;
-        let children = frontier[split_idx..].to_vec();
-        children_map.insert(parent_id, children);
-        frontier.truncate(split_idx);
-        frontier.push(parent_id);
-    }
-    if frontier.len() > 1 {
-        let parent_id = next_node_id;
-        let children = frontier.clone();
-        children_map.insert(parent_id, children);
-        frontier = vec![parent_id];
-    }
-
-    let mut curr_node = frontier[0];
-    let mut path_idx = path.len();
-
-    while children_map.contains_key(&curr_node) {
-        let children = &children_map[&curr_node];
-        if path_idx == 0 {
-            return None;
-        }
-        path_idx -= 1;
-        let step = &path[path_idx];
-        if step.siblings.len() != children.len() - 1 {
-            return None;
-        }
-        if step.position >= children.len() {
-            return None;
-        }
-        curr_node = children[step.position];
-    }
-
-    let f_idx = curr_node;
-    if f_idx >= coords.len() {
-        return None;
-    }
-
-    let (left, height) = coords[f_idx];
-    if path_idx != height as usize {
-        return None;
-    }
-
-    let mut offset = 0u64;
-    let mut power = 1u64;
-    for step in path.iter().take(path_idx) {
-        if step.siblings.len() != k_usize - 1 {
-            return None;
-        }
-        if step.position >= k_usize {
-            return None;
-        }
-        let term = (step.position as u64).checked_mul(power)?;
-        offset = offset.checked_add(term)?;
-        power = power.checked_mul(k)?;
-    }
-
-    left.checked_add(offset)
-}
-
-fn path_length_to_frontier_node(k: u64, coords_len: usize, target_f_idx: usize) -> Option<usize> {
-    if k < 2 || k > 256 {
-        return None;
-    }
-    if target_f_idx >= coords_len {
-        return None;
-    }
-
-    let mut next_node_id = coords_len;
-    let mut frontier: Vec<usize> = (0..coords_len).collect();
-    let mut children_map = std::collections::HashMap::new();
-    let mut spans = std::collections::HashMap::new();
-
-    for i in 0..coords_len {
-        spans.insert(i, (i, i));
-    }
-
-    let k_usize = k as usize;
-    while frontier.len() > k_usize {
-        let split_idx = frontier.len() - k_usize;
-        let parent_id = next_node_id;
-        next_node_id += 1;
-        let children = frontier[split_idx..].to_vec();
-
-        let min_idx = spans[&children[0]].0;
-        let max_idx = spans[children.last()?].1;
-        spans.insert(parent_id, (min_idx, max_idx));
-
-        children_map.insert(parent_id, children);
-        frontier.truncate(split_idx);
-        frontier.push(parent_id);
-    }
-    if frontier.len() > 1 {
-        let parent_id = next_node_id;
-        let children = frontier.clone();
-
-        let min_idx = spans[&children[0]].0;
-        let max_idx = spans[children.last()?].1;
-        spans.insert(parent_id, (min_idx, max_idx));
-
-        children_map.insert(parent_id, children);
-        frontier = vec![parent_id];
-    }
-
-    let root = frontier[0];
-    let mut curr = root;
-    let mut depth = 0;
-    while children_map.contains_key(&curr) {
-        let children = &children_map[&curr];
-        let mut found = false;
-        for &child in children {
-            let (min_val, max_val) = spans[&child];
-            if target_f_idx >= min_val && target_f_idx <= max_val {
-                curr = child;
-                depth += 1;
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return None;
-        }
-    }
-    Some(depth)
-}
-
-/// Validate that the inclusion proof path matches the expected structure, sibling count, and
-/// positions.
+/// Validate that the trailing steps of an inclusion proof path match the
+/// log-spine skeleton pinned by `(index, tree_size, k)`.
+///
+/// The skeleton — its length and, per step, the path node's position and sibling
+/// count — is derived once by [`inclusion_skeleton`], the single authority on log
+/// topology shared with proof generation. The trailing `skeleton.len()` steps are
+/// checked field-by-field against it; the leading `path.len() - skeleton.len()`
+/// steps are the subtree portion and carry no topological claim here (they are
+/// verified by hash chaining in [`reconstruct_inclusion_root`]).
 #[must_use]
 pub fn verify_inclusion_path_structure(
     k: usize,
@@ -604,41 +465,20 @@ pub fn verify_inclusion_path_structure(
     tree_size: u64,
     path: &[ProofStep],
 ) -> bool {
-    if k < 2 || k > 256 {
-        return false;
-    }
-    let k_u64 = k as u64;
-    let coords = frontier_for_size(tree_size, k_u64);
-    if coords.is_empty() {
-        return false;
-    }
-
-    let mut target_f_idx = None;
-    for (f_idx, &(left, height)) in coords.iter().enumerate() {
-        if let Some(cap) = k_u64.checked_pow(height) {
-            if index >= left && index < left + cap {
-                target_f_idx = Some((f_idx, height));
-                break;
-            }
-        }
-    }
-    let (f_idx, height) = match target_f_idx {
-        Some(val) => val,
+    let skeleton = match inclusion_skeleton(k as u64, tree_size, index) {
+        Some(s) => s,
         None => return false,
     };
-
-    let c = match path_length_to_frontier_node(k_u64, coords.len(), f_idx) {
-        Some(depth) => depth,
-        None => return false,
-    };
-
-    let expected_len = c + height as usize;
-    if path.len() < expected_len {
+    if path.len() < skeleton.len() {
         return false;
     }
-
-    let d = path.len() - expected_len;
-    reconstruct_index_from_path(k_u64, tree_size, &path[d..]) == Some(index)
+    let d = path.len() - skeleton.len();
+    path[d..]
+        .iter()
+        .zip(skeleton.iter())
+        .all(|(step, shape)| {
+            step.position == shape.position && step.siblings.len() == shape.sibling_count
+        })
 }
 
 /// Reconstruct the raw root from an inclusion proof path.
