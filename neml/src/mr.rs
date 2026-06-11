@@ -124,9 +124,6 @@ mod tests {
             Sha256::digest(b"").to_vec()
         }
 
-        fn null(&self) -> Vec<u8> {
-            crate::generate_nums_null(self, 32)
-        }
 
         fn hash(&self, data: &[u8]) -> Vec<u8> {
             Sha256::digest(data).to_vec()
@@ -192,13 +189,10 @@ mod tests {
         let leaf_hash = hasher.leaf(b"b");
         let root = evaluate(&hasher, &subtree);
         let proof = crate::proof::InclusionProof {
-            index: 0,
-            tree_size: 1,
-            log_arity: 2,
             path,
         };
         assert!(crate::proof::verify_inclusion(
-            &hasher, &leaf_hash, &proof, &root
+            &hasher, &leaf_hash, 0, 1, 2, &proof.path, &root
         ));
     }
 }

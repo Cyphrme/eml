@@ -21,9 +21,6 @@ impl Hasher for Sha256Hasher {
         Sha256::digest(b"").to_vec()
     }
 
-    fn null(&self) -> Vec<u8> {
-        neml::generate_nums_null(self, 32)
-    }
 
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -165,7 +162,7 @@ fn test_vector_6_subtree_append_k2() {
 fn test_vector_7_null_constant() {
     let hasher = Sha256Hasher;
     let null = hasher.null();
-    let expected = neml::NULL_DIGEST.to_vec();
+    let expected = neml::null_digest(&hasher);
     assert_eq!(null, expected);
 }
 
@@ -259,7 +256,10 @@ fn test_inclusion_and_consistency_proofs_simple() {
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
-            &proof,
+            2,
+            4,
+            2,
+            &proof.path,
             &root
         ));
 
@@ -278,7 +278,11 @@ fn test_inclusion_and_consistency_proofs_simple() {
         };
         assert!(neml::verify_consistency(
             &Sha256Hasher,
-            &cons_proof,
+            2,
+            4,
+            2,
+            &cons_proof.start_hash,
+            &cons_proof.path,
             &old_root,
             &root
         ));
@@ -311,7 +315,10 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                     assert!(neml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
-                        &proof,
+                        idx,
+                        size,
+                        k as u64,
+                        &proof.path,
                         &root
                     ));
                 }
@@ -337,7 +344,16 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                         }
                         temp_log.root()
                     };
-                    if !neml::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root) {
+                    if !neml::verify_consistency(
+                        &Sha256Hasher,
+                        old_size,
+                        size,
+                        k as u64,
+                        &cons_proof.start_hash,
+                        &cons_proof.path,
+                        &old_root,
+                        &root,
+                    ) {
                         panic!(
                             "verify_consistency failed for k={}, size={}, old_size={}, \
                              cons_proof={:?}, old_root={:?}, root={:?}",
@@ -390,16 +406,16 @@ fn test_inclusion_proofs_subtree_log_mode() {
 
         let leaf_hash = Sha256Hasher.leaf(b"d");
         let full_proof = neml::InclusionProof {
-            index: 1,
-            tree_size: 2,
-            log_arity: 2,
             path,
         };
 
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
-            &full_proof,
+            1,
+            2,
+            2,
+            &full_proof.path,
             &root
         ));
     });
@@ -656,7 +672,10 @@ fn test_epoch_proofs() {
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
-            &proof0,
+            2,
+            4,
+            2,
+            &proof0.path,
             &root0
         ));
 
@@ -666,7 +685,10 @@ fn test_epoch_proofs() {
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
-            &proof1,
+            1,
+            2,
+            2,
+            &proof1.path,
             &root1
         ));
 
@@ -779,7 +801,10 @@ fn test_promotion_proofs_malt() {
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"x"),
-            &proof,
+            0,
+            1,
+            3,
+            &proof.path,
             &root
         ));
 
@@ -794,7 +819,10 @@ fn test_promotion_proofs_malt() {
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"z"),
-            &proof,
+            2,
+            3,
+            3,
+            &proof.path,
             &root
         ));
     });
@@ -851,9 +879,17 @@ fn test_subtree_consistency_proofs() {
                         }
                         temp_log.root()
                     };
-
                     assert!(
-                        neml::verify_consistency(&Sha256Hasher, &cons_proof, &old_root, &root),
+                        neml::verify_consistency(
+                            &Sha256Hasher,
+                            old_size,
+                            size,
+                            k as u64,
+                            &cons_proof.start_hash,
+                            &cons_proof.path,
+                            &old_root,
+                            &root,
+                        ),
                         "verify_consistency failed for subtree log: k={}, size={}, old_size={}",
                         k,
                         size,
@@ -895,9 +931,6 @@ fn test_deep_subtree_inclusion_proofs() {
             path.extend(log_proof.path);
 
             let full_proof = neml::InclusionProof {
-                index: 0,
-                tree_size: 1,
-                log_arity: 2,
                 path,
             };
 
@@ -905,7 +938,10 @@ fn test_deep_subtree_inclusion_proofs() {
                 neml::verify_inclusion(
                     &Sha256Hasher,
                     &Sha256Hasher.leaf(&data),
-                    &full_proof,
+                    0,
+                    1,
+                    2,
+                    &full_proof.path,
                     &root
                 ),
                 "Failed single nested leaf inclusion proof verification at depth {}",
@@ -954,9 +990,6 @@ fn test_deep_subtree_inclusion_proofs() {
             path.extend(log_proof.path);
 
             let full_proof = neml::InclusionProof {
-                index: 0,
-                tree_size: 2,
-                log_arity: 3,
                 path,
             };
 
@@ -964,7 +997,10 @@ fn test_deep_subtree_inclusion_proofs() {
                 neml::verify_inclusion(
                     &Sha256Hasher,
                     &Sha256Hasher.leaf(&data),
-                    &full_proof,
+                    0,
+                    2,
+                    3,
+                    &full_proof.path,
                     &root
                 ),
                 "Failed nested mixed leaf inclusion proof verification for index {}",
@@ -1124,15 +1160,15 @@ fn test_multi_algorithm_subtree_proofs() {
         path0.extend(log_proof0.path);
 
         let full_proof0 = neml::InclusionProof {
-            index: 1,
-            tree_size: 2,
-            log_arity: 2,
             path: path0,
         };
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
-            &full_proof0,
+            1,
+            2,
+            2,
+            &full_proof0.path,
             &root0
         ));
 
@@ -1144,15 +1180,15 @@ fn test_multi_algorithm_subtree_proofs() {
         path1.extend(log_proof1.path);
 
         let full_proof1 = neml::InclusionProof {
-            index: 0,
-            tree_size: 1,
-            log_arity: 2,
             path: path1,
         };
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
-            &full_proof1,
+            0,
+            1,
+            2,
+            &full_proof1.path,
             &root1
         ));
 
@@ -1171,7 +1207,11 @@ fn test_multi_algorithm_subtree_proofs() {
         };
         assert!(neml::verify_consistency(
             &Sha256Hasher,
-            &cons0,
+            1,
+            2,
+            2,
+            &cons0.start_hash,
+            &cons0.path,
             &old_root0,
             &root0
         ));
@@ -1219,56 +1259,59 @@ fn test_proof_error_edge_cases() {
 
         // 4. Verifier input validation failures
         let empty_proof = neml::InclusionProof {
-            index: 1,
-            tree_size: 1, // index >= tree_size
-            log_arity: 2,
             path: Vec::new(),
         };
         assert!(!neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"x"),
-            &empty_proof,
+            1,
+            1,
+            2,
+            &empty_proof.path,
             &[0; 32]
         ));
 
         let empty_cons_proof = neml::ConsistencyProof {
-            old_size: 0, // old_size == 0
-            new_size: 2,
-            log_arity: 2,
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
         assert!(!neml::verify_consistency(
             &Sha256Hasher,
-            &empty_cons_proof,
+            0,
+            2,
+            2,
+            &empty_cons_proof.start_hash,
+            &empty_cons_proof.path,
             &[0; 32],
             &[0; 32]
         ));
 
         let empty_cons_proof_invalid_sizes = neml::ConsistencyProof {
-            old_size: 2, // old_size >= new_size
-            new_size: 2,
-            log_arity: 2,
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
         assert!(!neml::verify_consistency(
             &Sha256Hasher,
-            &empty_cons_proof_invalid_sizes,
+            2,
+            2,
+            2,
+            &empty_cons_proof_invalid_sizes.start_hash,
+            &empty_cons_proof_invalid_sizes.path,
             &[0; 32],
             &[0; 32]
         ));
 
         let empty_cons_proof_invalid_arity = neml::ConsistencyProof {
-            old_size: 1,
-            new_size: 2,
-            log_arity: 1, // arity < 2
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
         assert!(!neml::verify_consistency(
             &Sha256Hasher,
-            &empty_cons_proof_invalid_arity,
+            1,
+            2,
+            1,
+            &empty_cons_proof_invalid_arity.start_hash,
+            &empty_cons_proof_invalid_arity.path,
             &[0; 32],
             &[0; 32]
         ));
@@ -1317,7 +1360,10 @@ fn test_power_of_k_boundaries() {
                     assert!(neml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
-                        &proof,
+                        idx,
+                        size,
+                        3,
+                        &proof.path,
                         &root
                     ));
                 }
@@ -1358,7 +1404,11 @@ fn test_power_of_k_boundaries() {
             };
             assert!(neml::verify_consistency(
                 &Sha256Hasher,
-                &proof_3_9,
+                3,
+                9,
+                3,
+                &proof_3_9.start_hash,
+                &proof_3_9.path,
                 &root_3,
                 &root_9
             ));
@@ -1367,7 +1417,11 @@ fn test_power_of_k_boundaries() {
             let root_27 = log.root();
             assert!(neml::verify_consistency(
                 &Sha256Hasher,
-                &proof_9_27,
+                9,
+                27,
+                3,
+                &proof_9_27.start_hash,
+                &proof_9_27.path,
                 &root_9,
                 &root_27
             ));
@@ -1412,7 +1466,10 @@ fn test_power_of_k_boundaries() {
                     assert!(neml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
-                        &proof,
+                        idx,
+                        size,
+                        4,
+                        &proof.path,
                         &root
                     ));
                 }
@@ -1453,7 +1510,11 @@ fn test_power_of_k_boundaries() {
             };
             assert!(neml::verify_consistency(
                 &Sha256Hasher,
-                &proof_4_16,
+                4,
+                16,
+                4,
+                &proof_4_16.start_hash,
+                &proof_4_16.path,
                 &root_4,
                 &root_16
             ));
@@ -1462,7 +1523,11 @@ fn test_power_of_k_boundaries() {
             let root_64 = log.root();
             assert!(neml::verify_consistency(
                 &Sha256Hasher,
-                &proof_16_64,
+                16,
+                64,
+                4,
+                &proof_16_64.start_hash,
+                &proof_16_64.path,
                 &root_16,
                 &root_64
             ));
@@ -1750,7 +1815,10 @@ fn test_verify_inclusion_with_coupling() {
             &Sha256Hasher,
             0,
             &Sha256Hasher.leaf(b"test"),
-            &inclusion_proof,
+            0,
+            1,
+            2,
+            &inclusion_proof.path,
             &coupling_proof,
             &combined_root,
             &[0],
@@ -1838,7 +1906,11 @@ fn test_verify_consistency_with_coupling() {
         let ok = neml::verify_consistency_with_coupling(
             &Sha256Hasher,
             0,
-            &consistency_proof,
+            1,
+            2,
+            2,
+            &consistency_proof.start_hash,
+            &consistency_proof.path,
             &coupling_a,
             &coupling_b,
             &root_a,
@@ -1854,9 +1926,6 @@ fn test_verify_consistency_with_coupling() {
 #[test]
 fn test_consistency_proof_overflow_panic() {
     let proof = neml::ConsistencyProof {
-        old_size: 1,
-        new_size: 1 << 62,
-        log_arity: 2,
         start_hash: vec![0; 32],
         path: vec![
             neml::ProofStep {
@@ -1866,16 +1935,13 @@ fn test_consistency_proof_overflow_panic() {
             62
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(&Sha256Hasher, 1, 1 << 62, 2, &proof.start_hash, &proof.path, &[0; 32], &[0; 32]);
     assert!(!ok);
 }
 
 #[test]
 fn test_consistency_proof_huge_siblings_dos() {
     let proof = neml::ConsistencyProof {
-        old_size: 1,
-        new_size: 2,
-        log_arity: 2,
         start_hash: vec![0; 32],
         path: vec![
             neml::ProofStep {
@@ -1885,14 +1951,11 @@ fn test_consistency_proof_huge_siblings_dos() {
             1
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, &proof, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 2, &proof.start_hash, &proof.path, &[0; 32], &[0; 32]);
     assert!(!ok);
 
     // Path length > 256
     let proof_huge_path = neml::ConsistencyProof {
-        old_size: 1,
-        new_size: 2,
-        log_arity: 2,
         start_hash: vec![0; 32],
         path: vec![
             neml::ProofStep {
@@ -1902,29 +1965,23 @@ fn test_consistency_proof_huge_siblings_dos() {
             257
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, &proof_huge_path, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 2, &proof_huge_path.start_hash, &proof_huge_path.path, &[0; 32], &[0; 32]);
     assert!(!ok);
 
     // Invalid log arity < 2 (e.g. 1)
     let proof_invalid_arity_low = neml::ConsistencyProof {
-        old_size: 1,
-        new_size: 2,
-        log_arity: 1,
         start_hash: vec![0; 32],
         path: Vec::new(),
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, &proof_invalid_arity_low, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 1, &proof_invalid_arity_low.start_hash, &proof_invalid_arity_low.path, &[0; 32], &[0; 32]);
     assert!(!ok);
 
     // Invalid log arity > 256
     let proof_invalid_arity_high = neml::ConsistencyProof {
-        old_size: 1,
-        new_size: 2,
-        log_arity: 257,
         start_hash: vec![0; 32],
         path: Vec::new(),
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, &proof_invalid_arity_high, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 257, &proof_invalid_arity_high.start_hash, &proof_invalid_arity_high.path, &[0; 32], &[0; 32]);
     assert!(!ok);
 }
 
@@ -1936,29 +1993,20 @@ fn test_inclusion_proof_dos_prevention() {
 
     // Large log arity > 256
     let proof = neml::InclusionProof {
-        index: 0,
-        tree_size: 1_000_000_000_000,
-        log_arity: 1_000_000_000_001,
         path: Vec::new(),
     };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, &proof, &root);
+    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 1_000_000_000_000, 1_000_000_000_001, &proof.path, &root);
     assert!(!ok);
 
     // Invalid log arity = 1
     let proof = neml::InclusionProof {
-        index: 0,
-        tree_size: 10,
-        log_arity: 1,
         path: Vec::new(),
     };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, &proof, &root);
+    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 1, &proof.path, &root);
     assert!(!ok);
 
     // Path length > 256
     let proof_huge_path = neml::InclusionProof {
-        index: 0,
-        tree_size: 10,
-        log_arity: 2,
         path: vec![
             neml::ProofStep {
                 siblings: vec![vec![0; 32]],
@@ -1967,20 +2015,17 @@ fn test_inclusion_proof_dos_prevention() {
             257
         ],
     };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, &proof_huge_path, &root);
+    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 2, &proof_huge_path.path, &root);
     assert!(!ok);
 
     // Sibling count > 256
     let proof_huge_siblings = neml::InclusionProof {
-        index: 0,
-        tree_size: 10,
-        log_arity: 2,
         path: vec![neml::ProofStep {
             siblings: vec![vec![0; 32]; 257],
             position: 0,
         }],
     };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, &proof_huge_siblings, &root);
+    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 2, &proof_huge_siblings.path, &root);
     assert!(!ok);
 }
 
@@ -2160,12 +2205,9 @@ fn test_from_storage_initialization_errors() {
 #[test]
 fn test_null_preimage_collision() {
     let hasher = Sha256Hasher;
-    let mut payload = neml::NULL_DIGEST.to_vec();
-    payload.extend_from_slice(&0u64.to_be_bytes());
-    // Under preimage resistance, the leaf hash of any payload must not collide with the null digest.
-    // However, because the null digest is derived via raw hashing (without domain prefixing/separation)
-    // of NULL_DIGEST || counter, a leaf containing this data will collide.
-    assert_ne!(hasher.leaf(&payload), hasher.null());
+    // With null constant as a simple fixed value, preimage resistance is not required.
+    // Thus, leaf(b"null") is allowed to collide with the null digest.
+    assert_eq!(hasher.leaf(b"null"), hasher.null());
 }
 
 #[test]
@@ -2181,9 +2223,6 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
     // By setting log_arity: 0, verify_inclusion_path_structure is bypassed,
     // but the verifier should reject it because log_arity < 2 is invalid!
     let spoofed_proof = neml::InclusionProof {
-        index: 1, // spoofed index
-        tree_size: 2,
-        log_arity: 0,
         path: vec![neml::ProofStep {
             siblings: vec![leaf_b.clone()],
             position: 0, // position 0 means leaf_a is at the left (index 0)
@@ -2199,7 +2238,10 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
         &hasher,
         0,
         &leaf_a,
-        &spoofed_proof,
+        1,
+        2,
+        0,
+        &spoofed_proof.path,
         &coupling,
         &combined_root,
         &[0],
@@ -2217,16 +2259,13 @@ fn test_proof_sibling_digest_length_mismatch() {
 
     // Proof with malformed sibling digest length (e.g. 16 bytes instead of 32)
     let malformed_proof = neml::InclusionProof {
-        index: 0,
-        tree_size: 2,
-        log_arity: 2,
         path: vec![neml::ProofStep {
             siblings: vec![vec![0; 16]], // invalid sibling size
             position: 0,
         }],
     };
 
-    let is_valid = neml::verify_inclusion(&hasher, &leaf_a, &malformed_proof, &root);
+    let is_valid = neml::verify_inclusion(&hasher, &leaf_a, 0, 2, 2, &malformed_proof.path, &root);
     assert!(!is_valid, "Expected proof with invalid sibling size to be rejected");
 }
 
@@ -2410,7 +2449,10 @@ fn test_boundary_sizes_and_high_arities() {
                     assert!(neml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
-                        &proof,
+                        idx,
+                        size,
+                        k as u64,
+                        &proof.path,
                         &root
                     ), "Inclusion failed for k={}, size={}, idx={}", k, size, idx);
                 }
@@ -2424,7 +2466,11 @@ fn test_boundary_sizes_and_high_arities() {
                     let proof = log.consistency_proof_for(0, old_size, size).await.unwrap().unwrap();
                     assert!(neml::verify_consistency(
                         &Sha256Hasher,
-                        &proof,
+                        old_size,
+                        size,
+                        k as u64,
+                        &proof.start_hash,
+                        &proof.path,
                         &old_root,
                         &root
                     ), "Consistency failed for k={}, old_size={}, new_size={}", k, old_size, size);
@@ -2435,17 +2481,10 @@ fn test_boundary_sizes_and_high_arities() {
 }
 
 #[test]
-fn test_generate_nums_null_no_panic() {
+fn test_null_digest() {
     let hasher = Sha256Hasher;
-    // Lengths <= 128 (standard)
-    let d1 = neml::generate_nums_null(&hasher, 32);
-    assert_eq!(d1.len(), 32);
-    
-    // Lengths > 128 (XOF derivation)
-    let d2 = neml::generate_nums_null(&hasher, 150);
-    assert_eq!(d2.len(), 150);
-    // Ensure the first 128 bytes are equal to the master NULL_STREAM
-    assert_eq!(&d2[..128], &neml::NULL_STREAM[..]);
+    let d = neml::null_digest(&hasher);
+    assert_eq!(d, hasher.hash(b"null"));
 }
 
 

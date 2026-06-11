@@ -27,9 +27,6 @@ impl Hasher for Sha256Hasher {
         Sha256::digest(b"").to_vec()
     }
 
-    fn null(&self) -> Vec<u8> {
-        neml::generate_nums_null(self, 32)
-    }
 
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -456,13 +453,13 @@ proptest! {
             let proof = log.inclusion_proof_for(0, index, ts).await.unwrap().unwrap();
 
             prop_assert!(
-                verify_inclusion(&Sha256Hasher, &projected[index as usize], &proof, &root),
+                verify_inclusion(&Sha256Hasher, &projected[index as usize], index, ts, k as u64, &proof.path, &root),
                 "I-SOUND-MALT failed to verify valid proof"
             );
 
             let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA");
             prop_assert!(
-                !verify_inclusion(&Sha256Hasher, &wrong, &proof, &root),
+                !verify_inclusion(&Sha256Hasher, &wrong, index, ts, k as u64, &proof.path, &root),
                 "I-SOUND-MALT accepted invalid forged leaf"
             );
             Ok(())
@@ -487,7 +484,7 @@ proptest! {
             let proof = log.consistency_proof_for(0, old_size, ts).await.unwrap().unwrap();
 
             prop_assert!(
-                verify_consistency(&Sha256Hasher, &proof, &old_root, &new_root),
+                verify_consistency(&Sha256Hasher, old_size, ts, k as u64, &proof.start_hash, &proof.path, &old_root, &new_root),
                 "K-SOUND-MALT failed to verify consistency proof"
             );
             Ok(())
@@ -509,10 +506,11 @@ proptest! {
             let null_idx = activation.saturating_sub(1) as u64;
 
             let forged = Sha256Hasher.leaf(&payload);
-            let proof = log.inclusion_proof_for(0, null_idx, log.size()).await.unwrap().unwrap();
+            let ts = log.size();
+            let proof = log.inclusion_proof_for(0, null_idx, ts).await.unwrap().unwrap();
 
             prop_assert!(
-                !verify_inclusion(&Sha256Hasher, &forged, &proof, &root),
+                !verify_inclusion(&Sha256Hasher, &forged, null_idx, ts, k as u64, &proof.path, &root),
                 "T-BOUND-MALT accepted forged leaf at null position"
             );
             Ok(())
@@ -617,7 +615,10 @@ async fn check_state_invariants<S: neml::Storage>(
                 prop_assert!(verify_inclusion(
                     hasher.as_ref(),
                     &projected[idx as usize],
-                    &proof,
+                    idx,
+                    tree_size,
+                    k as u64,
+                    &proof.path,
                     &incremental
                 ));
             }
@@ -634,7 +635,11 @@ async fn check_state_invariants<S: neml::Storage>(
                     .unwrap();
                 prop_assert!(verify_consistency(
                     hasher.as_ref(),
-                    &proof,
+                    old_size,
+                    tree_size,
+                    k as u64,
+                    &proof.start_hash,
+                    &proof.path,
                     &old_root,
                     &incremental
                 ));

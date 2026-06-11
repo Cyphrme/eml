@@ -16,13 +16,6 @@ pub struct ProofStep {
 /// Inclusion proof: path from a leaf to the root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InclusionProof {
-    /// 0-based leaf index of the target.
-    pub index: u64,
-    /// Size of the tree for which this proof is valid.
-    pub tree_size: u64,
-    /// The log arity (k) of the tree. Set to 0 if not enforcing uniform log structure
-    /// verification.
-    pub log_arity: u64,
     /// Path steps from leaf to root.
     pub path: Vec<ProofStep>,
 }
@@ -30,12 +23,6 @@ pub struct InclusionProof {
 /// Consistency proof: proves tree at `old_size` is a prefix of tree at `new_size`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsistencyProof {
-    /// Size of the older tree.
-    pub old_size: u64,
-    /// Size of the newer tree.
-    pub new_size: u64,
-    /// The log arity (k) of the tree.
-    pub log_arity: u64,
     /// Starting hash (representing the boundary node of the old tree).
     pub start_hash: Vec<u8>,
     /// Path steps from the boundary to the root.
@@ -63,10 +50,13 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub fn verify_inclusion(
     hasher: &dyn Hasher,
     leaf_hash: &[u8],
-    proof: &InclusionProof,
+    index: u64,
+    tree_size: u64,
+    log_arity: u64,
+    path: &[ProofStep],
     root: &[u8],
 ) -> bool {
-    reconstruct_inclusion_root(hasher, leaf_hash, proof)
+    reconstruct_inclusion_root(hasher, leaf_hash, index, tree_size, log_arity, path)
         .is_some_and(|computed| constant_time_eq(&computed, root))
 }
 
@@ -79,11 +69,15 @@ use crate::tree::frontier_for_size;
 #[must_use]
 pub fn verify_consistency(
     hasher: &dyn Hasher,
-    proof: &ConsistencyProof,
+    old_size: u64,
+    new_size: u64,
+    log_arity: u64,
+    start_hash: &[u8],
+    path: &[ProofStep],
     old_root: &[u8],
     new_root: &[u8],
 ) -> bool {
-    reconstruct_consistency_roots(hasher, proof).is_some_and(|(computed_old, computed_new)| {
+    reconstruct_consistency_roots(hasher, old_size, new_size, log_arity, start_hash, path).is_some_and(|(computed_old, computed_new)| {
         constant_time_eq(&computed_old, old_root) & constant_time_eq(&computed_new, new_root)
     })
 }
@@ -379,7 +373,10 @@ pub fn verify_inclusion_path_structure(
 pub fn reconstruct_inclusion_root(
     hasher: &dyn Hasher,
     leaf_hash: &[u8],
-    proof: &InclusionProof,
+    index: u64,
+    tree_size: u64,
+    log_arity: u64,
+    path: &[ProofStep],
 ) -> Option<Vec<u8>> {
     let digest_len = hasher.empty().len();
     if digest_len == 0 || digest_len > 64 {
@@ -388,28 +385,28 @@ pub fn reconstruct_inclusion_root(
     if leaf_hash.len() != digest_len {
         return None;
     }
-    if proof.log_arity < 2 || proof.log_arity > 256 {
+    if log_arity < 2 || log_arity > 256 {
         return None;
     }
-    if proof.index >= proof.tree_size {
+    if index >= tree_size {
         return None;
     }
-    if proof.path.len() > 256 {
+    if path.len() > 256 {
         return None;
     }
 
     if !verify_inclusion_path_structure(
-        proof.log_arity as usize,
-        proof.index,
-        proof.tree_size,
-        &proof.path,
+        log_arity as usize,
+        index,
+        tree_size,
+        path,
     ) {
         return None;
     }
 
     let mut current = leaf_hash.to_vec();
 
-    for step in &proof.path {
+    for step in path {
         if step.siblings.len() > 256 {
             return None;
         }
@@ -448,25 +445,29 @@ pub fn reconstruct_inclusion_root(
 #[must_use]
 pub fn reconstruct_consistency_roots(
     hasher: &dyn Hasher,
-    proof: &ConsistencyProof,
+    old_size: u64,
+    new_size: u64,
+    log_arity: u64,
+    start_hash: &[u8],
+    path: &[ProofStep],
 ) -> Option<(Vec<u8>, Vec<u8>)> {
     let digest_len = hasher.empty().len();
     if digest_len == 0 || digest_len > 64 {
         return None;
     }
-    if proof.start_hash.len() != digest_len {
+    if start_hash.len() != digest_len {
         return None;
     }
-    if proof.old_size == 0 || proof.old_size >= proof.new_size {
+    if old_size == 0 || old_size >= new_size {
         return None;
     }
-    if proof.log_arity < 2 || proof.log_arity > 256 {
+    if log_arity < 2 || log_arity > 256 {
         return None;
     }
-    if proof.path.len() > 256 {
+    if path.len() > 256 {
         return None;
     }
-    for step in &proof.path {
+    for step in path {
         if step.siblings.len() > 256 {
             return None;
         }
@@ -477,10 +478,10 @@ pub fn reconstruct_consistency_roots(
         }
     }
 
-    let k = proof.log_arity;
+    let k = log_arity;
 
-    let old_coords = frontier_for_size(proof.old_size, k);
-    let new_coords = frontier_for_size(proof.new_size, k);
+    let old_coords = frontier_for_size(old_size, k);
+    let new_coords = frontier_for_size(new_size, k);
 
     let &(boundary_left, boundary_height) = old_coords.last()?;
 
@@ -503,18 +504,18 @@ pub fn reconstruct_consistency_roots(
     // We will populate a map from coordinate (left, height) to its hash
     use std::collections::HashMap;
     let mut map = HashMap::new();
-    map.insert((boundary_left, boundary_height), proof.start_hash.clone());
+    map.insert((boundary_left, boundary_height), start_hash.to_vec());
 
     let bisection_steps = (new_height - boundary_height) as usize;
-    if proof.path.len() < bisection_steps {
+    if path.len() < bisection_steps {
         return None;
     }
 
-    // 1. Trace the bisection steps (first bisection_steps of proof.path)
+    // 1. Trace the bisection steps (first bisection_steps of path)
     let mut curr_left = boundary_left;
     let mut curr_height = boundary_height;
     for i in 0..bisection_steps {
-        let step = &proof.path[i];
+        let step = &path[i];
         if step.siblings.is_empty() {
             // Promoted node
             curr_height += 1;
@@ -599,10 +600,10 @@ pub fn reconstruct_consistency_roots(
         let is_target_merged = target_idx >= split_idx;
 
         if is_target_merged {
-            if proof_idx >= proof.path.len() {
+            if proof_idx >= path.len() {
                 return None;
             }
-            let step = &proof.path[proof_idx];
+            let step = &path[proof_idx];
             proof_idx += 1;
 
             if step.position != target_idx - split_idx || step.siblings.len() != k_usize - 1 {
@@ -660,10 +661,10 @@ pub fn reconstruct_consistency_roots(
 
     if current_frontier.len() > 1 {
         // Final root merge
-        if proof_idx >= proof.path.len() {
+        if proof_idx >= path.len() {
             return None;
         }
-        let step = &proof.path[proof_idx];
+        let step = &path[proof_idx];
         proof_idx += 1;
 
         if step.position != target_idx || step.siblings.len() != current_frontier.len() - 1 {
@@ -693,7 +694,7 @@ pub fn reconstruct_consistency_roots(
         }];
     }
 
-    if proof_idx != proof.path.len() {
+    if proof_idx != path.len() {
         return None;
     }
 
@@ -737,22 +738,22 @@ pub fn verify_inclusion_with_coupling(
     hasher: &dyn Hasher,
     alg_id: u64,
     leaf_hash: &[u8],
-    inclusion_proof: &InclusionProof,
+    index: u64,
+    tree_size: u64,
+    log_arity: u64,
+    path: &[ProofStep],
     coupling: &CouplingProof,
     combined_root: &[u8],
     expected_active_algs: &[u64],
     config: VerifierConfig,
 ) -> bool {
-    if inclusion_proof.log_arity < 2 {
-        return false;
-    }
     let raw_root =
         match coupling.verify(hasher, alg_id, combined_root, expected_active_algs, config) {
             Some(r) => r,
             None => return false,
         };
 
-    verify_inclusion(hasher, leaf_hash, inclusion_proof, &raw_root)
+    verify_inclusion(hasher, leaf_hash, index, tree_size, log_arity, path, &raw_root)
 }
 
 /// Helper wrapper demonstrating consistency verification with decoupled coupling proofs.
@@ -761,7 +762,11 @@ pub fn verify_inclusion_with_coupling(
 pub fn verify_consistency_with_coupling(
     hasher: &dyn Hasher,
     alg_id: u64,
-    consistency_proof: &ConsistencyProof,
+    old_size: u64,
+    new_size: u64,
+    log_arity: u64,
+    start_hash: &[u8],
+    path: &[ProofStep],
     old_coupling: &CouplingProof,
     new_coupling: &CouplingProof,
     old_combined_root: &[u8],
@@ -787,7 +792,16 @@ pub fn verify_consistency_with_coupling(
 
     match (old_res, new_res) {
         (Some(old_raw_root), Some(new_raw_root)) => {
-            verify_consistency(hasher, consistency_proof, &old_raw_root, &new_raw_root)
+            verify_consistency(
+                hasher,
+                old_size,
+                new_size,
+                log_arity,
+                start_hash,
+                path,
+                &old_raw_root,
+                &new_raw_root,
+            )
         },
         _ => false,
     }

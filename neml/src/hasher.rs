@@ -20,12 +20,11 @@ pub trait Hasher: Debug + Send + Sync {
     #[must_use]
     fn empty(&self) -> Vec<u8>;
 
-    /// Null leaf constant: A Nothing-Up-My-Sleeve (NUMS) high-entropy constant.
-    /// Under prefix-free hashing, the null constant digest is derived dynamically via an
-    /// Extendable-Output Function (XOF) on a master seed (e.g. using `generate_nums_null`),
-    /// preventing collision with any leaf or node digests across arbitrary multihash sizes.
+    /// Null leaf constant: H(b"null").
     #[must_use]
-    fn null(&self) -> Vec<u8>;
+    fn null(&self) -> Vec<u8> {
+        self.hash(b"null")
+    }
 
     /// Raw cryptographic hash of arbitrary data.
     #[must_use]

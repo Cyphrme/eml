@@ -1138,9 +1138,6 @@ impl<S: Storage> NaryMerkleLog<S> {
         path.extend(std::mem::take(&mut current[target_idx].path));
 
         Ok(Some(crate::proof::InclusionProof {
-            index,
-            tree_size,
-            log_arity: self.config.log_arity as u64,
             path,
         }))
     }
@@ -1303,9 +1300,6 @@ impl<S: Storage> NaryMerkleLog<S> {
         path.extend(std::mem::take(&mut current[target_idx].path));
 
         Ok(Some(crate::proof::ConsistencyProof {
-            old_size,
-            new_size,
-            log_arity: k,
             start_hash,
             path,
         }))
@@ -1547,7 +1541,11 @@ impl<S: Storage> NaryMerkleLog<S> {
                         {
                             if !crate::proof::verify_consistency(
                                 state.hasher.as_ref(),
-                                &proof,
+                                old_alg_size,
+                                new_alg_size,
+                                self.config.log_arity as u64,
+                                &proof.start_hash,
+                                &proof.path,
                                 &old_root,
                                 &new_root,
                             ) {
@@ -1812,9 +1810,6 @@ mod tests {
             Vec::new()
         }
 
-        fn null(&self) -> Vec<u8> {
-            crate::generate_nums_null(self, 32)
-        }
 
         fn hash(&self, data: &[u8]) -> Vec<u8> {
             data.to_vec()
