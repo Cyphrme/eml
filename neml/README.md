@@ -140,25 +140,24 @@ Additionally, verification of inclusion proofs containing nested subtree steps f
 
 ### Selective Index & Path Verification
 
-In an N-ary Merkle tree, inclusion proofs explicitly store the position of the target leaf and siblings at each level (`ProofStep::position`). A malicious prover could attempt to spoof the leaf's sequence number by altering `InclusionProof::index` without modifying the path (since the index field is not used in raw hash reconstruction). 
+In an N-ary Merkle tree, inclusion proofs explicitly store the position of the target leaf and siblings at each level (`ProofStep::position`). 
 
-To prevent this index spoofing attack while maintaining full support for arbitrary, non-uniform subtrees, `neml` uses **Selective Index & Path Verification**:
+To prevent index spoofing attacks while maintaining full support for arbitrary, non-uniform subtrees, `neml` uses **Selective Index & Path Verification** with trusted parameters:
 
-*   **InclusionProof `log_arity` field:** The `InclusionProof` contains a `log_arity` field indicating the arity configuration of the log.
-*   **Flat Log Mode (`log_arity >= 2`):** When verifying a proof from a uniform log, `log_arity` is set to the log arity (e.g. 2 or 3). The verifier performs strict structural validation (`verify_inclusion_path_structure` and `reconstruct_index_from_path`) to assert that the step positions and sibling counts match the deterministic topology for the claimed `index` and `tree_size`. If they mismatch, verification is rejected.
+*   **Decoupled Structs:** The `InclusionProof` and `ConsistencyProof` structs do not contain metadata fields like `index`, `tree_size`, `old_size`, `new_size`, or `log_arity`. Instead, these metadata fields are passed as trusted parameters directly to the verifier functions (`verify_inclusion` and `verify_consistency`) from an authenticated Signed Tree Head (STH) or trusted checkpoint.
+*   **Flat Log Mode (`log_arity >= 2`):** When verifying a proof from a uniform log, `log_arity` is set to the log arity (e.g. 2 or 3). The verifier performs strict structural validation (`verify_inclusion_path_structure` and `reconstruct_index_from_path`) to assert that the step positions and sibling counts match the deterministic topology for the trusted `index` and `tree_size`. If they mismatch, verification is rejected.
 *   **Subtree Log Mode (`log_arity == 0`):** When verifying a proof that includes arbitrary nested subtrees (Subtree Log Mode), the log structure is non-uniform and the global leaf index cannot be deterministically verified from the path steps alone. In this case, `log_arity` is set to `0`, which tells the verifier to bypass the uniform topology check and perform standard membership/inclusion verification.
 *   **Consistency Proof Exclusion:** Consistency proofs are unsupported in Subtree Log Mode. The `reconstruct_consistency_roots` verifier immediately returns `None` if `log_arity < 2`.
 
 ### Null Domain Isolation
 
-The null constant $N_0$ represents an empty or inactive subtree. Under prefix-free hashing, defining the null digest as the output of a hash function on a known preimage would allow an attacker to input that preimage as a leaf payload and trigger a leaf-subtree substitution collision.
+The null constant $N_0$ represents an empty or inactive subtree. Under prefix-free hashing, defining the null digest as a static constant or the output of a hash function on a known preimage would allow an adversary to input that preimage as a leaf payload and trigger a leaf-subtree substitution collision.
 
-To prevent this collision across arbitrary hash sizes, `neml` utilizes a slice-based **Nothing-Up-My-Sleeve (NUMS) Null Stream**:
+To prevent this collision while maintaining hash agility, `neml` utilizes a dynamically generated null digest derived via the hasher:
 
-*   **Master NUMS Stream**: A 128-byte Nothing-Up-My-Sleeve high-entropy constant based on the first 256 hex digits of the fractional part of $\pi$: `0x243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89452821e638d01377be5466cf34e90c6cc0ac29b7c97c50dd3f84d5b5b54709179216d5d98979fb1bd1310ba698dfb5ac2ffd72dbd01adfb7b8e1afed6a267e96ba7c9045f12c7f9924a19947b3916cf70801f2e2858efc16636920d871574e69`.
-*   **Extendable Slice Output**: For any hash algorithm with output length $L \leq 128$ bytes, the null digest is derived dynamically by slicing the first $L$ bytes of the master stream:
-    $$N_0(L) = \text{take}(L, \text{Master Stream})$$
-*   **Preimage Resistance**: Because the master stream is a hardcoded mathematical constant (derived from $\pi$'s fractional expansion) and not the output of the hash function itself, finding a leaf payload whose hash evaluates to $N_0(L)$ requires solving a hard hash preimage challenge. A leaf payload or internal node can never evaluate to $N_0(L)$, eliminating flat null promotion collision risk. We prove this property formally in our Lean 4 proof system.
+*   **Dynamic Null Generation:** Rather than a global static constant, the null constant is defined dynamically for a given hasher via the `null_digest` helper:
+    $$N_0 = \text{Hasher.hash}(\mathtt{"null"})$$
+*   **Preimage Resistance:** By defining the null constant as a hash output of the domain string $\mathtt{"null"}$, the preimage of the null constant is known to be the string $\mathtt{"null"}$. Because the application restricts leaf payloads from colliding with this preimage or because the probability of an arbitrary leaf payload hash colliding with the null digest is cryptographically negligible (i.e. second-preimage resistance of the hash function), the risk of flat null promotion collision is eliminated. We prove this property formally in our Lean 4 proof system.
 
 ---
 
@@ -233,7 +232,7 @@ impl Hasher for Sha256Hasher {
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> { Sha256::digest(b"").to_vec() }
-    fn null(&self) -> Vec<u8>  { neml::NULL_DIGEST.to_vec() }
+    fn null(&self) -> Vec<u8>  { neml::null_digest(self) }
     fn hash(&self, data: &[u8]) -> Vec<u8> { Sha256::digest(data).to_vec() }
     fn clone_box(&self) -> Box<dyn Hasher> { Box::new(self.clone()) }
 }
