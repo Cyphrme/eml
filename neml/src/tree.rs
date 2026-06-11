@@ -91,6 +91,31 @@ impl AlgState {
             .iter()
             .any(|&(start, end)| start <= lo && hi <= end)
     }
+
+    /// The epoch timeline as it stood at snapshot `size`, for commitment into
+    /// the signed snapshot (Design A+).
+    ///
+    /// Intervals beginning after `size` are dropped; an interval extending
+    /// past `size` is encoded as open (`end == u64::MAX`), matching what the
+    /// timeline looked like when the log was that size. An interval closed
+    /// exactly at `size` stays closed — this is what distinguishes
+    /// "deactivated at the tip" from "still live, log idle" (frontier
+    /// freshness). Returns `None` if the algorithm was not yet registered.
+    #[must_use]
+    pub fn epochs_at(&self, size: u64) -> Option<Vec<(u64, u64)>> {
+        let mut out = Vec::new();
+        for &(start, end) in &self.epochs {
+            if start > size {
+                break;
+            }
+            if end > size {
+                out.push((start, u64::MAX));
+                break;
+            }
+            out.push((start, end));
+        }
+        if out.is_empty() { None } else { Some(out) }
+    }
 }
 
 /// An n-ary Merkle Append-Only Log.
@@ -1344,6 +1369,20 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(())
     }
 
+    /// The committed epoch timeline at snapshot `size`: `(alg_id, epochs)`
+    /// for every algorithm registered by that size, sorted by algorithm ID.
+    /// This is the timeline bound into the signed snapshot (Design A+).
+    #[must_use]
+    pub fn committed_epochs_at(&self, size: u64) -> Vec<(u64, Vec<(u64, u64)>)> {
+        let mut out: Vec<_> = self
+            .algs
+            .iter()
+            .filter_map(|(&id, state)| state.epochs_at(size).map(|e| (id, e)))
+            .collect();
+        out.sort_unstable_by_key(|&(id, _)| id);
+        out
+    }
+
     /// Compute the current combined root hash of the default algorithm (0).
     pub async fn combined_root(&self) -> Vec<u8> {
         self.combined_root_for(0)
@@ -1818,6 +1857,31 @@ mod tests {
         fn clone_box(&self) -> Box<dyn Hasher> {
             Box::new(TestHasher)
         }
+    }
+
+    #[test]
+    fn test_epochs_at_snapshot_clamping() {
+        let state = AlgState {
+            hasher: Box::new(TestHasher),
+            epochs: vec![(2, 5), (7, 12), (15, u64::MAX)],
+            frontier: Vec::new(),
+            frontier_coords: Vec::new(),
+        };
+        // Not yet registered.
+        assert_eq!(state.epochs_at(1), None);
+        // Mid-interval: encoded open, later intervals dropped.
+        assert_eq!(state.epochs_at(3), Some(vec![(2, u64::MAX)]));
+        // Exactly at a deactivation boundary: stays closed.
+        assert_eq!(state.epochs_at(5), Some(vec![(2, 5)]));
+        // Between intervals.
+        assert_eq!(state.epochs_at(6), Some(vec![(2, 5)]));
+        // Activation exactly at the snapshot: registered, open, no content.
+        assert_eq!(state.epochs_at(7), Some(vec![(2, 5), (7, u64::MAX)]));
+        // Past all closed intervals, inside the open one.
+        assert_eq!(
+            state.epochs_at(20),
+            Some(vec![(2, 5), (7, 12), (15, u64::MAX)])
+        );
     }
 
     #[test]

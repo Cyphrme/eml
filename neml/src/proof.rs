@@ -82,6 +82,216 @@ pub fn verify_consistency(
     })
 }
 
+// ============================================================================
+// Committed epoch timeline (Design A+)
+// ============================================================================
+//
+// The signed snapshot commits, for every algorithm registered at the snapshot
+// size, the full epoch timeline `(activation, deactivation)` as it stood at
+// that size. Activity at a position is read from this authenticated field —
+// never inferred from a digest equaling the null constant — which renders the
+// `leaf(b"null") == null()` collision inert without forbidding any payload.
+
+/// Canonical serialization of a snapshot commitment: the combined-root preimage.
+///
+/// Layout (all integers `u64` big-endian; fixed-width counts and lengths make
+/// the encoding unambiguous to parse and therefore injective):
+///
+/// ```text
+/// n_active ‖ [ id ‖ root_len ‖ root ]*
+/// n_algs   ‖ [ id ‖ n_epochs ‖ (start ‖ end)* ]*
+/// ```
+///
+/// `active_roots` lists the raw roots of algorithms active at the snapshot
+/// size; `alg_epochs` lists the committed epoch timeline of every registered
+/// algorithm (active and frozen). An epoch open at the snapshot is encoded
+/// with `end == u64::MAX`.
+#[must_use]
+pub fn combined_root_preimage(
+    active_roots: &[(u64, Vec<u8>)],
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(active_roots.len() as u64).to_be_bytes());
+    for (id, r) in active_roots {
+        buf.extend_from_slice(&id.to_be_bytes());
+        buf.extend_from_slice(&(r.len() as u64).to_be_bytes());
+        buf.extend_from_slice(r);
+    }
+    buf.extend_from_slice(&(alg_epochs.len() as u64).to_be_bytes());
+    for (id, epochs) in alg_epochs {
+        buf.extend_from_slice(&id.to_be_bytes());
+        buf.extend_from_slice(&(epochs.len() as u64).to_be_bytes());
+        for &(start, end) in epochs {
+            buf.extend_from_slice(&start.to_be_bytes());
+            buf.extend_from_slice(&end.to_be_bytes());
+        }
+    }
+    buf
+}
+
+/// Validate the structural well-formedness of a committed epoch timeline at
+/// `tree_size`: entries strictly sorted by algorithm ID; at least one epoch
+/// per algorithm; intervals ordered and non-overlapping (`start <= end`,
+/// `start >= prior end`); only the final interval may be open
+/// (`end == u64::MAX`); closed ends and open starts do not exceed `tree_size`.
+#[must_use]
+pub fn validate_committed_epochs(
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+    tree_size: u64,
+) -> bool {
+    if alg_epochs.windows(2).any(|w| w[0].0 >= w[1].0) {
+        return false;
+    }
+    for (_, epochs) in alg_epochs {
+        if epochs.is_empty() {
+            return false;
+        }
+        let mut last_end = 0u64;
+        for (i, &(start, end)) in epochs.iter().enumerate() {
+            if start > end || start < last_end {
+                return false;
+            }
+            if end == u64::MAX {
+                if i != epochs.len() - 1 || start > tree_size {
+                    return false;
+                }
+            } else if end > tree_size {
+                return false;
+            }
+            last_end = end;
+        }
+    }
+    true
+}
+
+/// Read the authenticated activity of `alg_id` at position `index` from a
+/// committed epoch timeline. Returns `None` if the algorithm has no committed
+/// timeline.
+#[must_use]
+pub fn committed_active_at(
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+    alg_id: u64,
+    index: u64,
+) -> Option<bool> {
+    let idx = alg_epochs
+        .binary_search_by_key(&alg_id, |&(id, _)| id)
+        .ok()?;
+    Some(
+        alg_epochs[idx]
+            .1
+            .iter()
+            .any(|&(start, end)| start <= index && index < end),
+    )
+}
+
+/// Whether `alg_id` is live (final epoch still open) at the snapshot this
+/// timeline was committed at. Returns `None` if the algorithm has no
+/// committed timeline.
+///
+/// This answers the frontier-freshness query "is this key live right now?",
+/// which is not derivable from the tree alone: a deactivation at the idle log
+/// tip leaves no later positions to witness it.
+#[must_use]
+pub fn committed_is_live(alg_epochs: &[(u64, Vec<(u64, u64)>)], alg_id: u64) -> Option<bool> {
+    let idx = alg_epochs
+        .binary_search_by_key(&alg_id, |&(id, _)| id)
+        .ok()?;
+    Some(
+        alg_epochs[idx]
+            .1
+            .last()
+            .is_some_and(|&(_, end)| end == u64::MAX),
+    )
+}
+
+/// Derive the active algorithm set at `tree_size` from a committed timeline:
+/// the algorithms whose epochs cover the final position `tree_size - 1`.
+/// Returned sorted by algorithm ID (inherited from the timeline ordering).
+#[must_use]
+pub fn committed_active_algs(
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+    tree_size: u64,
+) -> Vec<u64> {
+    if tree_size == 0 {
+        return Vec::new();
+    }
+    let last = tree_size - 1;
+    alg_epochs
+        .iter()
+        .filter(|(_, epochs)| epochs.iter().any(|&(start, end)| start <= last && last < end))
+        .map(|&(id, _)| id)
+        .collect()
+}
+
+/// Verify that a committed epoch timeline at `new_size` is an append-only
+/// evolution of one previously committed at `old_size` — the temporal analog
+/// of a consistency proof.
+///
+/// Allowed transitions per algorithm: the old intervals are preserved
+/// verbatim, except that an interval open at the old snapshot may since have
+/// closed at or after `old_size`; additional intervals and newly registered
+/// algorithms may only begin at or after `old_size`; algorithms never
+/// disappear. Both timelines must be well-formed at their respective sizes.
+#[must_use]
+pub fn verify_epoch_evolution(
+    old_epochs: &[(u64, Vec<(u64, u64)>)],
+    old_size: u64,
+    new_epochs: &[(u64, Vec<(u64, u64)>)],
+    new_size: u64,
+) -> bool {
+    if old_size > new_size {
+        return false;
+    }
+    if !validate_committed_epochs(old_epochs, old_size)
+        || !validate_committed_epochs(new_epochs, new_size)
+    {
+        return false;
+    }
+    let lookup = |timeline: &[(u64, Vec<(u64, u64)>)], id: u64| {
+        timeline
+            .binary_search_by_key(&id, |&(tid, _)| tid)
+            .ok()
+            .map(|i| timeline[i].1.clone())
+    };
+    for (id, old) in old_epochs {
+        let Some(new) = lookup(new_epochs, *id) else {
+            return false;
+        };
+        if new.len() < old.len() {
+            return false;
+        }
+        let last = old.len() - 1;
+        if new[..last] != old[..last] {
+            return false;
+        }
+        let (o_start, o_end) = old[last];
+        let (n_start, n_end) = new[last];
+        if n_start != o_start {
+            return false;
+        }
+        if o_end == u64::MAX {
+            // Open at the old snapshot: may remain open, or close at/after it.
+            if n_end != u64::MAX && n_end < old_size {
+                return false;
+            }
+        } else if n_end != o_end {
+            return false;
+        }
+        if new[old.len()..].iter().any(|&(start, _)| start < old_size) {
+            return false;
+        }
+    }
+    for (id, new) in new_epochs {
+        if lookup(old_epochs, *id).is_none()
+            && new.first().is_some_and(|&(start, _)| start < old_size)
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Configuration options for proof verification (local node policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifierConfig {
@@ -821,4 +1031,141 @@ pub struct AuditPayload {
     pub active_algs: Vec<u64>,
     /// The Combined Roots of the log at `tree_size` for each active algorithm.
     pub combined_roots: Vec<(u64, Vec<u8>)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MAX: u64 = u64::MAX;
+
+    #[test]
+    fn test_combined_root_preimage_injective_sections() {
+        // Moving an interval between algorithms or shifting a boundary must
+        // change the encoding.
+        let roots = vec![(0u64, vec![0xAA; 32])];
+        let a = combined_root_preimage(&roots, &[(0, vec![(0, MAX)])]);
+        let b = combined_root_preimage(&roots, &[(0, vec![(1, MAX)])]);
+        let c = combined_root_preimage(&roots, &[(0, vec![(0, 5)])]);
+        let d = combined_root_preimage(&roots, &[(0, vec![(0, 5), (7, MAX)])]);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(c, d);
+        // Empty epoch section differs from empty active section swap.
+        let e = combined_root_preimage(&[], &[(0, vec![(0, MAX)])]);
+        let f = combined_root_preimage(&roots, &[]);
+        assert_ne!(e, f);
+    }
+
+    #[test]
+    fn test_validate_committed_epochs() {
+        // Well-formed: closed, open, gap + resume.
+        assert!(validate_committed_epochs(&[(0, vec![(0, MAX)])], 10));
+        assert!(validate_committed_epochs(&[(0, vec![(0, 5)])], 10));
+        assert!(validate_committed_epochs(
+            &[(0, vec![(0, 3), (5, MAX)]), (1, vec![(2, 2)])],
+            10
+        ));
+        // Resume at the deactivation boundary is legal.
+        assert!(validate_committed_epochs(&[(0, vec![(0, 5), (5, MAX)])], 10));
+
+        // Unsorted / duplicate algorithm IDs.
+        assert!(!validate_committed_epochs(
+            &[(1, vec![(0, MAX)]), (0, vec![(0, MAX)])],
+            10
+        ));
+        assert!(!validate_committed_epochs(
+            &[(0, vec![(0, MAX)]), (0, vec![(0, MAX)])],
+            10
+        ));
+        // Empty timeline.
+        assert!(!validate_committed_epochs(&[(0, vec![])], 10));
+        // Overlap / disorder.
+        assert!(!validate_committed_epochs(&[(0, vec![(0, 5), (4, MAX)])], 10));
+        assert!(!validate_committed_epochs(&[(0, vec![(5, 3)])], 10));
+        // Open epoch not last.
+        assert!(!validate_committed_epochs(
+            &[(0, vec![(0, MAX), (1, 2)])],
+            10
+        ));
+        // Bounds beyond the snapshot size.
+        assert!(!validate_committed_epochs(&[(0, vec![(0, 11)])], 10));
+        assert!(!validate_committed_epochs(&[(0, vec![(11, MAX)])], 10));
+        // Closed exactly at the snapshot size is legal (frontier deactivation).
+        assert!(validate_committed_epochs(&[(0, vec![(0, 10)])], 10));
+    }
+
+    #[test]
+    fn test_committed_activity_reads() {
+        let timeline = vec![(0u64, vec![(0u64, 3u64), (5, MAX)]), (1, vec![(0, 10)])];
+        assert_eq!(committed_active_at(&timeline, 0, 2), Some(true));
+        assert_eq!(committed_active_at(&timeline, 0, 3), Some(false));
+        assert_eq!(committed_active_at(&timeline, 0, 4), Some(false));
+        assert_eq!(committed_active_at(&timeline, 0, 5), Some(true));
+        assert_eq!(committed_active_at(&timeline, 1, 9), Some(true));
+        assert_eq!(committed_active_at(&timeline, 2, 0), None);
+
+        assert_eq!(committed_is_live(&timeline, 0), Some(true));
+        assert_eq!(committed_is_live(&timeline, 1), Some(false));
+        assert_eq!(committed_is_live(&timeline, 2), None);
+
+        // Alg 1's epoch closes exactly at 10, so it still covers position 9.
+        assert_eq!(committed_active_algs(&timeline, 10), vec![0, 1]);
+        // Position 4 falls in alg 0's gap [3, 5).
+        assert_eq!(committed_active_algs(&timeline, 5), vec![1]);
+        assert_eq!(committed_active_algs(&timeline, 2), vec![0, 1]);
+        assert!(committed_active_algs(&timeline, 0).is_empty());
+    }
+
+    #[test]
+    fn test_verify_epoch_evolution() {
+        let old = vec![(0u64, vec![(0u64, MAX)])];
+        // Stays open; closes at/after the old snapshot; gains a resume.
+        assert!(verify_epoch_evolution(&old, 5, &[(0, vec![(0, MAX)])], 9));
+        assert!(verify_epoch_evolution(&old, 5, &[(0, vec![(0, 5)])], 9));
+        assert!(verify_epoch_evolution(&old, 5, &[(0, vec![(0, 7)])], 9));
+        assert!(verify_epoch_evolution(
+            &old,
+            5,
+            &[(0, vec![(0, 6), (8, MAX)])],
+            9
+        ));
+        // New algorithm registered after the old snapshot.
+        assert!(verify_epoch_evolution(
+            &old,
+            5,
+            &[(0, vec![(0, MAX)]), (1, vec![(5, MAX)])],
+            9
+        ));
+
+        // Rewritten activation boundary.
+        assert!(!verify_epoch_evolution(&old, 5, &[(0, vec![(1, MAX)])], 9));
+        // Closed before the old snapshot (the old snapshot witnessed it open).
+        assert!(!verify_epoch_evolution(&old, 5, &[(0, vec![(0, 4)])], 9));
+        // Algorithm disappeared.
+        assert!(!verify_epoch_evolution(&old, 5, &[(1, vec![(5, MAX)])], 9));
+        // Backdated resume.
+        assert!(!verify_epoch_evolution(
+            &[(0, vec![(0, 2)])],
+            5,
+            &[(0, vec![(0, 2), (3, MAX)])],
+            9
+        ));
+        // Backdated new algorithm (would have appeared in the old snapshot).
+        assert!(!verify_epoch_evolution(
+            &old,
+            5,
+            &[(0, vec![(0, MAX)]), (1, vec![(2, MAX)])],
+            9
+        ));
+        // Closed interval mutated.
+        assert!(!verify_epoch_evolution(
+            &[(0, vec![(0, 3)])],
+            5,
+            &[(0, vec![(0, 4)])],
+            9
+        ));
+        // Shrinking snapshot sizes.
+        assert!(!verify_epoch_evolution(&old, 9, &old, 5));
+    }
 }
