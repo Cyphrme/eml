@@ -10,24 +10,26 @@ the whitepaper.
 ## Mathematical Formulations
 
 1. **Epoch Projection**:
-   An epoch is modeled as a half-open interval $[start, stop)$. The activation map `isActive` 
-   determines if leaf $i$ is within any active epoch. The projection function `project` maps 
-   inactive positions to `nullLeaf` ($H(0x02)$) and active positions to their payload leaf hashes.
+   An epoch is modeled as a half-open interval $[start, stop)$. The activation map `isActive`
+   determines if leaf $i$ is within any active epoch. The projection function `project` maps
+   inactive positions to `nullLeaf` and active positions to their payload leaf hashes.
 
 2. **Theorem 1: Projection Equivalence**:
-   For any payload sequence and set of activation epochs, the concrete ctoRoot digest equals 
+   For any payload sequence and set of activation epochs, the concrete ctoRoot digest equals
    the concrete mth digest:
-   $$\text{ctoRootDigest}(\text{project}(\text{epochs}, \text{nullLeaf}, \text{payloads})) = 
+   $$\text{ctoRootDigest}(\text{project}(\text{epochs}, \text{nullLeaf}, \text{payloads})) =
      \text{mthDigest}(\text{project}(\text{epochs}, \text{nullLeaf}, \text{payloads}))$$
 
-3. **Theorem 2: Temporal Binding**:
-   Under the Random Oracle Model (modeled via the `domain_separation` axiom), the null constant 
-   $H(0x02)$ is distinct from any leaf hash $H(0x00 \mathbin{\Vert} d)$. Consequently, no valid 
-   inclusion proof can be produced for an inactive leaf position.
+   This is a genuine structural equivalence (it instantiates `bridge_lemma`).
+   `generic_projection_equivalence` is its hash-agnostic version — `congrArg`
+   applied to the underlying tree equality, holding for any evaluation function.
 
-4. **Theorem 3: Algorithm Isolation**:
-   Proves that two configuration epoch sets ($\mathcal{A}$ and $\mathcal{B}$) 
-   each yield valid RFC 9162 Merkle trees over the same leaf sequence, without interference.
+The previous "Temporal Binding" and "Algorithm Isolation" theorems were removed:
+they were vacuous (an axiom echo, and two independent copies of Projection
+Equivalence). Their intended security content — that inactivity is authenticated,
+and that per-algorithm commitments do not interfere — is formalized properly in
+`NEML.lean`'s committed-epoch (Design A+) layer, where activity is read from an
+authenticated timeline bound into the combined-root metaroot.
 -/
 
 set_option linter.style.emptyLine false
@@ -63,11 +65,8 @@ noncomputable instance : Inhabited Digest :=
 
 axiom H : List UInt8 → Digest
 
-def leafTag : UInt8 := 0x00
 def nodeTag : UInt8 := 0x01
 def nullTag : UInt8 := 0x02
-
-noncomputable def leafHash (d : List UInt8) : Digest := H (leafTag :: d)
 
 axiom digestToBytes : Digest → List UInt8
 
@@ -102,8 +101,9 @@ theorem treeHeight_leaf_map {α : Type} (L : List α) :
 /-- **Generic Projection Equivalence.**
     For any type `β` representing a digest space and any evaluation function `eval_fn`
     (which maps a structural tree to `β`), the evaluated ctoRoot equals the evaluated mth
-    over any list of leaves. This proves that the equivalence is independent of any concrete
-    hash function or serialization format. -/
+    over any list of leaves. The equivalence is independent of any concrete hash function
+    or serialization format. Mechanically this is `congrArg eval_fn bridge_lemma` — the
+    underlying trees are equal as data; no algebraic/homomorphism structure is involved. -/
 theorem generic_projection_equivalence {α β : Type} (eval_fn : MerkleTree α → β)
     (leaves : List (MerkleTree α)) :
     eval_fn (ctoRoot leaves) = eval_fn (mth leaves) := by
@@ -117,35 +117,14 @@ theorem projection_equivalence (epochs : List Epoch) (payloads : List Digest) :
   simp only [ctoRootDigest, mthDigest]
   rw [bridge_lemma]
 
-/-- Domain separation axiom: the null constant H(0x02) is distinct from
-    any leaf hash H(0x00 ‖ d). This is a computational hardness assumption
-    under the Random Oracle Model — finding a collision requires breaking
-    preimage resistance of H. -/
-axiom domain_separation : ∀ (d : List UInt8), nullLeaf ≠ leafHash d
-
-/-- **Theorem 2 (Temporal Binding).**
-    At any inactive position, the tree contains the null constant,
-    and no payload can produce a leaf hash equal to the null constant.
-    Therefore, no valid inclusion proof exists for any payload at an
-    inactive position. -/
-theorem temporal_binding (epochs : List Epoch) (i : Nat) (d : List UInt8)
-    (_h_inactive : isActive epochs i = false) :
-    leafHash d ≠ nullLeaf := by
-  exact Ne.symm (domain_separation d)
-
-/-- Concrete project function for algorithm. -/
-noncomputable def projectDigest (epochs : List Epoch) (payloads : List Digest) : List Digest :=
-  project epochs nullLeaf payloads
-
-/-- **Theorem 3 (Algorithm Isolation).**
-    For any two algorithms a and b (represented by their activation epochs)
-    operating over the same payload sequence, both per-algorithm projections
-    independently yield valid RFC 9162 Merkle trees. -/
-theorem algorithm_isolation
-    (epochs_a epochs_b : List Epoch) (payloads : List Digest) :
-    ctoRootDigest (projectDigest epochs_a payloads) =
-      mthDigest (projectDigest epochs_a payloads) ∧
-    ctoRootDigest (projectDigest epochs_b payloads) =
-      mthDigest (projectDigest epochs_b payloads) := by
-  simp only [projectDigest]
-  exact ⟨projection_equivalence epochs_a payloads, projection_equivalence epochs_b payloads⟩
+-- `temporal_binding` and `algorithm_isolation` were removed here. Both were
+-- vacuous: `temporal_binding` ignored its inactivity hypothesis and merely
+-- restated a domain-separation axiom (which itself secured only the tagged EML
+-- construction and is information-theoretically false for a compressing hash),
+-- and `algorithm_isolation` was two independent copies of `projection_equivalence`
+-- with nothing modeling distinct algorithms or non-interference. The genuine
+-- replacements live in `NEML.lean` (Design A+): inactivity is authenticated by
+-- the committed epoch timeline bound into the combined-root metaroot, and the
+-- metaroot binding is the real cross-algorithm non-interference statement.
+-- Deleting `temporal_binding` left `domain_separation`, the tagged `leafHash`,
+-- and `projectDigest` with no consumers, so they were removed too.
