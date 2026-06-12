@@ -1059,6 +1059,17 @@ impl<S: Storage> NaryMerkleLog<S> {
             .await
             .map_err(crate::error::Error::Storage)?
         {
+            let expected = state.hasher.null().len();
+            if hash.len() != expected {
+                return Err(crate::error::Error::CorruptedMetadata {
+                    alg_id,
+                    reason: format!(
+                        "node at left {} height {} has wrong digest length: \
+                         expected {}, got {}",
+                        left, height, expected, hash.len()
+                    ),
+                });
+            }
             Ok(hash)
         } else {
             // Any node whose range has at least one active leaf will be stored
@@ -2100,19 +2111,22 @@ impl<S: Storage> NaryMerkleLog<S> {
 
                 let digest = if is_active {
                     if let Some(ref d) = data {
-                        state.hasher.leaf(d)
+                        // Flat: compute from raw leaf bytes; compare to cached
+                        // tree node to detect cache tampering independently.
+                        let computed = state.hasher.leaf(d);
+                        let stored = self.get_node_hash(alg_id, i, 0).await?;
+                        if !crate::proof::constant_time_eq(&computed, &stored) {
+                            return Ok(false); // Cached node doesn't match raw leaf.
+                        }
+                        computed
                     } else {
+                        // Subtree: only the stored root is available; tampering
+                        // is detected by the parent-level recomputation below.
                         self.get_node_hash(alg_id, i, 0).await?
                     }
                 } else {
                     state.hasher.null()
                 };
-
-                // Check leaf/subtree hash tampering
-                let stored_leaf_hash = self.get_node_hash(alg_id, i, 0).await?;
-                if !crate::proof::constant_time_eq(&digest, &stored_leaf_hash) {
-                    return Ok(false); // Leaf/subtree root hash mismatch!
-                }
 
                 frontier.push(digest);
                 frontier_coords.push((i, 0));

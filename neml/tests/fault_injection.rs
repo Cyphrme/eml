@@ -538,3 +538,85 @@ fn test_v12_boundary_band_corruption_detected() {
     });
 }
 
+/// V16 part 1: subtree-mode verify_non_divergence is not a no-op.
+///
+/// Before the fix, the per-leaf comparison was stored-vs-stored (circular),
+/// so a tampered height-0 subtree root was trivially "verified". The parent-
+/// level recomputation must catch it instead.
+#[test]
+fn test_v16_subtree_mode_tamper_detected() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
+            .await
+            .unwrap();
+
+        // Append two subtrees so the height-1 parent exists.
+        let sub0 = neml::Subtree::Leaf(b"subtree-payload-0".to_vec());
+        let sub1 = neml::Subtree::Leaf(b"subtree-payload-1".to_vec());
+        log.append_subtree(&sub0).await.unwrap();
+        log.append_subtree(&sub1).await.unwrap();
+
+        // Clean check.
+        assert!(
+            log.verify_non_divergence(None, &[]).await.unwrap(),
+            "clean subtree log failed non-divergence check"
+        );
+
+        // Tamper the height-0 stored root for subtree 0.
+        let mut tampered = log.storage().clone();
+        tampered.nodes.insert((0, 0, 0), vec![0xDE; 32]);
+
+        let tampered_log =
+            NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))])
+                .await
+                .unwrap();
+
+        // The parent-level recomputation nary_mr([tampered, h1]) will differ
+        // from the stored parent, so verify_non_divergence must return false.
+        assert!(
+            !tampered_log
+                .verify_non_divergence(None, &[])
+                .await
+                .unwrap(),
+            "subtree-mode tampering was not detected"
+        );
+    });
+}
+
+/// V16 part 2: a wrong-length digest injected into node storage is rejected
+/// on read rather than being silently folded into the Merkle root.
+#[test]
+fn test_v16_wrong_length_digest_rejected() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
+            .await
+            .unwrap();
+
+        for i in 0u8..4 {
+            log.append_leaf(&[i]).await.unwrap();
+        }
+
+        // Replace a fully-active internal node with a truncated digest.
+        let mut tampered = log.storage().clone();
+        // (alg=0, left=0, height=1) is a fully-active height-1 node.
+        tampered.nodes.insert((0, 0, 1), vec![0xAB; 16]); // 16 bytes, not 32
+
+        let tampered_log =
+            NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))])
+                .await
+                .unwrap();
+
+        // get_node_hash must detect the wrong-length value and return
+        // CorruptedMetadata rather than folding it into a silently wrong root.
+        let result = tampered_log.verify_non_divergence(None, &[]).await;
+        assert!(
+            result.is_err(),
+            "wrong-length digest was not rejected: {:?}",
+            result
+        );
+    });
+}
