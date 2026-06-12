@@ -1060,7 +1060,12 @@ impl<S: Storage> NaryMerkleLog<S> {
             .map_err(crate::error::Error::Storage)?
         {
             Ok(hash)
-        } else if state.fully_active(left, limit) {
+        } else {
+            // Any node whose range has at least one active leaf will be stored
+            // as a non-null value (null requires every active leaf to collide
+            // with the null digest — negligible probability). A missing node
+            // in any active range is therefore corruption, whether the range is
+            // fully or only partially active.
             Err(crate::error::Error::CorruptedMetadata {
                 alg_id,
                 reason: format!(
@@ -1068,8 +1073,6 @@ impl<S: Storage> NaryMerkleLog<S> {
                     alg_id, left, height
                 ),
             })
-        } else {
-            Ok(state.hasher.null())
         }
     }
 

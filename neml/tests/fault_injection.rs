@@ -448,3 +448,93 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
         assert_eq!(recovered_log.size(), 5);
     });
 }
+
+/// V12: a missing node in the partially-active boundary band is corruption,
+/// not a legitimate null.
+///
+/// A boundary band node covers a range that is only partially active (at
+/// least one active leaf, at least one inactive leaf). resume_algorithm
+/// computes and stores these mixed nodes. Deleting one should be detected
+/// as CorruptedMetadata, not silently treated as null.
+///
+/// Setup: alg 1 has epochs [(0,3),(6,∞)]. The height-1 node at
+/// (alg=1, left=2, height=1) covers [2, 4):
+///   active_range(2, 4) = true  (epoch [0,3) overlaps: 0 < 4 and 3 > 2)
+///   fully_active(2, 4) = false (position 3 is not in [0,3): 4 > 3)
+/// It is stored by resume_algorithm as nary_mr([h2, null]).
+#[test]
+fn test_v12_boundary_band_corruption_detected() {
+    smol::block_on(async {
+        let storage = MemoryStorage::new();
+        let config = TreeConfig { log_arity: 2 };
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
+            .await
+            .unwrap();
+
+        // Register a second algorithm alongside alg 0.
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        // Append 3 leaves (alg 1 active during [0, 3)).
+        log.append_leaf(b"leaf0").await.unwrap();
+        log.append_leaf(b"leaf1").await.unwrap();
+        log.append_leaf(b"leaf2").await.unwrap();
+
+        // Deactivate alg 1 (epoch [0, 3)).
+        log.remove_algorithm(1).await.unwrap();
+
+        // Append 3 more leaves; alg 1 is skipped (not active).
+        log.append_leaf(b"leaf3").await.unwrap();
+        log.append_leaf(b"leaf4").await.unwrap();
+        log.append_leaf(b"leaf5").await.unwrap();
+        // Log size is now 6; alg 1 epoch = [(0, 3)].
+
+        // Resume alg 1 at size 6. This runs reconstruct_subtree_root, which
+        // computes and stores boundary band nodes: specifically the height-1
+        // node at (alg=1, left=2, height=1) covering [2, 4).
+        log.resume_algorithm(1).await.unwrap();
+
+        // Append one more leaf (position 6) so alg 1's second epoch is
+        // active at the final log position.  Without this, root_for_at would
+        // compute alg_size = 3 (last epoch end before size 6) and the
+        // frontier folded by verify_non_divergence (which spans all 6
+        // positions including the null gap) would not match.
+        log.append_leaf(b"leaf6").await.unwrap();
+        // Now alg 1 has epochs [(0,3),(6,7)] — wait, it's still active:
+        // epochs = [(0,3), (6,∞)]. is_active_at(6) = true.
+
+        let metas = vec![
+            (0u64, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+            (1u64, Box::new(Sha256Hasher) as Box<dyn Hasher>),
+        ];
+
+        // Clean log: verify_non_divergence must succeed.
+        // This verifies that legitimately-null boundary regions
+        // (active_range = false, e.g. (alg1, left=4, height=1) covering
+        // [4,6) which is fully outside all active epochs) do not trigger
+        // false positives.
+        assert!(
+            log.verify_non_divergence(None, &[])
+                .await
+                .unwrap(),
+            "clean log after resume_algorithm + extra leaf failed non-divergence check"
+        );
+
+        // Corrupt the boundary band node (alg=1, left=2, height=1).
+        // Before the V12 fix, get_node_hash silently returned null() for
+        // this absent node (partially active, not fully active). After the
+        // fix it returns CorruptedMetadata, which propagates from
+        // verify_non_divergence as Err.
+        let mut tampered = log.storage().clone();
+        tampered.nodes.remove(&(1, 2, 1));
+
+        let tampered_log =
+            NaryMerkleLog::from_storage(tampered, metas).await.unwrap();
+
+        let result = tampered_log.verify_non_divergence(None, &[]).await;
+        assert!(
+            result.is_err() || !result.unwrap(),
+            "boundary band corruption was not detected"
+        );
+    });
+}
+
