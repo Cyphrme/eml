@@ -794,7 +794,9 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Append a single flat leaf to the log.
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
-        if self.kind == LogKind::Subtree {
+        // Kind is only binding once an append has happened; an empty log
+        // (including one reloaded from an empty store) accepts either kind.
+        if self.kind == LogKind::Subtree && self.count > 0 {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: "cannot append leaf after subtree appends".to_string(),

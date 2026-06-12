@@ -3400,6 +3400,45 @@ fn test_epoch_evolution() {
 
 // ── Deterministic recovery tests ──────────────────────────────────────────────
 
+/// A store saved before its first append has no log_meta; reloading it must
+/// not lock the kind — both append kinds remain available on the empty log.
+#[test]
+fn test_empty_store_reload_accepts_either_append() {
+    smol::block_on(async {
+        for flat_first in [true, false] {
+            let log = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                TreeConfig::default(),
+            )
+            .await
+            .unwrap();
+
+            let storage = log.into_storage();
+            let mut reloaded =
+                NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))])
+                    .await
+                    .unwrap();
+            assert_eq!(reloaded.count(), 0);
+
+            if flat_first {
+                reloaded
+                    .append_leaf(b"first")
+                    .await
+                    .expect("empty reloaded log must accept a leaf append");
+                assert_eq!(reloaded.kind(), neml::LogKind::Flat);
+            } else {
+                let subtree = Subtree::Leaf(b"first".to_vec());
+                reloaded
+                    .append_subtree(&subtree)
+                    .await
+                    .expect("empty reloaded log must accept a subtree append");
+                assert_eq!(reloaded.kind(), neml::LogKind::Subtree);
+            }
+        }
+    });
+}
+
 /// Persisted log_meta makes from_storage return identical count/root
 /// regardless of how many times it is called on the same storage.
 #[test]
