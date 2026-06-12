@@ -64,6 +64,29 @@ pub trait Storage: Send + Sync {
         &self,
     ) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send;
 
+    /// Persist authoritative log metadata: the total append count and log kind byte.
+    ///
+    /// Kind byte: `0` = flat leaf log, `1` = subtree log.
+    ///
+    /// This must be called on every append so that `from_storage` can recover
+    /// the authoritative size without probing node storage. V7 (atomic batch)
+    /// will fold this write into the append batch; until then it is a separate
+    /// call made immediately after `write_batch`.
+    fn store_log_meta(
+        &mut self,
+        count: u64,
+        kind: u8,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Load authoritative log metadata written by `store_log_meta`.
+    ///
+    /// Returns `None` for stores that have never written log metadata (legacy
+    /// or newly initialised), triggering the deterministic probe fallback in
+    /// `from_storage`.
+    fn load_log_meta(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<(u64, u8)>, Self::Error>> + Send;
+
     /// Perform a batch write of multiple leaves and nodes.
     fn write_batch(
         &mut self,
@@ -95,6 +118,8 @@ pub struct MemoryStorage {
     pub nodes: HashMap<(u64, u64, u32), Vec<u8>>,
     /// Algorithm epoch metadata, keyed by algorithm ID.
     pub algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
+    /// Authoritative log metadata: `(total_append_count, kind_byte)`.
+    pub log_meta: Option<(u64, u8)>,
 }
 
 impl MemoryStorage {
@@ -105,6 +130,7 @@ impl MemoryStorage {
             leaves: Vec::new(),
             nodes: HashMap::new(),
             algorithm_metas: HashMap::new(),
+            log_meta: None,
         }
     }
 }
@@ -192,6 +218,15 @@ impl Storage for MemoryStorage {
             .iter()
             .map(|(&id, e)| (id, e.clone()))
             .collect())
+    }
+
+    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
+        self.log_meta = Some((count, kind));
+        Ok(())
+    }
+
+    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+        Ok(self.log_meta)
     }
 }
 

@@ -174,6 +174,20 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
+    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
+        self.inner
+            .store_log_meta(count, kind)
+            .await
+            .map_err(|_| FaultError::Storage)
+    }
+
+    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+        self.inner
+            .load_log_meta()
+            .await
+            .map_err(|_| FaultError::Storage)
+    }
+
     async fn write_batch(
         &mut self,
         leaves: &[(u64, &[u8])],

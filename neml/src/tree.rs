@@ -8,6 +8,21 @@ use crate::storage::Storage;
 use crate::subtree::Subtree;
 use crate::topology::frontier_for_size;
 
+/// Whether log-level appends are flat leaf appends or subtree appends.
+///
+/// Decided on the first append and persisted in storage; read back at load so
+/// `from_storage` never infers kind from counters or `len()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogKind {
+    /// Each append is a raw leaf; the payload is stored verbatim for auditability.
+    Flat,
+    /// Each append is a subtree root; only the evaluated root hash is stored.
+    Subtree,
+}
+
+const LOG_KIND_FLAT: u8 = 0;
+const LOG_KIND_SUBTREE: u8 = 1;
+
 /// Configuration for the n-ary Merkle tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TreeConfig {
@@ -125,10 +140,10 @@ pub struct NaryMerkleLog<S: Storage> {
     storage: S,
     config: TreeConfig,
     algs: std::collections::HashMap<u64, AlgState>,
-    /// Number of leaves appended (Flat Log Mode).
-    size: u64,
-    /// Number of subtrees appended.
-    subtree_count: u64,
+    /// Total number of log-level appends (leaves for `Flat`, subtrees for `Subtree`).
+    count: u64,
+    /// Whether appends are flat leaf or subtree appends.
+    kind: LogKind,
 }
 
 impl<S: Storage> NaryMerkleLog<S> {
@@ -155,8 +170,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             storage,
             config,
             algs: std::collections::HashMap::new(),
-            size: 0,
-            subtree_count: 0,
+            count: 0,
+            kind: LogKind::Flat,
         };
         // Eagerly register algorithm 0 as active from index 0
         log.add_algorithm(0, hasher).await?;
@@ -220,7 +235,30 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         }
 
-        let global_size = Self::determine_global_size(&storage, &metas).await?;
+        // Recover authoritative (count, kind) from persisted log metadata when
+        // available; fall back to deterministic probing for legacy stores.
+        let (global_size, kind) =
+            match storage.load_log_meta().await.map_err(crate::error::Error::Storage)? {
+                Some((count, kind_byte)) => {
+                    let kind = if kind_byte == LOG_KIND_SUBTREE {
+                        LogKind::Subtree
+                    } else {
+                        LogKind::Flat
+                    };
+                    (count, kind)
+                }
+                None => {
+                    let size = Self::determine_global_size(&storage, &metas).await?;
+                    // len() > 0 iff flat leaves were written; V8 (len() swallowing
+                    // errors) is a separate fix — this branch only runs for legacy stores.
+                    let kind = if storage.len().await > 0 {
+                        LogKind::Flat
+                    } else {
+                        LogKind::Subtree
+                    };
+                    (size, kind)
+                }
+            };
 
         let mut algs = std::collections::HashMap::new();
         let k = config.log_arity as u64;
@@ -240,21 +278,22 @@ impl<S: Storage> NaryMerkleLog<S> {
             algs.insert(alg_id, state);
         }
 
-        // Determine if we are in Flat Log Mode or Subtree Log Mode.
-        let is_state_mode = storage.len().await > 0;
-        let size = if is_state_mode { global_size } else { 0 };
-        let subtree_count = if is_state_mode { 0 } else { global_size };
-
         Ok(Self {
             storage,
             config,
             algs,
-            size,
-            subtree_count,
+            count: global_size,
+            kind,
         })
     }
 
-    /// Probe storage to find the current global size.
+    /// Probe storage to estimate the current global size (legacy fallback only).
+    ///
+    /// Called only when no authoritative log metadata has been persisted. Sorts
+    /// algorithms by ID before probing so the result is deterministic across
+    /// replicas regardless of `HashMap` iteration order. Uses a linear scan
+    /// rather than binary search because level-0 node presence is not guaranteed
+    /// to be monotonic across deactivation/reactivation gaps.
     async fn determine_global_size(
         storage: &S,
         metas: &[(u64, Vec<(u64, u64)>)],
@@ -264,8 +303,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Ok(leaf_len);
         }
 
-        let mut max_frozen_end = 0;
-        let mut active_algs = Vec::new();
+        let mut max_frozen_end = 0u64;
+        let mut active_algs: Vec<(u64, u64)> = Vec::new();
         for &(alg_id, ref epochs) in metas {
             if let Some(&(start, end)) = epochs.last() {
                 if end == u64::MAX {
@@ -280,45 +319,23 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Ok(max_frozen_end);
         }
 
-        // Probe active algorithm to determine size.
+        // Deterministic probe target: lowest alg_id avoids HashMap ordering dependency.
+        active_algs.sort_unstable_by_key(|&(id, _)| id);
         let (alg_id, start) = active_algs[0];
-        let mut low = start;
-        let mut high = start;
+
+        // Linear scan: binary search is unsafe here because level-0 node presence
+        // is non-monotonic across deactivation/reactivation gaps.
+        let mut size = start;
         loop {
             if storage
-                .get_node(alg_id, high, 0)
+                .get_node(alg_id, size, 0)
                 .await
                 .map_err(crate::error::Error::Storage)?
                 .is_none()
             {
                 break;
             }
-            if high == 0 {
-                high = 1;
-            } else {
-                if let Some(new_high) = high.checked_mul(2) {
-                    high = new_high;
-                } else {
-                    high = u64::MAX;
-                    break;
-                }
-            }
-        }
-
-        let mut size = low;
-        while low < high {
-            let mid = low + (high - low) / 2;
-            if storage
-                .get_node(alg_id, mid, 0)
-                .await
-                .map_err(crate::error::Error::Storage)?
-                .is_some()
-            {
-                size = mid + 1;
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
+            size += 1;
         }
         Ok(size)
     }
@@ -438,16 +455,28 @@ impl<S: Storage> NaryMerkleLog<S> {
         &self.config
     }
 
-    /// Retrieve the number of leaves stored.
+    /// Total number of log-level appends regardless of kind.
     #[must_use]
-    pub fn size(&self) -> u64 {
-        self.size
+    pub fn count(&self) -> u64 {
+        self.count
     }
 
-    /// Retrieve the number of subtrees stored.
+    /// Whether this log uses flat leaf or subtree appends.
+    #[must_use]
+    pub fn kind(&self) -> LogKind {
+        self.kind
+    }
+
+    /// Number of flat leaf appends (0 for subtree logs).
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        if self.kind == LogKind::Flat { self.count } else { 0 }
+    }
+
+    /// Number of subtree appends (0 for flat logs).
     #[must_use]
     pub fn subtree_count(&self) -> u64 {
-        self.subtree_count
+        if self.kind == LogKind::Subtree { self.count } else { 0 }
     }
 
     /// Access the frontier stack of the default algorithm (0).
@@ -489,11 +518,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::DuplicateAlgorithm(alg_id));
         }
 
-        let current_size = if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        };
+        let current_size = self.count;
 
         let epochs = vec![(current_size, u64::MAX)];
 
@@ -522,11 +547,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Deactivate (freeze) an algorithm at the current tree size.
     pub async fn remove_algorithm(&mut self, alg_id: u64) -> Result<(), S::Error> {
-        let current_size = if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        };
+        let current_size = self.count;
 
         let state = self
             .algs
@@ -553,11 +574,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Reactivate a frozen algorithm at the current tree size.
     pub async fn resume_algorithm(&mut self, alg_id: u64) -> Result<(), S::Error> {
-        let current_size = if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        };
+        let current_size = self.count;
 
         let mut new_epochs = {
             let state = self
@@ -775,16 +792,16 @@ impl<S: Storage> NaryMerkleLog<S> {
         })
     }
 
-    /// Append a single leaf to the log (Flat Log Mode).
+    /// Append a single flat leaf to the log.
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
-        if self.subtree_count > 0 {
+        if self.kind == LogKind::Subtree {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
-                reason: "cannot append leaf in Subtree Log Mode".to_string(),
+                reason: "cannot append leaf after subtree appends".to_string(),
             });
         }
 
-        if self.size >= (1u64 << 47) {
+        if self.count >= (1u64 << 47) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: "log capacity exceeded (max 2^47 items)".to_string(),
@@ -799,25 +816,25 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut batch_leaves = Vec::new();
         let mut batch_nodes = Vec::new();
 
-        batch_leaves.push((self.size, data));
+        batch_leaves.push((self.count, data));
 
         for (&alg_id, state) in &mut temp_algs {
             if !state.is_active() {
                 continue;
             }
 
-            let digest = if state.is_active_at(self.size) {
+            let digest = if state.is_active_at(self.count) {
                 let leaf_hash = state.hasher.leaf(data);
-                batch_nodes.push((alg_id, self.size, 0, leaf_hash.clone()));
+                batch_nodes.push((alg_id, self.count, 0, leaf_hash.clone()));
                 leaf_hash
             } else {
                 state.hasher.null()
             };
 
             state.frontier.push(digest);
-            state.frontier_coords.push((self.size, 0));
+            state.frontier_coords.push((self.count, 0));
 
-            let merges = reduction_count(self.size, self.config.log_arity as u64);
+            let merges = reduction_count(self.count, self.config.log_arity as u64);
             for _ in 0..merges {
                 let mut children = Vec::with_capacity(self.config.log_arity);
                 let mut coords = Vec::with_capacity(self.config.log_arity);
@@ -864,14 +881,30 @@ impl<S: Storage> NaryMerkleLog<S> {
             .await
             .map_err(crate::error::Error::Storage)?;
 
+        // Persist authoritative append count and kind. V7 will fold this into
+        // the atomic batch; until then it is a separate write immediately after.
+        let new_count = self.count + 1;
+        self.storage
+            .store_log_meta(new_count, LOG_KIND_FLAT)
+            .await
+            .map_err(crate::error::Error::Storage)?;
+
         self.algs = temp_algs;
-        self.size += 1;
+        self.count = new_count;
+        self.kind = LogKind::Flat;
         Ok(())
     }
 
-    /// Append a structured subtree to the log (Subtree Log Mode).
+    /// Append a structured subtree to the log.
     pub async fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
-        if self.subtree_count >= (1u64 << 47) {
+        if self.kind == LogKind::Flat && self.count > 0 {
+            return Err(crate::error::Error::CorruptedMetadata {
+                alg_id: 0,
+                reason: "cannot append subtree after leaf appends".to_string(),
+            });
+        }
+
+        if self.count >= (1u64 << 47) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: "log capacity exceeded (max 2^47 items)".to_string(),
@@ -890,18 +923,18 @@ impl<S: Storage> NaryMerkleLog<S> {
                 continue;
             }
 
-            let digest = if state.is_active_at(self.subtree_count) {
+            let digest = if state.is_active_at(self.count) {
                 let root_hash = evaluate(state.hasher.as_ref(), subtree);
-                batch_nodes.push((alg_id, self.subtree_count, 0, root_hash.clone()));
+                batch_nodes.push((alg_id, self.count, 0, root_hash.clone()));
                 root_hash
             } else {
                 state.hasher.null()
             };
 
             state.frontier.push(digest);
-            state.frontier_coords.push((self.subtree_count, 0));
+            state.frontier_coords.push((self.count, 0));
 
-            let merges = reduction_count(self.subtree_count, self.config.log_arity as u64);
+            let merges = reduction_count(self.count, self.config.log_arity as u64);
             for _ in 0..merges {
                 let mut children = Vec::with_capacity(self.config.log_arity);
                 let mut coords = Vec::with_capacity(self.config.log_arity);
@@ -948,8 +981,17 @@ impl<S: Storage> NaryMerkleLog<S> {
             .await
             .map_err(crate::error::Error::Storage)?;
 
+        // Persist authoritative append count and kind. V7 will fold this into
+        // the atomic batch; until then it is a separate write immediately after.
+        let new_count = self.count + 1;
+        self.storage
+            .store_log_meta(new_count, LOG_KIND_SUBTREE)
+            .await
+            .map_err(crate::error::Error::Storage)?;
+
         self.algs = temp_algs;
-        self.subtree_count += 1;
+        self.count = new_count;
+        self.kind = LogKind::Subtree;
         Ok(())
     }
 
@@ -1050,11 +1092,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .get(&alg_id)
             .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
 
-        let max_size = state.tree_size(if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        });
+        let max_size = state.tree_size(self.count);
 
         if tree_size == 0 || index >= tree_size || tree_size > max_size {
             return Ok(None);
@@ -1203,11 +1241,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .get(&alg_id)
             .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
 
-        let max_size = state.tree_size(if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        });
+        let max_size = state.tree_size(self.count);
 
         if old_size == 0 || old_size >= new_size || new_size > max_size {
             return Ok(None);
@@ -1407,12 +1441,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Compute the current combined root hash for a specific algorithm.
     pub async fn combined_root_for(&self, alg_id: u64) -> Result<Vec<u8>, S::Error> {
-        let tip_size = if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        };
-        self.combined_root_at(alg_id, tip_size).await
+        self.combined_root_at(alg_id, self.count).await
     }
 
     /// Build an `AuditPayload` at a historical tree size.
@@ -1451,8 +1480,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         &self,
         log_id: [u8; 32],
     ) -> Result<crate::proof::AuditPayload, S::Error> {
-        let tip = if self.size > 0 { self.size } else { self.subtree_count };
-        self.audit_payload_at(log_id, tip).await
+        self.audit_payload_at(log_id, self.count).await
     }
 
     /// Build a `CouplingProof` at a historical tree size.
@@ -1506,7 +1534,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         payload: &crate::proof::AuditPayload,
     ) -> Result<bool, S::Error> {
         let size = payload.tree_size;
-        let current_size = if self.size > 0 { self.size } else { self.subtree_count };
+        let current_size = self.count;
 
         // ── 1. Structural validation ──────────────────────────────────────
         if size == 0 || size > current_size {
@@ -1540,7 +1568,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
 
         // ── 2. Streaming cell check ───────────────────────────────────────
-        let is_flat = self.size > 0;
+        let is_flat = self.kind == LogKind::Flat;
         let k = self.config.log_arity;
         let active_set: std::collections::HashSet<u64> =
             payload.active_algs.iter().copied().collect();
@@ -1573,8 +1601,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                     Some(true) => {
                         if let Some(ref d) = leaf_data {
                             let expected = state.hasher.leaf(d);
-                            // In flat mode the stored node is a cache; if
-                            // present it must match the recomputed leaf hash.
+                            // Flat: the stored node is a cache; if present it
+                            // must match the recomputed leaf hash.
                             if let Some(stored) = self
                                 .storage
                                 .get_node(alg_id, i, 0)
@@ -1587,7 +1615,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                             }
                             expected
                         } else {
-                            // Subtree mode: stored node is authoritative and
+                            // Subtree: the stored node is authoritative and
                             // must exist for active-set algorithms.
                             match self
                                 .storage
@@ -1792,16 +1820,10 @@ impl<S: Storage> NaryMerkleLog<S> {
             .get(&alg_id)
             .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
 
-        let current_global_size = if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        };
-
-        if size > current_global_size {
+        if size > self.count {
             return Err(crate::error::Error::IndexOutOfBounds {
                 index: size,
-                tree_size: current_global_size,
+                tree_size: self.count,
             });
         }
 
@@ -1862,11 +1884,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         trusted_roots: &[(u64, Vec<u8>)],
     ) -> Result<bool, S::Error> {
         let start = checkpoint_size.unwrap_or(0);
-        let end = if self.size > 0 {
-            self.size
-        } else {
-            self.subtree_count
-        };
+        let end = self.count;
         if start > end {
             return Ok(false);
         }
@@ -2049,7 +2067,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // Stream leaf payloads from storage and rebuild stacks incrementally
         for i in start..end {
-            let data = if self.size > 0 {
+            let data = if self.kind == LogKind::Flat {
                 match self.storage.get_leaf(i).await {
                     Ok(d) => Some(d),
                     Err(e) => return Err(crate::error::Error::Storage(e)),

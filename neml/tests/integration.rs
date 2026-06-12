@@ -2314,6 +2314,14 @@ impl Storage for MockStorage {
     async fn load_algorithm_metas(&self) -> Result<neml::AlgorithmMetas, Self::Error> {
         self.metas.clone()
     }
+
+    async fn store_log_meta(&mut self, _count: u64, _kind: u8) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+        Ok(None)
+    }
 }
 
 #[test]
@@ -2557,6 +2565,14 @@ impl neml::Storage for ErrorMaskingStorage {
     async fn load_algorithm_metas(&self) -> Result<neml::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().await
     }
+
+    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
+        self.inner.store_log_meta(count, kind).await
+    }
+
+    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+        self.inner.load_log_meta().await
+    }
 }
 
 #[test]
@@ -2583,23 +2599,17 @@ fn test_storage_len_error_masking_overwrite() {
             assert_eq!(reconstructed.size(), 2);
         }
 
-        // Now mask len to zero, simulating a transient error
+        // Mask len to zero, simulating a transient read error on the leaf keyspace.
         mask.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        // Reconstruct from storage.
-        let mut corrupted_log = NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
+        // With persisted log_meta, from_storage reads the authoritative (count, kind)
+        // directly and does not rely on len() for mode inference.
+        let log_after_mask = NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
             .await
             .unwrap();
-        assert_eq!(corrupted_log.size(), 0);
-        assert_eq!(corrupted_log.subtree_count(), 2);
-
-        // Attempting append_leaf in Subtree Log Mode should fail and prevent overwrite.
-        let append_result = corrupted_log.append_leaf(b"leaf_overwrite").await;
-        assert!(append_result.is_err(), "Expected append_leaf to fail in Subtree Log Mode");
-
-        // The original leaf0 remains untouched
-        let untouched_leaf = corrupted_log.storage().get_leaf(0).await.unwrap();
-        assert_eq!(untouched_leaf, b"leaf0");
+        assert_eq!(log_after_mask.size(), 2, "persisted log_meta wins over masked len()");
+        assert_eq!(log_after_mask.subtree_count(), 0);
+        assert_eq!(log_after_mask.kind(), neml::LogKind::Flat);
     });
 }
 

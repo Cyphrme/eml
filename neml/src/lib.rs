@@ -24,7 +24,7 @@ pub use schedule::reduction_count;
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use subtree::Subtree;
 pub use topology::{SkeletonStep, frontier_for_size, inclusion_skeleton};
-pub use tree::{NaryMerkleLog, TreeConfig};
+pub use tree::{LogKind, NaryMerkleLog, TreeConfig};
 
 /// Dynamically generate a null digest constant using the hasher.
 #[must_use]

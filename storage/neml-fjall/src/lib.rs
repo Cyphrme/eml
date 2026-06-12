@@ -6,6 +6,12 @@ use std::sync::{Arc, Mutex};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 use neml::{AlgorithmMetas, Storage};
 
+/// Reserved 9-byte key for log metadata in the `neml_metadata` keyspace.
+///
+/// All algorithm-epoch keys are exactly 8 bytes (alg_id as big-endian u64), so
+/// this 9-byte key never collides with any valid algorithm entry.
+const LOG_META_KEY: [u8; 9] = [b'_', b'l', b'o', b'g', b'm', b'e', b't', b'a', b'_'];
+
 /// Error type for [`FjallStorage`] operations.
 #[derive(Debug, thiserror::Error)]
 pub enum FjallStorageError {
@@ -170,6 +176,10 @@ impl Storage for FjallStorage {
             let (key_bytes, val_bytes) = item
                 .into_inner()
                 .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+            // Skip the reserved log-metadata entry (9 bytes, not a valid alg key).
+            if key_bytes.as_ref() == LOG_META_KEY {
+                continue;
+            }
             let alg_id = {
                 let arr: [u8; 8] = key_bytes.as_ref().try_into().map_err(|_| {
                     FjallStorageError::MetadataCorruption("invalid key length".to_string())
@@ -231,5 +241,36 @@ impl Storage for FjallStorage {
             .commit()
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
+        let _guard = self.write_lock.lock().unwrap();
+        let mut value = [0u8; 9];
+        value[0..8].copy_from_slice(&count.to_be_bytes());
+        value[8] = kind;
+        self.metadata
+            .insert(LOG_META_KEY, value)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+        let value = self
+            .metadata
+            .get(LOG_META_KEY)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+        match value {
+            None => Ok(None),
+            Some(bytes) => {
+                if bytes.len() != 9 {
+                    return Err(FjallStorageError::MetadataCorruption(
+                        "log_meta value must be 9 bytes".to_string(),
+                    ));
+                }
+                let count = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+                let kind = bytes[8];
+                Ok(Some((count, kind)))
+            }
+        }
     }
 }
