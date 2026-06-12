@@ -503,11 +503,6 @@ impl<S: Storage> NaryMerkleLog<S> {
         &self.storage
     }
 
-    /// Borrow the underlying storage backend mutably.
-    pub fn storage_mut(&mut self) -> &mut S {
-        &mut self.storage
-    }
-
     /// Register a new algorithm, activating it at the current tree size.
     pub async fn add_algorithm(
         &mut self,

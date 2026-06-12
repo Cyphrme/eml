@@ -1,7 +1,6 @@
 //! Fjall-backed persistence implementation for neml.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use fjall::{Database, Keyspace, KeyspaceCreateOptions};
 use neml::{AlgorithmMetas, Storage};
@@ -30,15 +29,14 @@ pub enum FjallStorageError {
 
 /// A production-grade neml storage backend backed by a Fjall database.
 ///
-/// Clones of `FjallStorage` share the same underlying database handle.
-#[derive(Clone)]
+/// Not `Clone` — enforces single-writer ownership so the tree-level
+/// read-count→write-at-count window cannot race across aliased handles.
 pub struct FjallStorage {
     #[allow(dead_code)]
     db: Database,
     leaves: Keyspace,
     nodes: Keyspace,
     metadata: Keyspace,
-    write_lock: Arc<Mutex<()>>,
 }
 
 impl FjallStorage {
@@ -72,7 +70,6 @@ impl FjallStorage {
             leaves,
             nodes,
             metadata,
-            write_lock: Arc::new(Mutex::new(())),
         })
     }
 }
@@ -81,7 +78,6 @@ impl Storage for FjallStorage {
     type Error = FjallStorageError;
 
     async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        let _guard = self.write_lock.lock().unwrap();
         let key = index.to_be_bytes();
         self.leaves
             .insert(key, data)
@@ -122,7 +118,6 @@ impl Storage for FjallStorage {
         height: u32,
         hash: &[u8],
     ) -> Result<(), Self::Error> {
-        let _guard = self.write_lock.lock().unwrap();
         let mut key = [0u8; 20];
         key[0..8].copy_from_slice(&alg_id.to_be_bytes());
         key[8..16].copy_from_slice(&left.to_be_bytes());
@@ -157,7 +152,6 @@ impl Storage for FjallStorage {
         alg_id: u64,
         epochs: &[(u64, u64)],
     ) -> Result<(), Self::Error> {
-        let _guard = self.write_lock.lock().unwrap();
         let key = alg_id.to_be_bytes();
         let mut bytes = Vec::with_capacity(epochs.len() * 16);
         for &(start, end) in epochs {
@@ -221,7 +215,6 @@ impl Storage for FjallStorage {
         leaves: &[(u64, &[u8])],
         nodes: &[(u64, u64, u32, &[u8])],
     ) -> Result<(), Self::Error> {
-        let _guard = self.write_lock.lock().unwrap();
         let mut batch = self.db.batch();
 
         for &(index, data) in leaves {
@@ -244,7 +237,6 @@ impl Storage for FjallStorage {
     }
 
     async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
-        let _guard = self.write_lock.lock().unwrap();
         let mut value = [0u8; 9];
         value[0..8].copy_from_slice(&count.to_be_bytes());
         value[8] = kind;
