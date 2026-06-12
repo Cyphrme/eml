@@ -3398,4 +3398,242 @@ fn test_epoch_evolution() {
     });
 }
 
+// ── Deterministic recovery tests ──────────────────────────────────────────────
 
+/// Persisted log_meta makes from_storage return identical count/root
+/// regardless of how many times it is called on the same storage.
+#[test]
+fn test_from_storage_deterministic_repeated() {
+    smol::block_on(async {
+        let mut log = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig { log_arity: 2 },
+        )
+        .await
+        .unwrap();
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+        log.add_algorithm(2, Box::new(Sha256Hasher)).await.unwrap();
+
+        // Build a subtree log; deactivate alg 1, then reactivate it.
+        let st = Subtree::Leaf(b"x".to_vec());
+        log.append_subtree(&st).await.unwrap();
+        log.remove_algorithm(1).await.unwrap();
+        log.append_subtree(&st).await.unwrap();
+        log.resume_algorithm(1).await.unwrap();
+        log.append_subtree(&st).await.unwrap();
+
+        let expected_count = log.count();
+        let expected_root = log.root_for(0).unwrap();
+        let storage = log.into_storage();
+
+        // Call from_storage several times and assert identity.
+        for _ in 0..5 {
+            let r = NaryMerkleLog::from_storage(
+                storage.clone(),
+                vec![
+                    (0, Box::new(Sha256Hasher)),
+                    (1, Box::new(Sha256Hasher)),
+                    (2, Box::new(Sha256Hasher)),
+                ],
+            )
+            .await
+            .unwrap();
+            assert_eq!(r.count(), expected_count, "count must be identical each load");
+            assert_eq!(
+                r.root_for(0).unwrap(),
+                expected_root,
+                "root must be identical each load"
+            );
+            assert_eq!(r.kind(), neml::LogKind::Subtree);
+        }
+    });
+}
+
+/// LogKind is persisted and restored correctly for both flat and subtree logs.
+#[test]
+fn test_log_kind_persisted_and_restored() {
+    smol::block_on(async {
+        // Flat log.
+        {
+            let mut log = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                TreeConfig::default(),
+            )
+            .await
+            .unwrap();
+            log.append_leaf(b"a").await.unwrap();
+            log.append_leaf(b"b").await.unwrap();
+            let expected_root = log.root_for(0).unwrap();
+            let storage = log.into_storage();
+
+            let r = NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))])
+                .await
+                .unwrap();
+            assert_eq!(r.kind(), neml::LogKind::Flat);
+            assert_eq!(r.count(), 2);
+            assert_eq!(r.size(), 2);
+            assert_eq!(r.subtree_count(), 0);
+            assert_eq!(r.root_for(0).unwrap(), expected_root);
+        }
+
+        // Subtree log.
+        {
+            let st = Subtree::Node(vec![
+                Subtree::Leaf(b"p".to_vec()),
+                Subtree::Leaf(b"q".to_vec()),
+            ]);
+            let mut log = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                TreeConfig::default(),
+            )
+            .await
+            .unwrap();
+            log.append_subtree(&st).await.unwrap();
+            log.append_subtree(&st).await.unwrap();
+            let expected_root = log.root_for(0).unwrap();
+            let storage = log.into_storage();
+
+            let r = NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))])
+                .await
+                .unwrap();
+            assert_eq!(r.kind(), neml::LogKind::Subtree);
+            assert_eq!(r.count(), 2);
+            assert_eq!(r.subtree_count(), 2);
+            assert_eq!(r.size(), 0);
+            assert_eq!(r.root_for(0).unwrap(), expected_root);
+        }
+    });
+}
+
+/// Mixed-append rejection: flat-leaf log rejects subsequent subtree append.
+#[test]
+fn test_mixed_append_leaf_then_subtree_rejected() {
+    smol::block_on(async {
+        let mut log = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig::default(),
+        )
+        .await
+        .unwrap();
+        log.append_leaf(b"a").await.unwrap();
+        let result = log.append_subtree(&Subtree::Leaf(b"b".to_vec())).await;
+        assert!(result.is_err(), "subtree append after leaf append must fail");
+    });
+}
+
+/// Mixed-append rejection: subtree log rejects subsequent flat-leaf append.
+#[test]
+fn test_mixed_append_subtree_then_leaf_rejected() {
+    smol::block_on(async {
+        let mut log = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig::default(),
+        )
+        .await
+        .unwrap();
+        log.append_subtree(&Subtree::Leaf(b"a".to_vec())).await.unwrap();
+        let result = log.append_leaf(b"b").await;
+        assert!(result.is_err(), "leaf append after subtree append must fail");
+    });
+}
+
+/// Cross-replica: two independently-constructed MemoryStorage instances with
+/// the same logical data recover identical size and root.
+#[test]
+fn test_cross_replica_identical_recovery() {
+    smol::block_on(async {
+        // Build the reference log.
+        let mut log_a = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig { log_arity: 2 },
+        )
+        .await
+        .unwrap();
+        log_a.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        let st = Subtree::Leaf(b"data".to_vec());
+        log_a.append_subtree(&st).await.unwrap();
+        log_a.remove_algorithm(1).await.unwrap();
+        log_a.append_subtree(&st).await.unwrap();
+
+        let storage_a = log_a.into_storage();
+
+        // Clone the storage — simulates an independent replica with identical bytes.
+        let storage_b = storage_a.clone();
+
+        let r_a = NaryMerkleLog::from_storage(
+            storage_a,
+            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+        )
+        .await
+        .unwrap();
+
+        let r_b = NaryMerkleLog::from_storage(
+            storage_b,
+            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(r_a.count(), r_b.count(), "replicas must agree on count");
+        assert_eq!(
+            r_a.root_for(0).unwrap(),
+            r_b.root_for(0).unwrap(),
+            "replicas must agree on root"
+        );
+        assert_eq!(r_a.kind(), r_b.kind(), "replicas must agree on kind");
+    });
+}
+
+/// Legacy-probe gap correctness: when no log_meta is present, the linear scan
+/// correctly stops at the first absent node even if gaps exist between
+/// activation epochs (i.e. the binary search assumption was violated).
+#[test]
+fn test_legacy_probe_gap_correctness() {
+    smol::block_on(async {
+        // Build a 3-append subtree log with alg 0 and alg 1, where alg 1
+        // is deactivated at position 1 (creating a gap at index 1 for alg 1).
+        let mut log = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig { log_arity: 2 },
+        )
+        .await
+        .unwrap();
+        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+        let st = Subtree::Leaf(b"y".to_vec());
+        log.append_subtree(&st).await.unwrap(); // index 0 — both algs active
+        log.remove_algorithm(1).await.unwrap(); // freeze alg 1 at 1
+        log.append_subtree(&st).await.unwrap(); // index 1 — only alg 0 active
+        log.resume_algorithm(1).await.unwrap(); // reactivate alg 1 at 2
+        log.append_subtree(&st).await.unwrap(); // index 2 — both algs active
+
+        let expected_count = log.count();
+        let expected_root = log.root_for(0).unwrap();
+
+        // Remove log_meta to simulate a legacy store; recovery must use probe.
+        let mut storage = log.into_storage();
+        storage.log_meta = None;
+
+        let r = NaryMerkleLog::from_storage(
+            storage,
+            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(r.count(), expected_count, "legacy probe must recover correct count");
+        assert_eq!(
+            r.root_for(0).unwrap(),
+            expected_root,
+            "legacy probe must recover correct root"
+        );
+    });
+}
