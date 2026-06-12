@@ -37,22 +37,22 @@ impl Hasher for Sha256Hasher {
 #[derive(Debug, Clone)]
 struct FaultInjectingStorage {
     inner: MemoryStorage,
-    fail_after_writes: Arc<Mutex<Option<usize>>>,
-    write_count: Arc<Mutex<usize>>,
+    fail_after_batches: Arc<Mutex<Option<usize>>>,
+    batch_count: Arc<Mutex<usize>>,
 }
 
 impl FaultInjectingStorage {
     fn new(inner: MemoryStorage) -> Self {
         Self {
             inner,
-            fail_after_writes: Arc::new(Mutex::new(None)),
-            write_count: Arc::new(Mutex::new(0)),
+            fail_after_batches: Arc::new(Mutex::new(None)),
+            batch_count: Arc::new(Mutex::new(0)),
         }
     }
 
-    fn set_fail_after_writes(&self, count: Option<usize>) {
-        *self.fail_after_writes.lock().unwrap() = count;
-        *self.write_count.lock().unwrap() = 0;
+    fn set_fail_after_batches(&self, count: Option<usize>) {
+        *self.fail_after_batches.lock().unwrap() = count;
+        *self.batch_count.lock().unwrap() = 0;
     }
 }
 
@@ -74,26 +74,6 @@ impl Storage for FaultInjectingStorage {
     type Error = FaultError;
 
     async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        let should_fail = {
-            let mut count = self.write_count.lock().unwrap();
-            let limit = self.fail_after_writes.lock().unwrap();
-            if let Some(limit) = *limit {
-                if *count >= limit {
-                    true
-                } else {
-                    *count += 1;
-                    false
-                }
-            } else {
-                *count += 1;
-                false
-            }
-        };
-
-        if should_fail {
-            return Err(FaultError::Injected);
-        }
-
         self.inner
             .store_leaf(index, data)
             .await
@@ -107,8 +87,8 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn len(&self) -> u64 {
-        self.inner.len().await
+    async fn len(&self) -> Result<u64, Self::Error> {
+        self.inner.len().await.map_err(|_| FaultError::Storage)
     }
 
     async fn store_node(
@@ -118,26 +98,6 @@ impl Storage for FaultInjectingStorage {
         height: u32,
         hash: &[u8],
     ) -> Result<(), Self::Error> {
-        let should_fail = {
-            let mut count = self.write_count.lock().unwrap();
-            let limit = self.fail_after_writes.lock().unwrap();
-            if let Some(limit) = *limit {
-                if *count >= limit {
-                    true
-                } else {
-                    *count += 1;
-                    false
-                }
-            } else {
-                *count += 1;
-                false
-            }
-        };
-
-        if should_fail {
-            return Err(FaultError::Injected);
-        }
-
         self.inner
             .store_node(alg_id, left, height, hash)
             .await
@@ -174,16 +134,16 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
+    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
         self.inner
-            .store_log_meta(count, kind)
+            .load_log_meta()
             .await
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
         self.inner
-            .load_log_meta()
+            .load_checkpoint_roots()
             .await
             .map_err(|_| FaultError::Storage)
     }
@@ -192,23 +152,41 @@ impl Storage for FaultInjectingStorage {
         &mut self,
         leaves: &[(u64, &[u8])],
         nodes: &[(u64, u64, u32, &[u8])],
+        algorithm_metas: &[(u64, &[(u64, u64)])],
+        log_meta: Option<(u64, u8)>,
+        checkpoint_roots: &[(u64, &[u8])],
     ) -> Result<(), Self::Error> {
+        let should_fail = {
+            let mut count = self.batch_count.lock().unwrap();
+            let limit = self.fail_after_batches.lock().unwrap();
+            if let Some(limit) = *limit {
+                if *count >= limit {
+                    true
+                } else {
+                    *count += 1;
+                    false
+                }
+            } else {
+                *count += 1;
+                false
+            }
+        };
+
+        if should_fail {
+            return Err(FaultError::Injected);
+        }
+
+        // Apply atomically: snapshot for rollback, apply all, restore on error.
         let backup = self.inner.clone();
-
-        for &(index, data) in leaves {
-            if let Err(e) = self.store_leaf(index, data).await {
-                self.inner = backup;
-                return Err(e);
-            }
+        if self
+            .inner
+            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
+            .await
+            .is_err()
+        {
+            self.inner = backup;
+            return Err(FaultError::Storage);
         }
-
-        for &(alg_id, left, height, hash) in nodes {
-            if let Err(e) = self.store_node(alg_id, left, height, hash).await {
-                self.inner = backup;
-                return Err(e);
-            }
-        }
-
         Ok(())
     }
 }
@@ -230,7 +208,8 @@ fn test_mid_batch_failure_recovery() {
         let size_before = log.size();
         assert_eq!(size_before, 10);
 
-        storage.set_fail_after_writes(Some(1));
+        // Fail the next batch (the whole append is one atomic batch).
+        storage.set_fail_after_batches(Some(0));
 
         let append_res = log.append_leaf(&[10]).await;
         assert!(append_res.is_err());
@@ -244,7 +223,7 @@ fn test_mid_batch_failure_recovery() {
         assert_eq!(reconstructed.size(), size_before);
         assert_eq!(reconstructed.root(), root_before);
 
-        storage.set_fail_after_writes(None);
+        storage.set_fail_after_batches(None);
         let mut reconstructed = reconstructed;
         reconstructed.append_leaf(&[10]).await.unwrap();
         assert_eq!(reconstructed.size(), 11);
@@ -276,52 +255,56 @@ fn test_verify_non_divergence_tamper_detection() {
             tampered_storage.leaves[7] = vec![0xFF; 16];
             let tampered_log =
                 NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))])
-                    .await
-                    .unwrap();
-            assert!(
-                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
-                "Failed to detect tampered leaf data"
-            );
+                    .await;
+            // Either from_storage errors (checkpoint mismatch) or verify_non_divergence detects it.
+            match tampered_log {
+                Err(_) => {}
+                Ok(log) => {
+                    assert!(
+                        !log.verify_non_divergence(None, &[]).await.unwrap(),
+                        "Failed to detect tampered leaf data"
+                    );
+                }
+            }
         }
 
-        // 2. Internal node hash tampering
+        // 2. Internal node hash tampering (frontier node at height 3 covers [0,8))
         {
             let mut tampered_storage = log.storage().clone();
-            // Find an internal node and tamper it
             let key = (0, 0, 3); // (alg_id, left, height)
             if let std::collections::hash_map::Entry::Occupied(mut e) =
                 tampered_storage.nodes.entry(key)
             {
                 e.insert(vec![0x00; 32]);
+                // from_storage should detect the checkpoint mismatch.
                 let tampered_log = NaryMerkleLog::from_storage(
                     tampered_storage,
                     vec![(0, Box::new(Sha256Hasher))],
                 )
-                .await
-                .unwrap();
+                .await;
                 assert!(
-                    !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
-                    "Failed to detect tampered internal node hash"
+                    tampered_log.is_err(),
+                    "from_storage did not detect tampered frontier node"
                 );
             }
         }
 
-        // 3. Epoch metadata tampering
+        // 3. Epoch metadata tampering — checkpoint verification catches the
+        // tampered boundary at load time (frontier reconstructed with the
+        // wrong epoch does not match the stored checkpoint root).
         {
             let mut tampered_storage = log.storage().clone();
-            // Shorten the active epoch interval for algorithm 0
             if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&0) {
                 if !epochs.is_empty() {
-                    epochs[0].1 = 10; // set arbitrary frozen boundary where it should be active (u64::MAX)
+                    epochs[0].1 = 10;
                 }
             }
             let tampered_log =
                 NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))])
-                    .await
-                    .unwrap();
+                    .await;
             assert!(
-                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
-                "Failed to detect tampered epoch metadata"
+                tampered_log.is_err(),
+                "from_storage did not detect tampered epoch metadata"
             );
         }
     });
@@ -368,7 +351,8 @@ fn test_verify_non_divergence_legitimate_frozen() {
             "Legitimate frozen algorithm failed non-divergence verification"
         );
 
-        // Tamper test: Modify alg 1's frozen deactivation boundary from 5 to 3
+        // Tamper test: Modify alg 1's frozen deactivation boundary from 5 to 3.
+        // Checkpoint verification catches the tampered boundary at load time.
         {
             let mut tampered_storage = log.storage().clone();
             if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&1) {
@@ -378,12 +362,10 @@ fn test_verify_non_divergence_legitimate_frozen() {
                 (0, Box::new(Sha256Hasher) as Box<dyn Hasher>),
                 (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
             ];
-            let tampered_log = NaryMerkleLog::from_storage(tampered_storage, metas)
-                .await
-                .unwrap();
+            let tampered_log = NaryMerkleLog::from_storage(tampered_storage, metas).await;
             assert!(
-                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
-                "Failed to detect tampered epoch metadata for frozen algorithm"
+                tampered_log.is_err(),
+                "from_storage did not detect tampered epoch boundary for frozen algorithm"
             );
         }
     });
@@ -412,16 +394,22 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
         log.append_leaf(b"leaf2").await.unwrap();
         log.append_leaf(b"leaf3").await.unwrap();
 
-        // 4. Simulate resume_algorithm crash:
-        // We write the reconstructed frontier nodes for size 4 to storage,
-        // but do NOT update the algorithm metadata.
+        // 4. Simulate a partial write: nodes written but metadata NOT updated.
+        // With the V7 atomic batch fix this cannot happen through the normal API,
+        // but we simulate it by directly mutating storage to match the torn state.
         let mut mutated_storage = log.storage().clone();
-        
+
         // Write a garbage node to storage at alg 0, left 0, height 2 (root of size 4)
         // representing a corrupted/partial write.
         mutated_storage.store_node(0, 0, 2, &[0xAA; 32]).await.unwrap();
+        // Also corrupt the checkpoint root so from_storage doesn't reject alg 0's
+        // current frozen state (we're simulating a pre-resume partial write, not
+        // a post-resume corruption).
+        // The checkpoint root for alg 0 was set when it was still active (before freeze).
+        // After freeze, no new checkpoint is written for alg 0.  Corrupt the node
+        // for alg 1's frontier to simulate a torn write during resume_algorithm.
 
-        // 5. Recover/from_storage: metadata is still frozen.
+        // 5. Recover/from_storage: metadata is still frozen for alg 0.
         let metas = vec![
             (0, Box::new(Sha256Hasher) as Box<dyn Hasher>),
             (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
@@ -499,8 +487,7 @@ fn test_v12_boundary_band_corruption_detected() {
         // frontier folded by verify_non_divergence (which spans all 6
         // positions including the null gap) would not match.
         log.append_leaf(b"leaf6").await.unwrap();
-        // Now alg 1 has epochs [(0,3),(6,7)] — wait, it's still active:
-        // epochs = [(0,3), (6,∞)]. is_active_at(6) = true.
+        // Now alg 1 has epochs [(0,3),(6,∞)]. is_active_at(6) = true.
 
         let metas = vec![
             (0u64, Box::new(Sha256Hasher) as Box<dyn Hasher>),
@@ -508,10 +495,6 @@ fn test_v12_boundary_band_corruption_detected() {
         ];
 
         // Clean log: verify_non_divergence must succeed.
-        // This verifies that legitimately-null boundary regions
-        // (active_range = false, e.g. (alg1, left=4, height=1) covering
-        // [4,6) which is fully outside all active epochs) do not trigger
-        // false positives.
         assert!(
             log.verify_non_divergence(None, &[])
                 .await
@@ -570,18 +553,19 @@ fn test_v16_subtree_mode_tamper_detected() {
 
         let tampered_log =
             NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))])
-                .await
-                .unwrap();
+                .await;
 
-        // The parent-level recomputation nary_mr([tampered, h1]) will differ
-        // from the stored parent, so verify_non_divergence must return false.
-        assert!(
-            !tampered_log
-                .verify_non_divergence(None, &[])
-                .await
-                .unwrap(),
-            "subtree-mode tampering was not detected"
-        );
+        // from_storage may reject via checkpoint mismatch, or verify_non_divergence
+        // catches the tampered parent via recomputation.
+        match tampered_log {
+            Err(_) => {}
+            Ok(log) => {
+                assert!(
+                    !log.verify_non_divergence(None, &[]).await.unwrap(),
+                    "subtree-mode tampering was not detected"
+                );
+            }
+        }
     });
 }
 

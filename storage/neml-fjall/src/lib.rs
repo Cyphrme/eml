@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use fjall::{Database, Keyspace, KeyspaceCreateOptions};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
 use neml::{AlgorithmMetas, Storage};
 
 /// Reserved 9-byte key for log metadata in the `neml_metadata` keyspace.
@@ -10,6 +10,18 @@ use neml::{AlgorithmMetas, Storage};
 /// All algorithm-epoch keys are exactly 8 bytes (alg_id as big-endian u64), so
 /// this 9-byte key never collides with any valid algorithm entry.
 const LOG_META_KEY: [u8; 9] = [b'_', b'l', b'o', b'g', b'm', b'e', b't', b'a', b'_'];
+
+/// 10-byte key prefix for per-algorithm checkpoint roots in `neml_metadata`.
+///
+/// Format: `[b'r', b'o', alg_id_be_bytes[0..8]]` — does not collide with the
+/// 8-byte epoch keys or the 9-byte LOG_META_KEY.
+fn checkpoint_root_key(alg_id: u64) -> [u8; 10] {
+    let mut key = [0u8; 10];
+    key[0] = b'r';
+    key[1] = b'o';
+    key[2..10].copy_from_slice(&alg_id.to_be_bytes());
+    key
+}
 
 /// Error type for [`FjallStorage`] operations.
 #[derive(Debug, thiserror::Error)]
@@ -100,15 +112,21 @@ impl Storage for FjallStorage {
         }
     }
 
-    async fn len(&self) -> u64 {
-        if let Some(guard) = self.leaves.iter().next_back() {
-            if let Ok(key_bytes) = guard.key() {
-                if let Ok(arr) = key_bytes.as_ref().try_into() {
-                    return u64::from_be_bytes(arr) + 1;
-                }
+    async fn len(&self) -> Result<u64, Self::Error> {
+        match self.leaves.iter().next_back() {
+            None => Ok(0),
+            Some(guard) => {
+                let key = guard
+                    .key()
+                    .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+                let arr: [u8; 8] = key.as_ref().try_into().map_err(|_| {
+                    FjallStorageError::MetadataCorruption(
+                        "leaf key has wrong length".to_string(),
+                    )
+                })?;
+                Ok(u64::from_be_bytes(arr) + 1)
             }
         }
-        0
     }
 
     async fn store_node(
@@ -170,12 +188,13 @@ impl Storage for FjallStorage {
             let (key_bytes, val_bytes) = item
                 .into_inner()
                 .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-            // Skip the reserved log-metadata entry (9 bytes, not a valid alg key).
-            if key_bytes.as_ref() == LOG_META_KEY {
+            // Skip reserved entries: log-metadata (9 bytes) and checkpoint roots (10 bytes).
+            let key_ref = key_bytes.as_ref();
+            if key_ref == LOG_META_KEY || (key_ref.len() == 10 && key_ref[0] == b'r' && key_ref[1] == b'o') {
                 continue;
             }
             let alg_id = {
-                let arr: [u8; 8] = key_bytes.as_ref().try_into().map_err(|_| {
+                let arr: [u8; 8] = key_ref.try_into().map_err(|_| {
                     FjallStorageError::MetadataCorruption("invalid key length".to_string())
                 })?;
                 u64::from_be_bytes(arr)
@@ -210,42 +229,6 @@ impl Storage for FjallStorage {
         Ok(metas)
     }
 
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-    ) -> Result<(), Self::Error> {
-        let mut batch = self.db.batch();
-
-        for &(index, data) in leaves {
-            let key = index.to_be_bytes();
-            batch.insert(&self.leaves, key, data);
-        }
-
-        for &(alg_id, left, height, hash) in nodes {
-            let mut key = [0u8; 20];
-            key[0..8].copy_from_slice(&alg_id.to_be_bytes());
-            key[8..16].copy_from_slice(&left.to_be_bytes());
-            key[16..20].copy_from_slice(&height.to_be_bytes());
-            batch.insert(&self.nodes, key, hash);
-        }
-
-        batch
-            .commit()
-            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-        Ok(())
-    }
-
-    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
-        let mut value = [0u8; 9];
-        value[0..8].copy_from_slice(&count.to_be_bytes());
-        value[8] = kind;
-        self.metadata
-            .insert(LOG_META_KEY, value)
-            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-        Ok(())
-    }
-
     async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
         let value = self
             .metadata
@@ -264,5 +247,78 @@ impl Storage for FjallStorage {
                 Ok(Some((count, kind)))
             }
         }
+    }
+
+    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
+        let mut roots = Vec::new();
+        for item in self.metadata.iter() {
+            let (key_bytes, val_bytes) = item
+                .into_inner()
+                .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+            let key_ref = key_bytes.as_ref();
+            if key_ref.len() == 10 && key_ref[0] == b'r' && key_ref[1] == b'o' {
+                let arr: [u8; 8] = key_ref[2..10].try_into().map_err(|_| {
+                    FjallStorageError::MetadataCorruption(
+                        "checkpoint root key has wrong alg_id length".to_string(),
+                    )
+                })?;
+                let alg_id = u64::from_be_bytes(arr);
+                roots.push((alg_id, val_bytes.to_vec()));
+            }
+        }
+        Ok(roots)
+    }
+
+    async fn write_batch(
+        &mut self,
+        leaves: &[(u64, &[u8])],
+        nodes: &[(u64, u64, u32, &[u8])],
+        algorithm_metas: &[(u64, &[(u64, u64)])],
+        log_meta: Option<(u64, u8)>,
+        checkpoint_roots: &[(u64, &[u8])],
+    ) -> Result<(), Self::Error> {
+        let mut batch = self.db.batch();
+
+        for &(index, data) in leaves {
+            let key = index.to_be_bytes();
+            batch.insert(&self.leaves, key, data);
+        }
+
+        for &(alg_id, left, height, hash) in nodes {
+            let mut key = [0u8; 20];
+            key[0..8].copy_from_slice(&alg_id.to_be_bytes());
+            key[8..16].copy_from_slice(&left.to_be_bytes());
+            key[16..20].copy_from_slice(&height.to_be_bytes());
+            batch.insert(&self.nodes, key, hash);
+        }
+
+        for &(alg_id, epochs) in algorithm_metas {
+            let key = alg_id.to_be_bytes();
+            let mut bytes = Vec::with_capacity(epochs.len() * 16);
+            for &(start, end) in epochs {
+                bytes.extend_from_slice(&start.to_be_bytes());
+                bytes.extend_from_slice(&end.to_be_bytes());
+            }
+            batch.insert(&self.metadata, key, bytes);
+        }
+
+        if let Some((count, kind)) = log_meta {
+            let mut value = [0u8; 9];
+            value[0..8].copy_from_slice(&count.to_be_bytes());
+            value[8] = kind;
+            batch.insert(&self.metadata, LOG_META_KEY, value);
+        }
+
+        for &(alg_id, root) in checkpoint_roots {
+            let key = checkpoint_root_key(alg_id);
+            batch.insert(&self.metadata, key, root);
+        }
+
+        batch
+            .durability(Some(PersistMode::SyncAll))
+            .commit()
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+
+        Ok(())
     }
 }

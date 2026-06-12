@@ -249,9 +249,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 }
                 None => {
                     let size = Self::determine_global_size(&storage, &metas).await?;
-                    // len() > 0 iff flat leaves were written; V8 (len() swallowing
-                    // errors) is a separate fix — this branch only runs for legacy stores.
-                    let kind = if storage.len().await > 0 {
+                    let kind = if storage.len().await.map_err(crate::error::Error::Storage)? > 0 {
                         LogKind::Flat
                     } else {
                         LogKind::Subtree
@@ -278,6 +276,32 @@ impl<S: Storage> NaryMerkleLog<S> {
             algs.insert(alg_id, state);
         }
 
+        // V6: verify loaded frontier against stored checkpoint roots.
+        // A corrupted frontier node will produce a different root from the one
+        // committed at write time, detecting the corruption before the log is used.
+        let stored_roots: std::collections::HashMap<u64, Vec<u8>> = storage
+            .load_checkpoint_roots()
+            .await
+            .map_err(crate::error::Error::Storage)?
+            .into_iter()
+            .collect();
+
+        for (&alg_id, state) in &algs {
+            if let Some(stored_root) = stored_roots.get(&alg_id) {
+                let actual_root = Self::compute_root_from_state(state, config.log_arity);
+                if &actual_root != stored_root {
+                    return Err(crate::error::Error::CorruptedMetadata {
+                        alg_id,
+                        reason: format!(
+                            "checkpoint root mismatch for algorithm {}: \
+                             recomputed root differs from stored checkpoint",
+                            alg_id
+                        ),
+                    });
+                }
+            }
+        }
+
         Ok(Self {
             storage,
             config,
@@ -285,6 +309,27 @@ impl<S: Storage> NaryMerkleLog<S> {
             count: global_size,
             kind,
         })
+    }
+
+    /// Compute the root hash from an algorithm's in-memory frontier.
+    fn compute_root_from_state(state: &AlgState, k: usize) -> Vec<u8> {
+        if state.frontier.is_empty() {
+            return state.hasher.empty();
+        }
+        if state.frontier.len() == 1 {
+            return state.frontier[0].clone();
+        }
+        let mut current = state.frontier.clone();
+        while current.len() > k {
+            let split_idx = current.len() - k;
+            let right_elements = &current[split_idx..];
+            let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
+            let merged = crate::mr::nary_mr(state.hasher.as_ref(), &refs);
+            current.truncate(split_idx);
+            current.push(merged);
+        }
+        let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+        crate::mr::nary_mr(state.hasher.as_ref(), &refs)
     }
 
     /// Probe storage to estimate the current global size (legacy fallback only).
@@ -298,7 +343,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         storage: &S,
         metas: &[(u64, Vec<(u64, u64)>)],
     ) -> Result<u64, S::Error> {
-        let leaf_len = storage.len().await;
+        let leaf_len = storage.len().await.map_err(crate::error::Error::Storage)?;
         if leaf_len > 0 {
             return Ok(leaf_len);
         }
@@ -503,6 +548,17 @@ impl<S: Storage> NaryMerkleLog<S> {
         &self.storage
     }
 
+    /// Mutable access to the underlying storage backend.
+    ///
+    /// Bypasses all tree invariants (size tracking, checkpoint roots).
+    /// Intended for test-only tampering; production callers should use the
+    /// tree API.  V3 race safety is structural (non-Clone `FjallStorage`),
+    /// not dependent on hiding this method.
+    #[doc(hidden)]
+    pub fn storage_mut(&mut self) -> &mut S {
+        &mut self.storage
+    }
+
     /// Register a new algorithm, activating it at the current tree size.
     pub async fn add_algorithm(
         &mut self,
@@ -610,6 +666,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 left,
                 left + cap,
                 k,
+                self.kind,
                 true,
             )
             .await?;
@@ -622,13 +679,25 @@ impl<S: Storage> NaryMerkleLog<S> {
             .map(|&(left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
             .collect();
 
-        self.storage
-            .write_batch(&[], &nodes_ref)
-            .await
-            .map_err(crate::error::Error::Storage)?;
+        // Compute the checkpoint root for the resumed algorithm from its new frontier.
+        let resumed_state = AlgState {
+            hasher: self.algs[&alg_id].hasher.clone_box(),
+            epochs: new_epochs.clone(),
+            frontier: frontier.clone(),
+            frontier_coords: coords.clone(),
+        };
+        let resumed_root = Self::compute_root_from_state(&resumed_state, self.config.log_arity);
 
+        let epochs_ref: &[(u64, u64)] = &new_epochs;
+        // Commit nodes + epoch update + checkpoint root atomically (closes V13).
         self.storage
-            .store_algorithm_meta(alg_id, &new_epochs)
+            .write_batch(
+                &[],
+                &nodes_ref,
+                &[(alg_id, epochs_ref)],
+                None,
+                &[(alg_id, resumed_root.as_slice())],
+            )
             .await
             .map_err(crate::error::Error::Storage)?;
 
@@ -652,6 +721,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         lo: u64,
         hi: u64,
         k: u64,
+        kind: LogKind,
         store_mixed: bool,
     ) -> std::pin::Pin<
         Box<
@@ -670,12 +740,23 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
             if size == 1 {
                 if state.is_active_at(lo) {
-                    if storage.len().await == 0 {
+                    if kind == LogKind::Subtree {
                         if let Some(hash) = storage
                             .get_node(alg_id, lo, 0)
                             .await
                             .map_err(crate::error::Error::Storage)?
                         {
+                            let expected = state.hasher.null().len();
+                            if hash.len() != expected {
+                                return Err(crate::error::Error::CorruptedMetadata {
+                                    alg_id,
+                                    reason: format!(
+                                        "subtree node at left {} height 0 has wrong digest \
+                                         length: expected {}, got {}",
+                                        lo, expected, hash.len()
+                                    ),
+                                });
+                            }
                             return Ok((hash, Vec::new()));
                         } else {
                             return Ok((state.hasher.null(), Vec::new()));
@@ -719,6 +800,17 @@ impl<S: Storage> NaryMerkleLog<S> {
                         .await
                         .map_err(crate::error::Error::Storage)?
                     {
+                        let expected = state.hasher.null().len();
+                        if hash.len() != expected {
+                            return Err(crate::error::Error::CorruptedMetadata {
+                                alg_id,
+                                reason: format!(
+                                    "node at left {} height {} has wrong digest length: \
+                                     expected {}, got {}",
+                                    lo, height, expected, hash.len()
+                                ),
+                            });
+                        }
                         return Ok((hash, Vec::new()));
                     }
                 }
@@ -736,6 +828,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                         c_lo,
                         c_hi,
                         k,
+                        kind,
                         store_mixed,
                     )
                     .await?;
@@ -764,6 +857,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                         c_lo,
                         c_hi,
                         k,
+                        kind,
                         store_mixed,
                     )
                     .await?;
@@ -873,16 +967,30 @@ impl<S: Storage> NaryMerkleLog<S> {
             .map(|&(alg_id, left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
             .collect();
 
-        self.storage
-            .write_batch(&batch_leaves, &nodes_ref)
-            .await
-            .map_err(crate::error::Error::Storage)?;
-
-        // Persist authoritative append count and kind. V7 will fold this into
-        // the atomic batch; until then it is a separate write immediately after.
         let new_count = self.count + 1;
+
+        // Compute checkpoint roots from the updated temp frontier for all active algorithms.
+        let checkpoint_roots_owned: Vec<(u64, Vec<u8>)> = temp_algs
+            .iter()
+            .filter(|(_, s)| s.is_active())
+            .map(|(&alg_id, s)| {
+                let root = Self::compute_root_from_state(s, self.config.log_arity);
+                (alg_id, root)
+            })
+            .collect();
+        let checkpoint_refs: Vec<(u64, &[u8])> = checkpoint_roots_owned
+            .iter()
+            .map(|(id, r)| (*id, r.as_slice()))
+            .collect();
+
         self.storage
-            .store_log_meta(new_count, LOG_KIND_FLAT)
+            .write_batch(
+                &batch_leaves,
+                &nodes_ref,
+                &[],
+                Some((new_count, LOG_KIND_FLAT)),
+                &checkpoint_refs,
+            )
             .await
             .map_err(crate::error::Error::Storage)?;
 
@@ -973,16 +1081,29 @@ impl<S: Storage> NaryMerkleLog<S> {
             .map(|&(alg_id, left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
             .collect();
 
-        self.storage
-            .write_batch(&[], &nodes_ref)
-            .await
-            .map_err(crate::error::Error::Storage)?;
-
-        // Persist authoritative append count and kind. V7 will fold this into
-        // the atomic batch; until then it is a separate write immediately after.
         let new_count = self.count + 1;
+
+        let checkpoint_roots_owned: Vec<(u64, Vec<u8>)> = temp_algs
+            .iter()
+            .filter(|(_, s)| s.is_active())
+            .map(|(&alg_id, s)| {
+                let root = Self::compute_root_from_state(s, self.config.log_arity);
+                (alg_id, root)
+            })
+            .collect();
+        let checkpoint_refs: Vec<(u64, &[u8])> = checkpoint_roots_owned
+            .iter()
+            .map(|(id, r)| (*id, r.as_slice()))
+            .collect();
+
         self.storage
-            .store_log_meta(new_count, LOG_KIND_SUBTREE)
+            .write_batch(
+                &[],
+                &nodes_ref,
+                &[],
+                Some((new_count, LOG_KIND_SUBTREE)),
+                &checkpoint_refs,
+            )
             .await
             .map_err(crate::error::Error::Storage)?;
 

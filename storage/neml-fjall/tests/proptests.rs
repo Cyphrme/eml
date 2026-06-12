@@ -152,13 +152,13 @@ async fn run_differential_test(actions: Vec<StorageAction>) {
                     .iter()
                     .map(|(alg_id, left, height, hash)| (*alg_id, *left, *height, hash.as_slice()))
                     .collect();
-                storage.write_batch(&leaves_ref, &nodes_ref).await.unwrap();
+                storage.write_batch(&leaves_ref, &nodes_ref, &[], None, &[]).await.unwrap();
             },
         }
     }
 
     // Assert parity
-    assert_eq!(storage.len().await, oracle.expected_len());
+    assert_eq!(storage.len().await.unwrap(), oracle.expected_len());
 
     for (&index, expected_data) in &oracle.leaves {
         let actual_data = storage.get_leaf(index).await.unwrap();

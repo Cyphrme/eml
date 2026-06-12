@@ -27,12 +27,18 @@ pub trait Storage: Send + Sync {
         index: u64,
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send;
 
-    /// The number of leaves currently stored.
-    fn len(&self) -> impl std::future::Future<Output = u64> + Send;
+    /// The number of leaves currently stored, or an error if storage is
+    /// unreadable.  Never returns 0 on error; a storage failure must be
+    /// propagated so callers can distinguish "empty log" from "broken store".
+    fn len(
+        &self,
+    ) -> impl std::future::Future<Output = Result<u64, Self::Error>> + Send;
 
     /// Whether the storage contains no leaves.
-    fn is_empty(&self) -> impl std::future::Future<Output = bool> + Send {
-        async move { self.len().await == 0 }
+    fn is_empty(
+        &self,
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
+        async move { self.len().await.map(|n| n == 0) }
     }
 
     /// Persist a sealed internal node hash.
@@ -52,7 +58,10 @@ pub trait Storage: Send + Sync {
         height: u32,
     ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Self::Error>> + Send;
 
-    /// Persist algorithm metadata (epoch boundaries).
+    /// Persist algorithm metadata (epoch boundaries) for add/remove operations.
+    ///
+    /// Use `write_batch` when algorithm metadata must be committed atomically
+    /// alongside node data (e.g. during `resume_algorithm`).
     fn store_algorithm_meta(
         &mut self,
         alg_id: u64,
@@ -64,21 +73,7 @@ pub trait Storage: Send + Sync {
         &self,
     ) -> impl std::future::Future<Output = Result<AlgorithmMetas, Self::Error>> + Send;
 
-    /// Persist authoritative log metadata: the total append count and log kind byte.
-    ///
-    /// Kind byte: `0` = flat leaf log, `1` = subtree log.
-    ///
-    /// This must be called on every append so that `from_storage` can recover
-    /// the authoritative size without probing node storage. V7 (atomic batch)
-    /// will fold this write into the append batch; until then it is a separate
-    /// call made immediately after `write_batch`.
-    fn store_log_meta(
-        &mut self,
-        count: u64,
-        kind: u8,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Load authoritative log metadata written by `store_log_meta`.
+    /// Load authoritative log metadata written by `write_batch`.
     ///
     /// Returns `None` for stores that have never written log metadata (legacy
     /// or newly initialised), triggering the deterministic probe fallback in
@@ -87,22 +82,40 @@ pub trait Storage: Send + Sync {
         &self,
     ) -> impl std::future::Future<Output = Result<Option<(u64, u8)>, Self::Error>> + Send;
 
-    /// Perform a batch write of multiple leaves and nodes.
+    /// Load per-algorithm checkpoint roots last written by `write_batch`.
+    ///
+    /// Used by `from_storage` to verify frontier integrity: the root
+    /// recomputed from the loaded frontier must match the stored checkpoint.
+    /// Returns an empty list for stores that have never written checkpoint
+    /// roots (legacy or newly initialised).
+    fn load_checkpoint_roots(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<(u64, Vec<u8>)>, Self::Error>> + Send;
+
+    /// Atomically commit leaves, nodes, algorithm epoch updates, log
+    /// metadata, and per-algorithm checkpoint roots in a single durable
+    /// transaction.
+    ///
+    /// All fields are optional (pass empty slices / `None`) but the
+    /// implementation MUST guarantee all-or-nothing semantics: a crash
+    /// between any two writes within the batch must leave no partial state.
+    ///
+    /// `algorithm_metas` carries epoch updates for algorithms whose epoch
+    /// list changes as part of this operation (e.g. `resume_algorithm`).
+    ///
+    /// `log_meta` is `Some((count, kind_byte))` on every leaf/subtree
+    /// append; `None` for operations that don't change the global count.
+    ///
+    /// `checkpoint_roots` is a list of `(alg_id, root_hash)` pairs to store
+    /// alongside the batch so `from_storage` can verify frontier integrity.
     fn write_batch(
         &mut self,
         leaves: &[(u64, &[u8])],
         nodes: &[(u64, u64, u32, &[u8])],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            for &(index, data) in leaves {
-                self.store_leaf(index, data).await?;
-            }
-            for &(alg_id, left, height, hash) in nodes {
-                self.store_node(alg_id, left, height, hash).await?;
-            }
-            Ok(())
-        }
-    }
+        algorithm_metas: &[(u64, &[(u64, u64)])],
+        log_meta: Option<(u64, u8)>,
+        checkpoint_roots: &[(u64, &[u8])],
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // ============================================================================
@@ -120,6 +133,8 @@ pub struct MemoryStorage {
     pub algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
     /// Authoritative log metadata: `(total_append_count, kind_byte)`.
     pub log_meta: Option<(u64, u8)>,
+    /// Per-algorithm checkpoint roots: the root hash at the last append.
+    pub checkpoint_roots: HashMap<u64, Vec<u8>>,
 }
 
 impl MemoryStorage {
@@ -131,6 +146,7 @@ impl MemoryStorage {
             nodes: HashMap::new(),
             algorithm_metas: HashMap::new(),
             log_meta: None,
+            checkpoint_roots: HashMap::new(),
         }
     }
 }
@@ -179,8 +195,8 @@ impl Storage for MemoryStorage {
             })
     }
 
-    async fn len(&self) -> u64 {
-        self.leaves.len() as u64
+    async fn len(&self) -> Result<u64, Self::Error> {
+        Ok(self.leaves.len() as u64)
     }
 
     async fn store_node(
@@ -220,13 +236,47 @@ impl Storage for MemoryStorage {
             .collect())
     }
 
-    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
-        self.log_meta = Some((count, kind));
-        Ok(())
-    }
-
     async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
         Ok(self.log_meta)
+    }
+
+    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
+        Ok(self
+            .checkpoint_roots
+            .iter()
+            .map(|(&id, r)| (id, r.clone()))
+            .collect())
+    }
+
+    async fn write_batch(
+        &mut self,
+        leaves: &[(u64, &[u8])],
+        nodes: &[(u64, u64, u32, &[u8])],
+        algorithm_metas: &[(u64, &[(u64, u64)])],
+        log_meta: Option<(u64, u8)>,
+        checkpoint_roots: &[(u64, &[u8])],
+    ) -> Result<(), Self::Error> {
+        for &(index, data) in leaves {
+            debug_assert_eq!(
+                index,
+                self.leaves.len() as u64,
+                "write_batch leaf out of order"
+            );
+            self.leaves.push(data.to_vec());
+        }
+        for &(alg_id, left, height, hash) in nodes {
+            self.nodes.insert((alg_id, left, height), hash.to_vec());
+        }
+        for &(alg_id, epochs) in algorithm_metas {
+            self.algorithm_metas.insert(alg_id, epochs.to_vec());
+        }
+        if let Some((count, kind)) = log_meta {
+            self.log_meta = Some((count, kind));
+        }
+        for &(alg_id, root) in checkpoint_roots {
+            self.checkpoint_roots.insert(alg_id, root.to_vec());
+        }
+        Ok(())
     }
 }
 
@@ -238,12 +288,12 @@ mod tests {
     fn test_memory_storage_leaves() {
         smol::block_on(async {
             let mut storage = MemoryStorage::new();
-            assert!(storage.is_empty().await);
-            assert_eq!(storage.len().await, 0);
+            assert!(storage.is_empty().await.unwrap());
+            assert_eq!(storage.len().await.unwrap(), 0);
 
             storage.store_leaf(0, b"leaf0").await.unwrap();
-            assert!(!storage.is_empty().await);
-            assert_eq!(storage.len().await, 1);
+            assert!(!storage.is_empty().await.unwrap());
+            assert_eq!(storage.len().await.unwrap(), 1);
             assert_eq!(storage.get_leaf(0).await.unwrap(), b"leaf0");
 
             // Out of bounds retrieval

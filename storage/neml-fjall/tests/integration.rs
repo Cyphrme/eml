@@ -40,12 +40,12 @@ fn test_fjall_storage_basic_ops() {
         let mut storage = FjallStorage::open(dir.path()).unwrap();
 
         // Init
-        assert_eq!(storage.len().await, 0);
+        assert_eq!(storage.len().await.unwrap(), 0);
 
         // Leaf ops
         storage.store_leaf(0, b"leaf0").await.unwrap();
         storage.store_leaf(1, b"leaf1").await.unwrap();
-        assert_eq!(storage.len().await, 2);
+        assert_eq!(storage.len().await.unwrap(), 2);
         assert_eq!(storage.get_leaf(0).await.unwrap(), b"leaf0");
         assert_eq!(storage.get_leaf(1).await.unwrap(), b"leaf1");
 
@@ -169,7 +169,7 @@ fn test_fjall_out_of_order_and_sparse() {
         storage.store_leaf(10, b"index10").await.unwrap();
         
         // len() should return 11 (highest key + 1)
-        assert_eq!(storage.len().await, 11);
+        assert_eq!(storage.len().await.unwrap(), 11);
 
         // index 10 should be found
         assert_eq!(storage.get_leaf(10).await.unwrap(), b"index10");
@@ -183,7 +183,7 @@ fn test_fjall_out_of_order_and_sparse() {
         storage.store_leaf(5, b"index5").await.unwrap();
 
         // len() should still be 11
-        assert_eq!(storage.len().await, 11);
+        assert_eq!(storage.len().await.unwrap(), 11);
 
         // index 5 should be found
         assert_eq!(storage.get_leaf(5).await.unwrap(), b"index5");

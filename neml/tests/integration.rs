@@ -2280,8 +2280,8 @@ impl Storage for MockStorage {
         Ok(Vec::new())
     }
 
-    async fn len(&self) -> u64 {
-        self.len
+    async fn len(&self) -> Result<u64, Self::Error> {
+        Ok(self.len)
     }
 
     async fn store_node(
@@ -2315,12 +2315,23 @@ impl Storage for MockStorage {
         self.metas.clone()
     }
 
-    async fn store_log_meta(&mut self, _count: u64, _kind: u8) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
     async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
         Ok(None)
+    }
+
+    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
+        Ok(vec![])
+    }
+
+    async fn write_batch(
+        &mut self,
+        _leaves: &[(u64, &[u8])],
+        _nodes: &[(u64, u64, u32, &[u8])],
+        _algorithm_metas: &[(u64, &[(u64, u64)])],
+        _log_meta: Option<(u64, u8)>,
+        _checkpoint_roots: &[(u64, &[u8])],
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 }
 
@@ -2527,9 +2538,9 @@ impl neml::Storage for ErrorMaskingStorage {
         self.inner.get_leaf(index).await
     }
 
-    async fn len(&self) -> u64 {
+    async fn len(&self) -> Result<u64, Self::Error> {
         if self.mask_len_to_zero.load(std::sync::atomic::Ordering::SeqCst) {
-            0
+            Ok(0)
         } else {
             self.inner.len().await
         }
@@ -2566,12 +2577,23 @@ impl neml::Storage for ErrorMaskingStorage {
         self.inner.load_algorithm_metas().await
     }
 
-    async fn store_log_meta(&mut self, count: u64, kind: u8) -> Result<(), Self::Error> {
-        self.inner.store_log_meta(count, kind).await
-    }
-
     async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
         self.inner.load_log_meta().await
+    }
+
+    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
+        self.inner.load_checkpoint_roots().await
+    }
+
+    async fn write_batch(
+        &mut self,
+        leaves: &[(u64, &[u8])],
+        nodes: &[(u64, u64, u32, &[u8])],
+        algorithm_metas: &[(u64, &[(u64, u64)])],
+        log_meta: Option<(u64, u8)>,
+        checkpoint_roots: &[(u64, &[u8])],
+    ) -> Result<(), Self::Error> {
+        self.inner.write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots).await
     }
 }
 
