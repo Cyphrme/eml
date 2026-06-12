@@ -1806,7 +1806,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
 
         let alg_size = if size <= state.first_activation() {
-            0
+            // Null projections fill [0, size); frontier geometry uses the global size.
+            // For size == 0 this gives alg_size == 0 → empty() return below.
+            size
         } else if state.is_active_at(size - 1) {
             size
         } else {
@@ -1985,7 +1987,11 @@ impl<S: Storage> NaryMerkleLog<S> {
             let k = self.config.log_arity;
 
             let alg_size_at_start = if start <= state.first_activation() {
-                0
+                // Null projections span [0, start); use the global start so the
+                // carry schedule (reduction_count(alg_size - 1, k)) matches the
+                // global index at each step, matching the append path exactly.
+                // When start == 0 this gives 0, leaving the frontier empty (correct).
+                start
             } else if state.is_active_at(start - 1) {
                 start
             } else {
@@ -2021,7 +2027,12 @@ impl<S: Storage> NaryMerkleLog<S> {
                     Some(r) => r,
                     None => {
                         if alg_size_at_start == 0 {
+                            // start == 0: empty tree.
                             state.hasher.empty()
+                        } else if start <= state.first_activation() {
+                            // Pre-activation algorithm: null projections over [0, start)
+                            // fold to null() by null promotion — no trusted root needed.
+                            state.hasher.null()
                         } else {
                             return Err(crate::error::Error::UnknownAlgorithm(alg_id));
                         }

@@ -1949,6 +1949,101 @@ fn test_verify_non_divergence() {
     });
 }
 
+/// Verify that `verify_non_divergence` correctly handles a late-activated
+/// algorithm (registered at size M > 0) when the checkpoint `start` falls
+/// before activation (0 < start < M) or after (M < start < N).
+///
+/// The carry schedule must be driven by the global leaf index, not a
+/// per-algorithm-relative index.  An all-null prefix of size S has the
+/// same frontier geometry as a tree of S real leaves (by null promotion),
+/// so `alg_size` must be initialized to `start`, not 0, at checkpoint time.
+///
+/// Parametrized over k ∈ {2, 3, 256} with activation at a carry boundary
+/// (size k^2) to catch off-by-one alignment errors.
+#[test]
+fn test_late_activated_alg_checkpoint() {
+    smol::block_on(async {
+        // (k, M) pairs: M = k^2 aligns activation with a 2-carry boundary.
+        // k=256 uses M=k to keep the test fast while still hitting the
+        // first carry boundary in the null prefix.
+        let cases: &[(usize, u64)] = &[(2, 4), (3, 9), (256, 256)];
+
+        for &(k, m) in cases {
+            let n = m + m; // total leaves: M null-prefix + M active
+            let start_pre = m / 2; // checkpoint strictly before activation
+            let start_post = m + m / 2; // checkpoint strictly after activation
+
+            let config = TreeConfig { log_arity: k };
+
+            // ── Build log ──────────────────────────────────────────────────
+            let mut log = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                config,
+            )
+            .await
+            .unwrap();
+
+            // Append M leaves with only algorithm 0.
+            for i in 0u64..m {
+                log.append_leaf(&i.to_le_bytes()).await.unwrap();
+            }
+
+            // Register algorithm 1 at size M (late activation).
+            log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+
+            // Append M more leaves; both algorithms process them.
+            for i in m..n {
+                log.append_leaf(&i.to_le_bytes()).await.unwrap();
+            }
+
+            // ── Honest: checkpoint before activation ───────────────────────
+            // Algorithm 1 was not yet registered at start_pre; the verifier
+            // derives its expected root (null) internally — no entry needed.
+            let trusted_pre = vec![
+                (0u64, log.root_for_at(0, start_pre).await.unwrap()),
+            ];
+            let ok = log
+                .verify_non_divergence(Some(start_pre), &trusted_pre)
+                .await
+                .unwrap();
+            assert!(
+                ok,
+                "k={k} M={m} start={start_pre}: honest log failed pre-activation checkpoint"
+            );
+
+            // ── Honest: checkpoint after activation ────────────────────────
+            let trusted_post = vec![
+                (0u64, log.root_for_at(0, start_post).await.unwrap()),
+                (1u64, log.root_for_at(1, start_post).await.unwrap()),
+            ];
+            let ok_post = log
+                .verify_non_divergence(Some(start_post), &trusted_post)
+                .await
+                .unwrap();
+            assert!(
+                ok_post,
+                "k={k} M={m} start={start_post}: honest log failed post-activation checkpoint"
+            );
+
+            // ── Tamper: corrupt a leaf in algorithm 1's active range ───────
+            // Overwrite the stored leaf hash for algorithm 1 at position M
+            // (its first real leaf) with a wrong value.
+            let bad_hash = vec![0xab_u8; 32];
+            log.storage_mut().nodes.insert((1u64, m, 0), bad_hash);
+
+            let ok_tampered = log
+                .verify_non_divergence(Some(start_pre), &trusted_pre)
+                .await
+                .unwrap();
+            assert!(
+                !ok_tampered,
+                "k={k} M={m}: tampered log should have failed verification"
+            );
+        }
+    });
+}
+
 #[test]
 fn test_combined_root_size_0() {
     smol::block_on(async {
