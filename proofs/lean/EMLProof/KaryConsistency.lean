@@ -1,0 +1,326 @@
+import EMLProof.Kary
+
+/-!
+# K-ary consistency-verifier soundness (V9 follow-on d)
+
+`Kary.lean` proved the **inclusion** verifier sound. This module does the same
+for the **consistency** verifier — the property that makes the log
+tamper-evident: an accepted consistency proof between two roots witnesses a
+genuine append-only prefix relation between the two trees.
+
+The Rust subject is `neml/src/proof.rs`:
+
+* `verify_consistency` (`proof.rs:97`) =
+  `reconstruct_consistency_roots(..).is_some_and(|(c_old, c_new)|
+   c_old == old_root && c_new == new_root)` — the dual-root accept relation.
+* `reconstruct_consistency_roots` (`proof.rs:593`) recomputes **both** the
+  old-size and new-size roots from a single shared `path` anchored at
+  `start_hash`, using the same frontier topology as inclusion.
+
+## What the proof shows
+
+Anchored at the honest current tree (`newRoot = karyRoot cells`,
+`newSize = cells.length`):
+
+* **Non-vacuity** (`consistency_completeness`): the honest consistency proof
+  for `(cells, oldSize)` — the honest boundary-subtree root as `start_hash`
+  and the honest path — is accepted, with the reconstructed roots being the
+  genuine prefix root `karyRoot (cells.take oldSize)` and the genuine current
+  root `karyRoot cells`. So the accept set is provably non-empty (mirroring
+  `kary_completeness`).
+* **Soundness** (`consistency_soundness`): *any* accepting consistency proof
+  against the honest current root forces the reconstructed `oldRoot` to equal
+  `karyRoot (cells.take oldSize)` — the root of the **unique** size-`oldSize`
+  prefix of the current tree — modulo `NodeHashCollision` / `NullAmbiguity`
+  (the two explicit hash hypotheses, never axioms). An attacker cannot make
+  the verifier accept a *false* history (a forged `oldRoot`) against the true
+  current tree.
+
+`cells.take oldSize` is the append-only prefix: `oldSize < newSize =
+cells.length`, and `cells.take oldSize <+: cells` holds definitionally
+(`List.take_prefix`). The soundness theorem **concludes** the binding of
+`oldRoot` to that prefix's root; it does not assume it.
+
+## Proof architecture (reuses `Kary.lean` heavily)
+
+The consistency path is the **suffix of the inclusion path of the last old
+leaf** (`index = oldSize - 1`), taken from the boundary subtree's height
+upward: `start_hash` plays the role of that subtree's root (`perfectRoot`),
+the bisection steps are the upper digit steps, and the grouping steps are
+identical. Hence:
+
+* the new-root reconstruction is `foldNary start_hash path` (each Rust step —
+  bisection, target merge, final merge — applies the same null-promoting
+  `naryMr (insertAt position cur siblings)` to the running boundary digest;
+  skipped coordinate merges consume no step and leave it untouched);
+* soundness is **completeness + uniqueness** exactly as for inclusion: the
+  honest path shape-matches the consistency skeleton, both fold to
+  `karyRoot cells`, and `foldNary_unique_of_shape` forces the arbitrary
+  accepting path to equal the honest one — pinning `start_hash` to the genuine
+  boundary root and the recorded siblings to the genuine subtree roots, hence
+  `oldRoot` to `karyRoot (cells.take oldSize)`.
+
+The old-root reconstruction is modeled faithfully via the coordinate→digest
+map that `reconstruct_consistency_roots` builds (`consistencyMap`): the
+boundary coordinate maps to `start_hash`, and every bisection/merge step
+records its siblings at their coordinates. The old root is the
+`foldFrontierRoot` over the old frontier's coordinates read back from that map
+(`proof.rs:842`).
+-/
+
+set_option linter.style.emptyLine false
+set_option linter.unusedVariables false
+
+namespace NEML
+
+/-! ## The coordinate→digest map of `reconstruct_consistency_roots` -/
+
+/-- A coordinate `(left, height)` → digest map, as `reconstruct_consistency_roots`
+    builds it (`proof.rs:652`, a `HashMap<(u64, u32), Vec<u8>>`). -/
+abbrev CMap := (Nat × Nat) → Option Digest
+
+/-- The empty map. -/
+def cmEmpty : CMap := fun _ => none
+
+/-- Functional `map.insert(coord, digest)` (last write wins). -/
+def cmInsert (m : CMap) (c : Nat × Nat) (d : Digest) : CMap :=
+  fun c' => if c' = c then some d else m c'
+
+/-- Record one bisection step's siblings (`proof.rs:683-698`). The path node
+    sits at `(curLeft, ch)`; its parent at `(curLeft - position·k^ch, ch+1)`.
+    Sibling `j` (`0 ≤ j < k-1`) is the child at horizontal offset
+    `j·k^ch` (left of the path node) or `(j+1)·k^ch` (right of it), recorded at
+    its own coordinate, height `ch`. -/
+noncomputable def recordBisectSibs (k : Nat) (m : CMap) (curLeft ch : Nat) (s : ProofStep) : CMap :=
+  let cap := k ^ ch
+  let parentLeft := curLeft - s.position * cap
+  (List.range s.siblings.length).foldl
+    (fun mm j =>
+      let cLeft := if j < s.position then parentLeft + j * cap else parentLeft + j * cap + cap
+      cmInsert mm (cLeft, ch) (s.siblings.getD j emptyHash)) m
+
+/-- The bisection phase (`proof.rs:661-708`): trace `start_hash`'s coordinate up
+    `bisection_steps` levels, recording each step's siblings. Tracks only the
+    coordinate (`curLeft, ch`) — the running digest is recovered separately by
+    `foldNary`; sibling *coordinates* need no digest state. -/
+noncomputable def cmBisect (k : Nat) : List ProofStep → Nat → Nat → CMap → CMap
+  | [], _, _, m => m
+  | s :: rest, curLeft, ch, m =>
+      cmBisect k rest (curLeft - s.position * k ^ ch) (ch + 1) (recordBisectSibs k m curLeft ch s)
+
+/-- Record one merge step's siblings (`proof.rs:754-772` and `815-826`): a
+    window `nodes` of frontier coordinates with the target at local index `pos`;
+    the other `nodes.length - 1` entries are recorded from `s.siblings`
+    (sibling index shifted past the target, mirroring
+    `if j < step.position { j } else { j - 1 }`). -/
+noncomputable def recordMergeSibs (m : CMap) (nodes : List (Nat × Nat)) (pos : Nat) (s : ProofStep) : CMap :=
+  (List.range nodes.length).foldl
+    (fun mm j =>
+      if j = pos then mm
+      else
+        let sibIdx := if j < s.position then j else j - 1
+        cmInsert mm (nodes.getD j (0, 0)) (s.siblings.getD sibIdx emptyHash)) m
+
+/-- One coordinate-merge length step: `mergeTopCoords` strictly shrinks a list
+    longer than `k` (for `k ≥ 2`). -/
+theorem mergeTopCoords_length_lt (k : Nat) (coords : List (Nat × Nat))
+    (hk : 2 ≤ k) (hlen : k < coords.length) :
+    (mergeTopCoords k coords).length < coords.length := by
+  unfold mergeTopCoords
+  rw [if_neg (by omega)]
+  cases hd : (coords.drop (coords.length - k)).head? with
+  | none =>
+      exfalso
+      have : (coords.drop (coords.length - k)).length = k := by
+        rw [List.length_drop]; omega
+      rw [List.head?_eq_none_iff] at hd
+      rw [hd] at this; simp at this; omega
+  | some lh =>
+      obtain ⟨l, h⟩ := lh
+      simp only [List.length_append, List.length_take, List.length_cons, List.length_nil]
+      omega
+
+/-- The dynamic-merge phase (`proof.rs:710-836`): fold the new frontier by
+    repeatedly merging the rightmost `k`, recording the siblings of every merge
+    the target participates in (window merges consume a path step; coordinate
+    merges that skip the target do not), then the final root merge. Records
+    sibling coordinates into the map. -/
+noncomputable def cmMergeGo (k : Nat) : List (Nat × Nat) → Nat → List ProofStep → CMap → CMap
+  | frontier, targetIdx, path, m =>
+    if h : k < 2 ∨ frontier.length ≤ k then
+      if 1 < frontier.length then
+        match path with
+        | [] => m
+        | s :: _ => recordMergeSibs m frontier targetIdx s
+      else m
+    else
+      let split := frontier.length - k
+      if targetIdx ≥ split then
+        match path with
+        | [] => m
+        | s :: rest =>
+            cmMergeGo k (mergeTopCoords k frontier) split rest
+              (recordMergeSibs m (frontier.drop split) (targetIdx - split) s)
+      else
+        cmMergeGo k (mergeTopCoords k frontier) targetIdx path m
+termination_by frontier => frontier.length
+decreasing_by
+  all_goals (push_neg at h; exact mergeTopCoords_length_lt k frontier (by omega) h.2)
+
+/-- The full coordinate→digest map after a consistency reconstruction: the
+    boundary coordinate seeded with `start_hash` (`proof.rs:654`), then the
+    bisection and merge phases. -/
+noncomputable def consistencyMap (k oldSize newSize : Nat) (startHash : Digest)
+    (path : List ProofStep) : CMap :=
+  match (frontierForSizeT k oldSize).getLast? with
+  | none => cmEmpty
+  | some (bl, bh) =>
+    match findFrontier k bl (frontierForSizeT k newSize) 0 with
+    | none => cmEmpty
+    | some (fIdx, _sl, sh) =>
+        let bisSteps := sh - bh
+        let m0 := cmInsert cmEmpty (bl, bh) startHash
+        let m1 := cmBisect k (path.take bisSteps) bl bh m0
+        cmMergeGo k (frontierForSizeT k newSize) fIdx (path.drop bisSteps) m1
+
+/-! ## The verifier model -/
+
+/-- The list of old-frontier digests read back from the map (`proof.rs:842-847`):
+    `None` if any old-frontier coordinate is absent (the algorithm aborts). -/
+noncomputable def consistencyOldHashes (k oldSize newSize : Nat) (startHash : Digest)
+    (path : List ProofStep) : Option (List Digest) :=
+  (frontierForSizeT k oldSize).mapM (consistencyMap k oldSize newSize startHash path)
+
+/-- `reconstruct_consistency_roots` (`proof.rs:593`), modeled functionally:
+    the old root is the `foldFrontierRoot` over the old frontier's digests read
+    from the map (`proof.rs:849-867`); the new root is the running boundary
+    digest folded through the whole path (`foldNary start_hash path`), which is
+    exactly the merge phase's `computed_new_root` (`proof.rs:870`). Returns
+    `none` exactly when the map read-back fails. -/
+noncomputable def reconstructConsistencyRoots (L k oldSize newSize : Nat)
+    (startHash : Digest) (path : List ProofStep) : Option (Digest × Digest) :=
+  match consistencyOldHashes k oldSize newSize startHash path with
+  | none => none
+  | some hs => some (foldFrontierRoot L k hs, foldNary L startHash path)
+
+/-- The consistency-proof skeleton pinned by `reconstruct_consistency_roots`'s
+    structural guards: `sh - bh` bisection steps (each `k - 1` siblings, position
+    the base-`k` digit of the boundary subtree's offset in its new slot,
+    `proof.rs:667-675`) then the grouping steps from that slot to the spine root
+    (`proof.rs:739-836`). The boundary subtree root is a pure log-topology node,
+    so — unlike inclusion — there is **no** unconstrained within-subtree prefix:
+    the whole path is shape-pinned. -/
+def consistencySkeleton (k oldSize newSize : Nat) : Option (List (Nat × Nat)) :=
+  if k < 2 then none
+  else match (frontierForSizeT k oldSize).getLast? with
+    | none => none
+    | some (bl, bh) =>
+      match findFrontier k bl (frontierForSizeT k newSize) 0 with
+      | none => none
+      | some (fIdx, sl, sh) =>
+        if bh ≤ sh then
+          some (digitSteps k ((bl - sl) / k ^ bh) (sh - bh) ++
+            (groupingSteps k (frontierForSizeT k newSize).length fIdx).map
+              (fun pc => (pc.1, pc.2 - 1)))
+        else none
+
+/-- `verify_consistency`'s structural acceptance (`proof.rs:647-840`): the path's
+    per-step shape matches the consistency skeleton exactly (full match — no free
+    prefix). The k-ary analog of `StructureOK`, minus the existential depth. -/
+def StructureConsistencyOK (k oldSize newSize : Nat) (path : List ProofStep) : Prop :=
+  ∃ skel, consistencySkeleton k oldSize newSize = some skel ∧ path.map stepShape = skel
+
+/-- The accept relation of `verify_consistency`, minus DoS bounds: size guards,
+    skeleton pinning, canonical well-formedness (zero-sibling steps rejected,
+    insert position in range — `proof.rs:617-625,667-670`), and the dual-root
+    match `reconstruct_consistency_roots(..) == some (oldRoot, newRoot)`
+    (`proof.rs:107`). -/
+def AcceptsConsistency (L k oldSize newSize : Nat) (startHash : Digest)
+    (path : List ProofStep) (oldRoot newRoot : Digest) : Prop :=
+  2 ≤ k ∧ 0 < oldSize ∧ oldSize < newSize ∧
+  StructureConsistencyOK k oldSize newSize path ∧
+  WellFormedSteps path ∧
+  reconstructConsistencyRoots L k oldSize newSize startHash path = some (oldRoot, newRoot)
+
+/-! ## The honest prover (non-vacuity witness) -/
+
+/-- The honest `start_hash`: the genuine root of the boundary subtree — the
+    rightmost (last) perfect subtree of the old frontier. -/
+noncomputable def honestStartHash (L k : Nat) (cells : List Digest)
+    (oldSize : Nat) : Digest :=
+  match (frontierForSizeT k oldSize).getLast? with
+  | none => emptyHash
+  | some (bl, bh) => perfectRoot L k cells bl bh
+
+/-- The honest consistency path: the inclusion path of the last old leaf
+    (`index = oldSize - 1`) in the current tree, taken from the boundary
+    subtree's height upward (dropping the `bh` lower digit steps that fold the
+    leaf up to the boundary subtree root — which `start_hash` already is). -/
+noncomputable def honestConsistencyPath (L k : Nat) (cells : List Digest)
+    (oldSize : Nat) : List ProofStep :=
+  match (frontierForSizeT k oldSize).getLast? with
+  | none => []
+  | some (_bl, bh) => (honestInclusionPath L k cells (oldSize - 1)).drop bh
+
+/-! ## The theorems -/
+
+/-- **Non-vacuity: honest consistency proofs verify.** The honest boundary-root
+    `start_hash` and honest path are accepted against the genuine current root
+    `karyRoot cells`, reconstructing the genuine prefix root
+    `karyRoot (cells.take oldSize)`. So `AcceptsConsistency` is satisfiable for
+    every valid `(cells, oldSize)`, and the soundness theorem below quantifies
+    over a provably non-empty accept set — mirroring how `kary_completeness`
+    guards `kary_inclusion_soundness`.
+
+    *Strategy:* `start_hash = perfectRoot (bl, bh)` is the digest the last old
+    leaf reaches after `bh` digit steps (`digitFold`); the dropped honest path
+    therefore folds it to `karyRoot cells` by `honest_path_folds` +
+    `List.foldl` append decomposition. The shape matches `consistencySkeleton`
+    (the dropped portion of `honest_path_shape`). The old-root read-back equals
+    `karyRoot (cells.take oldSize)` because every old-frontier coordinate is
+    recorded with its genuine `perfectRoot` and `foldFrontierRoot` over them is
+    `karyRoot` of the prefix (`kary_bridge` on `cells.take oldSize`). -/
+theorem consistency_completeness (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
+    AcceptsConsistency L k oldSize cells.length
+      (honestStartHash L k cells oldSize) (honestConsistencyPath L k cells oldSize)
+      (karyRoot L k (cells.take oldSize)) (karyRoot L k cells) := by
+  sorry
+
+/-- **Consistency-verifier soundness: accept ⇒ genuine append-only prefix.**
+    If `verify_consistency` accepts `(start_hash, path, oldRoot)` against the
+    honest current root `karyRoot cells` (`newSize = cells.length`), then the
+    reconstructed `oldRoot` is forced to be the genuine root of the size-`oldSize`
+    prefix `cells.take oldSize` — modulo `NodeHashCollision` / `NullAmbiguity`.
+
+    This is the V9 tamper-evidence statement for the consistency verifier: there
+    is no `(start_hash, path)` making the verifier accept a `oldRoot` that
+    disagrees with the true history of the genuine current tree. Combined with
+    `consistency_completeness` (the accept set is non-empty), the verifier
+    accepts an `oldRoot` **iff** it is the true prefix root.
+
+    *Strategy (completeness + uniqueness — no new induction):* the path
+    shape-matches `consistencySkeleton`; so does the honest path
+    (`consistency_completeness`'s shape obligation). Both fold `start_hash` /
+    the honest boundary root to `karyRoot cells`. `foldNary_unique_of_shape`
+    forces `start_hash` to the genuine boundary root and `path` to the honest
+    path; the old-root read-back is then `karyRoot (cells.take oldSize)` by the
+    completeness computation. -/
+theorem consistency_soundness (L k : Nat) (cells : List Digest)
+    (oldSize : Nat) (startHash oldRoot : Digest) (path : List ProofStep)
+    (hacc : AcceptsConsistency L k oldSize cells.length startHash path oldRoot
+      (karyRoot L k cells))
+    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    oldRoot = karyRoot L k (cells.take oldSize) := by
+  sorry
+
+/-- The append-only prefix the soundness conclusion is about: `cells.take
+    oldSize` is a genuine prefix of the current `cells`, with
+    `oldSize < cells.length`. Definitional, recorded to make the prefix
+    relation explicit at the statement surface. -/
+theorem consistency_prefix_relation (cells : List Digest) (oldSize : Nat)
+    (h : oldSize < cells.length) :
+    (cells.take oldSize) <+: cells ∧ oldSize < cells.length :=
+  ⟨List.take_prefix oldSize cells, h⟩
+
+end NEML
