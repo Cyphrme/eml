@@ -170,4 +170,43 @@ mod tests {
         assert_eq!(inclusion_skeleton(2, 0, 0), None);
         assert_eq!(inclusion_skeleton(2, 4, 4), None);
     }
+
+    /// Rust twin of every Lean `#guard` in `proofs/lean/EMLProof/Kary.lean`
+    /// (`section SanityChecks`).
+    ///
+    /// These are the *same vectors*, transcribed value-for-value, so that
+    /// definitional drift between the Lean topology model and this Rust source
+    /// breaks a build on **either** side rather than going silent. Each Lean
+    /// `#guard` is reproduced below in source order; if one is added there, add
+    /// its twin here. Argument order differs by design: Lean takes the arity
+    /// first (`frontierForSizeT k n`, `reductionCount k n`,
+    /// `inclusionSkeleton k treeSize index`), the Rust API takes it last
+    /// (`frontier_for_size(n, k)`, `reduction_count(n, k)`) or first
+    /// (`inclusion_skeleton(k, tree_size, index)`).
+    #[test]
+    fn lean_guard_parity() {
+        use crate::schedule::reduction_count;
+
+        let step = |position: usize, sibling_count: usize| SkeletonStep { position, sibling_count };
+
+        // frontierForSizeT k n  ⟷  frontier_for_size(n, k)
+        assert_eq!(frontier_for_size(5, 2), vec![(0u64, 2u32), (4, 0)]);
+        assert_eq!(frontier_for_size(5, 3), vec![(0, 1), (3, 0), (4, 0)]);
+        assert_eq!(frontier_for_size(0, 2), Vec::<(u64, u32)>::new());
+
+        // (List.range _).map (reductionCount k)  ⟷  reduction_count(n, k)
+        let rc2: Vec<u32> = (0..8).map(|n| reduction_count(n, 2)).collect();
+        assert_eq!(rc2, vec![0, 1, 0, 2, 0, 1, 0, 3]);
+        let rc3: Vec<u32> = (0..9).map(|n| reduction_count(n, 3)).collect();
+        assert_eq!(rc3, vec![0, 0, 1, 0, 0, 1, 0, 0, 2]);
+
+        // inclusionSkeleton k treeSize index  ⟷  inclusion_skeleton(k, tree_size, index)
+        // Each Lean pair `(position, siblingCount)` maps to one `SkeletonStep`.
+        assert_eq!(inclusion_skeleton(2, 1, 0), Some(vec![])); // singleton: empty path
+        assert_eq!(inclusion_skeleton(2, 5, 4), Some(vec![step(1, 1)])); // lone height-0 node
+        assert_eq!(inclusion_skeleton(2, 4, 1), Some(vec![step(1, 1), step(0, 1)])); // two digit steps
+        assert_eq!(inclusion_skeleton(3, 4, 3), Some(vec![step(1, 1)]));
+        assert_eq!(inclusion_skeleton(2, 4, 4), None); // index out of range
+        assert_eq!(inclusion_skeleton(1, 4, 0), None); // arity out of range
+    }
 }

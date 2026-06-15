@@ -591,7 +591,9 @@ theorem skeleton_no_promoted (k treeSize index : Nat) (skel : List (Nat × Nat))
 
 /-! Executable sanity pins against `topology.rs` test vectors: definitional
     drift between this model and the Rust source breaks the build here, not
-    silently in a proof. -/
+    silently in a proof. Each `#guard` below has a value-for-value twin in
+    `neml/src/topology.rs::tests::lean_guard_parity`, so drift on *either* side
+    fails a build. Adding a `#guard` here obliges adding its Rust twin there. -/
 section SanityChecks
 set_option linter.hashCommand false
 #guard frontierForSizeT 2 5 = [(0, 2), (4, 0)]
