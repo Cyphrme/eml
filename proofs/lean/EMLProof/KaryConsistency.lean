@@ -606,6 +606,21 @@ private theorem honest_consistency_shape (L k : Nat) (hk : 2 ≤ k) (cells : Lis
     List.drop_append_of_le_length (by rw [hdslen]; exact hbhsh),
     digitSteps_drop k bh sh (oldSize - 1 - sl) hbhsh, hdiveq]
 
+/-- **The honest old-root read-back yields the genuine prefix root.** The
+    coordinate map the verifier builds for an honest consistency proof records,
+    at each old-frontier coordinate, its genuine `perfectRoot`; folding those
+    with the frontier grouping (`foldFrontierRoot`) gives `karyRoot` of the
+    size-`oldSize` prefix. This is the coordinate-coverage core: the boundary is
+    `start_hash`, the bisection siblings are the perfect roots flanking the
+    boundary path inside its slot, and the merge siblings are the perfect roots
+    of the new-frontier slots left of it — together exactly the old frontier. -/
+private theorem honest_oldroot_readback (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
+    ∃ hs, consistencyOldHashes k oldSize cells.length (honestStartHash L k cells oldSize)
+        (honestConsistencyPath L k cells oldSize) = some hs ∧
+      foldFrontierRoot L k hs = karyRoot L k (cells.take oldSize) := by
+  sorry
+
 /-! ## The theorems -/
 
 /-- **Non-vacuity: honest consistency proofs verify.** The honest boundary-root
@@ -629,7 +644,18 @@ theorem consistency_completeness (L k : Nat) (hk : 2 ≤ k) (cells : List Digest
     AcceptsConsistency L k oldSize cells.length
       (honestStartHash L k cells oldSize) (honestConsistencyPath L k cells oldSize)
       (karyRoot L k (cells.take oldSize)) (karyRoot L k cells) := by
-  sorry
+  refine ⟨hk, hold, hnew, honest_consistency_shape L k hk cells oldSize hold hnew, ?_, ?_⟩
+  · -- WellFormedSteps: the honest consistency path is a suffix of the honest
+    -- inclusion path, which is well-formed
+    obtain ⟨_, hwf⟩ := honest_path_shape L k hk cells (oldSize - 1) (by omega)
+    obtain ⟨bl, bh, _, _, _, hlast, _⟩ := boundary_slot k hk cells oldSize hold hnew
+    intro s hs
+    simp only [honestConsistencyPath, hlast] at hs
+    exact hwf s (List.mem_of_mem_drop hs)
+  · -- dual-root reconstruction
+    obtain ⟨hs, hhs, hfold⟩ := honest_oldroot_readback L k hk cells oldSize hold hnew
+    simp only [reconstructConsistencyRoots, hhs]
+    rw [hfold, honest_consistency_newroot L k hk cells oldSize hold hnew]
 
 /-- **Consistency-verifier soundness: accept ⇒ genuine append-only prefix.**
     If `verify_consistency` accepts `(start_hash, path, oldRoot)` against the
@@ -656,7 +682,37 @@ theorem consistency_soundness (L k : Nat) (cells : List Digest)
       (karyRoot L k cells))
     (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
     oldRoot = karyRoot L k (cells.take oldSize) := by
-  sorry
+  obtain ⟨hk, hold, holdnew, hstruct, hwf, hrec⟩ := hacc
+  obtain ⟨skel, hcsk, hpsh⟩ := hstruct
+  obtain ⟨skel', hcsk', hpsh'⟩ := honest_consistency_shape L k hk cells oldSize hold holdnew
+  have hskeq : skel = skel' := Option.some.inj (hcsk.symm.trans hcsk')
+  have hshapes : path.map stepShape
+      = (honestConsistencyPath L k cells oldSize).map stepShape := by
+    rw [hpsh, hskeq, ← hpsh']
+  have hwf_honest : WellFormedSteps (honestConsistencyPath L k cells oldSize) := by
+    obtain ⟨_, hwfI⟩ := honest_path_shape L k hk cells (oldSize - 1) (by omega)
+    obtain ⟨bl, bh, _, _, _, hlast, _⟩ := boundary_slot k hk cells oldSize hold holdnew
+    intro s hs
+    simp only [honestConsistencyPath, hlast] at hs
+    exact hwfI s (List.mem_of_mem_drop hs)
+  have hnewfold := honest_consistency_newroot L k hk cells oldSize hold holdnew
+  obtain ⟨hsh, hoph, hfoldh⟩ := honest_oldroot_readback L k hk cells oldSize hold holdnew
+  unfold reconstructConsistencyRoots at hrec
+  split at hrec
+  · simp at hrec
+  · next hsp hop =>
+    simp only [Option.some.injEq, Prod.mk.injEq] at hrec
+    obtain ⟨hoR, hnR⟩ := hrec
+    have hfeq : foldNary L startHash path
+        = foldNary L (honestStartHash L k cells oldSize)
+            (honestConsistencyPath L k cells oldSize) := by rw [hnR, hnewfold]
+    obtain ⟨hstart, hpatheq⟩ := foldNary_unique_of_shape L startHash
+      (honestStartHash L k cells oldSize) path (honestConsistencyPath L k cells oldSize)
+      hshapes hwf hwf_honest hfeq hH hN
+    rw [hstart, hpatheq, hoph] at hop
+    have hsphs : hsp = hsh := (Option.some.inj hop).symm
+    rw [← hoR, hsphs]
+    exact hfoldh
 
 /-! ### `karyRoot` injectivity (supports the dual append-only theorem) -/
 
