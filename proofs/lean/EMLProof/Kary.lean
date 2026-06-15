@@ -75,7 +75,65 @@ set_option linter.unusedVariables false
 
 namespace NEML
 
-/-! ## Layer 1 — topology (total transcription of `neml/src/topology.rs`) -/
+/-!
+## Rust correspondence
+
+This module is a hand transcription of the shipped Rust, so its soundness for
+the *real* system rests on the Lean definitions faithfully mirroring it. This
+section makes that mapping auditable: every Lean symbol below names the Rust
+it models with a `file:line` anchor, and each row states **how** the
+correspondence is checked — `#guard`-pinned (mechanically, via a `#guard` here
+with a value-for-value twin in `topology.rs::tests::lean_guard_parity`) or
+**inspection-only** (a structural reading a human must perform). Line numbers
+are anchors, not guarantees; re-locate by symbol name if they drift.
+
+### Layer 1 — computable topology (`#guard`-pinned)
+
+Pure `Nat`/`List` arithmetic, so it can be and is pinned by evaluation. The
+guard set exercises all of these — `inclusionSkeleton` guards drive
+`findFrontier`, `digitSteps`, and `groupingSteps` end-to-end — so a value
+disagreement on any of them fails a build on both sides.
+
+| Lean | Rust | Pinning |
+| --- | --- | --- |
+| `frontierForSizeT` / `frontierGo` | `frontier_for_size` (`neml/src/topology.rs:20`) | pinned — 3 guard vectors |
+| `reductionCount` / `reductionCountGo` | `reduction_count` (`neml/src/schedule.rs:11`) | pinned — 2 guard vectors |
+| `inclusionSkeleton` | `inclusion_skeleton` (`neml/src/topology.rs:66`) | pinned — 6 guard vectors |
+| `findFrontier` | subtree-locate loop in `inclusion_skeleton` (`neml/src/topology.rs:77`) | pinned transitively |
+| `digitSteps` | base-k offset-digit loop in `inclusion_skeleton` (`neml/src/topology.rs:92`) | pinned transitively |
+| `groupingSteps` | `grouping_steps` (`neml/src/topology.rs:118`) | pinned transitively |
+| `stepShape` | `SkeletonStep {position, sibling_count}` (`neml/src/topology.rs:46`); compared in `verify_inclusion_path_structure` (`neml/src/proof.rs:507`) | pinned — guard pairs *are* `(position, siblingCount)` |
+
+### Layers 2–3 — noncomputable fold / accept (inspection-only)
+
+Built on the `H : List UInt8 → Digest` axiom, so they cannot be
+`#guard`-evaluated — that is a category limit, not an omission. Each row is a
+structural reading of the Rust that a reviewer must confirm; the `#guard`s do
+**not** reach here.
+
+| Lean | Rust | Notes (inspection-only) |
+| --- | --- | --- |
+| `naryMr` | `nary_mr` (`neml/src/mr.rs:11`) | empty→`empty()`, singleton→child unchanged, all-null→`null()`, else `node(children)` |
+| `mergeTopD` / `mergeTopDN` / `appendCell` / `buildStackGo` / `buildStackCells` | push-then-merge loop in `append_leaf` / `append_subtree` (`neml/src/tree.rs:925`, merge via `nary_mr` at `:949`) | push the cell, run `reduction_count` merges of the top `k` |
+| `perfectRoot` | the canonical perfect-subtree fold that same loop realizes (no standalone Rust fn) | `kary_bridge` proves the stack machine equals this decomposition |
+| `foldFrontierRoot` / `karyRoot` | `compute_root_from_state` (`neml/src/tree.rs:315`) | merge rightmost `k` while `> k` remain, then one final `nary_mr` |
+| `StructureOK` | `verify_inclusion_path_structure` (`neml/src/proof.rs:489`) | skeleton exists, `path.len ≥ skel.len`, trailing `skel.len` steps match shape (the skeleton it pins against is itself guard-pinned; this relation is not) |
+| `WellFormedSteps` | per-step guards in `reconstruct_inclusion_root` (`neml/src/proof.rs:561` zero-sibling reject, `:569` position bound) | canonical encoding |
+| `applyStepN` / `foldNary` | reconstruction fold in `reconstruct_inclusion_root` (`neml/src/proof.rs:550`; child-list build `:574`, `nary_mr` at `:585`) | `insertAt` ⟷ inserting `current` at `position` among siblings |
+| `AcceptsKary` | `verify_inclusion` (`neml/src/proof.rs:77`) → `reconstruct_inclusion_root` | the model drops only the DoS bounds (digest length, `path.len ≤ 256`, `siblings.len ≤ 256`), which bound resource use, not soundness |
+
+**Residual risk this note does not close.** The Layer 2–3 rows above are
+verified by human reading alone. Nothing mechanical forces `naryMr`,
+`foldNary`, the builder loop, or `AcceptsKary` to keep matching their Rust
+counterparts: an edit to `nary_mr`, `reconstruct_inclusion_root`, or the
+`append_*` merge loop that diverges from these definitions would leave every
+theorem in this file true *of the Lean model* while silently false *of the
+shipped Rust*, and no build — Lean or Rust — would fail. The `H`-axiom backing
+makes this irreducible here; only a computable hash instantiation plus
+differential execution against the Rust could pin it. Treat these rows as a
+documented, standing assumption, not a discharged one.
+
+## Layer 1 — topology (total transcription of `neml/src/topology.rs`) -/
 
 /-- Greedy frontier decomposition from `left` over `n` remaining leaves:
     repeatedly strip the largest perfect k-ary subtree (`cap = k ^ log_k n`).
@@ -97,7 +155,7 @@ decreasing_by
 def frontierForSizeT (k n : Nat) : List (Nat × Nat) := frontierGo k 0 n
 
 /-- Carry count of the append at 0-based index `n`: the multiplicity of `k`
-    in `n + 1`. Mirrors `topology… reduction_count` (`neml/src/lib.rs`):
+    in `n + 1`. Mirrors `reduction_count` (`neml/src/schedule.rs`):
     after pushing leaf `n`, the builder merges the top `k` stack entries
     this many times. -/
 def reductionCountGo (k m : Nat) : Nat :=
