@@ -131,12 +131,36 @@ def Tiles (k : Nat) : Nat → List (Nat × Nat) → Nat → Prop
   | start, [], stop => start = stop
   | start, (l, h) :: rest, stop => l = start ∧ Tiles k (start + k ^ h) rest stop
 
-/-- **Frontier coverage.** The frontier tiles `[0, n)`.
-    *Strategy:* generalize to `Tiles k left (frontierGo k left n) (left + n)`
-    and use `frontierGo.induct`; the cap bound is `Nat.pow_log_le_self k hn`. -/
+/-- Generalized coverage: the greedy decomposition from `left` over `n`
+    remaining leaves tiles `[left, left + n)`. -/
+private theorem frontierGo_tiles (k : Nat) (hk : 2 ≤ k) :
+    ∀ n left, Tiles k left (frontierGo k left n) (left + n) := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro left
+    rw [frontierGo]
+    split
+    · next h =>
+        have hn : n = 0 := by omega
+        subst hn
+        simp [Tiles]
+    · next h =>
+        push_neg at h
+        obtain ⟨hn0, _⟩ := h
+        have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
+        have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+        refine ⟨rfl, ?_⟩
+        have hrec := ih (n - k ^ Nat.log k n) (by omega) (left + k ^ Nat.log k n)
+        have harith : (left + k ^ Nat.log k n) + (n - k ^ Nat.log k n) = left + n := by omega
+        rw [harith] at hrec
+        exact hrec
+
+/-- **Frontier coverage.** The frontier tiles `[0, n)`. -/
 theorem frontier_tiles (k n : Nat) (hk : 2 ≤ k) :
     Tiles k 0 (frontierForSizeT k n) n := by
-  sorry
+  have := frontierGo_tiles k hk n 0
+  simpa [frontierForSizeT] using this
 
 /-- **Carry-schedule consistency — the k-ary `AppendConsistent`.** Appending
     index `n` (push `(n, 0)`, then `reductionCount k n` top-k merges)
@@ -200,6 +224,71 @@ def inclusionSkeleton (k treeSize index : Nat) : Option (List (Nat × Nat)) :=
         (groupingSteps k (frontierForSizeT k treeSize).length fIdx).map
           (fun pc => (pc.1, pc.2 - 1)))
 
+/-- Every digit step carries position `< k` and exactly `k - 1` siblings. -/
+private theorem digitSteps_spec (k : Nat) (hk : 2 ≤ k) :
+    ∀ (h offset : Nat), ∀ pc ∈ digitSteps k offset h, pc.1 < k ∧ pc.2 = k - 1 := by
+  intro h
+  induction h with
+  | zero => intro offset pc hmem; simp only [digitSteps, List.not_mem_nil] at hmem
+  | succ n ih =>
+    intro offset pc hmem
+    simp only [digitSteps, List.mem_cons] at hmem
+    rcases hmem with rfl | hmem'
+    · exact ⟨Nat.mod_lt offset (by omega), rfl⟩
+    · exact ih (offset / k) pc hmem'
+
+/-- Every grouping step has `childCount ∈ [2, k]` and position `< childCount`,
+    provided the tracked slot is in range. The slot-in-range invariant is
+    preserved by both recursive branches. -/
+private theorem groupingSteps_spec (k : Nat) (hk : 2 ≤ k) :
+    ∀ (len fIdx : Nat), fIdx < len → ∀ pc ∈ groupingSteps k len fIdx,
+      2 ≤ pc.2 ∧ pc.1 < pc.2 := by
+  intro len
+  induction len using Nat.strong_induction_on with
+  | _ len ih =>
+    intro fIdx hlt pc hmem
+    rw [groupingSteps] at hmem
+    split at hmem
+    · next hbase =>
+        split at hmem
+        · next hlen1 =>
+            simp only [List.mem_singleton] at hmem
+            subst hmem
+            exact ⟨by omega, hlt⟩
+        · next hlen1 => simp only [List.not_mem_nil] at hmem
+    · next hrec =>
+        push_neg at hrec
+        obtain ⟨_, hlenk⟩ := hrec
+        split at hmem
+        · next hge =>
+            rw [List.mem_cons] at hmem
+            rcases hmem with rfl | hmem'
+            · exact ⟨by omega, by show fIdx - (len - k) < k; omega⟩
+            · exact ih (len - k + 1) (by omega) (len - k) (by omega) pc hmem'
+        · next hlt2 => exact ih (len - k + 1) (by omega) fIdx (by omega) pc hmem
+
+/-- `findFrontier` returns a slot strictly within the list (counting from the
+    starting counter). -/
+private theorem findFrontier_slot_lt (k index : Nat) :
+    ∀ (l : List (Nat × Nat)) (c fIdx lv h : Nat),
+      findFrontier k index l c = some (fIdx, lv, h) → fIdx < c + l.length := by
+  intro l
+  induction l with
+  | nil => intro c fIdx lv h hf; simp only [findFrontier, reduceCtorEq] at hf
+  | cons p rest ih =>
+    intro c fIdx lv h hf
+    obtain ⟨pl, ph⟩ := p
+    rw [findFrontier] at hf
+    split at hf
+    · next hcond =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at hf
+        obtain ⟨hfi, _, _⟩ := hf
+        subst hfi
+        simp only [List.length_cons]; omega
+    · next hcond =>
+        have := ih (c + 1) fIdx lv h hf
+        simp only [List.length_cons]; omega
+
 /-- **The skeleton never contains a promoted step.** Every step carries at
     least one sibling, and the path-node position is within the arity. This
     is what entitles the verifier to reject zero-sibling steps outright
@@ -211,7 +300,31 @@ def inclusionSkeleton (k treeSize index : Nat) : Option (List (Nat × Nat)) :=
 theorem skeleton_no_promoted (k treeSize index : Nat) (skel : List (Nat × Nat))
     (hskel : inclusionSkeleton k treeSize index = some skel) :
     ∀ pc ∈ skel, 1 ≤ pc.2 ∧ pc.1 ≤ pc.2 := by
-  sorry
+  rw [inclusionSkeleton] at hskel
+  split at hskel
+  · next hk2 => simp only [reduceCtorEq] at hskel
+  · next hk2 =>
+    have hk : 2 ≤ k := by omega
+    cases hff : findFrontier k index (frontierForSizeT k treeSize) 0 with
+    | none => rw [hff] at hskel; simp only [reduceCtorEq] at hskel
+    | some res =>
+      obtain ⟨fIdx, lv, h⟩ := res
+      rw [hff] at hskel
+      simp only [Option.some.injEq] at hskel
+      subst hskel
+      intro pc hmem
+      rw [List.mem_append] at hmem
+      rcases hmem with hd | hg
+      · obtain ⟨hpos, hsib⟩ := digitSteps_spec k hk h (index - lv) pc hd
+        exact ⟨by rw [hsib]; omega, by rw [hsib]; omega⟩
+      · rw [List.mem_map] at hg
+        obtain ⟨g, hgmem, hgeq⟩ := hg
+        have hfidxlt : fIdx < (frontierForSizeT k treeSize).length := by
+          have := findFrontier_slot_lt k index (frontierForSizeT k treeSize) 0 fIdx lv h hff
+          simpa using this
+        obtain ⟨hg2, hg1⟩ := groupingSteps_spec k hk _ fIdx hfidxlt g hgmem
+        rw [← hgeq]
+        exact ⟨by show 1 ≤ g.2 - 1; omega, by show g.1 ≤ g.2 - 1; omega⟩
 
 /-! Executable sanity pins against `topology.rs` test vectors: definitional
     drift between this model and the Rust source breaks the build here, not
@@ -393,7 +506,111 @@ theorem naryMr_inj_of_length (L : Nat) (xs ys : List Digest)
     (heq : naryMr L xs = naryMr L ys)
     (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
     xs = ys := by
-  sorry
+  have hys2 : 2 ≤ ys.length := hlen ▸ h2
+  -- Length ≥ 2 forces both lists into the catch-all arm of `naryMr`.
+  obtain ⟨a, b, xr, rfl⟩ : ∃ a b xr, xs = a :: b :: xr := by
+    rcases xs with _ | ⟨a, _ | ⟨b, xr⟩⟩
+    · simp only [List.length_nil] at h2; omega
+    · simp only [List.length_cons, List.length_nil] at h2; omega
+    · exact ⟨a, b, xr, rfl⟩
+  obtain ⟨c, d, yr, rfl⟩ : ∃ c d yr, ys = c :: d :: yr := by
+    rcases ys with _ | ⟨c, _ | ⟨d, yr⟩⟩
+    · simp only [List.length_nil] at hys2; omega
+    · simp only [List.length_cons, List.length_nil] at hys2; omega
+    · exact ⟨c, d, yr, rfl⟩
+  simp only [naryMr] at heq
+  by_cases hxn : ∀ z ∈ a :: b :: xr, z = nullDigest L
+  · by_cases hyn : ∀ z ∈ c :: d :: yr, z = nullDigest L
+    · -- Both all-null and same length ⇒ elementwise equal.
+      apply List.ext_getElem hlen
+      intro i h1 h2'
+      rw [hxn _ (List.getElem_mem h1), hyn _ (List.getElem_mem h2')]
+    · -- `xs` all-null, `ys` not ⇒ `nodeHash ys = nullDigest L`: NullAmbiguity.
+      rw [if_pos hxn, if_neg hyn] at heq
+      exact absurd ⟨c :: d :: yr, hys2, hyn, heq.symm⟩ hN
+  · by_cases hyn : ∀ z ∈ c :: d :: yr, z = nullDigest L
+    · rw [if_neg hxn, if_pos hyn] at heq
+      exact absurd ⟨a :: b :: xr, h2, hxn, heq⟩ hN
+    · rw [if_neg hxn, if_neg hyn] at heq
+      by_contra hne
+      exact hH ⟨a :: b :: xr, c :: d :: yr, hne, heq⟩
+
+/-- `insertAt` adds exactly one element. -/
+private theorem insertAt_length {α : Type} (n : Nat) (x : α) (l : List α) :
+    (insertAt n x l).length = l.length + 1 := by
+  induction l generalizing n with
+  | nil => simp [insertAt]
+  | cons y ys ih =>
+    cases n with
+    | zero => simp [insertAt]
+    | succ m => simp [insertAt, ih]
+
+/-- Fold-append: the running digest after the prefix, then one step. -/
+private theorem foldNary_append_last (L : Nat) (a : Digest)
+    (p' : List ProofStep) (s : ProofStep) :
+    foldNary L a (p' ++ [s]) = applyStepN L (foldNary L a p') s := by
+  simp only [foldNary, List.foldl_append, List.foldl_cons, List.foldl_nil]
+
+private theorem foldNary_unique_aux (L : Nat)
+    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    ∀ (n : Nat) (a b : Digest) (p q : List ProofStep),
+      p.length = n → q.length = n →
+      p.map stepShape = q.map stepShape →
+      WellFormedSteps p → WellFormedSteps q →
+      foldNary L a p = foldNary L b q →
+      a = b ∧ p = q := by
+  intro n
+  induction n with
+  | zero =>
+    intro a b p q hp hq _ _ _ heq
+    have hpe : p = [] := List.eq_nil_of_length_eq_zero hp
+    have hqe : q = [] := List.eq_nil_of_length_eq_zero hq
+    subst hpe; subst hqe
+    simp only [foldNary, List.foldl_nil] at heq
+    exact ⟨heq, rfl⟩
+  | succ m ih =>
+    intro a b p q hp hq hshape hwfp hwfq heq
+    obtain ⟨p', s₁, hp_eq, hp'_len⟩ := list_decomp_last p hp
+    obtain ⟨q', s₂, hq_eq, hq'_len⟩ := list_decomp_last q hq
+    subst hp_eq; subst hq_eq
+    -- Split the shape equality into prefix + last step.
+    rw [List.map_append, List.map_append] at hshape
+    have hlenmap : (p'.map stepShape).length = (q'.map stepShape).length := by
+      simp only [List.length_map, hp'_len, hq'_len]
+    obtain ⟨hshape', hslast⟩ := List.append_inj hshape hlenmap
+    simp only [List.map_cons, List.map_nil, List.cons.injEq, and_true] at hslast
+    have hsstep : stepShape s₁ = stepShape s₂ := hslast
+    simp only [stepShape, Prod.mk.injEq] at hsstep
+    obtain ⟨hpos, hsiblen⟩ := hsstep
+    -- Well-formedness of the last steps and of the prefixes.
+    have hwf_s1 := hwfp s₁ (List.mem_append.mpr (Or.inr (by simp)))
+    have hwfp' : WellFormedSteps p' := fun s hs => hwfp s (List.mem_append.mpr (Or.inl hs))
+    have hwfq' : WellFormedSteps q' := fun s hs => hwfq s (List.mem_append.mpr (Or.inl hs))
+    -- Peel the last fold step and invert it.
+    rw [foldNary_append_last, foldNary_append_last] at heq
+    simp only [applyStepN] at heq
+    have hxs2 : 2 ≤ (insertAt s₁.position (foldNary L a p') s₁.siblings).length := by
+      rw [insertAt_length]
+      have hne : s₁.siblings.length ≠ 0 := fun h0 =>
+        hwf_s1.1 (List.eq_nil_of_length_eq_zero h0)
+      omega
+    have hxylen :
+        (insertAt s₁.position (foldNary L a p') s₁.siblings).length =
+          (insertAt s₂.position (foldNary L b q') s₂.siblings).length := by
+      rw [insertAt_length, insertAt_length, hsiblen]
+    have hnode := naryMr_inj_of_length L _ _ hxylen hxs2 heq hH hN
+    rw [hpos] at hnode
+    obtain ⟨hfold, hsib⟩ :=
+      insertAt_injective s₂.position (foldNary L a p') (foldNary L b q')
+        s₁.siblings s₂.siblings hnode
+    obtain ⟨hab, hpq⟩ := ih a b p' q' hp'_len hq'_len hshape' hwfp' hwfq' hfold
+    refine ⟨hab, ?_⟩
+    have hstep : s₁ = s₂ := by
+      cases s₁ with | mk sib1 pos1 =>
+      cases s₂ with | mk sib2 pos2 =>
+      simp only [ProofStep.mk.injEq]
+      exact ⟨hsib, hpos⟩
+    rw [hpq, hstep]
 
 /-- **Shape-pinned fold uniqueness — the soundness engine.** Two well-formed
     paths of identical shape folding to the same digest coincide entirely,
@@ -410,7 +627,11 @@ theorem foldNary_unique_of_shape (L : Nat) (a b : Digest)
     (heq : foldNary L a p = foldNary L b q)
     (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
     a = b ∧ p = q := by
-  sorry
+  have hlenpq : p.length = q.length := by
+    have := congrArg List.length hshape
+    simpa using this
+  exact foldNary_unique_aux L hH hN p.length a b p q rfl hlenpq.symm
+    hshape hwfp hwfq heq
 
 /-! ### The honest prover -/
 
