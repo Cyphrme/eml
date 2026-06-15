@@ -358,6 +358,145 @@ theorem consistency_soundness (L k : Nat) (cells : List Digest)
     oldRoot = karyRoot L k (cells.take oldSize) := by
   sorry
 
+/-! ### `karyRoot` injectivity (supports the dual append-only theorem) -/
+
+/-- Every index in `[start, stop)` lands in some tile of a `Tiles`
+    decomposition. -/
+private theorem Tiles_covers (k : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat), Tiles k start coords stop →
+      ∀ i, start ≤ i → i < stop → ∃ c ∈ coords, c.1 ≤ i ∧ i < c.1 + k ^ c.2 := by
+  intro coords
+  induction coords with
+  | nil => intro start stop htiles i hs hi; simp only [Tiles] at htiles; omega
+  | cons p rest ih =>
+    intro start stop htiles i hs hi
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    by_cases hlt : i < start + k ^ ph
+    · refine ⟨(pl, ph), ?_, ?_, ?_⟩
+      · simp
+      · show pl ≤ i; omega
+      · show i < pl + k ^ ph; omega
+    · obtain ⟨c, hc, h1, h2⟩ := ih (start + k ^ ph) stop htrest i (by omega) hi
+      exact ⟨c, List.mem_cons_of_mem _ hc, h1, h2⟩
+
+/-- **`perfectRoot` injectivity over a span.** Equal perfect-subtree roots over
+    `xs` and `ys` force the two cell lists to agree at every index the subtree
+    covers — or a hash assumption broke. Induction on height, `naryMr_inj_of_length`
+    at each level. -/
+private theorem perfectRoot_inj (L k : Nat) (hk : 2 ≤ k)
+    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) (xs ys : List Digest) :
+    ∀ (h left : Nat), perfectRoot L k xs left h = perfectRoot L k ys left h →
+      ∀ i, i < k ^ h → xs.getD (left + i) emptyHash = ys.getD (left + i) emptyHash := by
+  intro h
+  induction h with
+  | zero =>
+    intro left heq i hi
+    simp only [pow_zero, Nat.lt_one_iff] at hi
+    subst hi
+    simpa only [perfectRoot, Nat.add_zero] using heq
+  | succ n ih =>
+    intro left heq i hi
+    have eL : perfectRoot L k xs left (n + 1)
+        = naryMr L ((List.range k).map (fun j => perfectRoot L k xs (left + j * k ^ n) n)) := by
+      rw [perfectRoot]
+    have eR : perfectRoot L k ys left (n + 1)
+        = naryMr L ((List.range k).map (fun j => perfectRoot L k ys (left + j * k ^ n) n)) := by
+      rw [perfectRoot]
+    rw [eL, eR] at heq
+    have h2 : 2 ≤ ((List.range k).map
+        (fun j => perfectRoot L k xs (left + j * k ^ n) n)).length := by simp; omega
+    have hlen : ((List.range k).map (fun j => perfectRoot L k xs (left + j * k ^ n) n)).length
+        = ((List.range k).map (fun j => perfectRoot L k ys (left + j * k ^ n) n)).length := by simp
+    have hmapeq := naryMr_inj_of_length L _ _ hlen h2 heq hH hN
+    -- per-child equality
+    have hchild : ∀ j, j < k →
+        perfectRoot L k xs (left + j * k ^ n) n = perfectRoot L k ys (left + j * k ^ n) n :=
+      fun j hj => List.map_inj_left.mp hmapeq j (List.mem_range.mpr hj)
+    -- decompose i = j*k^n + r
+    have hkn : 0 < k ^ n := pow_pos (by omega) n
+    have hj : i / k ^ n < k := by
+      have hpow : k ^ (n + 1) = k ^ n * k := pow_succ k n
+      rw [hpow] at hi
+      exact Nat.div_lt_of_lt_mul hi
+    have hr : i % k ^ n < k ^ n := Nat.mod_lt _ hkn
+    have hdecomp : left + i = (left + (i / k ^ n) * k ^ n) + i % k ^ n := by
+      have hdm := Nat.div_add_mod i (k ^ n)
+      have hc : (i / k ^ n) * k ^ n = k ^ n * (i / k ^ n) := Nat.mul_comm _ _
+      omega
+    rw [hdecomp]
+    exact ih (left + (i / k ^ n) * k ^ n) (hchild _ hj) (i % k ^ n) hr
+
+/-- `naryMr` injectivity extended to **all** equal lengths (including the
+    empty and singleton cases the length-≥2 version excludes): the empty/empty
+    and singleton/singleton arms are promotion (no hashing). -/
+private theorem naryMr_inj_eqlen (L : Nat) (xs ys : List Digest)
+    (hlen : xs.length = ys.length) (heq : naryMr L xs = naryMr L ys)
+    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) : xs = ys := by
+  rcases xs with _ | ⟨a, xs'⟩
+  · rcases ys with _ | ⟨c, ys'⟩
+    · rfl
+    · simp only [List.length_nil, List.length_cons] at hlen; omega
+  · rcases ys with _ | ⟨c, ys'⟩
+    · simp only [List.length_nil, List.length_cons] at hlen; omega
+    · rcases xs' with _ | ⟨b, s⟩
+      · rcases ys' with _ | ⟨d, t⟩
+        · have e1 : naryMr L [a] = a := rfl
+          have e2 : naryMr L [c] = c := rfl
+          rw [e1, e2] at heq; rw [heq]
+        · simp only [List.length_cons, List.length_nil] at hlen; omega
+      · rcases ys' with _ | ⟨d, t⟩
+        · simp only [List.length_cons, List.length_nil] at hlen; omega
+        · exact naryMr_inj_of_length L _ _ hlen (by simp) heq hH hN
+
+/-- **`foldFrontierRoot` injectivity over equal-length stacks.** Two stacks of
+    equal length folding to the same spine root coincide — or a hash assumption
+    broke. Strong induction on the (shared) length: the merge schedule is
+    length-determined, so each `mergeTopD` step stays aligned and inverts via
+    `naryMr_inj_of_length`. -/
+private theorem foldFrontierRoot_inj (L k : Nat) (hk : 2 ≤ k)
+    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    ∀ (n : Nat) (xs ys : List Digest), xs.length = n → ys.length = n →
+      foldFrontierRoot L k xs = foldFrontierRoot L k ys → xs = ys := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro xs ys hx hy heq
+    by_cases hbase : xs.length ≤ k
+    · have hbx : k < 2 ∨ xs.length ≤ k := Or.inr hbase
+      have hby : k < 2 ∨ ys.length ≤ k := Or.inr (by omega)
+      rw [foldFrontierRoot, dif_pos hbx] at heq
+      conv_rhs at heq => rw [foldFrontierRoot, dif_pos hby]
+      -- heq : naryMr L xs = naryMr L ys
+      exact naryMr_inj_eqlen L xs ys (by omega) heq hH hN
+    · push_neg at hbase
+      have hbx : ¬(k < 2 ∨ xs.length ≤ k) := by push_neg; exact ⟨by omega, by omega⟩
+      have hby : ¬(k < 2 ∨ ys.length ≤ k) := by push_neg; exact ⟨by omega, by omega⟩
+      rw [foldFrontierRoot, dif_neg hbx] at heq
+      conv_rhs at heq => rw [foldFrontierRoot, dif_neg hby]
+      have hmx : (mergeTopD L k xs).length = n - k + 1 := by
+        rw [mergeTopD, if_neg (by omega)]; simp only [List.length_append, List.length_take,
+          List.length_cons, List.length_nil]; omega
+      have hmy : (mergeTopD L k ys).length = n - k + 1 := by
+        rw [mergeTopD, if_neg (by omega)]; simp only [List.length_append, List.length_take,
+          List.length_cons, List.length_nil]; omega
+      have hmerge := ih (n - k + 1) (by omega) (mergeTopD L k xs) (mergeTopD L k ys) hmx hmy heq
+      -- mergeTopD xs = mergeTopD ys  ⇒  xs = ys
+      rw [mergeTopD, if_neg (by omega), mergeTopD, if_neg (by omega)] at hmerge
+      have hlenx : (xs.take (xs.length - k)).length = (ys.take (ys.length - k)).length := by
+        simp only [List.length_take]; omega
+      obtain ⟨htake, hsnoc⟩ := List.append_inj hmerge hlenx
+      have hdrop2 : 2 ≤ (xs.drop (xs.length - k)).length := by
+        simp only [List.length_drop]; omega
+      have hdroplen : (xs.drop (xs.length - k)).length = (ys.drop (ys.length - k)).length := by
+        simp only [List.length_drop]; omega
+      have hnary : naryMr L (xs.drop (xs.length - k)) = naryMr L (ys.drop (ys.length - k)) := by
+        have := List.cons.inj hsnoc; exact this.1
+      have hdrop := naryMr_inj_of_length L _ _ hdroplen hdrop2 hnary hH hN
+      calc xs = xs.take (xs.length - k) ++ xs.drop (xs.length - k) := (List.take_append_drop _ _).symm
+        _ = ys.take (ys.length - k) ++ ys.drop (ys.length - k) := by rw [htake, hdrop]
+        _ = ys := List.take_append_drop _ _
+
 /-- **`karyRoot` injectivity over equal-length cell lists.** Two cell lists of
     the same length with equal k-ary root coincide — or a hash assumption broke.
     Equal length is essential: by the flat-null-promotion design, all-null lists
@@ -373,7 +512,27 @@ theorem karyRoot_inj_of_length (L k : Nat) (hk : 2 ≤ k) (xs ys : List Digest)
     (hlen : xs.length = ys.length) (heq : karyRoot L k xs = karyRoot L k ys)
     (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
     xs = ys := by
-  sorry
+  rw [karyRoot, karyRoot, kary_bridge L k hk xs, kary_bridge L k hk ys, ← hlen] at heq
+  set F := frontierForSizeT k xs.length with hF
+  have hstacklen : (F.map (fun lh => perfectRoot L k xs lh.1 lh.2)).length
+      = (F.map (fun lh => perfectRoot L k ys lh.1 lh.2)).length := by simp
+  have hmaps := foldFrontierRoot_inj L k hk hH hN _ _ _ rfl hstacklen.symm heq
+  -- per-coordinate root equality
+  have hcoord : ∀ c ∈ F, perfectRoot L k xs c.1 c.2 = perfectRoot L k ys c.1 c.2 :=
+    fun c hc => List.map_inj_left.mp hmaps c hc
+  -- index-wise equality via tiling
+  have hcover := Tiles_covers k F 0 xs.length (frontier_tiles k xs.length hk)
+  have hpt : ∀ i, i < xs.length → xs.getD i emptyHash = ys.getD i emptyHash := by
+    intro i hi
+    obtain ⟨c, hc, h1, h2⟩ := hcover i (by omega) hi
+    have hpr := perfectRoot_inj L k hk hH hN xs ys c.2 c.1 (hcoord c hc) (i - c.1) (by omega)
+    rwa [show c.1 + (i - c.1) = i from by omega] at hpr
+  apply List.ext_getElem hlen
+  intro i h1 h2
+  have hp := hpt i h1
+  simp only [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem h1,
+    List.getElem?_eq_getElem h2, Option.getD_some] at hp
+  exact hp
 
 /-- **Dual soundness: accept between two honest roots ⇒ data-level append-only.**
     If `verify_consistency` accepts a proof between the honest root of `oldCells`
