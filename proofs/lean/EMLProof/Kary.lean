@@ -743,7 +743,7 @@ private theorem Tiles_le (k : Nat) :
     omega
 
 /-- Each tiled span fits within the stop. -/
-private theorem Tiles_entry_bound (k : Nat) :
+theorem Tiles_entry_bound (k : Nat) :
     ∀ (coords : List (Nat × Nat)) (start stop : Nat),
       Tiles k start coords stop → ∀ lh ∈ coords, lh.1 + k ^ lh.2 ≤ stop := by
   intro coords
@@ -776,7 +776,7 @@ private theorem buildStackGo_snoc (L k : Nat) :
 
 /-- `perfectRoot` only reads cells within the subtree span, so appending more
     cells beyond it leaves the root unchanged. -/
-private theorem perfectRoot_stable (L k : Nat) (cells extra : List Digest) :
+theorem perfectRoot_stable (L k : Nat) (cells extra : List Digest) :
     ∀ (h left : Nat), left + k ^ h ≤ cells.length →
       perfectRoot L k cells left h = perfectRoot L k (cells ++ extra) left h := by
   intro h

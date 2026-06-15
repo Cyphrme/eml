@@ -606,20 +606,45 @@ private theorem honest_consistency_shape (L k : Nat) (hk : 2 ≤ k) (cells : Lis
     List.drop_append_of_le_length (by rw [hdslen]; exact hbhsh),
     digitSteps_drop k bh sh (oldSize - 1 - sl) hbhsh, hdiveq]
 
-/-- **The honest old-root read-back yields the genuine prefix root.** The
-    coordinate map the verifier builds for an honest consistency proof records,
-    at each old-frontier coordinate, its genuine `perfectRoot`; folding those
-    with the frontier grouping (`foldFrontierRoot`) gives `karyRoot` of the
-    size-`oldSize` prefix. This is the coordinate-coverage core: the boundary is
-    `start_hash`, the bisection siblings are the perfect roots flanking the
-    boundary path inside its slot, and the merge siblings are the perfect roots
-    of the new-frontier slots left of it — together exactly the old frontier. -/
+/-- **Coordinate-coverage core.** For an honest consistency proof the verifier's
+    coordinate map reads back, at every old-frontier coordinate, that subtree's
+    genuine `perfectRoot`: the boundary is `start_hash = perfectRoot (bl, bh)`,
+    the bisection siblings are the perfect roots flanking the boundary path
+    inside its slot, and the merge siblings are the perfect roots of the
+    new-frontier slots left of it — together exactly the old frontier. This is
+    the remaining inductive obligation over `cmBisect` / `cmMergeGo`. -/
+private theorem honest_oldroot_coverage (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
+    consistencyOldHashes k oldSize cells.length (honestStartHash L k cells oldSize)
+        (honestConsistencyPath L k cells oldSize)
+      = some ((frontierForSizeT k oldSize).map (fun c => perfectRoot L k cells c.1 c.2)) := by
+  sorry
+
+/-- **The honest old-root read-back yields the genuine prefix root.** Folding
+    the perfect roots the coordinate map records (`honest_oldroot_coverage`) with
+    the frontier grouping gives `karyRoot` of the size-`oldSize` prefix: by
+    `kary_bridge` on `cells.take oldSize`, that prefix's root is the same fold of
+    the same perfect roots (`perfectRoot` only reads in-range cells, so taking
+    the prefix does not change them). -/
 private theorem honest_oldroot_readback (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
     ∃ hs, consistencyOldHashes k oldSize cells.length (honestStartHash L k cells oldSize)
         (honestConsistencyPath L k cells oldSize) = some hs ∧
       foldFrontierRoot L k hs = karyRoot L k (cells.take oldSize) := by
-  sorry
+  refine ⟨(frontierForSizeT k oldSize).map (fun c => perfectRoot L k cells c.1 c.2),
+    honest_oldroot_coverage L k hk cells oldSize hold hnew, ?_⟩
+  rw [karyRoot, kary_bridge L k hk (cells.take oldSize)]
+  have hlen : (cells.take oldSize).length = oldSize := by rw [List.length_take]; omega
+  rw [hlen]
+  apply congrArg
+  apply List.map_congr_left
+  intro c hc
+  have hbound : c.1 + k ^ c.2 ≤ oldSize :=
+    Tiles_entry_bound k (frontierForSizeT k oldSize) 0 oldSize (frontier_tiles k oldSize hk) c hc
+  have hstab := perfectRoot_stable L k (cells.take oldSize) (cells.drop oldSize) c.2 c.1
+    (by rw [hlen]; exact hbound)
+  rw [List.take_append_drop] at hstab
+  exact hstab.symm
 
 /-! ## The theorems -/
 
