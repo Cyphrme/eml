@@ -234,7 +234,7 @@ private theorem frontierGo_scale (k : Nat) (hk : 2 ≤ k) :
     `a` with every span scaled and every height bumped. -/
 private theorem frontierForSizeT_scale (k : Nat) (hk : 2 ≤ k) (a : Nat) :
     frontierForSizeT k (a * k) =
-      (frontierForSizeT k a).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+      (frontierForSizeT k a).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) := by
   rw [frontierForSizeT, frontierForSizeT, frontierGo_scale k hk a 0 0]
   apply List.map_congr_left
   intro lh _
@@ -305,7 +305,7 @@ private theorem frontierForSizeT_push (k : Nat) (hk : 2 ≤ k) (m : Nat)
     height-0 leaves. `b = 0` is the scale lemma; the step is a push. -/
 private theorem frontier_divstep (k : Nat) (hk : 2 ≤ k) (a : Nat) :
     ∀ b, b < k → frontierForSizeT k (a * k + b) =
-      (frontierForSizeT k a).map (fun lh => (lh.1 * k, lh.2 + 1)) ++
+      (frontierForSizeT k a).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
       (List.range b).map (fun i => (a * k + i, 0)) := by
   intro b
   induction b with
@@ -339,8 +339,8 @@ private theorem frontier_divstep (k : Nat) (hk : 2 ≤ k) (a : Nat) :
     digit characterization of `frontierGo` first, then the merge recursion
     consumes one trailing-digit run. Pure arithmetic; no hashing. -/
 private theorem mergeTopCoords_scale (k : Nat) (cs : List (Nat × Nat)) :
-    mergeTopCoords k (cs.map (fun lh => (lh.1 * k, lh.2 + 1))) =
-      (mergeTopCoords k cs).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+    mergeTopCoords k (cs.map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))) =
+      (mergeTopCoords k cs).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) := by
   unfold mergeTopCoords
   by_cases hlen : cs.length < k
   · simp [List.length_map, hlen]
@@ -353,15 +353,15 @@ private theorem mergeTopCoords_scale (k : Nat) (cs : List (Nat × Nat)) :
 
 private theorem mergeTopCoordsN_scale (k : Nat) :
     ∀ (c : Nat) (cs : List (Nat × Nat)),
-      mergeTopCoordsN k c (cs.map (fun lh => (lh.1 * k, lh.2 + 1))) =
-        (mergeTopCoordsN k c cs).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+      mergeTopCoordsN k c (cs.map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))) =
+        (mergeTopCoordsN k c cs).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) := by
   intro c
   induction c with
   | zero => intro cs; rfl
   | succ c ih =>
     intro cs
-    show mergeTopCoordsN k c (mergeTopCoords k (cs.map (fun lh => (lh.1 * k, lh.2 + 1)))) =
-         (mergeTopCoordsN k c (mergeTopCoords k cs)).map (fun lh => (lh.1 * k, lh.2 + 1))
+    show mergeTopCoordsN k c (mergeTopCoords k (cs.map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)))) =
+         (mergeTopCoordsN k c (mergeTopCoords k cs)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))
     rw [mergeTopCoords_scale]
     exact ih (mergeTopCoords k cs)
 
@@ -403,18 +403,18 @@ theorem frontier_append_consistent (k n : Nat) (hk : 2 ≤ k) :
         congr 1
         omega
       have hLHS : frontierForSizeT k (n + 1) =
-          (frontierForSizeT k m).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+          (frontierForSizeT k m).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) := by
         rw [← hmk, frontierForSizeT_scale k hk m]
       have hn_eq : n = (m - 1) * k + (k - 1) := by rw [Nat.sub_one_mul]; omega
       have hfn : frontierForSizeT k n =
-          (frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1)) ++
+          (frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
           (List.range (k - 1)).map (fun i => ((m - 1) * k + i, 0)) := by
         rw [hn_eq]; exact frontier_divstep k hk (m - 1) (k - 1) (by omega)
       have hrange : List.range k = List.range (k - 1) ++ [k - 1] := by
         conv_lhs => rw [show k = (k - 1) + 1 by omega]
         rw [List.range_succ]
       have hYeq : frontierForSizeT k n ++ [(n, 0)] =
-          (frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1)) ++
+          (frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
           (List.range k).map (fun i => ((m - 1) * k + i, 0)) := by
         rw [hfn, List.append_assoc]
         congr 1
@@ -422,9 +422,9 @@ theorem frontier_append_consistent (k n : Nat) (hk : 2 ≤ k) :
         congr 1
         simp [hn_eq]
       have hgroup := mergeTopCoords_group k (by omega)
-        ((frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1))) ((m - 1) * k)
+        ((frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))) ((m - 1) * k)
       have hgroup2 :
-          (frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1)) ++ [((m - 1) * k, 1)] =
+          (frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++ [((m - 1) * k, 1)] =
             (frontierForSizeT k (m - 1) ++ [(m - 1, 0)]).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) := by
         rw [List.map_append, List.map_cons, List.map_nil]
       rw [hrceq, hLHS, hYeq,
@@ -663,6 +663,231 @@ noncomputable def perfectRoot (L k : Nat) (cells : List Digest) (left : Nat) :
       naryMr L ((List.range k).map fun j =>
         perfectRoot L k cells (left + j * k ^ h) h)
 
+/-! Bridge support: the build distributes over a final cell, `perfectRoot`
+    only reads in-range cells, and frontier spans stay within bounds. -/
+
+/-- The tiling start never exceeds its stop. -/
+private theorem Tiles_le (k : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat),
+      Tiles k start coords stop → start ≤ stop := by
+  intro coords
+  induction coords with
+  | nil => intro start stop h; exact le_of_eq h
+  | cons p rest ih =>
+    intro start stop h
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := h
+    have := ih (start + k ^ ph) stop htrest
+    omega
+
+/-- Each tiled span fits within the stop. -/
+private theorem Tiles_entry_bound (k : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat),
+      Tiles k start coords stop → ∀ lh ∈ coords, lh.1 + k ^ lh.2 ≤ stop := by
+  intro coords
+  induction coords with
+  | nil => intro start stop _ lh hmem; simp only [List.not_mem_nil] at hmem
+  | cons p rest ih =>
+    intro start stop htiles lh hmem
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    rw [List.mem_cons] at hmem
+    rcases hmem with rfl | hmem'
+    · have hle := Tiles_le k rest (start + k ^ ph) stop htrest
+      show pl + k ^ ph ≤ stop
+      omega
+    · exact ih (start + k ^ ph) stop htrest lh hmem'
+
+/-- Processing one more cell at the end is one more `appendCell`. -/
+private theorem buildStackGo_snoc (L k : Nat) :
+    ∀ (cs : List Digest) (stack : List Digest) (idx : Nat) (c : Digest),
+      buildStackGo L k stack idx (cs ++ [c]) =
+        appendCell L k (buildStackGo L k stack idx cs) c (idx + cs.length) := by
+  intro cs
+  induction cs with
+  | nil => intro stack idx c; simp [buildStackGo]
+  | cons d ds ih =>
+    intro stack idx c
+    simp only [List.cons_append, buildStackGo]
+    rw [ih (appendCell L k stack d idx) (idx + 1) c, List.length_cons,
+      show idx + 1 + ds.length = idx + (ds.length + 1) by omega]
+
+/-- `perfectRoot` only reads cells within the subtree span, so appending more
+    cells beyond it leaves the root unchanged. -/
+private theorem perfectRoot_stable (L k : Nat) (cells extra : List Digest) :
+    ∀ (h left : Nat), left + k ^ h ≤ cells.length →
+      perfectRoot L k cells left h = perfectRoot L k (cells ++ extra) left h := by
+  intro h
+  induction h with
+  | zero =>
+    intro left hle
+    rw [pow_zero] at hle
+    show cells.getD left emptyHash = (cells ++ extra).getD left emptyHash
+    rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD,
+      List.getElem?_append_left (by omega)]
+  | succ n ih =>
+    intro left hle
+    simp only [perfectRoot]
+    congr 1
+    apply List.map_congr_left
+    intro j hj
+    rw [List.mem_range] at hj
+    apply ih
+    have h1 : j * k ^ n + k ^ n = (j + 1) * k ^ n := by ring
+    have h2 : (j + 1) * k ^ n ≤ k ^ (n + 1) := by
+      calc (j + 1) * k ^ n ≤ k * k ^ n := by gcongr; omega
+        _ = k ^ (n + 1) := by rw [pow_succ']
+    omega
+
+/-- The trailing `k` coordinates form a perfect k-ary block of equal height —
+    the precondition under which a digest merge realizes a `perfectRoot`. -/
+def IsBlockTop (k : Nat) (coords : List (Nat × Nat)) : Prop :=
+  k ≤ coords.length ∧
+    ∃ l h, coords.drop (coords.length - k) = (List.range k).map (fun i => (l + i * k ^ h, h))
+
+/-- **Single-step digest/coordinate simulation.** When the trailing `k` coords
+    form a valid block, one digest merge equals the coordinate merge under the
+    `perfectRoot` map — because the block's `naryMr` is exactly `perfectRoot`
+    of the parent (definitional unfold of `perfectRoot (h+1)`). -/
+private theorem mergeTopD_sim (L k : Nat) (hk : 1 ≤ k) (cells : List Digest)
+    (coords : List (Nat × Nat)) (hblock : IsBlockTop k coords) :
+    mergeTopD L k (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)) =
+      (mergeTopCoords k coords).map (fun lh => perfectRoot L k cells lh.1 lh.2) := by
+  obtain ⟨hlen, l, h, hdrop⟩ := hblock
+  have hnary : naryMr L ((coords.drop (coords.length - k)).map
+      (fun lh => perfectRoot L k cells lh.1 lh.2)) = perfectRoot L k cells l (h + 1) := by
+    rw [hdrop, List.map_map]
+    conv_rhs => rw [perfectRoot]
+    apply congrArg (naryMr L)
+    apply List.map_congr_left
+    intro i _
+    simp [Function.comp]
+  have hhead : (coords.drop (coords.length - k)).head? = some (l, h) := by
+    rw [hdrop, List.head?_map]
+    have hr : (List.range k).head? = some 0 := by
+      rw [show k = (k - 1) + 1 by omega, List.range_succ_eq_map]; rfl
+    rw [hr]; simp
+  have hLHS : mergeTopD L k (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)) =
+      (coords.take (coords.length - k)).map (fun lh => perfectRoot L k cells lh.1 lh.2) ++
+        [perfectRoot L k cells l (h + 1)] := by
+    unfold mergeTopD
+    rw [List.length_map, if_neg (by omega), ← List.map_take, ← List.map_drop, hnary]
+  have hRHS : (mergeTopCoords k coords).map (fun lh => perfectRoot L k cells lh.1 lh.2) =
+      (coords.take (coords.length - k)).map (fun lh => perfectRoot L k cells lh.1 lh.2) ++
+        [perfectRoot L k cells l (h + 1)] := by
+    unfold mergeTopCoords
+    rw [if_neg (by omega), hhead]
+    simp
+  rw [hLHS, hRHS]
+
+/-- **Chained simulation.** If every intermediate state has a valid trailing
+    block, the iterated digest merge tracks the iterated coordinate merge. -/
+private theorem simChain (L k : Nat) (hk : 1 ≤ k) (cells : List Digest) :
+    ∀ (c : Nat) (coords : List (Nat × Nat)),
+      (∀ j < c, IsBlockTop k (mergeTopCoordsN k j coords)) →
+      mergeTopDN L k c (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)) =
+        (mergeTopCoordsN k c coords).map (fun lh => perfectRoot L k cells lh.1 lh.2) := by
+  intro c
+  induction c with
+  | zero => intro coords _; rfl
+  | succ c ih =>
+    intro coords hvalid
+    have hval' : ∀ j < c, IsBlockTop k (mergeTopCoordsN k j (mergeTopCoords k coords)) :=
+      fun j hj => hvalid (j + 1) (by omega)
+    show mergeTopDN L k c (mergeTopD L k (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)))
+       = (mergeTopCoordsN k (c + 1) coords).map (fun lh => perfectRoot L k cells lh.1 lh.2)
+    rw [mergeTopD_sim L k hk cells coords (hvalid 0 (by omega)),
+      ih (mergeTopCoords k coords) hval']
+    rfl
+
+/-- Scaling a list one level up preserves a valid trailing block (with the
+    block lifted one level). -/
+private theorem IsBlockTop_scale (k : Nat) (Z : List (Nat × Nat)) (hZ : IsBlockTop k Z) :
+    IsBlockTop k (Z.map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))) := by
+  obtain ⟨hlen, l, h, hdrop⟩ := hZ
+  refine ⟨by rw [List.length_map]; exact hlen, l * k, h + 1, ?_⟩
+  rw [List.length_map, ← List.map_drop, hdrop, List.map_map]
+  apply List.map_congr_left
+  intro i _
+  show ((l + i * k ^ h) * k, h + 1) = (l * k + i * k ^ (h + 1), h + 1)
+  rw [Prod.mk.injEq, pow_succ]
+  exact ⟨by ring, rfl⟩
+
+/-- **Every carry merge is a valid block.** During the append of leaf `len`,
+    each of the `reductionCount k len` merges acts on a perfect k-ary block.
+    Proved by the same base-`k` division induction as the carry schedule:
+    the first merge consumes the completed bottom run; the rest are the
+    carries of `(len+1)/k - 1` lifted one level. -/
+private theorem validCarry (k : Nat) (hk : 2 ≤ k) :
+    ∀ len, ∀ j < reductionCount k len,
+      IsBlockTop k (mergeTopCoordsN k j (frontierForSizeT k len ++ [(len, 0)])) := by
+  intro len
+  induction len using Nat.strong_induction_on with
+  | _ len ih =>
+    intro j hj
+    by_cases hmod0 : (len + 1) % k = 0
+    · have hdvd : k ∣ (len + 1) := Nat.dvd_of_mod_eq_zero hmod0
+      have hkle : k ≤ len + 1 := Nat.le_of_dvd (by omega) hdvd
+      set m := (len + 1) / k with hm
+      have hmk : m * k = len + 1 := by rw [hm]; exact Nat.div_mul_cancel hdvd
+      have hmpos : 0 < m := by rw [hm]; exact Nat.div_pos hkle (by omega)
+      have hmlt : m < len + 1 := by rw [hm]; exact Nat.div_lt_self (by omega) (by omega)
+      have hmlt' : m - 1 < len := by omega
+      have hrceq : reductionCount k len = 1 + reductionCount k (m - 1) := by
+        unfold reductionCount
+        conv_lhs => rw [reductionCountGo]
+        rw [dif_pos ⟨by omega, by omega, hmod0⟩]
+        congr 1
+        rw [← hm]; congr 1; omega
+      have hn_eq : len = (m - 1) * k + (k - 1) := by rw [Nat.sub_one_mul]; omega
+      have hrange : List.range k = List.range (k - 1) ++ [k - 1] := by
+        conv_lhs => rw [show k = (k - 1) + 1 by omega]
+        rw [List.range_succ]
+      have hfn : frontierForSizeT k len =
+          (frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
+          (List.range (k - 1)).map (fun i => ((m - 1) * k + i, 0)) := by
+        rw [hn_eq]; exact frontier_divstep k hk (m - 1) (k - 1) (by omega)
+      have hX : frontierForSizeT k len ++ [(len, 0)] =
+          (frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
+          (List.range k).map (fun i => ((m - 1) * k + i, 0)) := by
+        rw [hfn, List.append_assoc]
+        congr 1
+        rw [hrange, List.map_append]
+        congr 1
+        simp [hn_eq]
+      rcases Nat.eq_zero_or_pos j with hj0 | hjpos
+      · subst hj0
+        rw [show mergeTopCoordsN k 0 (frontierForSizeT k len ++ [(len, 0)])
+              = frontierForSizeT k len ++ [(len, 0)] from rfl, hX]
+        refine ⟨?_, (m - 1) * k, 0, ?_⟩
+        · simp only [List.length_append, List.length_map, List.length_range]; omega
+        · have hdroplen :
+              ((frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
+                (List.range k).map (fun i => ((m - 1) * k + i, 0))).length - k =
+              ((frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))).length := by
+            simp only [List.length_append, List.length_map, List.length_range]; omega
+          rw [hdroplen, List.drop_left]
+          apply List.map_congr_left
+          intro i _
+          rw [pow_zero, Nat.mul_one]
+      · obtain ⟨j', rfl⟩ : ∃ j', j = j' + 1 := ⟨j - 1, by omega⟩
+        have hj'lt : j' < reductionCount k (m - 1) := by rw [hrceq] at hj; omega
+        rw [show mergeTopCoordsN k (j' + 1) (frontierForSizeT k len ++ [(len, 0)])
+              = mergeTopCoordsN k j'
+                  (mergeTopCoords k (frontierForSizeT k len ++ [(len, 0)])) from rfl,
+          hX, mergeTopCoords_group k (by omega)
+            ((frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))) ((m - 1) * k),
+          show (frontierForSizeT k (m - 1)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
+                [((m - 1) * k, 1)]
+              = (frontierForSizeT k (m - 1) ++ [(m - 1, 0)]).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) from by
+            rw [List.map_append]; simp,
+          mergeTopCoordsN_scale]
+        exact IsBlockTop_scale k _ (ih (m - 1) hmlt' j' hj'lt)
+    · have h0 : reductionCount k len = 0 := by
+        unfold reductionCount
+        rw [reductionCountGo, dif_neg (by rintro ⟨_, _, h⟩; exact hmod0 h)]
+      omega
+
 /-- **K-ary bridge lemma.** The frontier stack machine computes exactly the
     perfect-subtree roots of the frontier decomposition. This is the k-ary
     generalization of `bridge_lemma` (`Bridge.lean`), which covers only
@@ -681,7 +906,37 @@ theorem kary_bridge (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
     buildStackCells L k cells =
       (frontierForSizeT k cells.length).map
         (fun lh => perfectRoot L k cells lh.1 lh.2) := by
-  sorry
+  induction cells using List.reverseRecOn with
+  | nil =>
+    rw [buildStackCells, frontierForSizeT, frontierGo]
+    simp [buildStackGo]
+  | append_singleton cs c ih =>
+    have hlenc : (cs ++ [c]).length = cs.length + 1 := by simp
+    rw [buildStackCells, buildStackGo_snoc, Nat.zero_add,
+      show buildStackGo L k [] 0 cs = buildStackCells L k cs from rfl, ih, appendCell]
+    have hstab :
+        (frontierForSizeT k cs.length).map (fun lh : Nat × Nat => perfectRoot L k cs lh.1 lh.2)
+        = (frontierForSizeT k cs.length).map
+            (fun lh : Nat × Nat => perfectRoot L k (cs ++ [c]) lh.1 lh.2) := by
+      apply List.map_congr_left
+      intro lh hlh
+      exact perfectRoot_stable L k cs [c] lh.2 lh.1
+        (Tiles_entry_bound k (frontierForSizeT k cs.length) 0 cs.length
+          (frontier_tiles k cs.length hk) lh hlh)
+    have hc : perfectRoot L k (cs ++ [c]) cs.length 0 = c := by
+      show (cs ++ [c]).getD cs.length emptyHash = c
+      rw [List.getD_eq_getElem?_getD, List.getElem?_append_right (by omega),
+        show cs.length - cs.length = 0 from by omega]
+      rfl
+    have hmerge :
+        (frontierForSizeT k cs.length).map (fun lh : Nat × Nat => perfectRoot L k cs lh.1 lh.2) ++ [c]
+        = (frontierForSizeT k cs.length ++ [(cs.length, 0)]).map
+            (fun lh : Nat × Nat => perfectRoot L k (cs ++ [c]) lh.1 lh.2) := by
+      rw [hstab, List.map_append, List.map_cons, List.map_nil, hc]
+    rw [hmerge,
+      simChain L k (by omega) (cs ++ [c]) (reductionCount k cs.length)
+        (frontierForSizeT k cs.length ++ [(cs.length, 0)]) (validCarry k hk cs.length),
+      ← frontier_append_consistent k cs.length hk, hlenc]
 
 /-- Fold the frontier stack to the spine root: merge the rightmost `k` while
     more than `k` remain, then one final `naryMr` (which also covers the
