@@ -590,7 +590,7 @@ private theorem groupingSteps_spec (k : Nat) (hk : 2 ≤ k) :
 
 /-- `findFrontier` returns a slot strictly within the list (counting from the
     starting counter). -/
-private theorem findFrontier_slot_lt (k index : Nat) :
+theorem findFrontier_slot_lt (k index : Nat) :
     ∀ (l : List (Nat × Nat)) (c fIdx lv h : Nat),
       findFrontier k index l c = some (fIdx, lv, h) → fIdx < c + l.length := by
   intro l
@@ -1287,7 +1287,7 @@ private theorem filter_ne_range_length (k p : Nat) (hp : p < k) :
       omega
 
 /-- `digitSteps` as a closed-form map over levels. -/
-private theorem digitSteps_eq_map (k : Nat) :
+theorem digitSteps_eq_map (k : Nat) :
     ∀ (h offset : Nat),
       digitSteps k offset h = (List.range h).map (fun j => (offset / k ^ j % k, k - 1)) := by
   intro h
@@ -1347,7 +1347,7 @@ private theorem honestGroupPath_shape (L k : Nat) (hk : 2 ≤ k) :
           fIdx rfl (by omega)
 
 /-- A tiled coordinate covering `index` is found by `findFrontier`. -/
-private theorem findFrontier_cover (k index : Nat) :
+theorem findFrontier_cover (k index : Nat) :
     ∀ (coords : List (Nat × Nat)) (start stop c : Nat),
       Tiles k start coords stop → start ≤ index → index < stop →
       ∃ fIdx l h, findFrontier k index coords c = some (fIdx, l, h) := by
@@ -1474,7 +1474,7 @@ private theorem insertAt_filter_range {α} [Inhabited α] (φ : Nat → α) (k p
 /-- The digit path folds the leaf up to its frontier-subtree root. Stated
     generally over `offset` (the conclusion rounds `offset` down to a multiple
     of `k^h`); the in-range use has `offset < k^h`, giving `perfectRoot left h`. -/
-private theorem digitFold (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) :
+theorem digitFold (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) :
     ∀ (h offset : Nat),
       foldNary L (cells.getD (left + offset) emptyHash)
         (honestDigitPath L k cells left offset h)
@@ -1593,7 +1593,7 @@ private theorem findFrontier_slot_ge (k index : Nat) :
     · next hcond => have := ih (c + 1) fIdx l h hf; omega
 
 /-- The slot `findFrontier` returns indexes the covering tile. -/
-private theorem findFrontier_spec (k index : Nat) :
+theorem findFrontier_spec (k index : Nat) :
     ∀ (coords : List (Nat × Nat)) (c fIdx l h : Nat),
       findFrontier k index coords c = some (fIdx, l, h) →
       coords[fIdx - c]? = some (l, h) ∧ l ≤ index ∧ index < l + k ^ h := by

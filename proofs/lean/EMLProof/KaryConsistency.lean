@@ -152,6 +152,53 @@ private theorem frontier_getLast_aligned (k n bl bh : Nat) (hk : 2 ≤ k)
   have hmem : (bl, bh) ∈ frontierForSizeT k n := List.mem_of_getLast? hlast
   exact frontierGo_aligned k hk n 0 (by simp) (bl, bh) hmem
 
+/-- **Greedy slot height.** A frontier slot `(sl, sh)` has `sh = log_k (n - sl)`:
+    the height is the log of the leaves still remaining when the greedy
+    decomposition reaches `sl` (tiling pins the remaining count to `n - sl`). -/
+private theorem frontierGo_slot_height (k : Nat) (hk : 2 ≤ k) :
+    ∀ (n off sl sh : Nat), (sl, sh) ∈ frontierGo k off n →
+      sh = Nat.log k (off + n - sl) := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro off sl sh hmem
+    rw [frontierGo] at hmem
+    split at hmem
+    · simp only [List.not_mem_nil] at hmem
+    · next h =>
+        push_neg at h
+        obtain ⟨hn0, _⟩ := h
+        rw [List.mem_cons] at hmem
+        have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
+        have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+        rcases hmem with heq | hmem'
+        · rw [Prod.ext_iff] at heq
+          obtain ⟨hsl, hsh⟩ := heq
+          simp only at hsl hsh
+          subst hsl; subst hsh
+          congr 1; omega
+        · have hrec := ih (n - k ^ Nat.log k n) (by omega) (off + k ^ Nat.log k n) sl sh hmem'
+          rw [hrec]; congr 1; omega
+
+/-- **The boundary's new-frontier slot is at least as tall as the boundary
+    subtree** (`bh ≤ sh`). The slot starts at `sl ≤ bl`, so `n - sl ≥ k ^ bh`
+    leaves remain there; greedy then takes a subtree of height
+    `log_k (n - sl) ≥ bh`. This is `reconstruct_consistency_roots`'s
+    `new_height < boundary_height ⇒ None` guard, shown to never fire for an
+    honest prefix relation. -/
+private theorem newslot_height_ge (k newSize oldSize bl bh fIdx sl sh : Nat) (hk : 2 ≤ k)
+    (hbspan : bl + k ^ bh = oldSize) (hold : oldSize ≤ newSize)
+    (hslot : findFrontier k bl (frontierForSizeT k newSize) 0 = some (fIdx, sl, sh)) :
+    bh ≤ sh := by
+  obtain ⟨hget, hsle, _hblt⟩ := findFrontier_spec k bl (frontierForSizeT k newSize) 0 fIdx sl sh hslot
+  have hmem : (sl, sh) ∈ frontierForSizeT k newSize :=
+    List.mem_of_getElem? (by simpa using hget)
+  have hheight : sh = Nat.log k (0 + newSize - sl) :=
+    frontierGo_slot_height k hk newSize 0 sl sh hmem
+  have hge : k ^ bh ≤ 0 + newSize - sl := by omega
+  rw [hheight]
+  exact Nat.le_log_of_pow_le (by omega) hge
+
 /-! ## The coordinate→digest map of `reconstruct_consistency_roots` -/
 
 /-- A coordinate `(left, height)` → digest map, as `reconstruct_consistency_roots`
