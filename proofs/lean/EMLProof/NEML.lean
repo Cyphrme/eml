@@ -496,6 +496,64 @@ theorem metaroot_binds_timeline
   simp only [metaPreimage] at hpre
   exact List.append_cancel_left hpre
 
+/-! ## Coupling-verifier soundness
+
+The abstract binding theorem (`metaroot_binds_timeline`) upgrades into a
+soundness theorem for the *coupling verifier* that clients actually run
+(`CouplingProof::authenticate` / `::verify` in `proof.rs`).
+
+The verifier reconstructs `combined_root_preimage(active_roots, alg_epochs)` —
+the `metaPreimage` layout, `n_active ‖ [id‖len‖root]* ‖ n_algs ‖ [id‖…]*` —
+hashes it, and compares against the trusted `combined_root`; on success it
+extracts the target algorithm's root by membership in `active_roots`. The
+accept relation modeled below is exactly that recompute-and-extract: it derives
+the committed roots from the hash equality rather than assuming them.
+
+The structural checks (`authenticate`'s canonical ordering, bounds, and
+`active_roots`/timeline consistency) only further constrain the presented
+fields; omitting them strengthens the theorem, which holds for *any* presented
+fields hashing to the root. The genesis-promotion singleton branch
+(`is_promoted` — one algorithm with the default `[(0, MAX)]` timeline, where the
+combined root *is* that algorithm's raw root) is trivially sound — the lone
+extracted root equals the compared combined root with no hashing — and is
+outside the metaroot-binding statement below. -/
+
+/-- The coupling verifier's recompute-and-authenticate relation: the presented
+    roots `ar` and timeline `tl` hash, via the committed metaroot preimage, to
+    the trusted combined root `cr`. Mirrors `CouplingProof::authenticate`'s
+    hashed branch (recompute `combined_root_preimage`, hash, compare). -/
+def CouplingAuthenticates (ar : List (AlgId × List UInt8)) (tl : Timeline) (cr : Digest) : Prop :=
+  combinedRoot ar tl = cr
+
+/-- The full recompute-and-extract accept: authenticate, then return the target
+    algorithm's root by membership in the presented active roots. Mirrors
+    `CouplingProof::verify` returning `Some(root)` for `(target, root) ∈ ar`. -/
+def CouplingExtracts (ar : List (AlgId × List UInt8)) (tl : Timeline) (cr : Digest)
+    (target : AlgId) (root : List UInt8) : Prop :=
+  CouplingAuthenticates ar tl cr ∧ (target, root) ∈ ar
+
+/-- **Coupling-verifier soundness.** Let `(ar_true, tl_true)` be the genuinely
+    committed roots and timeline under combined root `cr`. If a presented
+    coupling proof authenticates against `cr` and extracts `(target, root)`, then
+    that pair is genuinely committed — `(target, root) ∈ ar_true` — unless `H`
+    collides. Acceptance *derives* `ar' = ar_true` from the hash equality via
+    `metaPreimage_injective`; the active roots are never assumed equal. This is
+    the client-facing form of `metaroot_binds_timeline`: an accepting coupling
+    proof cannot extract a root the committer never bound. -/
+theorem coupling_extract_sound
+    (ar_true ar' : List (AlgId × List UInt8)) (tl_true tl' : Timeline) (cr : Digest)
+    (target : AlgId) (root : List UInt8)
+    (htrue : combinedRoot ar_true tl_true = cr)
+    (haccept : CouplingExtracts ar' tl' cr target root) :
+    (target, root) ∈ ar_true ∨ HashCollision := by
+  obtain ⟨hauth, hmem⟩ := haccept
+  have hcr : combinedRoot ar' tl' = combinedRoot ar_true tl_true := hauth.trans htrue.symm
+  by_cases hpre : metaPreimage ar' tl' = metaPreimage ar_true tl_true
+  · obtain ⟨har, _htl⟩ := metaPreimage_injective hpre
+    exact Or.inl (har ▸ hmem)
+  · refine Or.inr ⟨metaPreimage ar' tl', metaPreimage ar_true tl_true, hpre, ?_⟩
+    simpa only [combinedRoot] using hcr
+
 /-- Inserts an element at a given position in a list. -/
 def insertAt {α : Type} (n : Nat) (x : α) : List α → List α
   | [] => [x]
