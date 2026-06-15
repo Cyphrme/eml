@@ -87,7 +87,7 @@ an accepted inclusion proof strictly hashes (`not_canonical_of_promoted`).
   accepting canonical path, modulo an internal-node hash collision. The proof-shape pinning
   (path length and per-step positions) that the shared topology module
   (`neml/src/topology.rs`) derives from `(k, index, tree_size)` enters as premises; see
-  [Future Formalization Work](#6-future-formalization-work).
+  [Future Formalization Work](#7-future-formalization-work).
 
 ### F. Coexistence of Concrete and Generalized Proof Paths
 To optimize auditability and academic generality, EMLProof maintains two parallel proof paths:
@@ -150,7 +150,7 @@ locations in the source files:
     `inclusion_proof_unique` (non-malleability) — all fully proved. Uniqueness holds modulo
     `NodeHashCollision` and takes the proof-shape pinning (`hlen`/`hpos`) as premises,
     mirroring the guarantees of `neml/src/topology.rs`
-    (see [Future Formalization Work](#6-future-formalization-work)).
+    (see [Future Formalization Work](#7-future-formalization-work)).
 
 ### 2.1. How to Audit and Verify Axioms (TCB)
 To verify which axioms and `sorry` placeholders the theorems depend on, a reviewer can inspect
@@ -186,6 +186,10 @@ respective Lean symbols in the source code:
 | **Inclusion Soundness** | [inclusion_soundness](EMLProof/NEML.lean) | Accepting canonical proof commits the leaf at the claimed log position (depth existential) |
 | **Non-Malleability** | [inclusion_proof_unique](EMLProof/NEML.lean) | At most one accepting canonical path per statement, modulo internal-node hash collision |
 | **Theorem 5** | [generalized_bridge_lemma](EMLProof/General/Duality.lean#L444) | Generalized Bridge Lemma |
+| **K-ary Carry Schedule** | [frontier_append_consistent](EMLProof/Kary.lean) | The shipped `frontier_for_size` + `reduction_count` schedule is `AppendConsistent` (base-`k`, any `k ≥ 2`) |
+| **K-ary Bridge** | [kary_bridge](EMLProof/Kary.lean) | The frontier stack machine computes the perfect-subtree roots of the frontier decomposition (k-ary generalization of `bridge_lemma`) |
+| **K-ary Completeness** | [kary_completeness](EMLProof/Kary.lean) | Honest inclusion proofs verify against the null-promoting fold and concrete skeleton |
+| **K-ary Inclusion Soundness** | [kary_inclusion_soundness](EMLProof/Kary.lean) | Accepting proof commits the leaf at log position `index` (depth existential), modulo two explicit hash assumptions |
 
 
 ---
@@ -281,16 +285,48 @@ the findings of our formal red-team audit:
 
 ---
 
-## 6. Future Formalization Work
+## 6. K-ary construction and verifier soundness (V9)
+
+[Kary.lean](EMLProof/Kary.lean) closes the V9 gap end-to-end for arbitrary arity
+`k ≥ 2`. **Now proven** (`sorry`-free):
+
+- the **k-ary construction** and the **shipped base-`k` carry schedule**
+  (`frontier_for_size` + `reduction_count`), via `frontier_append_consistent`
+  and `kary_bridge` — previously proven for no real policy (only the degenerate
+  `linear_split_policy`, and only for binary nodes);
+- the **inclusion verifier**, modeled faithfully against `proof.rs`: the trailing
+  steps are pinned field-by-field to the concrete `inclusionSkeleton` (the single
+  topology authority, transcribed from `topology.rs`), zero-sibling (promoted)
+  steps are rejected (canonical encoding), and the fold is the **null-promoting**
+  `naryMr`, not plain `nodeHash`. `kary_completeness` shows honest proofs verify
+  (the non-vacuity witness) and `kary_inclusion_soundness` shows acceptance binds
+  the leaf to log position `index` (existential in depth, per Cyphr SPEC §2.2.12).
+
+The transcription is pinned to `topology.rs` test vectors by 11 `#guard` checks,
+so definitional drift breaks the build rather than passing silently.
+
+**Trust base unchanged:** the four structural axioms below still bound the TCB.
+The k-ary soundness adds **no axioms** — its two collision-style escape hatches
+(`NodeHashCollision`, `NullAmbiguity`) appear as explicit *hypotheses* on the
+theorems, not as axioms.
+
+**Still UNVERIFIED** (honest scope): the consistency and coupling verifiers;
+multi-algorithm/epoch interaction with the k-ary spine; and Rust-to-Lean
+transcription fidelity itself (mitigated, not eliminated, by the `#guard` pins).
+
+---
+
+## 7. Future Formalization Work
 
 The realignment left the following gaps open, each flagged at its site in the source:
 
-1. **Topology port.** `inclusion_proof_unique` takes the proof-shape pinning as premises
-   (`hlen`: equal path lengths; `hpos`: equal per-step positions), modeling what the shared
-   topology module (`neml/src/topology.rs`) derives from `(k, index, tree_size)`. Porting that
-   module to Lean would make the abstract `SkeletonValid` predicate concrete and discharge
-   these premises as theorems, turning the conditional uniqueness statement into an
-   unconditional one (still modulo hash collisions).
+1. **Legacy `SkeletonValid` premise.** The corpus-level `inclusion_proof_unique`
+   still takes the proof-shape pinning as premises (`hlen`, `hpos`) over the
+   abstract `SkeletonValid`. The concrete topology is now ported in
+   [Kary.lean](EMLProof/Kary.lean) (`inclusionSkeleton`), and
+   `kary_inclusion_soundness` proves soundness against it directly; folding the
+   legacy `NEML.lean` uniqueness statement onto the concrete skeleton (or
+   retiring it in favor of the k-ary version) would discharge those premises.
 2. **Legacy verifier transcription.** `reconstructPathRoot`, `verifyInclusion`, and the
    `partial def` topology helpers in `NEML.lean` are a direct transcription of the
    pre-canonical Rust verifier, retained for reference; no theorem depends on them. They
