@@ -1196,19 +1196,159 @@ noncomputable def honestInclusionPath (L k : Nat) (cells : List Digest)
       honestDigitPath L k cells l (index - l) h ++
         honestGroupPath L k (buildStackCells L k cells) fIdx
 
+/-! Honest-prover shape support. -/
+
+/-- Removing the single matching element from `range k` leaves `k - 1`. -/
+private theorem filter_ne_range_length (k p : Nat) (hp : p < k) :
+    ((List.range k).filter (fun i => i != p)).length = k - 1 := by
+  induction k with
+  | zero => omega
+  | succ n ih =>
+    rw [List.range_succ, List.filter_append, List.length_append]
+    rcases Nat.lt_or_ge p n with hpn | hpn
+    · rw [ih hpn]
+      have hkeep : (([n] : List Nat).filter (fun i => i != p)).length = 1 := by
+        have hb : (n != p) = true := by simp [bne_iff_ne]; omega
+        simp [List.filter_cons, hb]
+      omega
+    · have hpeq : p = n := by omega
+      subst hpeq
+      have hr : ((List.range p).filter (fun i => i != p)).length = p := by
+        have hself : (List.range p).filter (fun i => i != p) = List.range p := by
+          apply List.filter_eq_self.mpr
+          intro a ha
+          rw [List.mem_range] at ha
+          simp [bne_iff_ne]; omega
+        rw [hself, List.length_range]
+      have hdrop : (([p] : List Nat).filter (fun i => i != p)).length = 0 := by
+        simp [List.filter_cons]
+      omega
+
+/-- `digitSteps` as a closed-form map over levels. -/
+private theorem digitSteps_eq_map (k : Nat) :
+    ∀ (h offset : Nat),
+      digitSteps k offset h = (List.range h).map (fun j => (offset / k ^ j % k, k - 1)) := by
+  intro h
+  induction h with
+  | zero => intro offset; rfl
+  | succ n ih =>
+    intro offset
+    rw [digitSteps, List.range_succ_eq_map, List.map_cons, List.map_map, ih (offset / k)]
+    congr 1
+    · simp
+    · apply List.map_congr_left
+      intro j _
+      simp only [Function.comp]
+      rw [Nat.div_div_eq_div_mul, ← pow_succ']
+
+/-- Exact length after a merge (when the stack is long enough). -/
+private theorem mergeTopD_length (L k : Nat) (stack : List Digest) (h : ¬ stack.length < k) :
+    (mergeTopD L k stack).length = stack.length - k + 1 := by
+  unfold mergeTopD
+  rw [if_neg h]
+  simp only [List.length_append, List.length_take, List.length_cons, List.length_nil]
+  omega
+
+/-- The honest grouping path realizes the mapped grouping skeleton. -/
+private theorem honestGroupPath_shape (L k : Nat) (hk : 2 ≤ k) :
+    ∀ (n : Nat) (stack : List Digest) (fIdx : Nat),
+      stack.length = n → fIdx < stack.length →
+      (honestGroupPath L k stack fIdx).map stepShape
+        = (groupingSteps k stack.length fIdx).map (fun pc => (pc.1, pc.2 - 1)) := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro stack fIdx hn hlt
+    by_cases hbase : k < 2 ∨ stack.length ≤ k
+    · rw [honestGroupPath, dif_pos hbase, groupingSteps, dif_pos hbase]
+      by_cases h1 : 1 < stack.length
+      · rw [if_pos h1, if_pos h1]
+        simp only [List.map_cons, List.map_nil, stepShape, List.length_eraseIdx_of_lt hlt]
+      · simp only [if_neg h1, List.map_nil]
+    · rw [honestGroupPath, dif_neg hbase, groupingSteps, dif_neg hbase]
+      push_neg at hbase
+      obtain ⟨_, hgt⟩ := hbase
+      have hml : (mergeTopD L k stack).length = stack.length - k + 1 :=
+        mergeTopD_length L k stack (by omega)
+      by_cases hge : fIdx ≥ stack.length - k
+      · rw [if_pos hge, if_pos hge, List.map_cons, List.map_cons]
+        refine List.cons_eq_cons.mpr ⟨?_, ?_⟩
+        · simp only [stepShape]
+          have hdl : (stack.drop (stack.length - k)).length = k := by
+            rw [List.length_drop]; omega
+          rw [List.length_eraseIdx_of_lt (by rw [hdl]; omega), hdl]
+        · rw [← hml]
+          exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack)
+            (stack.length - k) rfl (by omega)
+      · rw [if_neg hge, if_neg hge, ← hml]
+        exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack)
+          fIdx rfl (by omega)
+
+/-- A tiled coordinate covering `index` is found by `findFrontier`. -/
+private theorem findFrontier_cover (k index : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop c : Nat),
+      Tiles k start coords stop → start ≤ index → index < stop →
+      ∃ fIdx l h, findFrontier k index coords c = some (fIdx, l, h) := by
+  intro coords
+  induction coords with
+  | nil => intro start stop c htiles hs hlt; simp only [Tiles] at htiles; omega
+  | cons p rest ih =>
+    intro start stop c htiles hs hlt
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    rw [findFrontier]
+    by_cases hcond : pl ≤ index ∧ index < pl + k ^ ph
+    · rw [if_pos hcond]; exact ⟨c, pl, ph, rfl⟩
+    · rw [if_neg hcond]
+      push_neg at hcond
+      have hpli : pl + k ^ ph ≤ index := hcond (by omega)
+      exact ih (start + k ^ ph) stop (c + 1) htrest (by omega) hlt
+
 /-- The honest path realizes the skeleton exactly (no prefix: `d = 0` at the
-    cell level) and is well-formed.
-    *Strategy:* digit half — `List.length_filter` count of `i != pos` over
-    `range k` is `k - 1`, positions match `digitSteps` pointwise; grouping
-    half — induction on the shared recursion of `honestGroupPath` /
-    `groupingSteps` with `kary_bridge` fixing the stack length to the
-    frontier length; `eraseIdx` length arithmetic gives sibling counts. -/
+    cell level) and is well-formed. Well-formedness is derived from the shape
+    via `skeleton_no_promoted` rather than re-proven. -/
 theorem honest_path_shape (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (index : Nat) (hidx : index < cells.length) :
     (∃ skel, inclusionSkeleton k cells.length index = some skel ∧
       (honestInclusionPath L k cells index).map stepShape = skel) ∧
     WellFormedSteps (honestInclusionPath L k cells index) := by
-  sorry
+  set fr := frontierForSizeT k cells.length with hfr
+  obtain ⟨fIdx, l, h, hff⟩ := findFrontier_cover k index fr 0 cells.length 0
+    (by rw [hfr]; exact frontier_tiles k cells.length hk) (by omega) hidx
+  have hbuild : (buildStackCells L k cells).length = fr.length := by
+    rw [hfr, kary_bridge L k hk cells, List.length_map]
+  have hfidxlt : fIdx < fr.length := by
+    simpa using findFrontier_slot_lt k index fr 0 fIdx l h hff
+  have hskel : inclusionSkeleton k cells.length index =
+      some (digitSteps k (index - l) h ++
+        (groupingSteps k fr.length fIdx).map (fun pc => (pc.1, pc.2 - 1))) := by
+    rw [inclusionSkeleton, if_neg (by omega), ← hfr, hff]
+  have hpath : honestInclusionPath L k cells index =
+      honestDigitPath L k cells l (index - l) h ++
+        honestGroupPath L k (buildStackCells L k cells) fIdx := by
+    rw [honestInclusionPath, ← hfr, hff]
+  have hshape : (honestInclusionPath L k cells index).map stepShape =
+      digitSteps k (index - l) h ++
+        (groupingSteps k fr.length fIdx).map (fun pc => (pc.1, pc.2 - 1)) := by
+    rw [hpath, List.map_append]
+    congr 1
+    · rw [honestDigitPath, List.map_map, digitSteps_eq_map]
+      apply List.map_congr_left
+      intro j _
+      simp only [Function.comp, stepShape, List.length_map]
+      rw [filter_ne_range_length k ((index - l) / k ^ j % k) (Nat.mod_lt _ (by omega))]
+    · rw [honestGroupPath_shape L k hk (buildStackCells L k cells).length
+            (buildStackCells L k cells) fIdx rfl (by rw [hbuild]; exact hfidxlt), hbuild]
+  refine ⟨⟨_, hskel, hshape⟩, ?_⟩
+  intro s hs
+  have hmem : stepShape s ∈ digitSteps k (index - l) h ++
+      (groupingSteps k fr.length fIdx).map (fun pc => (pc.1, pc.2 - 1)) := by
+    rw [← hshape]; exact List.mem_map_of_mem hs
+  obtain ⟨h1, h2⟩ := skeleton_no_promoted k cells.length index _ hskel (stepShape s) hmem
+  simp only [stepShape] at h1 h2
+  refine ⟨fun hnil => ?_, h2⟩
+  rw [hnil] at h1
+  simp at h1
 
 /-- **Completeness core: the honest path folds to the root.**
     *Strategy:* digit half by induction on `h` — folding one digit step
