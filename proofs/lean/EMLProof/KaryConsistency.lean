@@ -80,6 +80,43 @@ set_option linter.unusedVariables false
 
 namespace NEML
 
+/-! ## Boundary topology
+
+The "boundary" is the last (rightmost, smallest) perfect subtree of the old
+frontier. Its span ends exactly at `oldSize`. These pure-arithmetic facts about
+the frontier tiling anchor both the honest construction and the soundness
+reduction; no hashing is involved. -/
+
+/-- The last tile of a `Tiles` decomposition ends exactly at `stop`. -/
+private theorem Tiles_last (k : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop bl bh : Nat),
+      Tiles k start coords stop → coords.getLast? = some (bl, bh) →
+        bl + k ^ bh = stop := by
+  intro coords
+  induction coords with
+  | nil => intro start stop bl bh _ hlast; simp at hlast
+  | cons p rest ih =>
+    intro start stop bl bh htiles hlast
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    cases rest with
+    | nil =>
+        simp only [List.getLast?_singleton, Option.some.injEq, Prod.mk.injEq] at hlast
+        obtain ⟨hbl, hbh⟩ := hlast
+        subst hbl; subst hbh
+        simp only [Tiles] at htrest
+        omega
+    | cons q qs =>
+        rw [List.getLast?_cons_cons] at hlast
+        exact ih (start + k ^ ph) stop bl bh htrest hlast
+
+/-- The old frontier's last coordinate `(bl, bh)` spans `[bl, oldSize)`:
+    `bl + k ^ bh = oldSize`. -/
+private theorem frontier_getLast_eq (k n bl bh : Nat) (hk : 2 ≤ k)
+    (hlast : (frontierForSizeT k n).getLast? = some (bl, bh)) :
+    bl + k ^ bh = n :=
+  Tiles_last k (frontierForSizeT k n) 0 n bl bh (frontier_tiles k n hk) hlast
+
 /-! ## The coordinate→digest map of `reconstruct_consistency_roots` -/
 
 /-- A coordinate `(left, height)` → digest map, as `reconstruct_consistency_roots`
