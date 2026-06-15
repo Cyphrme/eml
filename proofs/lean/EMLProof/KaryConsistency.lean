@@ -199,6 +199,57 @@ private theorem newslot_height_ge (k newSize oldSize bl bh fIdx sl sh : Nat) (hk
   rw [hheight]
   exact Nat.le_log_of_pow_le (by omega) hge
 
+/-- Every tile's left coordinate is at least the decomposition's start. -/
+private theorem Tiles_left_ge (k : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat), Tiles k start coords stop →
+      ∀ lh ∈ coords, start ≤ lh.1 := by
+  intro coords
+  induction coords with
+  | nil => intro start stop _ lh hmem; simp only [List.not_mem_nil] at hmem
+  | cons p rest ih =>
+    intro start stop htiles lh hmem
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    rw [List.mem_cons] at hmem
+    rcases hmem with rfl | hmem'
+    · exact le_of_eq hpl.symm
+    · have := ih (start + k ^ ph) stop htrest lh hmem'; omega
+
+/-- **`findFrontier` is tile-deterministic.** If it locates a tile `(l, h)` for
+    one index, it locates the same tile for any other index that tile covers:
+    the tiles are disjoint and ordered, so a second in-tile index skips exactly
+    the same prefix. The fact that lets the boundary `bl` and the last old leaf
+    `oldSize - 1` (both inside the boundary subtree) share a new-frontier slot. -/
+private theorem findFrontier_unique (k i₁ i₂ : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop c fIdx l h : Nat),
+      Tiles k start coords stop →
+      findFrontier k i₁ coords c = some (fIdx, l, h) →
+      l ≤ i₂ → i₂ < l + k ^ h →
+      findFrontier k i₂ coords c = some (fIdx, l, h) := by
+  intro coords
+  induction coords with
+  | nil => intro start stop c fIdx l h _ hf; simp only [findFrontier, reduceCtorEq] at hf
+  | cons p rest ih =>
+    intro start stop c fIdx l h htiles hf hle hlt
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    rw [findFrontier] at hf ⊢
+    by_cases hc1 : pl ≤ i₁ ∧ i₁ < pl + k ^ ph
+    · rw [if_pos hc1] at hf
+      simp only [Option.some.injEq, Prod.mk.injEq] at hf
+      obtain ⟨hfi, hl, hh⟩ := hf
+      subst hl; subst hh
+      rw [if_pos ⟨hle, hlt⟩]
+      simp [hfi]
+    · rw [if_neg hc1] at hf
+      obtain ⟨hget, _, _⟩ := findFrontier_spec k i₁ rest (c + 1) fIdx l h hf
+      have hmem : (l, h) ∈ rest := List.mem_of_getElem? (by simpa using hget)
+      have hlge : start + k ^ ph ≤ l := Tiles_left_ge k rest (start + k ^ ph) stop htrest (l, h) hmem
+      have hi2 : ¬(pl ≤ i₂ ∧ i₂ < pl + k ^ ph) := by
+        rintro ⟨_, hlt2⟩; omega
+      rw [if_neg hi2]
+      exact ih (start + k ^ ph) stop (c + 1) fIdx l h htrest hf hle hlt
+
 /-! ## The coordinate→digest map of `reconstruct_consistency_roots` -/
 
 /-- A coordinate `(left, height)` → digest map, as `reconstruct_consistency_roots`
@@ -387,6 +438,102 @@ noncomputable def honestConsistencyPath (L k : Nat) (cells : List Digest)
   match (frontierForSizeT k oldSize).getLast? with
   | none => []
   | some (_bl, bh) => (honestInclusionPath L k cells (oldSize - 1)).drop bh
+
+/-! ## Honest new-root reconstruction -/
+
+/-- **The honest consistency path reconstructs the genuine new root.**
+    Folding the honest boundary-subtree root (`start_hash`) through the honest
+    consistency path yields `karyRoot cells`. The path is the suffix, from the
+    boundary height up, of the inclusion path of the last old leaf
+    (`oldSize - 1`): `honest_path_folds` folds that leaf to the root, and the
+    dropped lower `bh` digit steps fold the leaf up to the boundary subtree root
+    (`digitFold`), which `start_hash` is. The boundary lands in a new-frontier
+    slot of height `≥ bh` (`newslot_height_ge`), shared with `oldSize - 1`
+    (`findFrontier_unique`), and the boundary's aligned position pins the
+    `bh`-level ancestor of `oldSize - 1` to `bl`. -/
+private theorem honest_consistency_newroot (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
+    foldNary L (honestStartHash L k cells oldSize) (honestConsistencyPath L k cells oldSize)
+      = karyRoot L k cells := by
+  -- the boundary coordinate
+  have hfrne : frontierForSizeT k oldSize ≠ [] := by
+    intro he
+    have ht := frontier_tiles k oldSize hk
+    rw [he] at ht; simp only [Tiles] at ht; omega
+  obtain ⟨bl, bh, hlast⟩ :
+      ∃ bl bh, (frontierForSizeT k oldSize).getLast? = some (bl, bh) := by
+    rcases hg : (frontierForSizeT k oldSize).getLast? with _ | ⟨bl, bh⟩
+    · exact absurd (List.getLast?_eq_none_iff.mp hg) hfrne
+    · exact ⟨bl, bh, rfl⟩
+  have hspan : bl + k ^ bh = oldSize := frontier_getLast_eq k oldSize bl bh hk hlast
+  have hbalign : k ^ bh ∣ bl := frontier_getLast_aligned k oldSize bl bh hk hlast
+  have hk0 : 0 < k ^ bh := pow_pos (by omega) bh
+  have hbllt : bl < cells.length := by omega
+  -- locate the boundary's new-frontier slot
+  obtain ⟨fIdx, sl, sh, hff⟩ := findFrontier_cover k bl (frontierForSizeT k cells.length) 0
+    cells.length 0 (frontier_tiles k cells.length hk) (Nat.zero_le _) hbllt
+  obtain ⟨hget, hsle, hblt⟩ :=
+    findFrontier_spec k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
+  have hslmem : (sl, sh) ∈ frontierForSizeT k cells.length :=
+    List.mem_of_getElem? (by simpa using hget)
+  have hslalign : k ^ sh ∣ sl := frontierGo_aligned k hk cells.length 0 (by simp) (sl, sh) hslmem
+  have hbhsh : bh ≤ sh :=
+    newslot_height_ge k cells.length oldSize bl bh fIdx sl sh hk hspan (le_of_lt hnew) hff
+  -- aligned nesting: the boundary subtree fits inside the slot
+  have hbhdvdsl : k ^ bh ∣ sl := dvd_trans (pow_dvd_pow k hbhsh) hslalign
+  obtain ⟨a, ha⟩ := hbalign
+  obtain ⟨b, hb⟩ := hbhdvdsl
+  have hba : b ≤ a := Nat.le_of_mul_le_mul_left (by omega) hk0
+  have hm : bl - sl = k ^ bh * (a - b) := by rw [ha, hb, Nat.mul_sub]
+  set m := a - b with hmdef
+  have hnest : bl + k ^ bh ≤ sl + k ^ sh := by
+    obtain ⟨q, hq⟩ := pow_dvd_pow k hbhsh
+    have h1 : k ^ bh * m < k ^ bh * q := by rw [← hq]; omega
+    have hmq : m < q := lt_of_mul_lt_mul_left h1 (Nat.zero_le _)
+    have h2 : k ^ bh * (m + 1) ≤ k ^ bh * q := Nat.mul_le_mul (le_refl _) (by omega)
+    have he : k ^ bh * (m + 1) = k ^ bh * m + k ^ bh := by ring
+    rw [hq]; omega
+  -- same slot for the last old leaf
+  have hff2 : findFrontier k (oldSize - 1) (frontierForSizeT k cells.length) 0
+      = some (fIdx, sl, sh) :=
+    findFrontier_unique k bl (oldSize - 1) (frontierForSizeT k cells.length) 0 cells.length 0
+      fIdx sl sh (frontier_tiles k cells.length hk) hff (by omega) (by omega)
+  -- the boundary is the bh-level aligned ancestor of oldSize - 1
+  have halign : sl + (oldSize - 1 - sl) / k ^ bh * k ^ bh = bl := by
+    have hofs : (oldSize - 1 - sl) / k ^ bh = m := by
+      have hrw : oldSize - 1 - sl = k ^ bh * m + (k ^ bh - 1) := by omega
+      rw [hrw, Nat.mul_add_div hk0, Nat.div_eq_of_lt (by omega), Nat.add_zero]
+    have hc : m * k ^ bh = k ^ bh * m := Nat.mul_comm _ _
+    rw [hofs]; omega
+  -- unfold the honest start hash and path
+  simp only [honestStartHash, honestConsistencyPath, hlast]
+  -- honest inclusion path through the shared slot
+  have hincl : honestInclusionPath L k cells (oldSize - 1)
+      = honestDigitPath L k cells sl (oldSize - 1 - sl) sh
+        ++ honestGroupPath L k (buildStackCells L k cells) fIdx := by
+    simp only [honestInclusionPath, hff2]
+  set leaf := cells.getD (oldSize - 1) emptyHash with hleaf
+  have hfull := honest_path_folds L k hk cells (oldSize - 1) (by omega)
+  -- the dropped lower bh steps fold the leaf to the boundary subtree root
+  have htakefold : foldNary L leaf
+      ((honestInclusionPath L k cells (oldSize - 1)).take bh) = perfectRoot L k cells bl bh := by
+    rw [hincl]
+    have hdlen : (honestDigitPath L k cells sl (oldSize - 1 - sl) sh).length = sh := by
+      rw [honestDigitPath, List.length_map, List.length_range]
+    rw [List.take_append_of_le_length (by rw [hdlen]; exact hbhsh)]
+    have htk : (honestDigitPath L k cells sl (oldSize - 1 - sl) sh).take bh
+        = honestDigitPath L k cells sl (oldSize - 1 - sl) bh := by
+      rw [honestDigitPath, honestDigitPath, ← List.map_take, List.take_range, Nat.min_eq_left hbhsh]
+    rw [htk]
+    have hdf := digitFold L k hk cells sl bh (oldSize - 1 - sl)
+    rw [show sl + (oldSize - 1 - sl) = oldSize - 1 from by omega, halign] at hdf
+    rw [hleaf]; exact hdf
+  -- assemble via the take/drop split of the honest fold
+  have hsplit : foldNary L leaf (honestInclusionPath L k cells (oldSize - 1))
+      = foldNary L (foldNary L leaf ((honestInclusionPath L k cells (oldSize - 1)).take bh))
+          ((honestInclusionPath L k cells (oldSize - 1)).drop bh) := by
+    rw [foldNary, foldNary, foldNary, ← List.foldl_append, List.take_append_drop]
+  rw [← hfull, hsplit, htakefold]
 
 /-! ## The theorems -/
 
