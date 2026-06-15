@@ -162,6 +162,170 @@ theorem frontier_tiles (k n : Nat) (hk : 2 ≤ k) :
   have := frontierGo_tiles k hk n 0
   simpa [frontierForSizeT] using this
 
+/-! Helper arithmetic for the carry schedule: the frontier is governed by the
+    base-`k` digit expansion, so appends factor through division by `k`
+    (`frontierGo_scale`), single pushes (`frontierGo_push`), and the digit
+    decomposition (`frontier_divstep`). -/
+
+/-- Every left coordinate in `frontierGo k off n` is at least `off`. -/
+private theorem frontierGo_left_ge (k : Nat) (hk : 2 ≤ k) :
+    ∀ (n off : Nat), ∀ lh ∈ frontierGo k off n, off ≤ lh.1 := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro off lh hmem
+    rw [frontierGo] at hmem
+    split at hmem
+    · simp only [List.not_mem_nil] at hmem
+    · next h =>
+        push_neg at h
+        obtain ⟨hn0, _⟩ := h
+        rw [List.mem_cons] at hmem
+        have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+        rcases hmem with rfl | hmem'
+        · exact le_refl _
+        · have := ih (n - k ^ Nat.log k n) (by
+            have : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0; omega)
+            (off + k ^ Nat.log k n) lh hmem'
+          omega
+
+/-- Multiplying the leaf count by `k` raises every frontier subtree one level
+    and scales its span by `k`. General over both offsets so the induction
+    closes. -/
+private theorem frontierGo_scale (k : Nat) (hk : 2 ≤ k) :
+    ∀ (j left off : Nat),
+      frontierGo k left (j * k) =
+        (frontierGo k off j).map (fun lh => (left + (lh.1 - off) * k, lh.2 + 1)) := by
+  intro j
+  induction j using Nat.strong_induction_on with
+  | _ j ih =>
+    intro left off
+    rcases Nat.eq_zero_or_pos j with hj0 | hjpos
+    · subst hj0; simp [frontierGo]
+    · have hjk : j * k ≠ 0 := Nat.mul_ne_zero (by omega) (by omega)
+      have hcapj : k ^ Nat.log k j ≤ j := Nat.pow_log_le_self k (by omega)
+      have hcapjpos : 0 < k ^ Nat.log k j := pow_pos (by omega) _
+      have hlog : Nat.log k (j * k) = Nat.log k j + 1 := Nat.log_mul_base (by omega) (by omega)
+      have hunfoldL : frontierGo k left (j * k) =
+          (left, Nat.log k j + 1) ::
+            frontierGo k (left + k ^ Nat.log k j * k) ((j - k ^ Nat.log k j) * k) := by
+        conv_lhs => rw [frontierGo]
+        rw [dif_neg (by omega), hlog, pow_succ, ← Nat.sub_mul]
+      have hunfoldR : frontierGo k off j =
+          (off, Nat.log k j) :: frontierGo k (off + k ^ Nat.log k j) (j - k ^ Nat.log k j) := by
+        conv_lhs => rw [frontierGo]
+        rw [dif_neg (by omega)]
+      rw [hunfoldL, hunfoldR, List.map_cons]
+      refine List.cons_eq_cons.mpr ⟨by simp, ?_⟩
+      rw [ih (j - k ^ Nat.log k j) (by omega) (left + k ^ Nat.log k j * k)
+        (off + k ^ Nat.log k j)]
+      apply List.map_congr_left
+      intro lh hlh
+      have hge : off + k ^ Nat.log k j ≤ lh.1 :=
+        frontierGo_left_ge k hk (j - k ^ Nat.log k j) (off + k ^ Nat.log k j) lh hlh
+      rw [Prod.mk.injEq]
+      refine ⟨?_, rfl⟩
+      have hrw : (lh.1 - off) * k =
+          (lh.1 - (off + k ^ Nat.log k j)) * k + k ^ Nat.log k j * k := by
+        rw [← Nat.add_mul]; congr 1; omega
+      rw [hrw]; omega
+
+/-- Scale at the canonical origin: `frontierForSizeT k (a*k)` is the frontier of
+    `a` with every span scaled and every height bumped. -/
+private theorem frontierForSizeT_scale (k : Nat) (hk : 2 ≤ k) (a : Nat) :
+    frontierForSizeT k (a * k) =
+      (frontierForSizeT k a).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+  rw [frontierForSizeT, frontierForSizeT, frontierGo_scale k hk a 0 0]
+  apply List.map_congr_left
+  intro lh _
+  simp
+
+/-- A push that does not complete a `k`-group just appends a height-0 leaf. -/
+private theorem frontierGo_push (k : Nat) (hk : 2 ≤ k) :
+    ∀ (n left : Nat), (n + 1) % k ≠ 0 →
+      frontierGo k left (n + 1) = frontierGo k left n ++ [(left + n, 0)] := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro left hmod
+    have hmono : Nat.log k n ≤ Nat.log k (n + 1) := Nat.log_mono_right (by omega)
+    have hlogeq : Nat.log k (n + 1) = Nat.log k n := by
+      rcases Nat.lt_or_ge (Nat.log k n) (Nat.log k (n + 1)) with hlt | hge
+      · exfalso
+        have hle : k ^ (Nat.log k n + 1) ≤ n + 1 :=
+          le_trans (Nat.pow_le_pow_right (by omega) hlt) (Nat.pow_log_le_self k (by omega))
+        have hgt : n < k ^ (Nat.log k n + 1) := Nat.lt_pow_succ_log_self (by omega) n
+        have heq1 : n + 1 = k ^ (Nat.log k n + 1) := by omega
+        apply hmod
+        rw [heq1, pow_succ, Nat.mul_comm]
+        exact Nat.mul_mod_right k _
+      · omega
+    rcases Nat.eq_zero_or_pos n with hn0 | hnpos
+    · subst hn0
+      have hlog1 : Nat.log k 1 = 0 := by rw [Nat.log_eq_zero_iff]; omega
+      rw [frontierGo, dif_neg (by omega), hlog1, pow_zero]
+      simp [frontierGo]
+    · have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k (by omega)
+      have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+      have hsubmod : (n - k ^ Nat.log k n + 1) % k ≠ 0 := by
+        rcases Nat.eq_zero_or_pos (Nat.log k n) with hl0 | hlpos
+        · rw [hl0, pow_zero]
+          have hnlt : n < k := by
+            have h := Nat.lt_pow_succ_log_self (show 1 < k by omega) n
+            rw [hl0] at h; simpa using h
+          rw [show n - 1 + 1 = n by omega, Nat.mod_eq_of_lt hnlt]; omega
+        · obtain ⟨c, hc⟩ : k ∣ k ^ Nat.log k n := dvd_pow_self k (by omega)
+          have hkey : n + 1 = (n - k ^ Nat.log k n + 1) + k * c := by rw [← hc]; omega
+          rw [hkey, Nat.add_mul_mod_self_left] at hmod
+          exact hmod
+      have hunfold1 : frontierGo k left (n + 1) =
+          (left, Nat.log k n) ::
+            frontierGo k (left + k ^ Nat.log k n) (n + 1 - k ^ Nat.log k n) := by
+        conv_lhs => rw [frontierGo]
+        rw [dif_neg (by omega), hlogeq]
+      have hunfold2 : frontierGo k left n =
+          (left, Nat.log k n) :: frontierGo k (left + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
+        conv_lhs => rw [frontierGo]
+        rw [dif_neg (by omega)]
+      rw [hunfold1, hunfold2, List.cons_append]
+      refine List.cons_eq_cons.mpr ⟨rfl, ?_⟩
+      rw [show n + 1 - k ^ Nat.log k n = (n - k ^ Nat.log k n) + 1 by omega,
+        ih (n - k ^ Nat.log k n) (by omega) (left + k ^ Nat.log k n) hsubmod,
+        show left + k ^ Nat.log k n + (n - k ^ Nat.log k n) = left + n by omega]
+
+/-- Canonical-origin push corollary. -/
+private theorem frontierForSizeT_push (k : Nat) (hk : 2 ≤ k) (m : Nat)
+    (hmod : (m + 1) % k ≠ 0) :
+    frontierForSizeT k (m + 1) = frontierForSizeT k m ++ [(m, 0)] := by
+  have := frontierGo_push k hk m 0 hmod
+  simpa [frontierForSizeT] using this
+
+/-- **Digit decomposition (one base-`k` division step).** For `b < k`, the
+    frontier of `a*k + b` is the scaled frontier of `a` followed by `b`
+    height-0 leaves. `b = 0` is the scale lemma; the step is a push. -/
+private theorem frontier_divstep (k : Nat) (hk : 2 ≤ k) (a : Nat) :
+    ∀ b, b < k → frontierForSizeT k (a * k + b) =
+      (frontierForSizeT k a).map (fun lh => (lh.1 * k, lh.2 + 1)) ++
+      (List.range b).map (fun i => (a * k + i, 0)) := by
+  intro b
+  induction b with
+  | zero =>
+    intro _
+    simp only [Nat.add_zero, List.range_zero, List.map_nil, List.append_nil]
+    exact frontierForSizeT_scale k hk a
+  | succ b ih =>
+    intro hb
+    have hb' : b < k := by omega
+    have hmod : (a * k + b + 1) % k ≠ 0 := by
+      have heqmod : (a * k + b + 1) % k = (b + 1) % k := by
+        rw [show a * k + b + 1 = (b + 1) + a * k by ring, Nat.add_mul_mod_self_right]
+      rw [heqmod, Nat.mod_eq_of_lt hb]; omega
+    rw [show a * k + (b + 1) = (a * k + b) + 1 by ring,
+      frontierForSizeT_push k hk (a * k + b) hmod, ih hb', List.append_assoc]
+    congr 1
+    rw [List.range_succ, List.map_append]
+    simp
+
 /-- **Carry-schedule consistency — the k-ary `AppendConsistent`.** Appending
     index `n` (push `(n, 0)`, then `reductionCount k n` top-k merges)
     transforms the frontier of size `n` into the frontier of size `n + 1`.
@@ -174,10 +338,107 @@ theorem frontier_tiles (k n : Nat) (hk : 2 ≤ k) :
     trailing `k-1` digits of `n` (the carry run of the increment). Prove a
     digit characterization of `frontierGo` first, then the merge recursion
     consumes one trailing-digit run. Pure arithmetic; no hashing. -/
+private theorem mergeTopCoords_scale (k : Nat) (cs : List (Nat × Nat)) :
+    mergeTopCoords k (cs.map (fun lh => (lh.1 * k, lh.2 + 1))) =
+      (mergeTopCoords k cs).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+  unfold mergeTopCoords
+  by_cases hlen : cs.length < k
+  · simp [List.length_map, hlen]
+  · rw [List.length_map, if_neg hlen, if_neg hlen, ← List.map_drop]
+    cases hdrop : cs.drop (cs.length - k) with
+    | nil => simp
+    | cons x rest =>
+      obtain ⟨l, h⟩ := x
+      simp [List.map_take]
+
+private theorem mergeTopCoordsN_scale (k : Nat) :
+    ∀ (c : Nat) (cs : List (Nat × Nat)),
+      mergeTopCoordsN k c (cs.map (fun lh => (lh.1 * k, lh.2 + 1))) =
+        (mergeTopCoordsN k c cs).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+  intro c
+  induction c with
+  | zero => intro cs; rfl
+  | succ c ih =>
+    intro cs
+    show mergeTopCoordsN k c (mergeTopCoords k (cs.map (fun lh => (lh.1 * k, lh.2 + 1)))) =
+         (mergeTopCoordsN k c (mergeTopCoords k cs)).map (fun lh => (lh.1 * k, lh.2 + 1))
+    rw [mergeTopCoords_scale]
+    exact ih (mergeTopCoords k cs)
+
+/-- A single merge of a trailing run of exactly `k` height-0 leaves at
+    consecutive positions `b, b+1, …, b+k-1` produces one height-1 node at
+    `b`, leaving the prefix untouched. -/
+private theorem mergeTopCoords_group (k : Nat) (hk : 1 ≤ k) (P : List (Nat × Nat)) (b : Nat) :
+    mergeTopCoords k (P ++ (List.range k).map (fun i => (b + i, 0))) = P ++ [(b, 1)] := by
+  have hglen : ((List.range k).map (fun i => (b + i, 0))).length = k := by
+    rw [List.length_map, List.length_range]
+  have hsub : (P ++ (List.range k).map (fun i => (b + i, 0))).length - k = P.length := by
+    rw [List.length_append, hglen]; omega
+  unfold mergeTopCoords
+  rw [if_neg (by rw [List.length_append, hglen]; omega), hsub, List.drop_left]
+  rw [show k = (k - 1) + 1 by omega, List.range_succ_eq_map, List.map_cons, List.head?_cons]
+  simp [hsub, List.take_left]
+
 theorem frontier_append_consistent (k n : Nat) (hk : 2 ≤ k) :
     frontierForSizeT k (n + 1) =
       mergeTopCoordsN k (reductionCount k n) (frontierForSizeT k n ++ [(n, 0)]) := by
-  sorry
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    by_cases hmod0 : (n + 1) % k = 0
+    · -- Carry case: `n + 1 = m * k`, one group merge then the carries of `m - 1`.
+      have hdvd : k ∣ (n + 1) := Nat.dvd_of_mod_eq_zero hmod0
+      have hkle : k ≤ n + 1 := Nat.le_of_dvd (by omega) hdvd
+      have hn1 : 1 ≤ n := by omega
+      set m := (n + 1) / k with hm
+      have hmk : m * k = n + 1 := by rw [hm]; exact Nat.div_mul_cancel hdvd
+      have hmpos : 0 < m := by rw [hm]; exact Nat.div_pos hkle (by omega)
+      have hmlt : m < n + 1 := by rw [hm]; exact Nat.div_lt_self (by omega) (by omega)
+      have hmlt' : m - 1 < n := by omega
+      have hrceq : reductionCount k n = 1 + reductionCount k (m - 1) := by
+        unfold reductionCount
+        conv_lhs => rw [reductionCountGo]
+        rw [dif_pos ⟨by omega, by omega, hmod0⟩]
+        congr 1
+        rw [← hm]
+        congr 1
+        omega
+      have hLHS : frontierForSizeT k (n + 1) =
+          (frontierForSizeT k m).map (fun lh => (lh.1 * k, lh.2 + 1)) := by
+        rw [← hmk, frontierForSizeT_scale k hk m]
+      have hn_eq : n = (m - 1) * k + (k - 1) := by rw [Nat.sub_one_mul]; omega
+      have hfn : frontierForSizeT k n =
+          (frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1)) ++
+          (List.range (k - 1)).map (fun i => ((m - 1) * k + i, 0)) := by
+        rw [hn_eq]; exact frontier_divstep k hk (m - 1) (k - 1) (by omega)
+      have hrange : List.range k = List.range (k - 1) ++ [k - 1] := by
+        conv_lhs => rw [show k = (k - 1) + 1 by omega]
+        rw [List.range_succ]
+      have hYeq : frontierForSizeT k n ++ [(n, 0)] =
+          (frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1)) ++
+          (List.range k).map (fun i => ((m - 1) * k + i, 0)) := by
+        rw [hfn, List.append_assoc]
+        congr 1
+        rw [hrange, List.map_append]
+        congr 1
+        simp [hn_eq]
+      have hgroup := mergeTopCoords_group k (by omega)
+        ((frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1))) ((m - 1) * k)
+      have hgroup2 :
+          (frontierForSizeT k (m - 1)).map (fun lh => (lh.1 * k, lh.2 + 1)) ++ [((m - 1) * k, 1)] =
+            (frontierForSizeT k (m - 1) ++ [(m - 1, 0)]).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) := by
+        rw [List.map_append, List.map_cons, List.map_nil]
+      rw [hrceq, hLHS, hYeq,
+        show (1 : Nat) + reductionCount k (m - 1) = reductionCount k (m - 1) + 1 from by omega]
+      conv_rhs => rw [mergeTopCoordsN]
+      rw [hgroup, hgroup2, mergeTopCoordsN_scale, ← ih (m - 1) hmlt',
+        show m - 1 + 1 = m from by omega]
+    · -- No-carry case: a plain push, zero merges.
+      have hrc0 : reductionCount k n = 0 := by
+        unfold reductionCount
+        rw [reductionCountGo, dif_neg (by rintro ⟨_, _, h⟩; exact hmod0 h)]
+      rw [hrc0]
+      show frontierForSizeT k (n + 1) = frontierForSizeT k n ++ [(n, 0)]
+      exact frontierForSizeT_push k hk n hmod0
 
 /-- Grouping steps from frontier slot `fIdx` to the spine root: fold the
     frontier by repeatedly merging the rightmost `k` slots; a final group of
