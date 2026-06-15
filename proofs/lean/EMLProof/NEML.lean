@@ -331,6 +331,47 @@ theorem uNat_injective : Function.Injective uNat := by
     List.length_nil] at hlen
   omega
 
+/-- `uNat 0` is the lone terminator byte. -/
+theorem uNat_zero : uNat 0 = [0] := rfl
+
+/-- `uNat (n+1)` prepends one `0x01` mark — definitionally, since `uNat` is a
+    `replicate` of marks terminated by `0x00`. -/
+theorem uNat_succ (n : Nat) : uNat (n + 1) = 1 :: uNat n := rfl
+
+/-- **`uNat` is self-delimiting (prefix-free).** Because each `uNat n` is a run
+    of `0x01` marks closed by a single `0x00`, the boundary is recoverable from
+    the byte stream: a concatenation `uNat a ++ s` determines both `a` (the
+    leading mark run) and the suffix `s`. This is the parsing primitive that
+    makes the length-prefixed root encoding (`encRoots`) injective and
+    prefix-free. -/
+theorem uNat_append_injective : ∀ {a b : Nat} {s t : List UInt8},
+    uNat a ++ s = uNat b ++ t → a = b ∧ s = t := by
+  intro a
+  induction a with
+  | zero =>
+    intro b s t h
+    cases b with
+    | zero =>
+      rw [uNat_zero] at h
+      simp only [List.cons_append, List.nil_append, List.cons.injEq, true_and] at h
+      exact ⟨rfl, h⟩
+    | succ b' =>
+      rw [uNat_zero, uNat_succ] at h
+      simp only [List.cons_append, List.nil_append, List.cons.injEq] at h
+      exact absurd h.1 (by decide)
+  | succ a' ih =>
+    intro b s t h
+    cases b with
+    | zero =>
+      rw [uNat_succ, uNat_zero] at h
+      simp only [List.cons_append, List.nil_append, List.cons.injEq] at h
+      exact absurd h.1 (by decide)
+    | succ b' =>
+      rw [uNat_succ, uNat_succ] at h
+      simp only [List.cons_append, List.cons.injEq, true_and] at h
+      obtain ⟨ha, hst⟩ := ih h
+      exact ⟨by omega, hst⟩
+
 /-- Injective byte serialization of the committed timeline. The combined-root
     preimage commits this (`combined_root_preimage` in `proof.rs` uses a concrete
     fixed-width big-endian framing; here we use any injective serialization, of
@@ -341,20 +382,102 @@ def encTimeline (tl : Timeline) : List UInt8 := uNat (Encodable.encode tl)
 theorem encTimeline_injective : Function.Injective encTimeline :=
   uNat_injective.comp Encodable.encode_injective
 
-/-- Byte serialization of the active per-algorithm roots (the rest of the
-    metaroot preimage). Its internal injectivity is irrelevant to the binding
-    argument below, which fixes the active roots and varies only the timeline. -/
-noncomputable def encRoots (ar : List (AlgId × Digest)) : List UInt8 :=
-  uNat ar.length ++ ar.flatMap (fun p => uNat p.1 ++ digestToBytes p.2)
+/-! ## Active-root encoding
+
+The active roots ride the wire as raw bytes (`active_roots : Vec<(u64, Vec<u8>)>`
+in `proof.rs`), and `combined_root_preimage` frames each entry length-prefixed:
+`id ‖ |root| ‖ root`. We model the root as `List UInt8` — exactly the Rust
+`Vec<u8>` — rather than an opaque `Digest`, so the encoding is a concrete
+byte function with no reliance on `digestToBytes` (an axiom with no injectivity).
+The per-entry length prefix is what makes the encoding parse-unambiguous, hence
+injective and prefix-free, which the coupling-verifier soundness theorem needs
+(the roots vary between the presented and the genuinely committed proof). -/
+
+/-- One active-root entry, length-prefixed so the encoding self-delimits:
+    `id ‖ |root| ‖ root`. Mirrors the `id ‖ r.len() ‖ r` block emitted per entry
+    by `combined_root_preimage` (`proof.rs`). -/
+def encRootEntry (p : AlgId × List UInt8) : List UInt8 :=
+  uNat p.1 ++ uNat p.2.length ++ p.2
+
+/-- A single entry self-delimits: its byte image determines both the entry and
+    whatever follows it. -/
+theorem encRootEntry_prefixFree {p q : AlgId × List UInt8} {s t : List UInt8}
+    (h : encRootEntry p ++ s = encRootEntry q ++ t) : p = q ∧ s = t := by
+  simp only [encRootEntry, List.append_assoc] at h
+  obtain ⟨hid, h2⟩ := uNat_append_injective h
+  obtain ⟨hlen, h3⟩ := uNat_append_injective h2
+  obtain ⟨hsnd, hst⟩ := List.append_inj h3 hlen
+  refine ⟨?_, hst⟩
+  cases p; cases q
+  simp_all
+
+/-- Byte serialization of the active per-algorithm roots: a length prefix
+    followed by one self-delimiting entry per algorithm. Mirrors the
+    `n_active ‖ [id ‖ len ‖ root]*` head of `combined_root_preimage`. -/
+def encRoots (ar : List (AlgId × List UInt8)) : List UInt8 :=
+  uNat ar.length ++ ar.flatMap encRootEntry
+
+/-- The entry list self-delimits once the count is known: equal-length entry
+    lists with equal flattened byte images (sharing a common suffix split) are
+    equal, and the suffixes coincide. -/
+theorem encRoots_entries_prefixFree :
+    ∀ {a b : List (AlgId × List UInt8)} {s t : List UInt8},
+      a.length = b.length →
+      a.flatMap encRootEntry ++ s = b.flatMap encRootEntry ++ t → a = b ∧ s = t := by
+  intro a
+  induction a with
+  | nil =>
+    intro b s t hlen h
+    cases b with
+    | nil => simpa using h
+    | cons q qs => simp at hlen
+  | cons p ps ih =>
+    intro b s t hlen h
+    cases b with
+    | nil => simp at hlen
+    | cons q qs =>
+      simp only [List.flatMap_cons, List.append_assoc] at h
+      obtain ⟨hpq, hrest⟩ := encRootEntry_prefixFree h
+      have hlen' : ps.length = qs.length := by simpa using hlen
+      obtain ⟨hps, hst⟩ := ih hlen' hrest
+      exact ⟨by rw [hpq, hps], hst⟩
+
+/-- **`encRoots` is prefix-free.** The leading count fixes the entry total and
+    each entry self-delimits, so `encRoots ar ++ s` recovers both `ar` and `s`.
+    This is the parse-unambiguity the binding argument relies on when the active
+    roots are not held fixed. -/
+theorem encRoots_prefixFree {a b : List (AlgId × List UInt8)} {s t : List UInt8}
+    (h : encRoots a ++ s = encRoots b ++ t) : a = b ∧ s = t := by
+  simp only [encRoots, List.append_assoc] at h
+  obtain ⟨hlen, hrest⟩ := uNat_append_injective h
+  exact encRoots_entries_prefixFree hlen hrest
+
+/-- **`encRoots` is injective** (the prefix-free property at empty suffix). -/
+theorem encRoots_injective : Function.Injective encRoots := by
+  intro a b h
+  have h' : encRoots a ++ [] = encRoots b ++ [] := by simp [h]
+  exact (encRoots_prefixFree h').1
 
 /-- The combined-root metaroot preimage: active roots followed by the committed
     timeline. -/
-noncomputable def metaPreimage (ar : List (AlgId × Digest)) (tl : Timeline) : List UInt8 :=
+def metaPreimage (ar : List (AlgId × List UInt8)) (tl : Timeline) : List UInt8 :=
   encRoots ar ++ encTimeline tl
 
 /-- The combined root (metaroot) is `H` of its preimage. -/
-noncomputable def combinedRoot (ar : List (AlgId × Digest)) (tl : Timeline) : Digest :=
+noncomputable def combinedRoot (ar : List (AlgId × List UInt8)) (tl : Timeline) : Digest :=
   H (metaPreimage ar tl)
+
+/-- **The metaroot preimage is injective in both fields.** Because `encRoots` is
+    prefix-free, the roots/timeline boundary is recoverable: equal preimages
+    force equal active roots *and* equal committed timelines. (`encTimeline`'s
+    injectivity closes the timeline half.) This is the structural fact behind
+    coupling-verifier soundness — a fixed combined root pins both committed
+    fields modulo a hash collision. -/
+theorem metaPreimage_injective {ar₁ ar₂ : List (AlgId × List UInt8)} {tl₁ tl₂ : Timeline}
+    (h : metaPreimage ar₁ tl₁ = metaPreimage ar₂ tl₂) : ar₁ = ar₂ ∧ tl₁ = tl₂ := by
+  simp only [metaPreimage] at h
+  obtain ⟨har, htl⟩ := encRoots_prefixFree h
+  exact ⟨har, encTimeline_injective htl⟩
 
 /-- **A+ non-equivocation: the metaroot binds the committed timeline.** The two
     histories the leaf/null collision would otherwise conflate — byte-identical
@@ -363,7 +486,7 @@ noncomputable def combinedRoot (ar : List (AlgId × Digest)) (tl : Timeline) : D
     Binding the timeline into the metaroot is exactly what makes inactivity
     non-forgeable by metadata substitution under a fixed root. -/
 theorem metaroot_binds_timeline
-    (ar : List (AlgId × Digest)) (tl₁ tl₂ : Timeline)
+    (ar : List (AlgId × List UInt8)) (tl₁ tl₂ : Timeline)
     (hne : tl₁ ≠ tl₂) (heq : combinedRoot ar tl₁ = combinedRoot ar tl₂) :
     HashCollision := by
   refine ⟨metaPreimage ar tl₁, metaPreimage ar tl₂, ?_, heq⟩
