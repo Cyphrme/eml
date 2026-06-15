@@ -62,10 +62,12 @@ Collision-style escape hatches, matching the corpus convention
 
 ## Status
 
-⚠ The definitions below are total and compile; theorems marked `sorry` are
-formulated and decomposed but not yet ground out. The README's sorry-free
-claim applies to the pre-existing corpus, not yet to this module. Each
-`sorry` carries a proof-strategy note.
+All theorems in this module are proven `sorry`-free: the topology
+(`frontier_tiles`, `skeleton_no_promoted`), the carry schedule
+(`frontier_append_consistent`), the construction (`kary_bridge`), and the
+verifier (`kary_completeness`, `kary_inclusion_soundness`). The two hash
+assumptions appear only as explicit hypotheses (`¬NodeHashCollision`,
+`¬NullAmbiguity`), never as axioms.
 -/
 
 set_option linter.style.emptyLine false
@@ -1350,19 +1352,246 @@ theorem honest_path_shape (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
   rw [hnil] at h1
   simp at h1
 
-/-- **Completeness core: the honest path folds to the root.**
-    *Strategy:* digit half by induction on `h` — folding one digit step
-    re-inserts the path node among its siblings, reassembling exactly the
-    `List.range k` child list of `perfectRoot (j+1)` (`insertAt` of the
-    erased element at its own position is the identity reassembly);
-    grouping half by the `honestGroupPath` recursion against
-    `foldFrontierRoot`, with `kary_bridge` supplying that the stack entries
-    are the perfect roots and the tracked entry is the running fold. -/
+/-! Honest-prover fold support: reassembling an erased element. -/
+
+private theorem map_eraseIdx {α β} (f : α → β) :
+    ∀ (l : List α) (i : Nat), (l.eraseIdx i).map f = (l.map f).eraseIdx i := by
+  intro l
+  induction l with
+  | nil => intro i; rfl
+  | cons x xs ih =>
+    intro i
+    cases i with
+    | zero => rfl
+    | succ m => simp only [List.eraseIdx_cons_succ, List.map_cons, ih]
+
+private theorem filter_ne_range_eq_eraseIdx (k p : Nat) (hp : p < k) :
+    (List.range k).filter (fun i => i != p) = (List.range k).eraseIdx p := by
+  induction k with
+  | zero => omega
+  | succ n ih =>
+    rw [List.range_succ, List.filter_append]
+    rcases Nat.lt_or_ge p n with hpn | hpn
+    · rw [ih hpn, List.eraseIdx_append_of_lt_length (by rw [List.length_range]; exact hpn)]
+      have hb : (n != p) = true := by simp [bne_iff_ne]; omega
+      simp [List.filter_cons, hb]
+    · have hpeq : p = n := by omega
+      subst hpeq
+      have hf1 : (List.range p).filter (fun i => i != p) = List.range p := by
+        apply List.filter_eq_self.mpr
+        intro a ha; rw [List.mem_range] at ha; simp [bne_iff_ne]; omega
+      rw [hf1, List.eraseIdx_append_of_length_le (by rw [List.length_range])]
+      simp [List.filter_cons]
+
+private theorem insertAt_eraseIdx {α} (d : α) :
+    ∀ (l : List α) (n : Nat), n < l.length →
+      insertAt n (l.getD n d) (l.eraseIdx n) = l := by
+  intro l
+  induction l with
+  | nil => intro n h; simp at h
+  | cons x xs ih =>
+    intro n hn
+    cases n with
+    | zero =>
+      simp only [List.getD_cons_zero, List.eraseIdx_cons_zero]
+      cases xs <;> rfl
+    | succ m =>
+      simp only [List.eraseIdx_cons_succ, List.getD_cons_succ]
+      show x :: insertAt m (xs.getD m d) (xs.eraseIdx m) = x :: xs
+      rw [ih m (by simp only [List.length_cons] at hn; omega)]
+
+private theorem insertAt_filter_range {α} [Inhabited α] (φ : Nat → α) (k p : Nat)
+    (hp : p < k) :
+    insertAt p (φ p) (((List.range k).filter (fun i => i != p)).map φ) =
+      (List.range k).map φ := by
+  rw [filter_ne_range_eq_eraseIdx k p hp, map_eraseIdx]
+  have hget : ((List.range k).map φ).getD p default = φ p := by
+    rw [List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_range hp]; rfl
+  rw [← hget]
+  exact insertAt_eraseIdx default ((List.range k).map φ) p
+    (by rw [List.length_map, List.length_range]; exact hp)
+
+/-- The digit path folds the leaf up to its frontier-subtree root. Stated
+    generally over `offset` (the conclusion rounds `offset` down to a multiple
+    of `k^h`); the in-range use has `offset < k^h`, giving `perfectRoot left h`. -/
+private theorem digitFold (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) :
+    ∀ (h offset : Nat),
+      foldNary L (cells.getD (left + offset) emptyHash)
+        (honestDigitPath L k cells left offset h)
+        = perfectRoot L k cells (left + offset / k ^ h * k ^ h) h := by
+  intro h
+  induction h with
+  | zero =>
+    intro offset
+    simp [honestDigitPath, foldNary, perfectRoot]
+  | succ n ih =>
+    intro offset
+    have hsplit : honestDigitPath L k cells left offset (n + 1)
+        = honestDigitPath L k cells left offset n ++
+          [{ position := offset / k ^ n % k,
+             siblings := ((List.range k).filter (fun i => i != offset / k ^ n % k)).map
+               fun i => perfectRoot L k cells (left + (offset / k ^ (n + 1) * k + i) * k ^ n) n }] := by
+      rw [honestDigitPath, honestDigitPath, List.range_succ, List.map_append, List.map_cons,
+        List.map_nil]
+    rw [hsplit, foldNary_append_last, ih]
+    simp only [applyStepN]
+    set φ := fun i => perfectRoot L k cells (left + offset / k ^ (n + 1) * k ^ (n + 1) + i * k ^ n) n
+      with hφ
+    have hp : offset / k ^ n % k < k := Nat.mod_lt _ (by omega)
+    have hsib : ((List.range k).filter (fun i => i != offset / k ^ n % k)).map
+                  (fun i => perfectRoot L k cells (left + (offset / k ^ (n + 1) * k + i) * k ^ n) n)
+              = ((List.range k).filter (fun i => i != offset / k ^ n % k)).map φ := by
+      apply List.map_congr_left
+      intro i _
+      rw [hφ]
+      congr 1
+      rw [show k ^ (n + 1) = k ^ n * k from pow_succ k n]
+      ring
+    have hcur : perfectRoot L k cells (left + offset / k ^ n * k ^ n) n
+              = φ (offset / k ^ n % k) := by
+      have hpow : k ^ (n + 1) = k ^ n * k := pow_succ k n
+      have hdd : offset / k ^ (n + 1) = offset / k ^ n / k := by rw [hpow, Nat.div_div_eq_div_mul]
+      have hidx : left + offset / k ^ n * k ^ n
+                = left + offset / k ^ (n + 1) * k ^ (n + 1) + offset / k ^ n % k * k ^ n := by
+        rw [hdd, hpow]
+        conv_lhs => rw [← Nat.div_add_mod (offset / k ^ n) k]
+        ring
+      rw [hφ, hidx]
+    rw [hsib, hcur, insertAt_filter_range φ k (offset / k ^ n % k) hp]
+    conv_rhs => rw [perfectRoot]
+
+/-- The honest grouping path folds the tracked entry through the frontier
+    merges to the spine root. -/
+private theorem honestGroupPath_folds (L k : Nat) (hk : 2 ≤ k) :
+    ∀ (n : Nat) (stack : List Digest) (fIdx : Nat),
+      stack.length = n → fIdx < stack.length →
+      foldNary L (stack.getD fIdx emptyHash) (honestGroupPath L k stack fIdx)
+        = foldFrontierRoot L k stack := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro stack fIdx hn hlt
+    by_cases hbase : k < 2 ∨ stack.length ≤ k
+    · rw [honestGroupPath, dif_pos hbase, foldFrontierRoot, dif_pos hbase]
+      by_cases h1 : 1 < stack.length
+      · rw [if_pos h1, foldNary, List.foldl_cons, List.foldl_nil, applyStepN,
+          insertAt_eraseIdx emptyHash stack fIdx hlt]
+      · rw [if_neg h1, foldNary, List.foldl_nil]
+        have hlen1 : stack.length = 1 := by omega
+        have hf0 : fIdx = 0 := by omega
+        obtain ⟨x, rfl⟩ := List.length_eq_one_iff.mp hlen1
+        subst hf0
+        simp [naryMr]
+    · rw [honestGroupPath, dif_neg hbase, foldFrontierRoot, dif_neg hbase]
+      push_neg at hbase
+      obtain ⟨_, hgt⟩ := hbase
+      have hml : (mergeTopD L k stack).length = stack.length - k + 1 :=
+        mergeTopD_length L k stack (by omega)
+      have hdroplen : (stack.drop (stack.length - k)).length = k := by
+        rw [List.length_drop]; omega
+      by_cases hge : fIdx ≥ stack.length - k
+      · rw [if_pos hge, foldNary, List.foldl_cons, applyStepN]
+        have hstart : stack.getD fIdx emptyHash
+            = (stack.drop (stack.length - k)).getD (fIdx - (stack.length - k)) emptyHash := by
+          simp only [List.getD_eq_getElem?_getD, List.getElem?_drop,
+            show (stack.length - k) + (fIdx - (stack.length - k)) = fIdx from by omega]
+        rw [hstart, insertAt_eraseIdx emptyHash (stack.drop (stack.length - k))
+            (fIdx - (stack.length - k)) (by rw [hdroplen]; omega)]
+        have hmerged : naryMr L (stack.drop (stack.length - k))
+            = (mergeTopD L k stack).getD (stack.length - k) emptyHash := by
+          rw [List.getD_eq_getElem?_getD, mergeTopD, if_neg (by omega),
+            List.getElem?_append_right (by rw [List.length_take]; omega),
+            List.length_take, Nat.min_eq_left (by omega)]
+          simp
+        rw [hmerged]
+        exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack)
+          (stack.length - k) rfl (by omega)
+      · rw [if_neg hge]
+        have htk : fIdx < stack.length - k := by omega
+        have htl : fIdx < (stack.take (stack.length - k)).length := by
+          rw [List.length_take, Nat.min_eq_left (by omega)]; exact htk
+        have hstart : stack.getD fIdx emptyHash = (mergeTopD L k stack).getD fIdx emptyHash := by
+          rw [mergeTopD, if_neg (by omega), List.getD_eq_getElem?_getD,
+            List.getD_eq_getElem?_getD, List.getElem?_append_left htl,
+            List.getElem?_take_of_lt htk]
+        rw [hstart]
+        exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack) fIdx rfl (by omega)
+
+/-- `findFrontier` returns a slot at or beyond the starting counter. -/
+private theorem findFrontier_slot_ge (k index : Nat) :
+    ∀ (coords : List (Nat × Nat)) (c fIdx l h : Nat),
+      findFrontier k index coords c = some (fIdx, l, h) → c ≤ fIdx := by
+  intro coords
+  induction coords with
+  | nil => intro c fIdx l h hf; simp only [findFrontier, reduceCtorEq] at hf
+  | cons p rest ih =>
+    intro c fIdx l h hf
+    obtain ⟨pl, ph⟩ := p
+    rw [findFrontier] at hf
+    split at hf
+    · next hcond => simp only [Option.some.injEq, Prod.mk.injEq] at hf; omega
+    · next hcond => have := ih (c + 1) fIdx l h hf; omega
+
+/-- The slot `findFrontier` returns indexes the covering tile. -/
+private theorem findFrontier_spec (k index : Nat) :
+    ∀ (coords : List (Nat × Nat)) (c fIdx l h : Nat),
+      findFrontier k index coords c = some (fIdx, l, h) →
+      coords[fIdx - c]? = some (l, h) ∧ l ≤ index ∧ index < l + k ^ h := by
+  intro coords
+  induction coords with
+  | nil => intro c fIdx l h hf; simp only [findFrontier, reduceCtorEq] at hf
+  | cons p rest ih =>
+    intro c fIdx l h hf
+    obtain ⟨pl, ph⟩ := p
+    rw [findFrontier] at hf
+    split at hf
+    · next hcond =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at hf
+        obtain ⟨hfi, hl, hh⟩ := hf
+        subst hl; subst hh
+        refine ⟨?_, hcond.1, hcond.2⟩
+        rw [show fIdx - c = 0 from by omega]
+        rfl
+    · next hcond =>
+        obtain ⟨hget, hl, hh⟩ := ih (c + 1) fIdx l h hf
+        have hge : c + 1 ≤ fIdx := findFrontier_slot_ge k index rest (c + 1) fIdx l h hf
+        refine ⟨?_, hl, hh⟩
+        rw [show fIdx - c = (fIdx - (c + 1)) + 1 from by omega, List.getElem?_cons_succ]
+        exact hget
+
+/-- **Completeness core: the honest path folds to the root.** The digit half
+    folds the leaf up to its frontier-subtree root (`digitFold`); the grouping
+    half folds that root through the frontier merges to the spine root
+    (`honestGroupPath_folds`), with `kary_bridge` pinning the stack entries to
+    the perfect roots. -/
 theorem honest_path_folds (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (index : Nat) (hidx : index < cells.length) :
     foldNary L (cells.getD index emptyHash)
       (honestInclusionPath L k cells index) = karyRoot L k cells := by
-  sorry
+  set fr := frontierForSizeT k cells.length with hfr
+  obtain ⟨fIdx, l, h, hff⟩ := findFrontier_cover k index fr 0 cells.length 0
+    (by rw [hfr]; exact frontier_tiles k cells.length hk) (by omega) hidx
+  have hcover := (findFrontier_spec k index fr 0 fIdx l h hff).2
+  have hfe : fr[fIdx]? = some (l, h) := by
+    have := (findFrontier_spec k index fr 0 fIdx l h hff).1; simpa using this
+  have hbuild : buildStackCells L k cells = fr.map (fun lh => perfectRoot L k cells lh.1 lh.2) := by
+    rw [hfr]; exact kary_bridge L k hk cells
+  have hfidxlt : fIdx < fr.length := by
+    simpa using findFrontier_slot_lt k index fr 0 fIdx l h hff
+  have hpath : honestInclusionPath L k cells index =
+      honestDigitPath L k cells l (index - l) h ++
+        honestGroupPath L k (buildStackCells L k cells) fIdx := by
+    rw [honestInclusionPath, ← hfr, hff]
+  rw [hpath, foldNary, List.foldl_append, ← foldNary, ← foldNary]
+  have hleaf : cells.getD index emptyHash = cells.getD (l + (index - l)) emptyHash := by
+    congr 1; omega
+  rw [hleaf, digitFold L k hk cells l h (index - l),
+    show (index - l) / k ^ h = 0 from Nat.div_eq_of_lt (by omega), Nat.zero_mul, Nat.add_zero]
+  have hentry : (buildStackCells L k cells).getD fIdx emptyHash = perfectRoot L k cells l h := by
+    rw [hbuild, List.getD_eq_getElem?_getD, List.getElem?_map, hfe]; rfl
+  rw [← hentry, karyRoot,
+    honestGroupPath_folds L k hk (buildStackCells L k cells).length
+      (buildStackCells L k cells) fIdx rfl (by rw [hbuild, List.length_map]; exact hfidxlt)]
 
 /-- **Completeness: honest proofs verify** — previously claimed nowhere.
     Also the non-vacuity witness: `AcceptsKary` is satisfiable for every
@@ -1373,7 +1602,13 @@ theorem kary_completeness (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (index : Nat) (hidx : index < cells.length) :
     AcceptsKary L k (cells.getD index emptyHash) index cells.length
       (karyRoot L k cells) (honestInclusionPath L k cells index) := by
-  sorry
+  obtain ⟨⟨skel, hskel, hmap⟩, hwf⟩ := honest_path_shape L k hk cells index hidx
+  have hlen : skel.length = (honestInclusionPath L k cells index).length := by
+    rw [← hmap, List.length_map]
+  refine ⟨hk, by omega, hidx, ⟨skel, hskel, by omega, ?_⟩, hwf,
+    honest_path_folds L k hk cells index hidx⟩
+  rw [show (honestInclusionPath L k cells index).length - skel.length = 0 from by omega,
+    List.drop_zero, hmap]
 
 /-- **Verifier soundness (existential in depth): accept ⇒ committed at
     `index`.** If the verifier accepts `(leaf, index, path)` against the
@@ -1408,6 +1643,27 @@ theorem kary_inclusion_soundness (L k : Nat) (cells : List Digest)
       inclusionSkeleton k cells.length index = some skel ∧
       d + skel.length = path.length ∧
       foldNary L leaf (path.take d) = cells.getD index emptyHash := by
-  sorry
+  obtain ⟨hk, _htree, hidx, ⟨skel, hskel, hsklen, hsuffix⟩, hwf, hfold⟩ := hacc
+  obtain ⟨⟨skel', hskel', hhmap⟩, hhwf⟩ := honest_path_shape L k hk cells index hidx
+  have hhfold := honest_path_folds L k hk cells index hidx
+  have hskeleq : skel' = skel := Option.some_injective _ (hskel'.symm.trans hskel)
+  refine ⟨path.length - skel.length, skel, hskel, by omega, ?_⟩
+  set d := path.length - skel.length with hd
+  have hshape : (path.drop d).map stepShape =
+      (honestInclusionPath L k cells index).map stepShape := by
+    rw [hsuffix, hhmap, hskeleq]
+  have hwfdrop : WellFormedSteps (path.drop d) :=
+    fun s hs => hwf s (List.mem_of_mem_drop hs)
+  have hcompose : foldNary L (foldNary L leaf (path.take d)) (path.drop d)
+      = foldNary L leaf path := by
+    conv_rhs => rw [← List.take_append_drop d path]
+    simp only [foldNary, List.foldl_append]
+  have hfeq : foldNary L (foldNary L leaf (path.take d)) (path.drop d)
+      = foldNary L (cells.getD index emptyHash) (honestInclusionPath L k cells index) := by
+    rw [hcompose, hfold, hroot, hhfold]
+  obtain ⟨hab, _⟩ := foldNary_unique_of_shape L (foldNary L leaf (path.take d))
+    (cells.getD index emptyHash) (path.drop d) (honestInclusionPath L k cells index)
+    hshape hwfdrop hhwf hfeq hH hN
+  exact hab
 
 end NEML
