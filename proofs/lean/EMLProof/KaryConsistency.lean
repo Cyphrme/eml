@@ -117,6 +117,41 @@ private theorem frontier_getLast_eq (k n bl bh : Nat) (hk : 2 ≤ k)
     bl + k ^ bh = n :=
   Tiles_last k (frontierForSizeT k n) 0 n bl bh (frontier_tiles k n hk) hlast
 
+/-- **Frontier coordinates are aligned to their height.** Every perfect subtree
+    `(l, h)` in the greedy decomposition starts at a multiple of `k ^ h` — the
+    decomposition strips largest-first, so each new offset stays divisible by all
+    smaller heights. Stated over `frontierGo` with the matching offset hypothesis
+    so the induction closes; `frontierForSizeT` is the `off = 0` case. -/
+private theorem frontierGo_aligned (k : Nat) (hk : 2 ≤ k) :
+    ∀ (n off : Nat), k ^ Nat.log k n ∣ off → ∀ lh ∈ frontierGo k off n, k ^ lh.2 ∣ lh.1 := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro off hdvd lh hmem
+    rw [frontierGo] at hmem
+    split at hmem
+    · simp only [List.not_mem_nil] at hmem
+    · next h =>
+        push_neg at h
+        obtain ⟨hn0, _⟩ := h
+        rw [List.mem_cons] at hmem
+        have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
+        have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+        rcases hmem with rfl | hmem'
+        · exact hdvd
+        · have hHle : Nat.log k (n - k ^ Nat.log k n) ≤ Nat.log k n :=
+            Nat.log_mono_right (by omega)
+          have hdvd' : k ^ Nat.log k (n - k ^ Nat.log k n) ∣ (off + k ^ Nat.log k n) :=
+            Nat.dvd_add (dvd_trans (pow_dvd_pow k hHle) hdvd) (pow_dvd_pow k hHle)
+          exact ih (n - k ^ Nat.log k n) (by omega) (off + k ^ Nat.log k n) hdvd' lh hmem'
+
+/-- The boundary coordinate `(bl, bh)` is `k ^ bh`-aligned: `k ^ bh ∣ bl`. -/
+private theorem frontier_getLast_aligned (k n bl bh : Nat) (hk : 2 ≤ k)
+    (hlast : (frontierForSizeT k n).getLast? = some (bl, bh)) :
+    k ^ bh ∣ bl := by
+  have hmem : (bl, bh) ∈ frontierForSizeT k n := List.mem_of_getLast? hlast
+  exact frontierGo_aligned k hk n 0 (by simp) (bl, bh) hmem
+
 /-! ## The coordinate→digest map of `reconstruct_consistency_roots` -/
 
 /-- A coordinate `(left, height)` → digest map, as `reconstruct_consistency_roots`
