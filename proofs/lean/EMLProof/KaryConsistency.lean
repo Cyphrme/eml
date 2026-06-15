@@ -564,7 +564,16 @@ theorem consistency_append_only (L k : Nat) (oldCells newCells : List Digest)
       (karyRoot L k oldCells) (karyRoot L k newCells))
     (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
     oldCells <+: newCells := by
-  sorry
+  have hk : 2 ≤ k := hacc.1
+  have hsize : oldCells.length < newCells.length := hacc.2.2.1
+  have hsound := consistency_soundness L k newCells oldCells.length startHash
+    (karyRoot L k oldCells) path hacc hH hN
+  have hlen : oldCells.length = (newCells.take oldCells.length).length := by
+    rw [List.length_take]; omega
+  have heqcells := karyRoot_inj_of_length L k hk oldCells (newCells.take oldCells.length)
+    hlen hsound hH hN
+  rw [heqcells]
+  exact List.take_prefix oldCells.length newCells
 
 /-- The append-only prefix the soundness conclusion is about: `cells.take
     oldSize` is a genuine prefix of the current `cells`, with
