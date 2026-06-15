@@ -35,6 +35,13 @@ Anchored at the honest current tree (`newRoot = karyRoot cells`,
   (the two explicit hash hypotheses, never axioms). An attacker cannot make
   the verifier accept a *false* history (a forged `oldRoot`) against the true
   current tree.
+* **Dual soundness** (`consistency_append_only`): accepting a proof between the
+  honest root of `oldCells` and the honest root of `newCells` forces
+  `oldCells <+: newCells` — the append-only relation at the cell-sequence
+  level. Soundness binds it at the root level; this binds it at the data level.
+  (The pure existential dual — "the new root is *some* extension's root" — is
+  not faithfully recoverable: a consistency proof carries perfect-subtree
+  roots, not the individual appended cells.)
 
 `cells.take oldSize` is the append-only prefix: `oldSize < newSize =
 cells.length`, and `cells.take oldSize <+: cells` holds definitionally
@@ -312,6 +319,55 @@ theorem consistency_soundness (L k : Nat) (cells : List Digest)
       (karyRoot L k cells))
     (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
     oldRoot = karyRoot L k (cells.take oldSize) := by
+  sorry
+
+/-- **`karyRoot` injectivity over equal-length cell lists.** Two cell lists of
+    the same length with equal k-ary root coincide — or a hash assumption broke.
+    Equal length is essential: by the flat-null-promotion design, all-null lists
+    of *different* lengths share a root (`naryRoot = nullDigest`), so injectivity
+    can only hold once length is pinned (which the consistency proof's size
+    fields do). The k-ary analog of `naryMr_inj_of_length` lifted from one node
+    to the whole frontier fold.
+
+    *Strategy:* induct on the frontier structure / `foldFrontierRoot`, applying
+    `naryMr_inj_of_length` at each merge; the equal-length hypothesis keeps the
+    two folds shape-aligned. -/
+theorem karyRoot_inj_of_length (L k : Nat) (hk : 2 ≤ k) (xs ys : List Digest)
+    (hlen : xs.length = ys.length) (heq : karyRoot L k xs = karyRoot L k ys)
+    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    xs = ys := by
+  sorry
+
+/-- **Dual soundness: accept between two honest roots ⇒ data-level append-only.**
+    If `verify_consistency` accepts a proof between the honest root of `oldCells`
+    and the honest root of `newCells`, then `oldCells` is a genuine prefix of
+    `newCells` — the append-only relation at the cell-sequence level, modulo
+    `NodeHashCollision` / `NullAmbiguity`.
+
+    This is the dual of `consistency_soundness`: that theorem fixes the honest
+    *new* tree and binds the reconstructed `oldRoot` to the prefix root; this one
+    fixes the honest *old* tree as well and concludes that the accepted new tree
+    genuinely *extends* it (`oldCells <+: newCells`). The two together are the
+    complete tamper-evidence story — an accepted consistency proof between honest
+    roots witnesses, at the data level, that the new log was formed by appending
+    to the old one.
+
+    The pure existential dual ("∃ extension whose root is `newRoot`") is *not*
+    stated, because it is not faithfully recoverable: a consistency proof carries
+    perfect-subtree *roots* for the appended range, never the individual new
+    cells, so no leaf-level extension can be reconstructed from an arbitrary
+    accepting proof. The two-honest-tree prefix relation is the faithful dual.
+
+    *Strategy:* `consistency_soundness` (with `cells := newCells`) gives
+    `karyRoot oldCells = karyRoot (newCells.take oldCells.length)`; both lists
+    have length `oldCells.length`, so `karyRoot_inj_of_length` yields
+    `oldCells = newCells.take oldCells.length`, i.e. `oldCells <+: newCells`. -/
+theorem consistency_append_only (L k : Nat) (oldCells newCells : List Digest)
+    (startHash : Digest) (path : List ProofStep)
+    (hacc : AcceptsConsistency L k oldCells.length newCells.length startHash path
+      (karyRoot L k oldCells) (karyRoot L k newCells))
+    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    oldCells <+: newCells := by
   sorry
 
 /-- The append-only prefix the soundness conclusion is about: `cells.take
