@@ -190,6 +190,9 @@ respective Lean symbols in the source code:
 | **K-ary Bridge** | [kary_bridge](EMLProof/Kary.lean) | The frontier stack machine computes the perfect-subtree roots of the frontier decomposition (k-ary generalization of `bridge_lemma`) |
 | **K-ary Completeness** | [kary_completeness](EMLProof/Kary.lean) | Honest inclusion proofs verify against the null-promoting fold and concrete skeleton |
 | **K-ary Inclusion Soundness** | [kary_inclusion_soundness](EMLProof/Kary.lean) | Accepting proof commits the leaf at log position `index` (depth existential), modulo two explicit hash assumptions |
+| **K-ary Consistency Soundness** | [consistency_soundness](EMLProof/KaryConsistency.lean) | Accepting consistency proof against the honest current root forces the reconstructed `oldRoot` to the genuine size-`oldSize` prefix root, modulo two explicit hash assumptions |
+| **K-ary Append-Only** | [consistency_append_only](EMLProof/KaryConsistency.lean) | Accepting a proof between two honest roots forces `oldCells <+: newCells` at the data level |
+| **K-ary Consistency Completeness** | [consistency_completeness](EMLProof/KaryConsistency.lean) | Honest consistency proofs verify, reconstructing the genuine prefix and current roots (non-vacuity witness) |
 
 
 ---
@@ -301,6 +304,15 @@ the findings of our formal red-team audit:
   `naryMr`, not plain `nodeHash`. `kary_completeness` shows honest proofs verify
   (the non-vacuity witness) and `kary_inclusion_soundness` shows acceptance binds
   the leaf to log position `index` (existential in depth, per Cyphr SPEC §2.2.12).
+- the **consistency verifier**, modeled faithfully against
+  `reconstruct_consistency_roots` (`proof.rs`): a single shared path anchored at
+  `start_hash` reconstructs both the old-size and new-size roots, with the
+  coordinate→digest map (`consistencyMap`) read back at every old-frontier
+  coordinate. `consistency_completeness` shows honest proofs verify (non-vacuity),
+  `consistency_soundness` shows acceptance against the honest current root forces
+  the reconstructed `oldRoot` to the genuine prefix root, and
+  `consistency_append_only` lifts that to the data-level append-only relation
+  `oldCells <+: newCells` — all modulo the same two explicit hash assumptions.
 
 The transcription is pinned to `topology.rs` test vectors by 11 `#guard` checks,
 so definitional drift breaks the build rather than passing silently.
@@ -310,7 +322,7 @@ The k-ary soundness adds **no axioms** — its two collision-style escape hatche
 (`NodeHashCollision`, `NullAmbiguity`) appear as explicit *hypotheses* on the
 theorems, not as axioms.
 
-**Still UNVERIFIED** (honest scope): the consistency and coupling verifiers;
+**Still UNVERIFIED** (honest scope): the coupling verifier;
 multi-algorithm/epoch interaction with the k-ary spine; and Rust-to-Lean
 transcription fidelity itself (mitigated, not eliminated, by the `#guard` pins).
 
