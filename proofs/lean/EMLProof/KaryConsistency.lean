@@ -1529,7 +1529,196 @@ private theorem honest_oldroot_coverage (L k : Nat) (hk : 2 ≤ k) (cells : List
   set m1 := cmBisect k (D.drop bh) bl bh m0 with hm1
   set M := cmMergeGo k (frontierForSizeT k cells.length) fIdx G m1 with hM
   show M c = some (perfectRoot L k cells c.1 c.2)
-  sorry
+  -- new-frontier slot data: membership, ordering, slot-interval avoidance
+  obtain ⟨hgetN, hsleN, hbltN⟩ :=
+    findFrontier_spec k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
+  simp only [Nat.sub_zero] at hgetN
+  have htilesN := frontier_tiles k cells.length hk
+  have hfIlt : fIdx < (frontierForSizeT k cells.length).length := by
+    simpa using findFrontier_slot_lt k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
+  have hP2 : ∀ i, i < (frontierForSizeT k cells.length).length → i ≠ fIdx →
+      ¬ (sl ≤ ((frontierForSizeT k cells.length).getD i (0, 0)).1 ∧
+         ((frontierForSizeT k cells.length).getD i (0, 0)).1 < sl + k ^ sh) :=
+    Tiles_slot_avoids k hk (frontierForSizeT k cells.length) 0 cells.length fIdx sl sh htilesN hgetN
+  -- boundary is the last old tile: split it off
+  obtain ⟨pre, hpre⟩ := List.getLast?_eq_some_iff.mp hlast
+  obtain ⟨mid, hTpre, hmideq, _⟩ :=
+    Tiles_split k pre (bl, bh) [] 0 oldSize (hpre ▸ frontier_tiles k oldSize hk)
+  simp only at hmideq; subst hmideq
+  have hk0 : 0 < k ^ bh := pow_pos (by omega) bh
+  rcases List.mem_append.mp (hpre ▸ hc) with hcpre | hcbnd
+  · -- c is an interior old tile: c.1 + k^c.2 ≤ bl
+    have hcb : c.1 + k ^ c.2 ≤ bl := Tiles_entry_bound k pre 0 bl hTpre c hcpre
+    have hcpos : 0 < k ^ c.2 := pow_pos (by omega) c.2
+    by_cases hcsl : c.1 < sl
+    · -- left of the slot: supplied by the merge phase
+      have hagree := frontier_agree k hk cells.length 0 oldSize sl sh (by simp)
+        (List.mem_of_getElem? hgetN) (Nat.zero_le _) (by omega) (le_of_lt hnew)
+      have hcfilt : c ∈ (frontierGo k 0 cells.length).filter (fun x => decide (x.1 < sl)) := by
+        rw [← hagree, List.mem_filter]; exact ⟨hc, by simp [hcsl]⟩
+      have hcmemN : c ∈ frontierForSizeT k cells.length := List.mem_of_mem_filter hcfilt
+      obtain ⟨i, hilt, hieq⟩ := List.mem_iff_getElem.mp hcmemN
+      have hidx : (frontierForSizeT k cells.length).getD i (0, 0) = c := by
+        rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hilt, Option.getD_some, hieq]
+      have hslval : ((frontierForSizeT k cells.length).getD fIdx (0, 0)).1 = sl := by
+        rw [List.getD_eq_getElem?_getD, hgetN, Option.getD_some]
+      have hilt' : i < fIdx := by
+        by_contra hge
+        push_neg at hge
+        rcases Nat.lt_or_eq_of_le hge with hlt | heq
+        · have hmono := Tiles_strict_mono k hk _ 0 cells.length htilesN fIdx i hlt hilt
+          rw [hslval, hidx] at hmono
+          omega
+        · rw [heq, hidx] at hslval
+          omega
+      have hbridge := kary_bridge L k hk cells
+      have hJ : ∀ i, i < fIdx → (buildStackCells L k cells).getD i emptyHash
+          = perfectRoot L k cells ((frontierForSizeT k cells.length).getD i (0, 0)).1
+              ((frontierForSizeT k cells.length).getD i (0, 0)).2 := by
+        intro j hj
+        have hjlt : j < (frontierForSizeT k cells.length).length := by omega
+        rw [hbridge, List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_eq_getElem hjlt,
+          List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hjlt]
+        rfl
+      have hsortedN : ∀ a b, a < (frontierForSizeT k cells.length).length →
+          b < (frontierForSizeT k cells.length).length → a < b →
+          ((frontierForSizeT k cells.length).getD a (0, 0)).1
+            < ((frontierForSizeT k cells.length).getD b (0, 0)).1 :=
+        fun a b _ hb hab => Tiles_strict_mono k hk _ 0 cells.length htilesN a b hab hb
+      have hcov := cmMergeGo_left_cover L k hk cells (frontierForSizeT k cells.length).length
+        (frontierForSizeT k cells.length) (buildStackCells L k cells) fIdx m1 rfl
+        (by rw [hbridge, List.length_map]) hfIlt hsortedN hJ i hilt'
+      rw [hidx] at hcov
+      have hlen' : (frontierForSizeT k cells.length).length = (buildStackCells L k cells).length := by
+        rw [hbridge, List.length_map]
+      rw [hM]
+      rw [show G = honestGroupPath L k (buildStackCells L k cells) fIdx from hG] at *
+      exact hcov
+    · -- inside the slot, left of the boundary: supplied by the bisection phase
+      push_neg at hcsl
+      have hcbl : c.1 < bl := by omega
+      have hchsh : c.2 < sh := by
+        have : k ^ c.2 < k ^ sh := by
+          calc k ^ c.2 ≤ bl - c.1 := by omega
+            _ ≤ bl - sl := by omega
+            _ < k ^ sh := by omega
+        exact (Nat.pow_lt_pow_iff_right (by omega)).mp this
+      have hbhch : bh ≤ c.2 := by
+        have hge : k ^ bh ≤ oldSize - c.1 := by omega
+        have hsh := frontierGo_slot_height k hk oldSize 0 c.1 c.2 hc
+        simp only [Nat.zero_add] at hsh
+        rw [hsh]; exact Nat.le_log_of_pow_le (by omega) hge
+      -- the merge phase preserves the slot interval, reducing to the bisection map
+      have hMm1 : M c = m1 c := by
+        rw [hM]
+        exact cmMergeGo_avoids k sl (sl + k ^ sh) hk (frontierForSizeT k cells.length).length
+          (frontierForSizeT k cells.length) fIdx G m1 rfl hfIlt hP2 c (by omega) (by omega)
+      -- geometry: c is a left sibling of the path at level c.2
+      have haligncl : k ^ c.2 ∣ c.1 := frontierGo_aligned k hk oldSize 0 (by simp) c hc
+      have halignsl : k ^ (c.2 + 1) ∣ sl := by
+        have : k ^ sh ∣ sl := frontierGo_aligned k hk cells.length 0 (by simp)
+          (sl, sh) (List.mem_of_getElem? hgetN)
+        exact dvd_trans (pow_dvd_pow k (by omega)) this
+      have hblock := frontier_block k hk oldSize 0 (by simp)
+        (by simp only [Nat.zero_mod, Nat.zero_add];
+            exact le_of_lt (Nat.lt_pow_succ_log_self (by omega) oldSize))
+        c.1 c.2 hc
+      simp only [Nat.zero_add] at hblock
+      -- normalise to (c.1 - sl) and offset = oldSize - 1 - sl
+      set offset := oldSize - 1 - sl with hoff
+      have hcsldvd : k ^ c.2 ∣ c.1 - sl :=
+        Nat.dvd_sub haligncl (dvd_trans (pow_dvd_pow k (by omega))
+          (frontierGo_aligned k hk cells.length 0 (by simp) (sl, sh) (List.mem_of_getElem? hgetN)))
+      obtain ⟨q, hq⟩ := hcsldvd
+      rw [Nat.mul_comm] at hq
+      have hsldvd1 : k ^ (c.2 + 1) ∣ sl := halignsl
+      obtain ⟨t, ht⟩ := hsldvd1
+      -- block condition descended to (c.1 - sl)/k^(c.2+1) = offset/k^(c.2+1)
+      have hp2 : k ^ (c.2 + 1) = k ^ c.2 * k := by rw [pow_succ]
+      have hQ : (c.1 - sl) / k ^ (c.2 + 1) = offset / k ^ (c.2 + 1) := by
+        have e1 : c.1 = k ^ (c.2 + 1) * t + (c.1 - sl) := by rw [← ht]; omega
+        have e2 : oldSize - 1 = k ^ (c.2 + 1) * t + offset := by rw [← ht]; omega
+        rw [e1, e2, Nat.mul_add_div (pow_pos (by omega) _), Nat.mul_add_div (pow_pos (by omega) _)]
+          at hblock
+        omega
+      -- i := the child index; q = (offset/k^(c.2+1))*k + i
+      have hqk : q / k = offset / k ^ (c.2 + 1) := by
+        have hqd : (c.1 - sl) / k ^ (c.2 + 1) = q / k := by
+          rw [hq, hp2, Nat.mul_comm q (k ^ c.2),
+            Nat.mul_div_mul_left q k (pow_pos (by omega) c.2)]
+        rw [← hqd]; exact hQ
+      set i := q % k with hi
+      have hqdecomp : q = offset / k ^ (c.2 + 1) * k + i := by
+        rw [hi, ← hqk]; exact (Nat.div_add_mod' q k).symm
+      have hc1form : c.1 = sl + offset / k ^ (c.2 + 1) * k ^ (c.2 + 1) + i * k ^ c.2 := by
+        have : c.1 - sl = q * k ^ c.2 := hq
+        rw [hqdecomp] at this
+        have hexp : (offset / k ^ (c.2 + 1) * k + i) * k ^ c.2
+            = offset / k ^ (c.2 + 1) * k ^ (c.2 + 1) + i * k ^ c.2 := by
+          rw [hp2]; ring
+        omega
+      -- i is below the path digit at level c.2
+      have hilt : i < offset / k ^ c.2 % k := by
+        have hqlt : q < offset / k ^ c.2 := by
+          have hq1 : (q + 1) * k ^ c.2 ≤ offset := by
+            have hqq : c.1 - sl = q * k ^ c.2 := hq
+            have hexp : (q + 1) * k ^ c.2 = q * k ^ c.2 + k ^ c.2 := by ring
+            omega
+          have := (Nat.le_div_iff_mul_le hcpos).mpr hq1
+          omega
+        have hoff_decomp : offset / k ^ c.2 = offset / k ^ (c.2 + 1) * k + offset / k ^ c.2 % k := by
+          conv_lhs => rw [← Nat.div_add_mod' (offset / k ^ c.2) k]
+          rw [show offset / k ^ c.2 / k = offset / k ^ (c.2 + 1) from by
+            rw [hp2, Nat.div_div_eq_div_mul]]
+        omega
+      -- the bisection map records c with its perfect root
+      rw [hMm1, hm1]
+      have key := cmBisect_covers L k hk cells sl offset sh (sh - bh) bh bl m0
+        (by omega) halign.symm c.2 i hbhch hchsh hilt
+      rw [show c = (c.1, c.2) from rfl, hc1form]
+      exact key
+  · -- c is the boundary tile: read straight from the seed
+    rw [List.mem_singleton] at hcbnd; subst hcbnd
+    have hMm1 : M (bl, bh) = m1 (bl, bh) := by
+      rw [hM]
+      exact cmMergeGo_avoids k sl (sl + k ^ sh) hk (frontierForSizeT k cells.length).length
+        (frontierForSizeT k cells.length) fIdx G m1 rfl hfIlt hP2 (bl, bh) (by exact hsle)
+        (by exact hbltN)
+    have hm1m0 : m1 (bl, bh) = m0 (bl, bh) := by
+      rw [hm1, hD]
+      cases hdb : (honestDigitPath L k cells sl (oldSize - 1 - sl) sh).drop bh with
+      | nil => rfl
+      | cons s rest =>
+        rw [cmBisect, cmBisect_preserves_below k rest _ (bh + 1) _ (bl, bh) (by simp)]
+        apply recordBisectSibs_preserves_node k hk m0 bl bh s
+        -- s.position * k^bh ≤ bl
+        have hshgt : bh < sh := by
+          rcases Nat.lt_or_ge bh sh with h | h
+          · exact h
+          · exfalso; have hnil : (honestDigitPath L k cells sl (oldSize - 1 - sl) sh).drop bh = [] := by
+              rw [List.drop_eq_nil_iff, hdlen]; omega
+            rw [hnil] at hdb; simp at hdb
+        have hd : (honestDigitPath L k cells sl (oldSize - 1 - sl) sh).drop bh
+            = { position := (oldSize - 1 - sl) / k ^ bh % k,
+                siblings := ((List.range k).filter (fun x => x != (oldSize - 1 - sl) / k ^ bh % k)).map
+                  fun x => perfectRoot L k cells
+                    (sl + ((oldSize - 1 - sl) / k ^ (bh + 1) * k + x) * k ^ bh) bh }
+              :: (honestDigitPath L k cells sl (oldSize - 1 - sl) sh).drop (bh + 1) := by
+          unfold honestDigitPath
+          rw [← List.map_drop, ← List.map_drop,
+            List.drop_eq_getElem_cons (by rw [List.length_range]; exact hshgt),
+            List.map_cons, List.getElem_range]
+        rw [hd] at hdb
+        injection hdb with hs_eq _
+        have hspos : s.position = (oldSize - 1 - sl) / k ^ bh % k := by rw [← hs_eq]
+        rw [hspos]
+        calc (oldSize - 1 - sl) / k ^ bh % k * k ^ bh
+            ≤ (oldSize - 1 - sl) / k ^ bh * k ^ bh := by
+              exact Nat.mul_le_mul_right (k ^ bh) (Nat.mod_le _ _)
+          _ = bl - sl := by omega
+          _ ≤ bl := by omega
+    rw [hMm1, hm1m0, hm0]
+    simp [cmInsert]
 
 /-- **The honest old-root read-back yields the genuine prefix root.** Folding
     the perfect roots the coordinate map records (`honest_oldroot_coverage`) with
