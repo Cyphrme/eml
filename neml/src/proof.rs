@@ -72,7 +72,24 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// Verify an inclusion proof.
 ///
 /// Returns `true` if the proof demonstrates that `leaf_hash` is the leaf at
-/// the given index in a tree of the given tree size with the given root.
+/// `index` in a tree of size `tree_size` and arity `log_arity` whose root is
+/// `root`.
+///
+/// # Trust contract (security-critical)
+///
+/// `index`, `tree_size`, `log_arity`, and `root` are **trusted parameters**.
+/// Soundness comes from the verifier reconstructing the exact tree topology
+/// from `(tree_size, log_arity, index)` and rejecting any deviation; the proof
+/// supplies only sibling digests. These parameters MUST therefore be obtained
+/// from an authenticated source — a signed Tree Head (STH) or trusted
+/// checkpoint — and never from the proof itself or any caller-untrusted input.
+/// If `tree_size`/`index` are attacker-controlled the guarantee is vacuous: the
+/// attacker picks the topology the verifier checks against, and an arbitrary
+/// `leaf_hash` can be made to "verify" against a matching forged `root`.
+///
+/// A `true` result binds `leaf_hash` to log position `index` only. The cell's
+/// payload and activity are not asserted here — activity is read from the
+/// committed epoch timeline, never inferred from a digest.
 #[must_use]
 pub fn verify_inclusion(
     hasher: &dyn Hasher,
@@ -91,8 +108,34 @@ use crate::topology::{frontier_for_size, inclusion_skeleton};
 
 /// Verify a consistency proof.
 ///
-/// Proves that the tree of size `old_size` with `old_root` is an append-only
-/// prefix of the tree of size `new_size` with `new_root`.
+/// Returns `true` if the proof demonstrates that the tree of size `old_size`
+/// with root `old_root` is an append-only prefix of the tree of size `new_size`
+/// with root `new_root` (arity `log_arity`).
+///
+/// # Trust contract (security-critical)
+///
+/// `old_size`, `new_size`, `log_arity`, `old_root`, and `new_root` are
+/// **trusted parameters** and MUST come from an authenticated source — signed
+/// Tree Heads (STHs) or trusted checkpoints — never from the proof or any
+/// caller-untrusted input. The verifier reconstructs both roots from the sizes
+/// and the single shared `path`; if the sizes are attacker-controlled the
+/// append-only guarantee is void.
+///
+/// Two further obligations follow from the length-hiding null-promotion design;
+/// violating them defeats the guarantee even with a correct verifier:
+///
+/// * **Root equality stands in for tree equality only when the size is also
+///   bound.** All-null (inactive) subtrees of *different* lengths share a root,
+///   so callers must never treat root equality as "same tree" without pinning
+///   the corresponding size. This applies to caches, dedup, and any comparison
+///   of stored/reconstructed roots.
+/// * **The data-level guarantee needs *both* roots authenticated.** A `true`
+///   result binds the roots (`old_root` is the genuine size-`old_size` prefix
+///   root of the size-`new_size` tree). Concluding that the new *data* is a
+///   genuine extension of the old data holds only when `new_root` is itself
+///   authenticated: a consistency proof carries perfect-subtree roots, not the
+///   appended cells, and cannot witness an extension against an unauthenticated
+///   `new_root`.
 #[must_use]
 pub fn verify_consistency(
     hasher: &dyn Hasher,
@@ -509,6 +552,12 @@ pub fn verify_inclusion_path_structure(
 }
 
 /// Reconstruct the raw root from an inclusion proof path.
+///
+/// Building block for [`verify_inclusion`]; it computes a root but does not
+/// compare it to a trusted one. Callers must hold to the same trust contract:
+/// `index`, `tree_size`, and `log_arity` must be authenticated (see
+/// [`verify_inclusion`]), and the returned root is only meaningful when checked
+/// against an authenticated root.
 #[must_use]
 pub fn reconstruct_inclusion_root(
     hasher: &dyn Hasher,
@@ -589,6 +638,13 @@ pub fn reconstruct_inclusion_root(
 }
 
 /// Reconstruct the old and new raw roots from a consistency proof path.
+///
+/// Building block for [`verify_consistency`]; it computes both roots but does
+/// not compare them to trusted ones. Callers must hold to the same trust
+/// contract: `old_size`, `new_size`, and `log_arity` must be authenticated, and
+/// the returned roots are only meaningful when checked against authenticated
+/// roots with the matching sizes bound (see [`verify_consistency`] for the
+/// length-binding and both-roots-authenticated obligations).
 #[must_use]
 pub fn reconstruct_consistency_roots(
     hasher: &dyn Hasher,
