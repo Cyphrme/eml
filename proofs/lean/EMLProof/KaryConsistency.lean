@@ -341,8 +341,8 @@ theorem mergeTopCoords_length_lt (k : Nat) (coords : List (Nat × Nat))
     the target participates in (window merges consume a path step; coordinate
     merges that skip the target do not), then the final root merge. Records
     sibling coordinates into the map. -/
-noncomputable def cmMergeGo (k : Nat) : List (Nat × Nat) → Nat → List ProofStep → CMap → CMap
-  | frontier, targetIdx, path, m =>
+noncomputable def cmMergeGo (k : Nat) (frontier : List (Nat × Nat)) (targetIdx : Nat)
+    (path : List ProofStep) (m : CMap) : CMap :=
     if h : k < 2 ∨ frontier.length ≤ k then
       if 1 < frontier.length then
         match path with
@@ -359,9 +359,46 @@ noncomputable def cmMergeGo (k : Nat) : List (Nat × Nat) → Nat → List Proof
               (recordMergeSibs m (frontier.drop split) (targetIdx - split) s)
       else
         cmMergeGo k (mergeTopCoords k frontier) targetIdx path m
-termination_by frontier => frontier.length
+termination_by frontier.length
 decreasing_by
   all_goals (push_neg at h; exact mergeTopCoords_length_lt k frontier (by omega) h.2)
+
+/-- One-step unfolding of `cmMergeGo` (the generated equation, with `let`
+    inlined), used to rewrite a single merge step. -/
+private theorem cmMergeGo_unfold (k : Nat) (frontier : List (Nat × Nat)) (targetIdx : Nat)
+    (path : List ProofStep) (m : CMap) :
+    cmMergeGo k frontier targetIdx path m =
+      if h : k < 2 ∨ frontier.length ≤ k then
+        (if 1 < frontier.length then
+          match path with
+          | [] => m
+          | s :: _ => recordMergeSibs m frontier targetIdx s
+        else m)
+      else
+        (if targetIdx ≥ frontier.length - k then
+          match path with
+          | [] => m
+          | s :: rest =>
+              cmMergeGo k (mergeTopCoords k frontier) (frontier.length - k) rest
+                (recordMergeSibs m (frontier.drop (frontier.length - k))
+                  (targetIdx - (frontier.length - k)) s)
+        else cmMergeGo k (mergeTopCoords k frontier) targetIdx path m) := by
+  rw [cmMergeGo.eq_def]
+
+/-- `getD` into the left part of an append. -/
+private theorem getD_append_lt {α} (l₁ l₂ : List α) (d : α) (i : Nat) (h : i < l₁.length) :
+    (l₁ ++ l₂).getD i d = l₁.getD i d := by
+  rw [List.getD_eq_getElem?_getD, List.getElem?_append_left h, List.getD_eq_getElem?_getD]
+
+/-- `getD` into the right part of an append. -/
+private theorem getD_append_ge {α} (l₁ l₂ : List α) (d : α) (i : Nat) (h : l₁.length ≤ i) :
+    (l₁ ++ l₂).getD i d = l₂.getD (i - l₁.length) d := by
+  rw [List.getD_eq_getElem?_getD, List.getElem?_append_right h, List.getD_eq_getElem?_getD]
+
+/-- `getD` below a `take` bound is unaffected. -/
+private theorem getD_take_lt {α} (l : List α) (d : α) (n i : Nat) (h : i < n) :
+    (l.take n).getD i d = l.getD i d := by
+  rw [List.getD_eq_getElem?_getD, List.getElem?_take_of_lt h, List.getD_eq_getElem?_getD]
 
 /-- The full coordinate→digest map after a consistency reconstruction: the
     boundary coordinate seeded with `start_hash` (`proof.rs:654`), then the
@@ -606,6 +643,855 @@ private theorem honest_consistency_shape (L k : Nat) (hk : 2 ≤ k) (cells : Lis
     List.drop_append_of_le_length (by rw [hdslen]; exact hbhsh),
     digitSteps_drop k bh sh (oldSize - 1 - sl) hbhsh, hdiveq]
 
+/-- `mapM` over the `Option` monad succeeds with the elementwise-mapped list when
+    every element maps to `some (g c)`. The lift that turns the pointwise
+    coordinate read-back into the whole-frontier read-back. -/
+private theorem mapM_option_some {α β} (g : α → β) :
+    ∀ (l : List α) (f : α → Option β), (∀ c ∈ l, f c = some (g c)) →
+      l.mapM f = some (l.map g) := by
+  intro l
+  induction l with
+  | nil => intro f _; rfl
+  | cons x xs ih =>
+    intro f h
+    rw [List.mapM_cons, h x (List.mem_cons_self ..),
+      ih f (fun c hc => h c (List.mem_cons_of_mem _ hc))]
+    rfl
+
+/-- A `foldl` of map-updating steps that each leave coordinate `c` untouched
+    leaves `c` untouched overall. The pointwise core under both
+    `recordBisectSibs` and `recordMergeSibs` (folds of conditional `cmInsert`). -/
+private theorem cmInsert_foldl_pointwise {β} (c : Nat × Nat) :
+    ∀ (js : List β) (step : CMap → β → CMap) (m : CMap),
+      (∀ j ∈ js, ∀ mm : CMap, step mm j c = mm c) →
+      (js.foldl step m) c = m c := by
+  intro js
+  induction js with
+  | nil => intro step m _; rfl
+  | cons x xs ih =>
+    intro step m h
+    rw [List.foldl_cons, ih step (step m x) (fun j hj mm => h j (List.mem_cons_of_mem _ hj) mm),
+      h x (List.mem_cons_self ..) m]
+
+/-- Reading a `cmInsert` at a coordinate other than the inserted one is the old
+    value. -/
+private theorem cmInsert_ne (m : CMap) (key c : Nat × Nat) (d : Digest) (h : c ≠ key) :
+    cmInsert m key d c = m c := by
+  simp only [cmInsert, if_neg h]
+
+/-- **Reading a uniquely-written key.** In a `foldl` of conditional `cmInsert`,
+    if `x` is the only un-skipped element whose key equals `key x`, then reading
+    `key x` afterward yields `val x` (no later step overwrites it). The dual of
+    `cmInsert_foldl_pointwise`, used to extract a recorded sibling's value. -/
+private theorem foldl_cmInsert_hits {β} (P : β → Prop) [DecidablePred P]
+    (key : β → Nat × Nat) (val : β → Digest) (x : β) :
+    ∀ (js : List β) (m : CMap),
+      js.Nodup → x ∈ js → ¬ P x →
+      (∀ y ∈ js, ¬ P y → key y = key x → y = x) →
+      (js.foldl (fun mm z => if P z then mm else cmInsert mm (key z) (val z)) m) (key x)
+        = some (val x) := by
+  intro js
+  induction js with
+  | nil => intro m _ hx _ _; simp at hx
+  | cons z zs ih =>
+    intro m hnd hx hPx huniq
+    rw [List.nodup_cons] at hnd
+    obtain ⟨hznotin, hndzs⟩ := hnd
+    rw [List.foldl_cons]
+    by_cases hzx : z = x
+    · subst hzx
+      simp only [if_neg hPx]
+      rw [cmInsert_foldl_pointwise (key z)]
+      · simp [cmInsert]
+      · intro y hy mm
+        by_cases hPy : P y
+        · simp only [if_pos hPy]
+        · simp only [if_neg hPy]
+          apply cmInsert_ne
+          intro hkey
+          exact hznotin (huniq y (List.mem_cons_of_mem _ hy) hPy hkey.symm ▸ hy)
+    · have hxzs : x ∈ zs := by
+        rcases List.mem_cons.mp hx with h | h
+        · exact absurd h.symm hzx
+        · exact h
+      refine ih (if P z then m else cmInsert m (key z) (val z)) hndzs hxzs hPx ?_
+      intro y hy hPy hkey
+      exact huniq y (List.mem_cons_of_mem _ hy) hPy hkey
+
+/-- `recordMergeSibs` leaves `c` untouched when `c` differs from every recorded
+    (non-target) window coordinate. -/
+private theorem recordMergeSibs_avoids (m : CMap) (nodes : List (Nat × Nat))
+    (pos : Nat) (s : ProofStep) (c : Nat × Nat)
+    (h : ∀ j, j < nodes.length → j ≠ pos → c ≠ nodes.getD j (0, 0)) :
+    recordMergeSibs m nodes pos s c = m c := by
+  rw [recordMergeSibs]
+  apply cmInsert_foldl_pointwise
+  intro j hj mm
+  rw [List.mem_range] at hj
+  by_cases hjp : j = pos
+  · simp only [if_pos hjp]
+  · simp only [if_neg hjp]
+    exact cmInsert_ne mm _ c _ (h j hj hjp)
+
+/-- Skip-free variant of `foldl_cmInsert_hits` (every step inserts). -/
+private theorem foldl_cmInsert_hits' {β} (key : β → Nat × Nat) (val : β → Digest) (x : β) :
+    ∀ (js : List β) (m : CMap),
+      js.Nodup → x ∈ js → (∀ y ∈ js, key y = key x → y = x) →
+      (js.foldl (fun mm z => cmInsert mm (key z) (val z)) m) (key x) = some (val x) := by
+  intro js m hnd hx huniq
+  have := foldl_cmInsert_hits (fun _ : β => False) key val x js m hnd hx (by simp)
+    (fun y hy _ hkey => huniq y hy hkey)
+  simpa using this
+
+/-- `recordBisectSibs` records each sibling at its child coordinate (height `ch`):
+    reading the `j0`-th child's coordinate returns the `j0`-th recorded sibling. -/
+private theorem recordBisectSibs_hits (k : Nat) (hk : 2 ≤ k) (m : CMap) (curLeft ch : Nat)
+    (s : ProofStep) (j0 : Nat) (hj0 : j0 < s.siblings.length) :
+    recordBisectSibs k m curLeft ch s
+        ((if j0 < s.position then curLeft - s.position * k ^ ch + j0 * k ^ ch
+          else curLeft - s.position * k ^ ch + j0 * k ^ ch + k ^ ch), ch)
+      = some (s.siblings.getD j0 emptyHash) := by
+  rw [recordBisectSibs]
+  have hcap : 0 < k ^ ch := pow_pos (by omega) ch
+  exact foldl_cmInsert_hits'
+    (fun j => ((if j < s.position then curLeft - s.position * k ^ ch + j * k ^ ch
+                else curLeft - s.position * k ^ ch + j * k ^ ch + k ^ ch), ch))
+    (fun j => s.siblings.getD j emptyHash) j0 (List.range s.siblings.length) m
+    List.nodup_range (List.mem_range.mpr hj0)
+    (fun y _ hkey => by
+      simp only [Prod.mk.injEq] at hkey
+      have h1 := hkey.1
+      have key1 : ∀ a : Nat,
+          (if a < s.position then curLeft - s.position * k ^ ch + a * k ^ ch
+            else curLeft - s.position * k ^ ch + a * k ^ ch + k ^ ch)
+          = curLeft - s.position * k ^ ch + (if a < s.position then a else a + 1) * k ^ ch := by
+        intro a
+        by_cases ha : a < s.position
+        · rw [if_pos ha, if_pos ha]
+        · rw [if_neg ha, if_neg ha, add_mul, one_mul]; omega
+      rw [key1, key1] at h1
+      have h2 : (if y < s.position then y else y + 1) * k ^ ch
+          = (if j0 < s.position then j0 else j0 + 1) * k ^ ch := by omega
+      have h3 := Nat.eq_of_mul_eq_mul_right hcap h2
+      rcases Nat.lt_or_ge y s.position with hy | hy <;>
+        rcases Nat.lt_or_ge j0 s.position with hj | hj
+      · rw [if_pos hy, if_pos hj] at h3; omega
+      · rw [if_pos hy, if_neg (by omega)] at h3; omega
+      · rw [if_neg (by omega), if_pos hj] at h3; omega
+      · rw [if_neg (by omega), if_neg (by omega)] at h3; omega)
+
+/-- `recordBisectSibs` only writes height-`ch` coordinates. -/
+private theorem recordBisectSibs_preserves (k : Nat) (m : CMap) (curLeft ch : Nat)
+    (s : ProofStep) (c : Nat × Nat) (h : c.2 ≠ ch) :
+    recordBisectSibs k m curLeft ch s c = m c := by
+  rw [recordBisectSibs]
+  apply cmInsert_foldl_pointwise
+  intro j _ mm
+  apply cmInsert_ne
+  intro hcq
+  exact h (by rw [hcq])
+
+/-- `recordBisectSibs` never overwrites the path node `(curLeft, ch)` itself:
+    every recorded sibling sits at a different left coordinate. -/
+private theorem recordBisectSibs_preserves_node (k : Nat) (hk : 2 ≤ k) (m : CMap)
+    (curLeft ch : Nat) (s : ProofStep) (hpos : s.position * k ^ ch ≤ curLeft) :
+    recordBisectSibs k m curLeft ch s (curLeft, ch) = m (curLeft, ch) := by
+  rw [recordBisectSibs]
+  apply cmInsert_foldl_pointwise
+  intro j _ mm
+  apply cmInsert_ne
+  intro hcq
+  rw [Prod.mk.injEq] at hcq
+  obtain ⟨h1, _⟩ := hcq
+  have hcap : 0 < k ^ ch := pow_pos (by omega) ch
+  by_cases hjp : j < s.position
+  · simp only [if_pos hjp] at h1
+    have hlt : j * k ^ ch < s.position * k ^ ch := (Nat.mul_lt_mul_right hcap).mpr hjp
+    omega
+  · simp only [if_neg hjp] at h1
+    have hge : s.position * k ^ ch ≤ j * k ^ ch := Nat.mul_le_mul_right (k ^ ch) (by omega)
+    omega
+
+/-- The bisection phase leaves coordinates below the current level untouched:
+    each step records at its own (rising) level. -/
+private theorem cmBisect_preserves_below (k : Nat) :
+    ∀ (path : List ProofStep) (curLeft ch : Nat) (m : CMap) (c : Nat × Nat),
+      c.2 < ch → cmBisect k path curLeft ch m c = m c := by
+  intro path
+  induction path with
+  | nil => intro curLeft ch m c _; rfl
+  | cons s rest ih =>
+    intro curLeft ch m c h
+    rw [cmBisect, ih _ (ch + 1) _ c (by omega),
+      recordBisectSibs_preserves k m curLeft ch s c (by omega)]
+
+/-- `recordMergeSibs` records the sibling digest at a window coordinate whose
+    position is distinct from every other window coordinate. -/
+private theorem recordMergeSibs_hits (m : CMap) (nodes : List (Nat × Nat)) (pos : Nat)
+    (s : ProofStep) (j0 : Nat) (hj0 : j0 < nodes.length) (hjp : j0 ≠ pos)
+    (hdist : ∀ j, j < nodes.length → nodes.getD j (0, 0) = nodes.getD j0 (0, 0) → j = j0) :
+    recordMergeSibs m nodes pos s (nodes.getD j0 (0, 0))
+      = some (s.siblings.getD (if j0 < s.position then j0 else j0 - 1) emptyHash) := by
+  rw [recordMergeSibs]
+  exact foldl_cmInsert_hits (fun j => j = pos) (fun j => nodes.getD j (0, 0))
+    (fun j => s.siblings.getD (if j < s.position then j else j - 1) emptyHash) j0
+    (List.range nodes.length) m List.nodup_range (List.mem_range.mpr hj0) hjp
+    (fun y hy _ hkey => hdist y (List.mem_range.mp hy) hkey)
+
+/-- **The merge phase never writes inside the target slot.** Every coordinate
+    `cmMergeGo` records is a non-target window coordinate, whose left lies outside
+    the half-open interval `[a, b)` as long as that holds for every non-target
+    coordinate of the input list (an invariant preserved by the coordinate
+    merge, since a merged node inherits its leftmost child's left). So any
+    coordinate whose left is in `[a, b)` keeps its incoming value. -/
+private theorem cmMergeGo_avoids (k a b : Nat) (hk : 2 ≤ k) :
+    ∀ (n : Nat) (coords : List (Nat × Nat)) (tgt : Nat) (path : List ProofStep) (m : CMap),
+      coords.length = n → tgt < coords.length →
+      (∀ i, i < coords.length → i ≠ tgt →
+        ¬ (a ≤ (coords.getD i (0, 0)).1 ∧ (coords.getD i (0, 0)).1 < b)) →
+      ∀ c, a ≤ c.1 → c.1 < b → cmMergeGo k coords tgt path m c = m c := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro coords tgt path m hn htgt hP2 c hca hcb
+    have hcin : a ≤ c.1 ∧ c.1 < b := ⟨hca, hcb⟩
+    -- c differs from every non-target coordinate of `coords`
+    have hcne : ∀ i, i < coords.length → i ≠ tgt → c ≠ coords.getD i (0, 0) := by
+      intro i hi hit heq
+      exact hP2 i hi hit (by rw [← heq]; exact hcin)
+    rw [cmMergeGo_unfold]
+    by_cases hbase : k < 2 ∨ coords.length ≤ k
+    · rw [dif_pos hbase]
+      by_cases h1 : 1 < coords.length
+      · rw [if_pos h1]
+        cases path with
+        | nil => rfl
+        | cons s rest =>
+            apply recordMergeSibs_avoids
+            intro j hj hjt
+            exact hcne j hj hjt
+      · rw [if_neg h1]
+    · rw [dif_neg hbase]
+      push_neg at hbase
+      obtain ⟨_, hgt⟩ := hbase
+      -- the coordinate merge: drop the last `k`, append their parent
+      have hmergedhead : mergeTopCoords k coords
+          = coords.take (coords.length - k)
+            ++ [((coords.getD (coords.length - k) (0, 0)).1,
+                 (coords.getD (coords.length - k) (0, 0)).2 + 1)] := by
+        rw [mergeTopCoords, if_neg (by omega)]
+        have hhd : (coords.drop (coords.length - k)).head?
+            = some (coords.getD (coords.length - k) (0, 0)) := by
+          rw [List.head?_eq_getElem?, List.getElem?_drop, Nat.add_zero,
+            List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega), Option.getD_some]
+        rw [hhd]
+      have hmlen : (mergeTopCoords k coords).length = coords.length - k + 1 := by
+        rw [hmergedhead, List.length_append, List.length_take, List.length_cons,
+          List.length_nil, Nat.min_eq_left (by omega)]
+      have htakelen : (coords.take (coords.length - k)).length = coords.length - k := by
+        rw [List.length_take, Nat.min_eq_left (by omega)]
+      -- prefix coordinates unchanged
+      have hmleft : ∀ i, i < coords.length - k →
+          (mergeTopCoords k coords).getD i (0, 0) = coords.getD i (0, 0) := by
+        intro i hi
+        rw [hmergedhead, getD_append_lt _ _ _ _ (by rw [htakelen]; exact hi), getD_take_lt _ _ _ _ hi]
+      -- merged coordinate inherits its leftmost child's left
+      have hmlast : ((mergeTopCoords k coords).getD (coords.length - k) (0, 0)).1
+          = (coords.getD (coords.length - k) (0, 0)).1 := by
+        rw [hmergedhead, getD_append_ge _ _ _ _ (by rw [htakelen]),
+          htakelen, Nat.sub_self, List.getD_cons_zero]
+      by_cases hge : tgt ≥ coords.length - k
+      · rw [if_pos hge]
+        cases path with
+        | nil => rfl
+        | cons s rest =>
+            have hrec : recordMergeSibs m (coords.drop (coords.length - k))
+                (tgt - (coords.length - k)) s c = m c := by
+              apply recordMergeSibs_avoids
+              intro j hj hjt
+              rw [List.length_drop] at hj
+              have hidx : (coords.drop (coords.length - k)).getD j (0, 0)
+                  = coords.getD ((coords.length - k) + j) (0, 0) := by
+                rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop]
+              rw [hidx]
+              apply hcne ((coords.length - k) + j) (by omega)
+              omega
+            have hP2' : ∀ i, i < (mergeTopCoords k coords).length → i ≠ coords.length - k →
+                ¬ (a ≤ ((mergeTopCoords k coords).getD i (0, 0)).1 ∧
+                   ((mergeTopCoords k coords).getD i (0, 0)).1 < b) := by
+              intro i hi hik
+              rw [hmleft i (by rw [hmlen] at hi; omega)]
+              exact hP2 i (by rw [hmlen] at hi; omega) (by omega)
+            exact (ih (mergeTopCoords k coords).length (by omega) (mergeTopCoords k coords)
+              (coords.length - k) rest (recordMergeSibs m (coords.drop (coords.length - k))
+                (tgt - (coords.length - k)) s) rfl (by rw [hmlen]; omega) hP2' c hca hcb).trans hrec
+      · rw [if_neg hge]
+        have hP2' : ∀ i, i < (mergeTopCoords k coords).length → i ≠ tgt →
+            ¬ (a ≤ ((mergeTopCoords k coords).getD i (0, 0)).1 ∧
+               ((mergeTopCoords k coords).getD i (0, 0)).1 < b) := by
+          intro i hi hit
+          rw [hmlen] at hi
+          by_cases hlt : i < coords.length - k
+          · rw [hmleft i hlt]; exact hP2 i (by omega) hit
+          · have hieq : i = coords.length - k := by omega
+            rw [hieq, hmlast]; exact hP2 (coords.length - k) (by omega) (by omega)
+        exact ih (mergeTopCoords k coords).length (by omega) (mergeTopCoords k coords)
+          tgt path m rfl (by rw [hmlen]; omega) hP2' c hca hcb
+
+/-- A `Tiles` decomposition splits around any interior tile: the prefix tiles
+    `[start, mid)`, the tile starts at `mid`, and the suffix tiles
+    `[mid + k^height, stop)`. -/
+private theorem Tiles_split (k : Nat) :
+    ∀ (pre : List (Nat × Nat)) (tile : Nat × Nat) (post : List (Nat × Nat)) (start stop : Nat),
+      Tiles k start (pre ++ tile :: post) stop →
+      ∃ mid, Tiles k start pre mid ∧ tile.1 = mid ∧ Tiles k (mid + k ^ tile.2) post stop := by
+  intro pre
+  induction pre with
+  | nil =>
+    intro tile post start stop htiles
+    obtain ⟨ht, hrest⟩ := htiles
+    exact ⟨start, by simp [Tiles], ht, ht ▸ hrest⟩
+  | cons p rest ih =>
+    intro tile post start stop htiles
+    obtain ⟨hp, hrest⟩ := htiles
+    obtain ⟨mid, hpre, htile, hpost⟩ := ih tile post (start + k ^ p.2) stop hrest
+    exact ⟨mid, ⟨hp, hpre⟩, htile, hpost⟩
+
+/-- **Tiles are disjoint.** The tile located at index `fIdx` spans
+    `[sl, sl + k^sh)`; every other tile's left coordinate lies outside that
+    interval (prefix tiles end at or before `sl`, suffix tiles start at or after
+    `sl + k^sh`). -/
+private theorem Tiles_slot_avoids (k : Nat) (hk : 2 ≤ k) :
+    ∀ (coords : List (Nat × Nat)) (start stop fIdx sl sh : Nat),
+      Tiles k start coords stop → coords[fIdx]? = some (sl, sh) →
+      ∀ i, i < coords.length → i ≠ fIdx →
+        ¬ (sl ≤ (coords.getD i (0, 0)).1 ∧ (coords.getD i (0, 0)).1 < sl + k ^ sh) := by
+    intro coords start stop fIdx sl sh htiles hget i hi hif
+    have hflt : fIdx < coords.length := by
+      rw [List.getElem?_eq_some_iff] at hget; obtain ⟨h, _⟩ := hget; exact h
+    have hdecomp : coords = coords.take fIdx ++ (sl, sh) :: coords.drop (fIdx + 1) := by
+      conv_lhs => rw [← List.take_append_drop fIdx coords, List.drop_eq_getElem_cons hflt]
+      rw [List.getElem?_eq_getElem hflt] at hget
+      rw [Option.some.injEq] at hget
+      rw [hget]
+    have htakelen : (coords.take fIdx).length = fIdx := by
+      rw [List.length_take, Nat.min_eq_left (by omega)]
+    obtain ⟨mid, hpre, htileeq, hpost⟩ :=
+      Tiles_split k (coords.take fIdx) (sl, sh) (coords.drop (fIdx + 1)) start stop
+        (hdecomp ▸ htiles)
+    simp only at htileeq
+    subst htileeq
+    rintro ⟨hge, hlt⟩
+    rcases Nat.lt_or_ge i fIdx with hlo | hhi
+    · -- prefix tile: its span ends at or before sl
+      have hmem : coords.getD i (0, 0) ∈ coords.take fIdx := by
+        have hi' : i < (coords.take fIdx).length := by rw [htakelen]; exact hlo
+        rw [← getD_take_lt coords (0, 0) fIdx i hlo, List.getD_eq_getElem?_getD,
+          List.getElem?_eq_getElem hi', Option.getD_some]
+        exact List.getElem_mem _
+      have hb := Tiles_entry_bound k (coords.take fIdx) start sl hpre _ hmem
+      have hpos : 0 < k ^ (coords.getD i (0, 0)).2 := pow_pos (by omega) _
+      omega
+    · -- suffix tile: its left is at or beyond sl + k^sh
+      have hidrop : coords.getD i (0, 0) = (coords.drop (fIdx + 1)).getD (i - (fIdx + 1)) (0, 0) := by
+        rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop,
+          show (fIdx + 1) + (i - (fIdx + 1)) = i from by omega]
+      have hmem : coords.getD i (0, 0) ∈ coords.drop (fIdx + 1) := by
+        rw [hidrop, List.getD_eq_getElem?_getD,
+          List.getElem?_eq_getElem (l := coords.drop (fIdx + 1))
+            (by rw [List.length_drop]; omega)]
+        exact List.getElem_mem _
+      have hb := Tiles_left_ge k (coords.drop (fIdx + 1)) (sl + k ^ sh) stop hpost _ hmem
+      omega
+
+/-- **A frontier tile shares its parent block with the last leaf.** Every
+    perfect subtree `(cl, ch)` of the greedy decomposition of `[off, off+n)` lies
+    in the same `k^(ch+1)`-block as the last leaf `off+n-1`: greedy emits a
+    height-`ch` tile only when the surrounding `k^(ch+1)`-block would overflow the
+    range, so the block cannot have been completed to a taller tile. The
+    invariants — the offset is `k^(log n)`-aligned and the remaining range fits in
+    the offset's `k^(log n + 1)`-block — are preserved by the greedy step. -/
+private theorem frontier_block (k : Nat) (hk : 2 ≤ k) :
+    ∀ (n off : Nat), k ^ Nat.log k n ∣ off →
+      off % k ^ (Nat.log k n + 1) + n ≤ k ^ (Nat.log k n + 1) →
+      ∀ cl ch, (cl, ch) ∈ frontierGo k off n →
+        cl / k ^ (ch + 1) = (off + n - 1) / k ^ (ch + 1) := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro off halign hfit cl ch hmem
+    rw [frontierGo] at hmem
+    split at hmem
+    · simp at hmem
+    · next h =>
+      push_neg at h
+      obtain ⟨hn0, _⟩ := h
+      set L := Nat.log k n with hL
+      have hcap : k ^ L ≤ n := Nat.pow_log_le_self k hn0
+      have hcaplt : n < k ^ (L + 1) := Nat.lt_pow_succ_log_self (by omega) n
+      have hcappos : 0 < k ^ L := pow_pos (by omega) L
+      have hpL1 : 0 < k ^ (L + 1) := pow_pos (by omega) (L + 1)
+      rw [List.mem_cons] at hmem
+      rcases hmem with heq | hmem'
+      · -- first tile (off, L): off and off+n-1 lie in off's (L+1)-block
+        rw [Prod.mk.injEq] at heq
+        obtain ⟨hcl, hch⟩ := heq
+        subst cl; subst ch
+        have hr : off % k ^ (L + 1) + (n - 1) < k ^ (L + 1) := by omega
+        have hdm : off = k ^ (L + 1) * (off / k ^ (L + 1)) + off % k ^ (L + 1) :=
+          (Nat.div_add_mod off (k ^ (L + 1))).symm
+        have hrw : off + n - 1 = k ^ (L + 1) * (off / k ^ (L + 1)) + (off % k ^ (L + 1) + (n - 1)) := by
+          omega
+        rw [hrw, Nat.mul_add_div hpL1, Nat.div_eq_of_lt hr]; omega
+      · -- recursive tiles: same total `off + n`, push the invariants down
+        have hL'le : Nat.log k (n - k ^ L) ≤ L :=
+          Nat.log_mono_right (show n - k ^ L ≤ n by omega)
+        have hdvd' : k ^ Nat.log k (n - k ^ L) ∣ off + k ^ L :=
+          Nat.dvd_add (dvd_trans (pow_dvd_pow k hL'le) halign) (pow_dvd_pow k hL'le)
+        have hfit' : (off + k ^ L) % k ^ (Nat.log k (n - k ^ L) + 1) + (n - k ^ L)
+            ≤ k ^ (Nat.log k (n - k ^ L) + 1) := by
+          set L' := Nat.log k (n - k ^ L) with hL'
+          have hn'pos : 0 < n - k ^ L := by
+            rcases Nat.eq_zero_or_pos (n - k ^ L) with h0 | hp
+            · exfalso; rw [frontierGo, dif_pos (by left; omega)] at hmem'; simp at hmem'
+            · exact hp
+          have hcaplt' : n - k ^ L < k ^ (L' + 1) := Nat.lt_pow_succ_log_self (by omega) _
+          rcases Nat.lt_or_ge L' L with hlt | hge
+          · -- shorter: the new offset is a multiple of k^(L'+1)
+            have hdvdoff : k ^ (L' + 1) ∣ off + k ^ L :=
+              Nat.dvd_add (dvd_trans (pow_dvd_pow k (by omega)) halign) (pow_dvd_pow k (by omega))
+            obtain ⟨c', hc'⟩ := hdvdoff
+            rw [hc', Nat.mul_mod_right]; omega
+          · -- equal log: the digit has not carried, so the block still fits
+            have hL'eq : L' = L := by omega
+            have ha : off = k ^ L * (off / k ^ L) := by
+              rw [Nat.mul_comm]; exact (Nat.div_mul_cancel halign).symm
+            have hmodoff : off % k ^ (L + 1) = off / k ^ L % k * k ^ L := by
+              conv_lhs => rw [ha, pow_succ]
+              rw [Nat.mul_mod_mul_left, Nat.mul_comm]
+            have hge2 : k ^ L ≤ n - k ^ L := by
+              have h := Nat.pow_log_le_self k (show n - k ^ L ≠ 0 by omega)
+              rw [← hL', hL'eq] at h; exact h
+            have hdigit : off / k ^ L % k + 1 < k := by
+              by_contra hc
+              push_neg at hc
+              have hmk : off / k ^ L % k = k - 1 := by
+                have := Nat.mod_lt (off / k ^ L) (show 0 < k by omega); omega
+              rw [hmodoff, hmk, pow_succ'] at hfit
+              have e1 : (k - 1) * k ^ L + 2 * k ^ L = (k + 1) * k ^ L := by
+                rw [← Nat.add_mul]; congr 1; omega
+              have e2 : (k + 1) * k ^ L = k * k ^ L + k ^ L := by ring
+              omega
+            have hRlt : off / k ^ L % k * k ^ L + k ^ L < k ^ (L + 1) := by
+              have h1 : (off / k ^ L % k + 1) * k ^ L = off / k ^ L % k * k ^ L + k ^ L := by ring
+              have h2 : (off / k ^ L % k + 1) * k ^ L ≤ (k - 1) * k ^ L :=
+                Nat.mul_le_mul_right (k ^ L) (by omega)
+              have h3 : (k - 1) * k ^ L < k * k ^ L := (Nat.mul_lt_mul_right hcappos).mpr (by omega)
+              rw [pow_succ']; omega
+            have hmod2 : (off + k ^ L) % k ^ (L + 1) = off / k ^ L % k * k ^ L + k ^ L := by
+              have hdecomp : off + k ^ L
+                  = k ^ (L + 1) * (off / k ^ (L + 1)) + (off / k ^ L % k * k ^ L + k ^ L) := by
+                have := Nat.div_add_mod off (k ^ (L + 1)); rw [hmodoff] at this; omega
+              rw [hdecomp, Nat.mul_add_mod, Nat.mod_eq_of_lt hRlt]
+            rw [hL'eq, hmod2]
+            rw [hmodoff] at hfit
+            omega
+        have hrec := ih (n - k ^ L) (by omega) (off + k ^ L) hdvd' hfit' cl ch hmem'
+        rwa [show off + k ^ L + (n - k ^ L) - 1 = off + n - 1 from by omega] at hrec
+
+/-- Every left coordinate in `frontierGo k off n` is at least `off`. -/
+private theorem frontierGo_left_ge' (k : Nat) (hk : 2 ≤ k) :
+    ∀ (n off : Nat), ∀ lh ∈ frontierGo k off n, off ≤ lh.1 := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro off lh hmem
+    rw [frontierGo] at hmem
+    split at hmem
+    · simp at hmem
+    · next h =>
+      push_neg at h
+      obtain ⟨hn0, _⟩ := h
+      have hcap : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+      rw [List.mem_cons] at hmem
+      rcases hmem with rfl | hmem'
+      · exact le_refl _
+      · have := ih (n - k ^ Nat.log k n) (by omega) (off + k ^ Nat.log k n) lh hmem'; omega
+
+/-- **The old and new frontiers agree on tiles left of the slot.** While greedy
+    decomposes `[off, off+sl)`, the old and current sizes emit the same tiles: a
+    tile is recorded left of `sl` only when both sizes share the top power (forced
+    because the slot `(sl, sh)` of the current frontier lies past it, so the top
+    power fits within `sl - off`, and the old size — being at least `sl - off` and
+    at most the current size — has the same log). Hence the prefix of tiles with
+    left `< sl` is identical. -/
+private theorem frontier_agree (k : Nat) (hk : 2 ≤ k) :
+    ∀ (newN off oldN sl sh : Nat),
+      k ^ Nat.log k newN ∣ off → (sl, sh) ∈ frontierGo k off newN →
+      off ≤ sl → sl ≤ off + oldN → oldN ≤ newN →
+      (frontierGo k off oldN).filter (fun c => decide (c.1 < sl))
+        = (frontierGo k off newN).filter (fun c => decide (c.1 < sl)) := by
+  intro newN
+  induction newN using Nat.strong_induction_on with
+  | _ newN ih =>
+    intro off oldN sl sh halign hslot hoff hsl hle
+    have hnew0 : newN ≠ 0 := by
+      intro h; rw [h, frontierGo, dif_pos (by left; rfl)] at hslot; simp at hslot
+    set L := Nat.log k newN with hL
+    have hcap : k ^ L ≤ newN := Nat.pow_log_le_self k hnew0
+    have hcappos : 0 < k ^ L := pow_pos (by omega) L
+    rw [frontierGo, dif_neg (by push_neg; exact ⟨by omega, by omega⟩)] at hslot
+    rw [List.mem_cons] at hslot
+    rcases hslot with heq | hmem
+    · -- slot is the first tile: sl = off, no tile lies left of sl
+      rw [Prod.mk.injEq] at heq
+      have hsloff : sl = off := heq.1
+      rw [List.filter_eq_nil_iff.mpr (fun c hc => by
+            simp only [decide_eq_true_eq, not_lt]; rw [hsloff]
+            exact frontierGo_left_ge' k hk oldN off c hc),
+          List.filter_eq_nil_iff.mpr (fun c hc => by
+            simp only [decide_eq_true_eq, not_lt]; rw [hsloff]
+            exact frontierGo_left_ge' k hk newN off c hc)]
+    · -- slot is deeper: the first tile is shared and lies left of sl
+      have hslge : off + k ^ L ≤ sl :=
+        frontierGo_left_ge' k hk (newN - k ^ L) (off + k ^ L) (sl, sh) hmem
+      have hofflt : off < sl := by omega
+      have hkLle : k ^ L ≤ oldN := by omega
+      have hlogold : Nat.log k oldN = L := by
+        have h1 : L ≤ Nat.log k oldN := Nat.le_log_of_pow_le (by omega) hkLle
+        have h2 : Nat.log k oldN ≤ L := Nat.log_mono_right hle
+        omega
+      have hold0 : oldN ≠ 0 := by omega
+      -- unfold both first tiles (both (off, L)) and strip them
+      have hfO : frontierGo k off oldN
+          = (off, Nat.log k oldN) :: frontierGo k (off + k ^ Nat.log k oldN) (oldN - k ^ Nat.log k oldN) := by
+        rw [frontierGo, dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+      have hfN : frontierGo k off newN
+          = (off, L) :: frontierGo k (off + k ^ L) (newN - k ^ L) := by
+        rw [frontierGo, dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+      rw [hfO, hfN, hlogold, List.filter_cons_of_pos (by simp [hofflt]),
+        List.filter_cons_of_pos (by simp [hofflt])]
+      congr 1
+      have hdvd' : k ^ Nat.log k (newN - k ^ L) ∣ off + k ^ L :=
+        Nat.dvd_add (dvd_trans (pow_dvd_pow k (Nat.log_mono_right (by omega))) halign)
+          (pow_dvd_pow k (Nat.log_mono_right (by omega)))
+      exact ih (newN - k ^ L) (by omega) (off + k ^ L) (oldN - k ^ L) sl sh hdvd' hmem
+        (by omega) (by omega) (by omega)
+
+/-- Reading a list below an erased index is unaffected. -/
+private theorem getD_eraseIdx_lt {α} [Inhabited α] (l : List α) (d : α) (n i : Nat) (h : i < n) :
+    (l.eraseIdx n).getD i d = l.getD i d := by
+  rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_eraseIdx,
+    if_pos h]
+
+/-- **The merge phase records every slot left of the target.** Folding the honest
+    grouping path of the digest stack `digests = coords.map perfectRoot` (on the
+    target prefix) records, at every coordinate strictly left of the target slot,
+    that slot's genuine perfect root. The target's lineage absorbs the left slots
+    one window at a time, each pristine (never previously merged), so its recorded
+    digest is still its original perfect root; later windows never overwrite it
+    (coordinates are strictly left-ordered). -/
+private theorem cmMergeGo_left_cover (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
+    ∀ (n : Nat) (coords : List (Nat × Nat)) (digests : List Digest) (tgt : Nat) (m : CMap),
+      coords.length = n → digests.length = coords.length → tgt < coords.length →
+      (∀ a b, a < coords.length → b < coords.length → a < b →
+        (coords.getD a (0, 0)).1 < (coords.getD b (0, 0)).1) →
+      (∀ i, i < tgt → digests.getD i emptyHash
+        = perfectRoot L k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2) →
+      ∀ i, i < tgt →
+        (cmMergeGo k coords tgt (honestGroupPath L k digests tgt) m) (coords.getD i (0, 0))
+          = some (perfectRoot L k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2) := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro coords digests tgt m hn hdl htgt hsorted hJ i hi
+    have hlen2 : 1 < coords.length := by omega
+    have hdistinct : ∀ a b, a < coords.length → b < coords.length →
+        coords.getD a (0, 0) = coords.getD b (0, 0) → a = b := by
+      intro a b ha hb heq
+      rcases Nat.lt_trichotomy a b with h | h | h
+      · exact absurd (heq ▸ hsorted a b ha hb h) (lt_irrefl _)
+      · exact h
+      · exact absurd (heq ▸ hsorted b a hb ha h) (lt_irrefl _)
+    rw [cmMergeGo_unfold]
+    by_cases hbase : k < 2 ∨ coords.length ≤ k
+    · rw [dif_pos hbase, if_pos hlen2]
+      set step : ProofStep := { position := tgt, siblings := digests.eraseIdx tgt } with hstep_def
+      have hgp : honestGroupPath L k digests tgt = [step] := by
+        rw [honestGroupPath, dif_pos (by rw [hdl]; exact hbase), if_pos (by rw [hdl]; exact hlen2),
+          hstep_def]
+      rw [hgp]
+      show recordMergeSibs m coords tgt step (coords.getD i (0, 0))
+        = some (perfectRoot L k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2)
+      rw [recordMergeSibs_hits m coords tgt step i (by omega) (by omega)
+        (fun j hj hjk => hdistinct j i hj (by omega) hjk), hstep_def]
+      simp only [if_pos hi]
+      rw [getD_eraseIdx_lt digests emptyHash tgt i hi, hJ i hi]
+    · rw [dif_neg hbase]
+      push_neg at hbase
+      obtain ⟨_, hgt⟩ := hbase
+      have hgtd : k < digests.length := by rw [hdl]; exact hgt
+      -- coordinate-merge shape facts
+      have htakelen : (coords.take (coords.length - k)).length = coords.length - k := by
+        rw [List.length_take, Nat.min_eq_left (by omega)]
+      have hmergedhead : mergeTopCoords k coords
+          = coords.take (coords.length - k)
+            ++ [((coords.getD (coords.length - k) (0, 0)).1,
+                 (coords.getD (coords.length - k) (0, 0)).2 + 1)] := by
+        rw [mergeTopCoords, if_neg (by omega)]
+        have hhd : (coords.drop (coords.length - k)).head?
+            = some (coords.getD (coords.length - k) (0, 0)) := by
+          rw [List.head?_eq_getElem?, List.getElem?_drop, Nat.add_zero,
+            List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega), Option.getD_some]
+        rw [hhd]
+      have hmlen : (mergeTopCoords k coords).length = coords.length - k + 1 := by
+        rw [hmergedhead, List.length_append, List.length_take, List.length_cons,
+          List.length_nil, Nat.min_eq_left (by omega)]
+      have hcleft : ∀ j, j < coords.length - k →
+          (mergeTopCoords k coords).getD j (0, 0) = coords.getD j (0, 0) := by
+        intro j hj
+        rw [hmergedhead, getD_append_lt _ _ _ _ (by rw [htakelen]; exact hj), getD_take_lt _ _ _ _ hj]
+      have hclast : ((mergeTopCoords k coords).getD (coords.length - k) (0, 0)).1
+          = (coords.getD (coords.length - k) (0, 0)).1 := by
+        rw [hmergedhead, getD_append_ge _ _ _ _ (by rw [htakelen]),
+          htakelen, Nat.sub_self, List.getD_cons_zero]
+      have hdleft : ∀ j, j < coords.length - k →
+          (mergeTopD L k digests).getD j emptyHash = digests.getD j emptyHash := by
+        intro j hj
+        rw [mergeTopD, if_neg (by omega), getD_append_lt _ _ _ _
+          (by rw [List.length_take, Nat.min_eq_left (by omega)]; rw [hdl]; exact hj),
+          getD_take_lt _ _ _ _ (by rw [hdl]; exact hj)]
+      have hdll : (mergeTopD L k digests).length = (mergeTopCoords k coords).length := by
+        rw [hmlen, mergeTopD, if_neg (by omega), List.length_append, List.length_take,
+          List.length_cons, List.length_nil, Nat.min_eq_left (by omega), hdl]
+      -- sorted is preserved
+      have hsorted' : ∀ a b, a < (mergeTopCoords k coords).length →
+          b < (mergeTopCoords k coords).length → a < b →
+          ((mergeTopCoords k coords).getD a (0, 0)).1 < ((mergeTopCoords k coords).getD b (0, 0)).1 := by
+        intro a b ha hb hab
+        rw [hmlen] at ha hb
+        by_cases hbs : b < coords.length - k
+        · rw [hcleft a (by omega), hcleft b hbs]; exact hsorted a b (by omega) (by omega) hab
+        · have hbe : b = coords.length - k := by omega
+          rw [hcleft a (by omega), hbe, hclast]
+          exact hsorted a (coords.length - k) (by omega) (by omega) (by omega)
+      by_cases hge : tgt ≥ coords.length - k
+      · rw [if_pos hge]
+        set headStep : ProofStep :=
+          { position := tgt - (coords.length - k),
+            siblings := (digests.drop (coords.length - k)).eraseIdx (tgt - (coords.length - k)) }
+          with hhead
+        have hgp : honestGroupPath L k digests tgt
+            = headStep :: honestGroupPath L k (mergeTopD L k digests) (coords.length - k) := by
+          rw [honestGroupPath, dif_neg (by push_neg; exact ⟨by omega, by omega⟩),
+            if_pos (by rw [hdl]; exact hge)]
+          rw [hhead, hdl]
+        rw [hgp]
+        set m' := recordMergeSibs m (coords.drop (coords.length - k))
+          (tgt - (coords.length - k)) headStep with hm'
+        -- the recursion's invariants
+        have hJ' : ∀ j, j < coords.length - k →
+            (mergeTopD L k digests).getD j emptyHash
+              = perfectRoot L k cells ((mergeTopCoords k coords).getD j (0, 0)).1
+                  ((mergeTopCoords k coords).getD j (0, 0)).2 := by
+          intro j hj
+          rw [hdleft j hj, hcleft j hj]; exact hJ j (by omega)
+        by_cases hisplit : i < coords.length - k
+        · rw [← hcleft i hisplit]
+          exact ih (mergeTopCoords k coords).length (by rw [hmlen]; omega) (mergeTopCoords k coords)
+            (mergeTopD L k digests) (coords.length - k) m' rfl hdll (by rw [hmlen]; omega)
+            hsorted' hJ' i hisplit
+        · -- split ≤ i < tgt: coords[i] is recorded in m' and survives the recursion
+          have hidx : coords.getD i (0, 0)
+              = (coords.drop (coords.length - k)).getD (i - (coords.length - k)) (0, 0) := by
+            rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop,
+              show (coords.length - k) + (i - (coords.length - k)) = i from by omega]
+          have hsurv : (cmMergeGo k (mergeTopCoords k coords) (coords.length - k)
+              (honestGroupPath L k (mergeTopD L k digests) (coords.length - k)) m')
+              (coords.getD i (0, 0))
+              = m' (coords.getD i (0, 0)) := by
+            apply cmMergeGo_avoids k (coords.getD i (0, 0)).1 ((coords.getD i (0, 0)).1 + 1) hk
+              (mergeTopCoords k coords).length (mergeTopCoords k coords) (coords.length - k)
+              _ m' rfl (by rw [hmlen]; omega) _ _ (by omega) (by omega)
+            intro j hj hjk
+            rw [hmlen] at hj
+            rw [hcleft j (by omega)]
+            rintro ⟨hle, _⟩
+            have := hsorted j i (by omega) (by omega) (by omega)
+            omega
+          show cmMergeGo k (mergeTopCoords k coords) (coords.length - k)
+              (honestGroupPath L k (mergeTopD L k digests) (coords.length - k)) m'
+              (coords.getD i (0, 0))
+            = some (perfectRoot L k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2)
+          have hdist : ∀ j, j < (coords.drop (coords.length - k)).length →
+              (coords.drop (coords.length - k)).getD j (0, 0)
+                = (coords.drop (coords.length - k)).getD (i - (coords.length - k)) (0, 0) →
+              j = i - (coords.length - k) := by
+            intro j hj hjk
+            rw [List.length_drop] at hj
+            have hg1 : (coords.drop (coords.length - k)).getD j (0, 0)
+                = coords.getD ((coords.length - k) + j) (0, 0) := by
+              rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop]
+            have hg2 : (coords.drop (coords.length - k)).getD (i - (coords.length - k)) (0, 0)
+                = coords.getD i (0, 0) := by
+              rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop,
+                show (coords.length - k) + (i - (coords.length - k)) = i from by omega]
+            rw [hg1, hg2] at hjk
+            have := hdistinct ((coords.length - k) + j) i (by omega) (by omega) hjk
+            omega
+          have hm'val : m' (coords.getD i (0, 0)) = some (digests.getD i emptyHash) := by
+            rw [hm', hidx, recordMergeSibs_hits m (coords.drop (coords.length - k))
+              (tgt - (coords.length - k)) headStep (i - (coords.length - k))
+              (by rw [List.length_drop]; omega) (by omega) hdist, hhead]
+            simp only [if_pos (show i - (coords.length - k) < tgt - (coords.length - k) from by omega)]
+            rw [getD_eraseIdx_lt _ emptyHash _ _ (by omega)]
+            congr 1
+            rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop,
+              show (coords.length - k) + (i - (coords.length - k)) = i from by omega]
+          rw [hsurv, hm'val, hJ i hi]
+      · rw [if_neg hge]
+        have hgp : honestGroupPath L k digests tgt
+            = honestGroupPath L k (mergeTopD L k digests) tgt := by
+          rw [honestGroupPath, dif_neg (by push_neg; exact ⟨by omega, by omega⟩),
+            if_neg (by rw [hdl]; exact hge)]
+        rw [hgp, ← hcleft i (by omega)]
+        have hJ' : ∀ j, j < tgt →
+            (mergeTopD L k digests).getD j emptyHash
+              = perfectRoot L k cells ((mergeTopCoords k coords).getD j (0, 0)).1
+                  ((mergeTopCoords k coords).getD j (0, 0)).2 := by
+          intro j hj
+          rw [hdleft j (by omega), hcleft j (by omega)]; exact hJ j hj
+        exact ih (mergeTopCoords k coords).length (by rw [hmlen]; omega) (mergeTopCoords k coords)
+          (mergeTopD L k digests) tgt m rfl hdll (by rw [hmlen]; omega)
+          hsorted' hJ' i hi
+
+/-- Removing the single matching element from `range k` is `eraseIdx` at it. -/
+private theorem filter_ne_range_eq_eraseIdx' (k p : Nat) (hp : p < k) :
+    (List.range k).filter (fun i => i != p) = (List.range k).eraseIdx p := by
+  induction k with
+  | zero => omega
+  | succ n ih =>
+    rw [List.range_succ, List.filter_append]
+    rcases Nat.lt_or_ge p n with hpn | hpn
+    · rw [ih hpn, List.eraseIdx_append_of_lt_length (by rw [List.length_range]; exact hpn)]
+      have hb : (n != p) = true := by simp [bne_iff_ne]; omega
+      simp [List.filter_cons, hb]
+    · have hpeq : p = n := by omega
+      subst hpeq
+      have hf1 : (List.range p).filter (fun i => i != p) = List.range p := by
+        apply List.filter_eq_self.mpr
+        intro a ha; rw [List.mem_range] at ha; simp [bne_iff_ne]; omega
+      rw [hf1, List.eraseIdx_append_of_length_le (by rw [List.length_range])]
+      simp [List.filter_cons]
+
+/-- The honest digit step's `i`-th sibling (for `i` below the path digit) is the
+    genuine perfect root of the `i`-th child of the level block. -/
+private theorem honest_digit_sibling (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (sl offset j i : Nat) (hi : i < offset / k ^ j % k) :
+    (((List.range k).filter (fun x => x != offset / k ^ j % k)).map
+       (fun x => perfectRoot L k cells (sl + (offset / k ^ (j + 1) * k + x) * k ^ j) j)).getD i emptyHash
+      = perfectRoot L k cells (sl + (offset / k ^ (j + 1) * k + i) * k ^ j) j := by
+  have hd : offset / k ^ j % k < k := Nat.mod_lt _ (by omega)
+  rw [List.getD_eq_getElem?_getD, List.getElem?_map, filter_ne_range_eq_eraseIdx' k _ hd,
+    List.getElem?_eraseIdx, if_pos hi, List.getElem?_range (by omega)]
+  rfl
+
+/-- **The bisection phase records every left sibling with its perfect root.**
+    Starting from the boundary coordinate's ancestor at level `ch`, folding the
+    honest digit steps records, at every coordinate that is a child to the left of
+    the path node at some level `level ∈ [ch, sh)`, that child subtree's genuine
+    perfect root. The recording happens at `level`; lower steps never reach it and
+    higher steps record at higher levels, so it survives. -/
+private theorem cmBisect_covers (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (sl offset sh : Nat) :
+    ∀ (d ch curLeft : Nat) (m : CMap),
+      ch + d = sh → curLeft = sl + offset / k ^ ch * k ^ ch →
+      ∀ (level i : Nat), ch ≤ level → level < sh → i < offset / k ^ level % k →
+        (cmBisect k ((honestDigitPath L k cells sl offset sh).drop ch) curLeft ch m)
+            (sl + offset / k ^ (level + 1) * k ^ (level + 1) + i * k ^ level, level)
+          = some (perfectRoot L k cells
+              (sl + offset / k ^ (level + 1) * k ^ (level + 1) + i * k ^ level) level) := by
+  intro d
+  induction d with
+  | zero => intro ch curLeft m hd _ level i hcl hlt _; omega
+  | succ d ih =>
+    intro ch curLeft m hd hcurLeft level i hcl hlt hi
+    have hchlt : ch < sh := by omega
+    have hcap : 0 < k ^ ch := pow_pos (by omega) ch
+    have hdig : offset / k ^ ch % k < k := Nat.mod_lt _ (by omega)
+    -- name the head step at level ch
+    set s : ProofStep :=
+      { position := offset / k ^ ch % k,
+        siblings := ((List.range k).filter (fun x => x != offset / k ^ ch % k)).map
+          fun x => perfectRoot L k cells (sl + (offset / k ^ (ch + 1) * k + x) * k ^ ch) ch }
+      with hs
+    have hstep : (honestDigitPath L k cells sl offset sh).drop ch
+        = s :: (honestDigitPath L k cells sl offset sh).drop (ch + 1) := by
+      rw [hs]
+      unfold honestDigitPath
+      rw [← List.map_drop, ← List.map_drop,
+        List.drop_eq_getElem_cons (by rw [List.length_range]; exact hchlt), List.map_cons,
+        List.getElem_range]
+    have hspos : s.position = offset / k ^ ch % k := by rw [hs]
+    rw [hstep, cmBisect]
+    -- the recursion's new anchor is the level-(ch+1) ancestor
+    have hnext : curLeft - s.position * k ^ ch = sl + offset / k ^ (ch + 1) * k ^ (ch + 1) := by
+      rw [hspos, hcurLeft]
+      have hpow : k ^ (ch + 1) = k ^ ch * k := pow_succ k ch
+      have hdm : offset / k ^ ch = offset / k ^ (ch + 1) * k + offset / k ^ ch % k := by
+        rw [show offset / k ^ (ch + 1) = offset / k ^ ch / k from by rw [hpow, Nat.div_div_eq_div_mul]]
+        exact (Nat.div_add_mod' (offset / k ^ ch) k).symm
+      have hACB : offset / k ^ ch * k ^ ch
+          = offset / k ^ (ch + 1) * k ^ (ch + 1) + offset / k ^ ch % k * k ^ ch := by
+        conv_lhs => rw [hdm]
+        rw [add_mul, hpow]; ring
+      omega
+    rcases Nat.lt_or_ge ch level with hlvl | hlvl
+    · -- target is at a higher level: this step misses it, recurse
+      exact ih (ch + 1) _ _ (by omega) hnext level i (by omega) hlt hi
+    · -- target is at this level: record it now, it survives the recursion
+      have hleq : level = ch := by omega
+      subst hleq
+      rw [cmBisect_preserves_below k _ _ (level + 1) _ _ (by simp only []; omega)]
+      have hslen : s.siblings.length = k - 1 := by
+        rw [hs, List.length_map, filter_ne_range_eq_eraseIdx' k _ hdig,
+          List.length_eraseIdx_of_lt (by rw [List.length_range]; exact hdig), List.length_range]
+      have hhit := recordBisectSibs_hits k hk m curLeft level s i (by rw [hslen]; omega)
+      rw [hspos, if_pos hi, hnext] at hhit
+      rw [hhit]
+      congr 1
+      rw [hs, honest_digit_sibling L k hk cells sl offset level i hi]
+      congr 1
+      rw [pow_succ]; ring
+
+/-- Tiles are strictly ordered by left coordinate. -/
+private theorem Tiles_strict_mono (k : Nat) (hk : 2 ≤ k) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat), Tiles k start coords stop →
+      ∀ a b, a < b → b < coords.length →
+        (coords.getD a (0, 0)).1 < (coords.getD b (0, 0)).1 := by
+  intro coords
+  induction coords with
+  | nil => intro start stop _ a b _ hb; simp at hb
+  | cons p rest ih =>
+    intro start stop htiles a b hab hb
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    have hcap : 0 < k ^ ph := pow_pos (by omega) ph
+    cases a with
+    | zero =>
+      obtain ⟨b', rfl⟩ : ∃ b', b = b' + 1 := ⟨b - 1, by omega⟩
+      simp only [List.getD_cons_zero, List.getD_cons_succ]
+      have hmem : rest.getD b' (0, 0) ∈ rest := by
+        rw [List.getD_eq_getElem?_getD,
+          List.getElem?_eq_getElem (by simp only [List.length_cons] at hb; omega)]
+        exact List.getElem_mem _
+      have := Tiles_left_ge k rest (start + k ^ ph) stop htrest _ hmem
+      omega
+    | succ a' =>
+      obtain ⟨b', rfl⟩ : ∃ b', b = b' + 1 := ⟨b - 1, by omega⟩
+      simp only [List.getD_cons_succ]
+      exact ih (start + k ^ ph) stop htrest a' b' (by omega)
+        (by simp only [List.length_cons] at hb; omega)
+
 /-- **Coordinate-coverage core.** For an honest consistency proof the verifier's
     coordinate map reads back, at every old-frontier coordinate, that subtree's
     genuine `perfectRoot`: the boundary is `start_hash = perfectRoot (bl, bh)`,
@@ -618,6 +1504,31 @@ private theorem honest_oldroot_coverage (L k : Nat) (hk : 2 ≤ k) (cells : List
     consistencyOldHashes k oldSize cells.length (honestStartHash L k cells oldSize)
         (honestConsistencyPath L k cells oldSize)
       = some ((frontierForSizeT k oldSize).map (fun c => perfectRoot L k cells c.1 c.2)) := by
+  obtain ⟨bl, bh, fIdx, sl, sh, hlast, hspan, hff, hff2, hbhsh, hsle, hdiveq, halign⟩ :=
+    boundary_slot k hk cells oldSize hold hnew
+  -- the honest consistency path splits into the upper digit steps and the group path
+  have hincl : honestInclusionPath L k cells (oldSize - 1)
+      = honestDigitPath L k cells sl (oldSize - 1 - sl) sh
+        ++ honestGroupPath L k (buildStackCells L k cells) fIdx := by
+    simp only [honestInclusionPath, hff2]
+  have hdlen : (honestDigitPath L k cells sl (oldSize - 1 - sl) sh).length = sh := by
+    rw [honestDigitPath, List.length_map, List.length_range]
+  set D := honestDigitPath L k cells sl (oldSize - 1 - sl) sh with hD
+  set G := honestGroupPath L k (buildStackCells L k cells) fIdx with hG
+  have hcpath : honestConsistencyPath L k cells oldSize = D.drop bh ++ G := by
+    simp only [honestConsistencyPath, hlast]
+    rw [hincl, List.drop_append_of_le_length (by rw [hdlen]; exact hbhsh)]
+  have hD'len : (D.drop bh).length = sh - bh := by rw [List.length_drop, hdlen]
+  rw [consistencyOldHashes]
+  apply mapM_option_some
+  intro c hc
+  -- unfold the honest consistency map to its bisection/merge composition
+  simp only [consistencyMap, honestStartHash, hlast, hff, hcpath]
+  rw [List.take_left' hD'len, List.drop_left' hD'len]
+  set m0 := cmInsert cmEmpty (bl, bh) (perfectRoot L k cells bl bh) with hm0
+  set m1 := cmBisect k (D.drop bh) bl bh m0 with hm1
+  set M := cmMergeGo k (frontierForSizeT k cells.length) fIdx G m1 with hM
+  show M c = some (perfectRoot L k cells c.1 c.2)
   sorry
 
 /-- **The honest old-root read-back yields the genuine prefix root.** Folding
