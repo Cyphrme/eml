@@ -1,0 +1,14 @@
+[package]
+name          = "pmt"
+version       = "0.1.0"
+description   = "Polymorphic Merkle Tree — the abstract kernel: proof spine, canonicalization, inclusion, embedding, and epoch construction"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+
+[dependencies]
+# Zero external dependencies. Hash operations injected via the Hasher trait.
+
+[dev-dependencies]
+sha2 = "0.10"
