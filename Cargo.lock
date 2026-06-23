@@ -329,6 +329,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-build"
+version = "0.1.0"
+dependencies = [
+ "eml-log",
+ "sha2",
+ "smol",
+]
+
+[[package]]
 name = "cyphr-log"
 version = "0.1.0"
 dependencies = [
