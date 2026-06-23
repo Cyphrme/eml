@@ -8,21 +8,28 @@
 //! # The per-algorithm binding root (no security mixing)
 //!
 //! Each algorithm `i` has its own binding root `BR_i`, the top-level node of
-//! that algorithm's tree, computed with **that algorithm's own hash** `H_i` over
-//! the canonical preimage of the shared member roots and committed epoch
-//! timeline ([`crate::proof::combined_root_preimage`]):
+//! that algorithm's tree: the canonicalization fold ([`crate::combined_root`])
+//! over the shared member roots as children, under **that algorithm's own hash**
+//! `H_i`, with the committed epoch timeline entering as a coverage sibling iff
+//! it is non-trivial:
 //!
 //! ```text
-//! BR_i = H_i( combined_root_preimage(member_roots, alg_epochs) )
+//! BR_i = combined_root(H_i, member_roots, alg_epochs)
+//!      = nary_mr(H_i, [MR₀, MR₁, …]  ‖  [H_i(serialize(timeline))]?)
 //! ```
 //!
-//! The member roots `MR₀, MR₁, …` enter the preimage as **opaque digests** —
-//! plain bytes that `H_i` hashes without interpretation. No algorithm's hash is
-//! ever applied to another algorithm's *security*: `BR_i`'s collision resistance
+//! The member roots `MR₀, MR₁, …` enter the fold as **opaque digests** — plain
+//! bytes that `H_i` hashes without interpretation. No algorithm's hash is ever
+//! applied to another algorithm's *security*: `BR_i`'s collision resistance
 //! rests **solely** on `H_i`. There is no single mixed commitment; each `BR_i`
 //! is an independent commitment under its own hash to the identical opaque
 //! material. This is exactly what lets distinct algorithms agree on a structure
 //! without any one's break weakening another (design decision D9).
+//!
+//! Genesis promotion is native to the fold: a single member root under a
+//! trivial timeline folds (`nary_mr` `len == 1`) to that member root, so a
+//! promoted binding root needs no special branch — the omission bug a separate
+//! promotion predicate invited cannot recur.
 //!
 //! # What the proof establishes (and what it assumes)
 //!
@@ -39,7 +46,7 @@
 //! are all hashes; no leaf payloads or proof paths are consulted.
 
 use crate::hasher::Hasher;
-use crate::proof::{combined_root_preimage, constant_time_eq, validate_committed_epochs};
+use crate::proof::{combined_root, constant_time_eq, validate_committed_epochs};
 
 /// A trusted per-algorithm binding root presented to a binding proof.
 ///
@@ -91,17 +98,6 @@ impl BindingProof {
             member_roots,
             alg_epochs,
         }
-    }
-
-    /// The shared canonical preimage every algorithm's binding root commits to.
-    ///
-    /// Both halves of the binding proof — the member roots and the committed
-    /// epoch timeline — feed [`combined_root_preimage`]. Every algorithm hashes
-    /// this *same* opaque byte string with its own `H_i`; agreement on the
-    /// preimage is what "the algorithms agree on the structure" means.
-    #[must_use]
-    fn preimage(&self) -> Vec<u8> {
-        combined_root_preimage(&self.member_roots, &self.alg_epochs)
     }
 
     /// Verify cross-algorithm binding-root consistency against trusted binding
@@ -163,15 +159,16 @@ impl BindingProof {
             }
         }
 
-        // The single shared preimage every algorithm commits to.
-        let preimage = self.preimage();
-
-        // Each algorithm independently recomputes its own binding root with its
-        // own hash over the shared opaque preimage. No algorithm's hash ever
-        // touches another's binding root: no security mixing.
-        trusted
-            .iter()
-            .all(|t| constant_time_eq(&t.hasher.hash(&preimage), t.root))
+        // Each algorithm independently recomputes its own binding root as the
+        // canonicalization fold over the shared member-root children (plus the
+        // coverage child iff the timeline is non-trivial), under its own hash.
+        // No algorithm's hash ever touches another's binding root: no security
+        // mixing. Genesis promotion is native to the fold, so a promoted binding
+        // root reconstructs with no special branch (the omission bug dissolves).
+        trusted.iter().all(|t| {
+            let computed = combined_root(t.hasher, &self.member_roots, &self.alg_epochs);
+            constant_time_eq(&computed, t.root)
+        })
     }
 }
 
@@ -265,12 +262,13 @@ mod tests {
         let tree_size = 4;
 
         let proof = BindingProof::produce(member_roots.clone(), alg_epochs.clone());
-        let preimage = combined_root_preimage(&member_roots, &alg_epochs);
 
         let h_a = Sha256Hasher;
         let h_b = PrefixedSha256Hasher;
-        let br_a = h_a.hash(&preimage);
-        let br_b = h_b.hash(&preimage);
+        // Each binding root is the canonicalization fold over the member-root
+        // children under its own hash (trivial timeline ⇒ no coverage child).
+        let br_a = combined_root(&h_a, &member_roots, &alg_epochs);
+        let br_b = combined_root(&h_b, &member_roots, &alg_epochs);
 
         (proof, h_a, h_b, br_a, br_b, tree_size)
     }
@@ -306,6 +304,28 @@ mod tests {
     }
 
     #[test]
+    fn promoted_binding_root_verifies() {
+        // C2 regression: a genuinely *promoted* binding root — one algorithm,
+        // one member root, trivial timeline — is the member root itself (native
+        // `nary_mr` promotion). The old code hashed unconditionally here and
+        // rejected this honest promoted root; the fold reconstructs it with no
+        // separate branch, so it now verifies.
+        let member_roots = vec![(0u64, vec![0x42; 32])];
+        let alg_epochs = vec![(0u64, vec![(0u64, MAX)])];
+        let proof = BindingProof::produce(member_roots.clone(), alg_epochs.clone());
+        let h_a = Sha256Hasher;
+        // The promoted binding root IS the member root.
+        let br_a = member_roots[0].1.clone();
+        assert_eq!(br_a, combined_root(&h_a, &member_roots, &alg_epochs));
+        let trusted = vec![TrustedBindingRoot {
+            alg_id: 0,
+            hasher: &h_a,
+            root: &br_a,
+        }];
+        assert!(proof.verify(&trusted, 4));
+    }
+
+    #[test]
     fn forged_binding_root_rejected() {
         // BR_b is replaced with garbage: B never committed to this structure.
         let (proof, h_a, h_b, br_a, _br_b, sz) = honest_setup();
@@ -332,7 +352,7 @@ mod tests {
         let (proof, h_a, h_b, br_a, _br_b, sz) = honest_setup();
         let other_roots = vec![(0u64, vec![0xAA; 32]), (1u64, vec![0xCC; 32])];
         let other_epochs = vec![(0u64, vec![(0u64, MAX)]), (1u64, vec![(0u64, MAX)])];
-        let br_b_other = h_b.hash(&combined_root_preimage(&other_roots, &other_epochs));
+        let br_b_other = combined_root(&h_b, &other_roots, &other_epochs);
         let trusted = vec![
             TrustedBindingRoot {
                 alg_id: 0,
@@ -351,8 +371,8 @@ mod tests {
     #[test]
     fn wrong_hasher_rejected() {
         // BR_a is genuinely committed, but the verifier is handed the wrong H
-        // for it (B's hash). H_b(preimage) != BR_a, so verification fails: no
-        // algorithm's security is borrowed for another's check.
+        // for it (B's hash). The fold under H_b != BR_a, so verification fails:
+        // no algorithm's security is borrowed for another's check.
         let (proof, _h_a, h_b, br_a, _br_b, sz) = honest_setup();
         let trusted = vec![TrustedBindingRoot {
             alg_id: 0,
@@ -370,12 +390,12 @@ mod tests {
 
     #[test]
     fn malformed_timeline_rejected() {
-        // An overlapping committed epoch timeline has no canonical preimage.
+        // An overlapping committed epoch timeline is rejected before any fold.
         let member_roots = vec![(0u64, vec![0xAA; 32])];
         let bad_epochs = vec![(0u64, vec![(0u64, 5u64), (4u64, MAX)])];
         let proof = BindingProof::produce(member_roots.clone(), bad_epochs.clone());
         let h_a = Sha256Hasher;
-        let br_a = h_a.hash(&combined_root_preimage(&member_roots, &bad_epochs));
+        let br_a = combined_root(&h_a, &member_roots, &bad_epochs);
         let trusted = vec![TrustedBindingRoot {
             alg_id: 0,
             hasher: &h_a,
@@ -391,7 +411,7 @@ mod tests {
         let alg_epochs = vec![(0u64, vec![(0u64, MAX)]), (1u64, vec![(0u64, MAX)])];
         let proof = BindingProof::produce(member_roots.clone(), alg_epochs.clone());
         let h_a = Sha256Hasher;
-        let br_a = h_a.hash(&combined_root_preimage(&member_roots, &alg_epochs));
+        let br_a = combined_root(&h_a, &member_roots, &alg_epochs);
         let trusted = vec![TrustedBindingRoot {
             alg_id: 0,
             hasher: &h_a,

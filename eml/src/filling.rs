@@ -37,8 +37,7 @@
 //! cannot reproduce the committed layout fails the binding-root check.
 
 use pmt::{
-    Hasher, Sealed, combined_root_preimage, constant_time_eq, fold_frontier, frontier_for_size,
-    nary_mr,
+    Hasher, Sealed, combined_root, constant_time_eq, fold_frontier, frontier_for_size, nary_mr,
 };
 
 /// Which readable materialization [`fill`] produces.
@@ -275,11 +274,12 @@ pub fn fill<D: AsRef<[u8]>>(
     })
 }
 
-/// Compute the binding root the *rebuilt* member root implies, mirroring the
-/// `Sealed`'s promotion rule: the registry-singleton default timeline promotes
-/// to the raw member root; otherwise the binding root is the algorithm's hash
-/// over the combined-root preimage, with the rebuilt member root substituted for
-/// the filled algorithm's committed member root.
+/// Compute the binding root the *rebuilt* member root implies: the
+/// canonicalization fold ([`pmt::combined_root`]) over every active algorithm's
+/// member root, with the filled algorithm's committed member root replaced by
+/// the *rebuilt* (gapless) one, under that algorithm's hash. Genesis promotion
+/// is native to the fold — a single member root under a trivial timeline folds
+/// to itself — so a promoted commitment needs no special case.
 fn rebuilt_binding_root(
     sealed: &Sealed,
     alg_id: u64,
@@ -287,21 +287,16 @@ fn rebuilt_binding_root(
     member_root: &[u8],
     all_hashers: &[(u64, &dyn Hasher)],
 ) -> Vec<u8> {
-    let epochs = sealed.alg_epochs();
-    let promoted = epochs.len() == 1 && epochs[0].1 == vec![(0u64, u64::MAX)];
-    if promoted {
-        return member_root.to_vec();
-    }
-    // The combined-root preimage is over every active algorithm's member root;
-    // for the filled algorithm we substitute the *rebuilt* (gapless) root so the
-    // check verifies the data reproduces the committed layout exactly.
+    // The fold's children are every active algorithm's member root; for the
+    // filled algorithm we substitute the rebuilt root so the check verifies the
+    // data reproduces the committed layout exactly.
     let mut members: Vec<(u64, Vec<u8>)> = sealed.member_roots(all_hashers);
     for (id, mr) in &mut members {
         if *id == alg_id {
             *mr = member_root.to_vec();
         }
     }
-    hasher.hash(&combined_root_preimage(&members, epochs))
+    combined_root(hasher, &members, sealed.alg_epochs())
 }
 
 /// Reconstruct the committed frontier partition of `[0, tree_size)`: the

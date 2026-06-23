@@ -1552,11 +1552,13 @@ fn test_combined_root_single_alg_commits_epochs() {
         assert_ne!(comb_root_at_1, raw_root_at_1);
 
         // Alg 1's epoch [(1, MAX)] appears in committed_epochs_at(1) even
-        // though alg 1 was not active at position 0.
-        let expected = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
+        // though alg 1 was not active at position 0. The timeline is now
+        // non-trivial, so the fold appends a coverage child over [member_0].
+        let expected = cyphr_log::combined_root(
+            &Sha256Hasher,
             &[(0, raw_root_at_1)],
             &[(0, vec![(0u64, u64::MAX)]), (1, vec![(1u64, u64::MAX)])],
-        ));
+        );
         assert_eq!(comb_root_at_1, expected);
     });
 }
@@ -1578,13 +1580,14 @@ fn test_combined_root_multi_alg() {
         let root_0 = log.root_for_at(0, 1).await.unwrap();
         let root_1 = log.root_for_at(1, 1).await.unwrap();
 
-        // Reconstruct combined root manually from the canonical snapshot
-        // serialization: sorted active roots plus the epoch timeline.
-        let buf = cyphr_log::combined_root_preimage(
+        // Reconstruct the combined root as the canonicalization fold over the
+        // member roots. Both algorithms are active from genesis, so the timeline
+        // is trivial: no coverage child, just nary_mr over [member_0, member_1].
+        let expected_combined = cyphr_log::combined_root(
+            &Sha256Hasher,
             &[(0, root_0), (1, root_1)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(0, u64::MAX)])],
         );
-        let expected_combined = Sha256Hasher.hash(&buf);
 
         let comb_root = log.combined_root_for(0).await.unwrap();
         assert_eq!(comb_root, expected_combined);
@@ -1614,23 +1617,25 @@ fn test_combined_root_historical_and_epochs() {
         let comb_1 = log.combined_root_at(0, 1).await.unwrap();
         let raw_0_at_1 = log.root_for_at(0, 1).await.unwrap();
         assert_ne!(comb_1, raw_0_at_1);
-        let expected_1 = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
+        let expected_1 = cyphr_log::combined_root(
+            &Sha256Hasher,
             &[(0, raw_0_at_1)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, u64::MAX)])],
-        ));
+        );
         assert_eq!(comb_1, expected_1);
 
         // Historical combined root at size 2: alg 0 and 1 active. Alg 1's
         // interval is closed at 2 by the later deactivation.
         let comb_2 = log.combined_root_at(0, 2).await.unwrap();
         assert_ne!(comb_2, log.root_for_at(0, 2).await.unwrap());
-        let expected_2 = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
+        let expected_2 = cyphr_log::combined_root(
+            &Sha256Hasher,
             &[
                 (0, log.root_for_at(0, 2).await.unwrap()),
                 (1, log.root_for_at(1, 2).await.unwrap()),
             ],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, 2)])],
-        ));
+        );
         assert_eq!(comb_2, expected_2);
 
         // Historical combined root at size 3: alg 1 is frozen — its root is
@@ -1638,10 +1643,11 @@ fn test_combined_root_historical_and_epochs() {
         let comb_3 = log.combined_root_at(0, 3).await.unwrap();
         let raw_0_at_3 = log.root_for_at(0, 3).await.unwrap();
         assert_ne!(comb_3, raw_0_at_3);
-        let expected_3 = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
+        let expected_3 = cyphr_log::combined_root(
+            &Sha256Hasher,
             &[(0, raw_0_at_3)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, 2)])],
-        ));
+        );
         assert_eq!(comb_3, expected_3);
     });
 }
@@ -1659,11 +1665,9 @@ fn test_coupling_proof_verify_validation() {
         alg_epochs: epochs.clone(),
     };
 
-    // Correct Combined Root computation
-    let combined_root = hasher.hash(&cyphr_log::combined_root_preimage(
-        &proof.active_roots,
-        &proof.alg_epochs,
-    ));
+    // Correct combined root: the canonicalization fold over the member roots
+    // (trivial timeline ⇒ no coverage child, just nary_mr over the two roots).
+    let combined_root = cyphr_log::combined_root(&hasher, &proof.active_roots, &proof.alg_epochs);
 
     let config = cyphr_log::VerifierConfig::default();
 
@@ -1810,10 +1814,11 @@ fn test_coupling_proof_verify_validation() {
         active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
         alg_epochs: vec![(0, vec![(0, u64::MAX)]), (1, vec![(0, 2)])],
     };
-    let inconsistent_root = hasher.hash(&cyphr_log::combined_root_preimage(
+    let inconsistent_root = cyphr_log::combined_root(
+        &hasher,
         &inconsistent_proof.active_roots,
         &inconsistent_proof.alg_epochs,
-    ));
+    );
     assert!(
         inconsistent_proof
             .verify(&hasher, 0, tree_size, &inconsistent_root, &[0, 1], config)
@@ -1825,10 +1830,11 @@ fn test_coupling_proof_verify_validation() {
         active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
         alg_epochs: vec![(0, vec![(0, 3), (2, u64::MAX)]), (1, vec![(0, u64::MAX)])],
     };
-    let ill_formed_root = hasher.hash(&cyphr_log::combined_root_preimage(
+    let ill_formed_root = cyphr_log::combined_root(
+        &hasher,
         &ill_formed_proof.active_roots,
         &ill_formed_proof.alg_epochs,
-    ));
+    );
     assert!(
         ill_formed_proof
             .verify(&hasher, 0, tree_size, &ill_formed_root, &[0, 1], config)
@@ -1849,10 +1855,8 @@ fn test_coupling_proof_verify_validation() {
         active_roots: vec![(0, var_root_0.clone()), (1, var_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
-    let var_combined = hasher.hash(&cyphr_log::combined_root_preimage(
-        &var_proof.active_roots,
-        &var_proof.alg_epochs,
-    ));
+    let var_combined =
+        cyphr_log::combined_root(&hasher, &var_proof.active_roots, &var_proof.alg_epochs);
 
     let target_var = var_proof.verify(&hasher, 0, tree_size, &var_combined, &[0, 1], config);
     assert_eq!(target_var.unwrap(), var_root_0);
@@ -1862,10 +1866,11 @@ fn test_coupling_proof_verify_validation() {
         active_roots: vec![(0, vec![]), (1, var_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
-    let empty_combined = hasher.hash(&cyphr_log::combined_root_preimage(
+    let empty_combined = cyphr_log::combined_root(
+        &hasher,
         &empty_root_proof.active_roots,
         &empty_root_proof.alg_epochs,
-    ));
+    );
 
     let target_empty =
         empty_root_proof.verify(&hasher, 0, tree_size, &empty_combined, &[0, 1], config);
@@ -2494,10 +2499,8 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
         active_roots: vec![(0, root.clone())],
         alg_epochs: vec![(0, vec![(0, u64::MAX)])],
     };
-    let combined_root = hasher.hash(&cyphr_log::combined_root_preimage(
-        &coupling.active_roots,
-        &coupling.alg_epochs,
-    ));
+    let combined_root =
+        cyphr_log::combined_root(&hasher, &coupling.active_roots, &coupling.alg_epochs);
 
     let is_valid = cyphr_log::verify_inclusion_with_coupling(
         &hasher,

@@ -197,11 +197,47 @@ impl Emt {
         self.config.arity
     }
 
-    /// The current root digest under `alg_id`, or `None` if the algorithm is
-    /// unregistered or the tree is empty.
+    /// The current per-algorithm **member root** under `alg_id` — the child of
+    /// the combined root — or `None` if the algorithm is unregistered or the
+    /// tree is empty.
     #[must_use]
     pub fn root(&self, alg_id: u64) -> Option<Vec<u8>> {
         self.states.get(&alg_id).and_then(|s| s.root.clone())
+    }
+
+    /// The current live **combined root** under `alg_id`'s hash — the primary
+    /// identity of the tree.
+    ///
+    /// The combined root is the canonicalization fold ([`pmt::combined_root`])
+    /// over every registered algorithm's member root as children, under
+    /// `alg_id`'s own hash. A mutable tree is dense and active-from-genesis, so
+    /// its committed timeline is trivial and no coverage child joins the fold;
+    /// the combined root is `nary_mr(H_alg_id, [member roots sorted by id])`.
+    /// Genesis promotion is native: a single registered algorithm folds to its
+    /// own member root, so for the common one-algorithm tree the combined root
+    /// equals [`Self::root`].
+    ///
+    /// Computed live from the materialized per-algorithm roots — no seal
+    /// required — and symmetric with the append-only log's combined root.
+    /// Returns `None` if `alg_id` is unregistered or the tree is empty.
+    #[must_use]
+    pub fn combined_root(&self, alg_id: u64) -> Option<Vec<u8>> {
+        let hasher = self.hashers.get(&alg_id)?.as_ref();
+        // Empty tree: no member root for any algorithm, hence no combined root.
+        self.states.get(&alg_id)?.root.as_ref()?;
+        // The member roots are the fold's children, in algorithm-ID order
+        // (BTreeMap iterates sorted). A trivial timeline carries no coverage
+        // child, so the registered algorithms are the only children.
+        let member_roots: Vec<(u64, Vec<u8>)> = self
+            .states
+            .iter()
+            .filter_map(|(&id, s)| s.root.clone().map(|r| (id, r)))
+            .collect();
+        let trivial: Vec<(u64, Vec<(u64, u64)>)> = member_roots
+            .iter()
+            .map(|&(id, _)| (id, vec![(0u64, u64::MAX)]))
+            .collect();
+        Some(pmt::combined_root(hasher, &member_roots, &trivial))
     }
 
     // --- proofs --------------------------------------------------------------

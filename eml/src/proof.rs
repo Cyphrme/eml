@@ -14,10 +14,10 @@
 use pmt::{ARITY_RANGE, Hasher, fold_frontier, frontier_for_size, nary_mr};
 pub use pmt::{
     AuditPayload, BindingProof, CouplingProof, InclusionProof, ProofStep, TrustedBindingRoot,
-    VerifierConfig, combined_root_preimage, committed_active_algs, committed_active_at,
-    committed_is_live, constant_time_eq, reconstruct_inclusion_root, validate_committed_epochs,
-    verify_inactivity_with_coupling, verify_inclusion, verify_inclusion_path_structure,
-    verify_inclusion_with_coupling,
+    VerifierConfig, combined_root, committed_active_algs, committed_active_at, committed_is_live,
+    constant_time_eq, reconstruct_inclusion_root, serialize_timeline, timeline_is_trivial,
+    validate_committed_epochs, verify_inactivity_with_coupling, verify_inclusion,
+    verify_inclusion_path_structure, verify_inclusion_with_coupling,
 };
 
 /// Consistency proof: proves tree at `old_size` is a prefix of tree at `new_size`.

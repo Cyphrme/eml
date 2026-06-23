@@ -229,11 +229,23 @@ fn op_strategy() -> impl Strategy<Value = Op> {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 1024, ..ProptestConfig::default() })]
 
-    /// Combined / binding-root differential (CN1-COMBINED): replay an identical
-    /// script of appends and algorithm lifecycle events on both trees, then
-    /// assert that `combined_root_for` (current size) and `combined_root_at`
-    /// (a historical size) agree for every algorithm — including across
-    /// deactivation and epoch resumption.
+    /// Combined / binding-root behaviour (CN1-COMBINED). Replay an identical
+    /// script of appends and algorithm lifecycle events on both trees and pin
+    /// the combined root two complementary ways:
+    ///
+    /// - **Single-algorithm registry (HR1 differential).** While only one
+    ///   algorithm has ever been registered the timeline is trivial, so the
+    ///   combined root *promotes* to that algorithm's raw member root — exactly
+    ///   what the frozen baseline computes. Here the current side must stay
+    ///   byte-identical to the baseline: single-algorithm behaviour is
+    ///   unchanged by the fold model.
+    /// - **Multi-algorithm registry (forward fold oracle).** Once a second
+    ///   algorithm registers, the combined root is intentionally re-modelled as
+    ///   the canonicalization fold over the member roots (and a coverage child
+    ///   when the timeline is non-trivial), which the pre-campaign baseline —
+    ///   built on the old flat-hash preimage — cannot reproduce. The baseline is
+    ///   the wrong oracle for this case, so the current side is checked against
+    ///   an independent recomputation of the fold itself.
     #[test]
     fn combined_root_matches(
         ops in prop::collection::vec(op_strategy(), 1..40),
@@ -286,18 +298,52 @@ proptest! {
             let size = cur.size();
             prop_assert_eq!(size, base.size(), "size diverged after script");
 
+            // The registry is a single algorithm exactly when no `add` ever
+            // succeeded; then every timeline is trivial and the combined root
+            // promotes — matching the baseline. More than one means the fold
+            // model has intentionally diverged from the baseline.
+            let single_registry = seen_algs.len() == 1;
+
             for &id in &seen_algs {
-                // current combined (binding) root
+                // The combined-root *outcome class* (Ok/Err) is unchanged by the
+                // re-model, so it stays a genuine differential on both sides.
                 let cur_now = cur.combined_root_for(id).await;
                 let base_now = base.combined_root_for(id).await;
                 prop_assert_eq!(cur_now.is_ok(), base_now.is_ok(),
                     "combined_root_for({}) outcome diverged", id);
-                if let (Ok(c), Ok(b)) = (&cur_now, &base_now) {
-                    prop_assert_eq!(c, b, "combined_root_for({}) diverged at size={}", id, size);
+
+                if let Ok(c) = &cur_now {
+                    if single_registry {
+                        // HR1: single-algorithm combined root is byte-identical
+                        // to the frozen baseline (promotion either way).
+                        let b = base_now.as_ref().expect("outcome classes already matched");
+                        prop_assert_eq!(c, b,
+                            "single-alg combined_root_for({}) diverged at size={}", id, size);
+                    } else if size > 0 {
+                        // Forward fold oracle: the combined root is the
+                        // canonicalization fold over the live member roots, with
+                        // a coverage child iff the committed timeline is
+                        // non-trivial. Recompute it independently and compare.
+                        // (At size 0 the combined root is the empty digest by
+                        // definition — nothing is committed — so there is no
+                        // fold to check; the outcome-class assertion covers it.)
+                        let epochs = cur.committed_epochs_at(size);
+                        let active = cyphr_log::committed_active_algs(&epochs, size);
+                        let members: Vec<(u64, Vec<u8>)> = active
+                            .iter()
+                            .map(|&aid| (aid, cur.root_for(aid).expect("active alg has a root")))
+                            .collect();
+                        let h = alg_hasher_cur(id);
+                        let expected = cyphr_log::combined_root(h.as_ref(), &members, &epochs);
+                        prop_assert_eq!(c, &expected,
+                            "multi-alg combined_root_for({}) is not the fold at size={}", id, size);
+                    }
                 }
 
-                // historical combined (binding) root at a random size <= current
-                if size > 0 {
+                // Historical combined root at a random size: for a single
+                // algorithm it promotes at every size, so it stays a byte-exact
+                // differential against the frozen baseline.
+                if single_registry && size > 0 {
                     let hist = hist_seed % (size + 1);
                     let cur_at = cur.combined_root_at(id, hist).await;
                     let base_at = base.combined_root_at(id, hist).await;
@@ -305,7 +351,7 @@ proptest! {
                         "combined_root_at({}, {}) outcome diverged", id, hist);
                     if let (Ok(c), Ok(b)) = (&cur_at, &base_at) {
                         prop_assert_eq!(c, b,
-                            "combined_root_at({}, {}) diverged", id, hist);
+                            "single-alg combined_root_at({}, {}) diverged", id, hist);
                     }
                 }
             }

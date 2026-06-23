@@ -20,6 +20,11 @@ noncomputable def leafHash (d : List UInt8) : Digest := H d
 noncomputable def nodeHash (children : List Digest) : Digest :=
   H (children.flatMap digestToBytes)
 
+/-- A collision on the internal node hash: distinct child lists, equal digest.
+    A `nodeHash` collision is in particular an `H` collision. (Defined here, by
+    `nodeHash`, so both the combined-root fold and the inclusion layer share it.) -/
+def NodeHashCollision : Prop := ∃ a b : List Digest, a ≠ b ∧ nodeHash a = nodeHash b
+
 /-- Canonical preimage of the null constant: the literal bytes of `b"null"`.
     Mirrors `neml/src/hasher.rs` (`null() = hash(b"null")`). -/
 def nullPreimage : List UInt8 := [0x6e, 0x75, 0x6c, 0x6c]
@@ -343,9 +348,8 @@ theorem uNat_succ (n : Nat) : uNat (n + 1) = 1 :: uNat n := rfl
 /-- **`uNat` is self-delimiting (prefix-free).** Because each `uNat n` is a run
     of `0x01` marks closed by a single `0x00`, the boundary is recoverable from
     the byte stream: a concatenation `uNat a ++ s` determines both `a` (the
-    leading mark run) and the suffix `s`. This is the parsing primitive that
-    makes the length-prefixed root encoding (`encRoots`) injective and
-    prefix-free. -/
+    leading mark run) and the suffix `s`. This is the parsing primitive behind
+    `encTimeline`'s injectivity. -/
 theorem uNat_append_injective : ∀ {a b : Nat} {s t : List UInt8},
     uNat a ++ s = uNat b ++ t → a = b ∧ s = t := by
   intro a
@@ -384,146 +388,152 @@ def encTimeline (tl : Timeline) : List UInt8 := uNat (Encodable.encode tl)
 theorem encTimeline_injective : Function.Injective encTimeline :=
   uNat_injective.comp Encodable.encode_injective
 
-/-! ## Active-root encoding
+/-! ## The combined root as the canonicalization fold (post-N29)
 
-The active roots ride the wire as raw bytes (`active_roots : Vec<(u64, Vec<u8>)>`
-in `proof.rs`), and `combined_root_preimage` frames each entry length-prefixed:
-`id ‖ |root| ‖ root`. We model the root as `List UInt8` — exactly the Rust
-`Vec<u8>` — rather than an opaque `Digest`, so the encoding is a concrete
-byte function with no reliance on `digestToBytes` (an axiom with no injectivity).
-The per-entry length prefix is what makes the encoding parse-unambiguous, hence
-injective and prefix-free, which the coupling-verifier soundness theorem needs
-(the roots vary between the presented and the genuinely committed proof). -/
+The combined root is no longer a bespoke `H(metaPreimage)` byte-concat. It is the
+**canonicalization fold** ([`naryMr`] — collapse + promotion) over the
+per-algorithm member roots as children, one level up, with the committed
+timeline entering as a single **coverage child** iff it is non-trivial — exactly
+`pmt::combined_root`:
 
-/-- One active-root entry, length-prefixed so the encoding self-delimits:
-    `id ‖ |root| ‖ root`. Mirrors the `id ‖ r.len() ‖ r` block emitted per entry
-    by `combined_root_preimage` (`proof.rs`). -/
-def encRootEntry (p : AlgId × List UInt8) : List UInt8 :=
-  uNat p.1 ++ uNat p.2.length ++ p.2
+```text
+combined_root(H, ar, tl) = naryMr ( (member roots of ar)  ++  [coverage tl]? )
+```
 
-/-- A single entry self-delimits: its byte image determines both the entry and
-    whatever follows it. -/
-theorem encRootEntry_prefixFree {p q : AlgId × List UInt8} {s t : List UInt8}
-    (h : encRootEntry p ++ s = encRootEntry q ++ t) : p = q ∧ s = t := by
-  simp only [encRootEntry, List.append_assoc] at h
-  obtain ⟨hid, h2⟩ := uNat_append_injective h
-  obtain ⟨hlen, h3⟩ := uNat_append_injective h2
-  obtain ⟨hsnd, hst⟩ := List.append_inj h3 hlen
-  refine ⟨?_, hst⟩
-  cases p; cases q
-  simp_all
+* **Genesis promotion is native.** One child (single algorithm, trivial timeline)
+  ⇒ `naryMr [c] = c`: the combined root *is* the member root because there is one
+  child, not by a predicate.
+* **Coverage is a sibling, present only when informative.** A trivial timeline
+  (every algorithm open-from-genesis) contributes no coverage child; a
+  non-trivial one appends `H(encTimeline tl)`.
 
-/-- Byte serialization of the active per-algorithm roots: a length prefix
-    followed by one self-delimiting entry per algorithm. Mirrors the
-    `n_active ‖ [id ‖ len ‖ root]*` head of `combined_root_preimage`. -/
-def encRoots (ar : List (AlgId × List UInt8)) : List UInt8 :=
-  uNat ar.length ++ ar.flatMap encRootEntry
+The member roots ride the fold as opaque child **digests** — the bytes
+`nary_mr` concatenates raw, with no length prefix (it reuses the kernel's
+inner-node hashing, which the corpus models without a uniform-width assumption,
+see `Kary.lean`). So the structural unit a fixed combined root pins is the
+**child-digest list**, by the same `NodeHashCollision` escape every other
+`naryMr` node uses — not the byte-injective preimage the old metaroot relied on.
+Recovering the abstract `ar` *identities* is not part of the fold's job: the
+coupling verifier trusts `expected_active_algs` for the algorithm IDs and order,
+and the fold authenticates the *member-root digests* under them. -/
 
-/-- The entry list self-delimits once the count is known: equal-length entry
-    lists with equal flattened byte images (sharing a common suffix split) are
-    equal, and the suffixes coincide. -/
-theorem encRoots_entries_prefixFree :
-    ∀ {a b : List (AlgId × List UInt8)} {s t : List UInt8},
-      a.length = b.length →
-      a.flatMap encRootEntry ++ s = b.flatMap encRootEntry ++ t → a = b ∧ s = t := by
-  intro a
-  induction a with
-  | nil =>
-    intro b s t hlen h
-    cases b with
-    | nil => simpa using h
-    | cons q qs => simp at hlen
-  | cons p ps ih =>
-    intro b s t hlen h
-    cases b with
-    | nil => simp at hlen
-    | cons q qs =>
-      simp only [List.flatMap_cons, List.append_assoc] at h
-      obtain ⟨hpq, hrest⟩ := encRootEntry_prefixFree h
-      have hlen' : ps.length = qs.length := by simpa using hlen
-      obtain ⟨hps, hst⟩ := ih hlen' hrest
-      exact ⟨by rw [hpq, hps], hst⟩
+/-- A member root presented as a child digest of the combined-root node: the
+    algorithm's raw root bytes as the opaque `Digest` the fold consumes. The
+    Rust member roots are already digests (`Vec<u8>`); `H` here is the embedding
+    into the abstract `Digest` type the node hash folds over. -/
+noncomputable def memberDigest (e : AlgId × List UInt8) : Digest := H e.2
 
-/-- **`encRoots` is prefix-free.** The leading count fixes the entry total and
-    each entry self-delimits, so `encRoots ar ++ s` recovers both `ar` and `s`.
-    This is the parse-unambiguity the binding argument relies on when the active
-    roots are not held fixed. -/
-theorem encRoots_prefixFree {a b : List (AlgId × List UInt8)} {s t : List UInt8}
-    (h : encRoots a ++ s = encRoots b ++ t) : a = b ∧ s = t := by
-  simp only [encRoots, List.append_assoc] at h
-  obtain ⟨hlen, hrest⟩ := uNat_append_injective h
-  exact encRoots_entries_prefixFree hlen hrest
+/-- Whether the committed timeline is **trivial**: every algorithm is
+    open-from-genesis (`[(0, none)]`, the model image of `[(0, u64::MAX)]`).
+    Mirrors `pmt::timeline_is_trivial`; the trivial case omits the coverage
+    child (informativeness, not registry cardinality). -/
+def timelineTrivial (tl : Timeline) : Bool :=
+  tl.all (fun p => p.2 == [(0, none)])
 
-/-- **`encRoots` is injective** (the prefix-free property at empty suffix). -/
-theorem encRoots_injective : Function.Injective encRoots := by
-  intro a b h
-  have h' : encRoots a ++ [] = encRoots b ++ [] := by simp [h]
-  exact (encRoots_prefixFree h').1
+/-- The children of the combined-root fold: one digest per member root, followed
+    by the coverage child `H(encTimeline tl)` iff the timeline is non-trivial. -/
+noncomputable def combinedChildren (ar : List (AlgId × List UInt8)) (tl : Timeline) :
+    List Digest :=
+  ar.map memberDigest ++ (if timelineTrivial tl then [] else [H (encTimeline tl)])
 
-/-- The combined-root metaroot preimage: active roots followed by the committed
-    timeline. -/
-def metaPreimage (ar : List (AlgId × List UInt8)) (tl : Timeline) : List UInt8 :=
-  encRoots ar ++ encTimeline tl
+/-- The combined-root fold (fixed-`H`): empty ⇒ `emptyHash`; one child ⇒ that
+    child (native promotion); many ⇒ `nodeHash`. Same shape as the log-level
+    `nary_mr` (`Kary.naryMr`), specialized to the combined-root level where the
+    member-root children are never all-null. -/
+noncomputable def combFold (children : List Digest) : Digest :=
+  match children with
+  | [] => emptyHash
+  | [c] => c
+  | _ => nodeHash children
 
-/-- The combined root (metaroot) is `H` of its preimage. -/
+/-- The combined root: the canonicalization fold over the member-root children
+    (plus a coverage child iff the timeline is non-trivial). Mirrors
+    `pmt::combined_root`. -/
 noncomputable def combinedRoot (ar : List (AlgId × List UInt8)) (tl : Timeline) : Digest :=
-  H (metaPreimage ar tl)
+  combFold (combinedChildren ar tl)
 
-/-- **The metaroot preimage is injective in both fields.** Because `encRoots` is
-    prefix-free, the roots/timeline boundary is recoverable: equal preimages
-    force equal active roots *and* equal committed timelines. (`encTimeline`'s
-    injectivity closes the timeline half.) This is the structural fact behind
-    coupling-verifier soundness — a fixed combined root pins both committed
-    fields modulo a hash collision. -/
-theorem metaPreimage_injective {ar₁ ar₂ : List (AlgId × List UInt8)} {tl₁ tl₂ : Timeline}
-    (h : metaPreimage ar₁ tl₁ = metaPreimage ar₂ tl₂) : ar₁ = ar₂ ∧ tl₁ = tl₂ := by
-  simp only [metaPreimage] at h
-  obtain ⟨har, htl⟩ := encRoots_prefixFree h
-  exact ⟨har, encTimeline_injective htl⟩
+/-- `combFold` of a list of length ≥ 2 is `nodeHash` of that list. -/
+theorem combFold_multi {children : List Digest} (h : children.length ≥ 2) :
+    combFold children = nodeHash children := by
+  match children, h with
+  | _ :: _ :: _, _ => rfl
 
-/-- **A+ non-equivocation: the metaroot binds the committed timeline.** The two
-    histories the leaf/null collision would otherwise conflate — byte-identical
-    trees (hence identical active roots `ar`) but timelines disagreeing on
-    activity at some `(X, p)` — cannot share a combined root unless `H` collides.
-    Binding the timeline into the metaroot is exactly what makes inactivity
-    non-forgeable by metadata substitution under a fixed root. -/
-theorem metaroot_binds_timeline
+/-- The member-root digests are a length-`ar.length` prefix of the combined-root
+    children; in the multi-member regime they make the child list length ≥ 2. -/
+theorem combinedChildren_len_ge {ar : List (AlgId × List UInt8)} {tl : Timeline}
+    (hmulti : ar.length ≥ 2) : (combinedChildren ar tl).length ≥ 2 := by
+  simp only [combinedChildren, List.length_append, List.length_map]
+  omega
+
+/-- **The combined-root fold binds its children modulo a node-hash collision.**
+    Equal combined roots over child lists both of length ≥ 2 force equal child
+    lists, unless the internal node hash collides. This is the fold analogue of
+    the old `metaPreimage_injective`: the child-digest list (member roots and
+    coverage) is the unit the combined root pins, by the `NodeHashCollision`
+    escape every `naryMr` node uses. -/
+theorem combinedChildren_bound {ar₁ ar₂ : List (AlgId × List UInt8)} {tl₁ tl₂ : Timeline}
+    (h₁ : (combinedChildren ar₁ tl₁).length ≥ 2)
+    (h₂ : (combinedChildren ar₂ tl₂).length ≥ 2)
+    (heq : combinedRoot ar₁ tl₁ = combinedRoot ar₂ tl₂) :
+    combinedChildren ar₁ tl₁ = combinedChildren ar₂ tl₂ ∨ NodeHashCollision := by
+  simp only [combinedRoot, combFold_multi h₁, combFold_multi h₂] at heq
+  by_cases hch : combinedChildren ar₁ tl₁ = combinedChildren ar₂ tl₂
+  · exact Or.inl hch
+  · exact Or.inr ⟨_, _, hch, heq⟩
+
+/-- **A+ non-equivocation: a non-trivial combined root binds the committed
+    timeline.** Two histories the leaf/null collision would conflate — identical
+    member roots `ar` (≥ 2), but distinct *non-trivial* timelines — cannot share a
+    combined root unless the node hash or `H` collides. The coverage children
+    `H(encTimeline ·)` differ (`encTimeline` injective, timelines distinct), so
+    equal combined roots force a collision. A trivial timeline contributes no
+    coverage child by design — its activity is the everywhere-active default, so
+    there is nothing to equivocate over. -/
+theorem combinedRoot_binds_timeline
     (ar : List (AlgId × List UInt8)) (tl₁ tl₂ : Timeline)
+    (hmulti : ar.length ≥ 2)
+    (hnt₁ : timelineTrivial tl₁ = false) (hnt₂ : timelineTrivial tl₂ = false)
     (hne : tl₁ ≠ tl₂) (heq : combinedRoot ar tl₁ = combinedRoot ar tl₂) :
-    HashCollision := by
-  refine ⟨metaPreimage ar tl₁, metaPreimage ar tl₂, ?_, heq⟩
-  intro hpre
-  apply hne
-  apply encTimeline_injective
-  simp only [metaPreimage] at hpre
-  exact List.append_cancel_left hpre
+    NodeHashCollision ∨ HashCollision := by
+  rcases combinedChildren_bound (combinedChildren_len_ge hmulti)
+      (combinedChildren_len_ge hmulti) heq with hch | hcol
+  · -- Equal child lists; the member-root prefixes are equal (same `ar`), so the
+    -- trailing one-element coverage lists coincide — an `H` collision on the
+    -- distinct timeline encodings.
+    right
+    simp only [combinedChildren, hnt₁, hnt₂, if_false] at hch
+    have hcov : [H (encTimeline tl₁)] = [H (encTimeline tl₂)] :=
+      List.append_cancel_left hch
+    have : H (encTimeline tl₁) = H (encTimeline tl₂) := by
+      simpa using hcov
+    exact ⟨encTimeline tl₁, encTimeline tl₂,
+      fun he => hne (encTimeline_injective he), this⟩
+  · exact Or.inl hcol
 
 /-! ## Coupling-verifier soundness
 
-The abstract binding theorem (`metaroot_binds_timeline`) upgrades into a
-soundness theorem for the *coupling verifier* that clients actually run
+The abstract binding theorem (`combinedChildren_bound`) upgrades into a soundness
+theorem for the *coupling verifier* that clients actually run
 (`CouplingProof::authenticate` / `::verify` in `proof.rs`).
 
-The verifier reconstructs `combined_root_preimage(active_roots, alg_epochs)` —
-the `metaPreimage` layout, `n_active ‖ [id‖len‖root]* ‖ n_algs ‖ [id‖…]*` —
-hashes it, and compares against the trusted `combined_root`; on success it
-extracts the target algorithm's root by membership in `active_roots`. The
-accept relation modeled below is exactly that recompute-and-extract: it derives
-the committed roots from the hash equality rather than assuming them.
+The verifier recomputes `combined_root(Hᵢ, active_roots, alg_epochs)` — the
+canonicalization fold over the member-root children (plus a coverage child iff
+the timeline is non-trivial) — and compares against the trusted combined root; on
+success it extracts the target algorithm's root by membership in `active_roots`.
 
-The structural checks (`authenticate`'s canonical ordering, bounds, and
-`active_roots`/timeline consistency) only further constrain the presented
-fields; omitting them strengthens the theorem, which holds for *any* presented
-fields hashing to the root. The genesis-promotion singleton branch
-(`is_promoted` — one algorithm with the default `[(0, MAX)]` timeline, where the
-combined root *is* that algorithm's raw root) is trivially sound — the lone
-extracted root equals the compared combined root with no hashing — and is
-outside the metaroot-binding statement below. -/
+Because the fold consumes the member roots as raw child digests (no length
+prefix), an accepting proof pins the *child-digest list*, not the abstract `ar`
+identities — so soundness is: a committed algorithm carries a member root with
+the same digest as the extracted one, unless the node hash collides. The IDs and
+ordering are the verifier's trusted `expected_active_algs` inputs, not something
+the root must re-establish. The multi-child regime (≥ 2 member roots) is the
+genuine-node case; the singleton branch (one member root, where the combined root
+*is* that raw root) is trivially sound (the lone extracted root equals the
+compared root with no hashing). -/
 
 /-- The coupling verifier's recompute-and-authenticate relation: the presented
-    roots `ar` and timeline `tl` hash, via the committed metaroot preimage, to
-    the trusted combined root `cr`. Mirrors `CouplingProof::authenticate`'s
-    hashed branch (recompute `combined_root_preimage`, hash, compare). -/
+    roots `ar` and timeline `tl` fold to the trusted combined root `cr`. Mirrors
+    `CouplingProof::authenticate` (recompute `combined_root`, compare). -/
 def CouplingAuthenticates (ar : List (AlgId × List UInt8)) (tl : Timeline) (cr : Digest) : Prop :=
   combinedRoot ar tl = cr
 
@@ -534,27 +544,121 @@ def CouplingExtracts (ar : List (AlgId × List UInt8)) (tl : Timeline) (cr : Dig
     (target : AlgId) (root : List UInt8) : Prop :=
   CouplingAuthenticates ar tl cr ∧ (target, root) ∈ ar
 
-/-- **Coupling-verifier soundness.** Let `(ar_true, tl_true)` be the genuinely
-    committed roots and timeline under combined root `cr`. If a presented
+/-- A presented member root is one of the combined-root children. -/
+theorem memberDigest_mem_combinedChildren
+    {ar : List (AlgId × List UInt8)} {tl : Timeline} {e : AlgId × List UInt8}
+    (h : e ∈ ar) : memberDigest e ∈ combinedChildren ar tl := by
+  simp only [combinedChildren, List.mem_append, List.mem_map]
+  exact Or.inl ⟨e, h, rfl⟩
+
+/-- **Coupling-verifier soundness (fold model).** Let `(ar_true, tl_true)` be the
+    genuinely committed roots and timeline under combined root `cr`, both sides in
+    the multi-child regime (≥ 2 member roots) and over the same number of active
+    algorithms — `hlen : ar'.length = ar_true.length`, the verifier's trusted
+    `active_roots.len() == expected_active_algs.len()` check. If a presented
     coupling proof authenticates against `cr` and extracts `(target, root)`, then
-    that pair is genuinely committed — `(target, root) ∈ ar_true` — unless `H`
-    collides. Acceptance *derives* `ar' = ar_true` from the hash equality via
-    `metaPreimage_injective`; the active roots are never assumed equal. This is
-    the client-facing form of `metaroot_binds_timeline`: an accepting coupling
-    proof cannot extract a root the committer never bound. -/
+    some genuinely committed algorithm carries a member root with the same digest
+    as `root` — `∃ e' ∈ ar_true, memberDigest e' = memberDigest (target, root)` —
+    unless the node hash collides. An accepting coupling proof cannot extract a
+    member root no committed algorithm bound, modulo collision. -/
 theorem coupling_extract_sound
     (ar_true ar' : List (AlgId × List UInt8)) (tl_true tl' : Timeline) (cr : Digest)
     (target : AlgId) (root : List UInt8)
+    (hmulti_true : ar_true.length ≥ 2) (hmulti' : ar'.length ≥ 2)
+    (hlen : ar'.length = ar_true.length)
     (htrue : combinedRoot ar_true tl_true = cr)
     (haccept : CouplingExtracts ar' tl' cr target root) :
-    (target, root) ∈ ar_true ∨ HashCollision := by
+    (∃ e' ∈ ar_true, memberDigest e' = memberDigest (target, root)) ∨ NodeHashCollision := by
   obtain ⟨hauth, hmem⟩ := haccept
   have hcr : combinedRoot ar' tl' = combinedRoot ar_true tl_true := hauth.trans htrue.symm
-  by_cases hpre : metaPreimage ar' tl' = metaPreimage ar_true tl_true
-  · obtain ⟨har, _htl⟩ := metaPreimage_injective hpre
-    exact Or.inl (har ▸ hmem)
-  · refine Or.inr ⟨metaPreimage ar' tl', metaPreimage ar_true tl_true, hpre, ?_⟩
-    simpa only [combinedRoot] using hcr
+  rcases combinedChildren_bound (combinedChildren_len_ge hmulti')
+      (combinedChildren_len_ge hmulti_true) hcr with hch | hcol
+  · -- Equal child lists. The member-root prefixes have equal length (`hlen` via
+    -- `length_map`), so append-injectivity splits the shared child list at the
+    -- common boundary: the presented member digests equal the committed ones.
+    left
+    have hmem' : memberDigest (target, root) ∈ ar'.map memberDigest :=
+      List.mem_map.mpr ⟨(target, root), hmem, rfl⟩
+    have hplen : (ar'.map memberDigest).length = (ar_true.map memberDigest).length := by
+      simp only [List.length_map]; exact hlen
+    have hmap : ar'.map memberDigest = ar_true.map memberDigest := by
+      simp only [combinedChildren] at hch
+      exact List.append_inj_left hch hplen
+    have hd : memberDigest (target, root) ∈ ar_true.map memberDigest := hmap ▸ hmem'
+    obtain ⟨e', he', hde'⟩ := List.mem_map.mp hd
+    exact ⟨e', he', hde'⟩
+  · exact Or.inr hcol
+
+/-! ## Per-algorithm combined root (binding root, no security mixing)
+
+The binding proof needs the *same* fold under each algorithm's **own** hash
+`Hᵢ` (D9 — no security mixing). These definitions parameterize the combined-root
+fold by the hash, so `combinedRootWith Hᵢ` is algorithm `i`'s binding root and
+the soundness lever is `NodeHashCollisionFor Hᵢ` — collision in `i`'s hash alone,
+never another algorithm's. The fixed-`H` `combinedRoot` above is the special
+case `combinedRootWith H`. -/
+
+/-- Node hash under an arbitrary algorithm hash `Hᵢ`: `Hᵢ(c₁ ‖ … ‖ cₘ)`. -/
+noncomputable def nodeHashWith (Hi : List UInt8 → Digest) (children : List Digest) : Digest :=
+  Hi (children.flatMap digestToBytes)
+
+/-- A collision in a *specific* algorithm's node hash. The per-algorithm analogue
+    of `NodeHashCollision`; binding-root security rests on `Hᵢ` alone (D9). -/
+def NodeHashCollisionFor (Hi : List UInt8 → Digest) : Prop :=
+  ∃ a b : List Digest, a ≠ b ∧ nodeHashWith Hi a = nodeHashWith Hi b
+
+/-- A member root as a child digest under algorithm hash `Hᵢ`. -/
+noncomputable def memberDigestWith (Hi : List UInt8 → Digest) (e : AlgId × List UInt8) : Digest :=
+  Hi e.2
+
+/-- The combined-root children under `Hᵢ`: member digests then the coverage child
+    (iff the timeline is non-trivial), all under `Hᵢ`. -/
+noncomputable def combinedChildrenWith (Hi : List UInt8 → Digest)
+    (ar : List (AlgId × List UInt8)) (tl : Timeline) : List Digest :=
+  ar.map (memberDigestWith Hi) ++ (if timelineTrivial tl then [] else [Hi (encTimeline tl)])
+
+/-- `naryMr` under `Hᵢ`: empty ⇒ `Hᵢ []`; one child ⇒ that child (promotion);
+    many ⇒ `nodeHashWith Hᵢ`. -/
+noncomputable def naryMrWith (Hi : List UInt8 → Digest) (children : List Digest) : Digest :=
+  match children with
+  | [] => Hi []
+  | [c] => c
+  | _ => nodeHashWith Hi children
+
+/-- Algorithm `i`'s binding root: the canonicalization fold over the member-root
+    children under its own hash `Hᵢ` (coverage child iff non-trivial). Mirrors
+    `pmt::combined_root` instantiated at `Hᵢ`. -/
+noncomputable def combinedRootWith (Hi : List UInt8 → Digest)
+    (ar : List (AlgId × List UInt8)) (tl : Timeline) : Digest :=
+  naryMrWith Hi (combinedChildrenWith Hi ar tl)
+
+/-- `naryMrWith` of a length-≥2 list is `nodeHashWith`. -/
+theorem naryMrWith_multi (Hi : List UInt8 → Digest) {children : List Digest}
+    (h : children.length ≥ 2) : naryMrWith Hi children = nodeHashWith Hi children := by
+  match children, h with
+  | _ :: _ :: _, _ => rfl
+
+/-- The per-algorithm child list has length ≥ 2 in the multi-member regime. -/
+theorem combinedChildrenWith_len_ge (Hi : List UInt8 → Digest)
+    {ar : List (AlgId × List UInt8)} {tl : Timeline} (hmulti : ar.length ≥ 2) :
+    (combinedChildrenWith Hi ar tl).length ≥ 2 := by
+  simp only [combinedChildrenWith, List.length_append, List.length_map]
+  omega
+
+/-- **The per-algorithm fold binds its children modulo `Hᵢ`'s node collision.**
+    Equal binding roots over length-≥2 child lists force equal child lists unless
+    `Hᵢ`'s node hash collides — `i`'s security alone, no mixing. -/
+theorem combinedChildrenWith_bound (Hi : List UInt8 → Digest)
+    {ar₁ ar₂ : List (AlgId × List UInt8)} {tl₁ tl₂ : Timeline}
+    (h₁ : (combinedChildrenWith Hi ar₁ tl₁).length ≥ 2)
+    (h₂ : (combinedChildrenWith Hi ar₂ tl₂).length ≥ 2)
+    (heq : combinedRootWith Hi ar₁ tl₁ = combinedRootWith Hi ar₂ tl₂) :
+    combinedChildrenWith Hi ar₁ tl₁ = combinedChildrenWith Hi ar₂ tl₂
+      ∨ NodeHashCollisionFor Hi := by
+  simp only [combinedRootWith, naryMrWith_multi Hi h₁, naryMrWith_multi Hi h₂] at heq
+  by_cases hch : combinedChildrenWith Hi ar₁ tl₁ = combinedChildrenWith Hi ar₂ tl₂
+  · exact Or.inl hch
+  · exact Or.inr ⟨_, _, hch, heq⟩
 
 /-- Inserts an element at a given position in a list. -/
 def insertAt {α : Type} (n : Nat) (x : α) : List α → List α
@@ -829,10 +933,6 @@ theorem inclusion_soundness
     rw [List.take_append_drop]; exact hfolds
   rw [foldCanonical, List.foldl_append] at hsplit
   exact hsplit
-
-/-- A collision on the internal node hash: distinct child lists, equal digest.
-    A `nodeHash` collision is in particular an `H` collision. -/
-def NodeHashCollision : Prop := ∃ a b : List Digest, a ≠ b ∧ nodeHash a = nodeHash b
 
 /-! Helper lemmas for `inclusion_proof_unique`: injectivity of `insertAt`,
     back-decomposition of lists, indexing across appends, and the

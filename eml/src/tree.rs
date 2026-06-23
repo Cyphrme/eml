@@ -1406,13 +1406,48 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(())
     }
 
-    /// Compute the current root hash of the default algorithm (0).
+    /// Compute the current combined root — the live primary root of the log,
+    /// under the default algorithm (0).
+    ///
+    /// The combined root is the canonicalization fold ([`pmt::combined_root`])
+    /// over the per-algorithm member roots; per-algorithm member roots stay
+    /// directly accessible via [`Self::root_for`]. For a single-algorithm log
+    /// with a trivial timeline the fold promotes to the lone member root, so
+    /// the primary root is byte-identical to that algorithm's raw root.
     #[must_use]
     pub fn root(&self) -> Vec<u8> {
-        self.root_for(0).unwrap_or_else(|_| Vec::new())
+        self.live_combined_root(0).unwrap_or_else(|_| Vec::new())
     }
 
-    /// Compute the current root hash for a specific algorithm.
+    /// The live combined root under `alg_id`'s hash, folded from the in-memory
+    /// per-algorithm frontiers at the current tip (the sync, no-storage peer of
+    /// [`Self::combined_root_at`] at `size == self.count`). Per-algorithm member
+    /// roots remain accessible via [`Self::root_for`].
+    fn live_combined_root(&self, alg_id: u64) -> Result<Vec<u8>, S::Error> {
+        let state = self
+            .algs
+            .get(&alg_id)
+            .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
+        if self.count == 0 {
+            return Ok(state.hasher.empty());
+        }
+        // The active algorithms at the current tip are the fold's children.
+        let active = self.active_algs_at(self.count);
+        let mut member_roots = Vec::with_capacity(active.len());
+        for &id in &active {
+            member_roots.push((id, self.root_for(id)?));
+        }
+        let alg_epochs = self.committed_epochs_at(self.count);
+        Ok(pmt::combined_root(
+            state.hasher.as_ref(),
+            &member_roots,
+            &alg_epochs,
+        ))
+    }
+
+    /// Compute the current raw member root for a specific algorithm — the
+    /// per-algorithm child of the combined root, the root the leaves
+    /// authenticate against.
     pub fn root_for(&self, alg_id: u64) -> Result<Vec<u8>, S::Error> {
         let state = self
             .algs
@@ -2029,23 +2064,20 @@ impl<S: Storage> NaryMerkleLog<S> {
             recomputed_roots.push((id, raw_root));
         }
 
-        // Apply genesis-promotion rule (mirrors combined_root_at).
-        let is_promoted =
-            payload.alg_epochs.len() == 1 && payload.alg_epochs[0].1 == vec![(0u64, u64::MAX)];
-
+        // Recompute each algorithm's combined root via the canonicalization
+        // fold over the recomputed member roots (promotion native; coverage
+        // child iff the timeline is non-trivial) and compare to the payload.
         for (i, &id) in payload.active_algs.iter().enumerate() {
             let state = self
                 .algs
                 .get(&id)
                 .ok_or(crate::error::Error::UnknownAlgorithm(id))?;
 
-            let computed_cr = if is_promoted {
-                recomputed_roots[i].1.clone()
-            } else {
-                let buf =
-                    crate::proof::combined_root_preimage(&recomputed_roots, &payload.alg_epochs);
-                state.hasher.hash(&buf)
-            };
+            let computed_cr = pmt::combined_root(
+                state.hasher.as_ref(),
+                &recomputed_roots,
+                &payload.alg_epochs,
+            );
 
             if !crate::proof::constant_time_eq(&computed_cr, &payload.combined_roots[i].1) {
                 return Ok(false);
@@ -2070,27 +2102,26 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Compute the combined root hash for a specific algorithm at a historical tree size.
     ///
-    /// The combined root is a metaroot: a structural layer that, like any
-    /// node, commits what is below it — except it spans every algorithm's
-    /// tree. Its preimage covers the raw roots of all active algorithms AND
-    /// the committed epoch timeline of every registered algorithm, because
-    /// the timeline is part of the multi-algorithm structure (it decides
-    /// which cells are null projections). Binding the timeline makes
-    /// activity/inactivity claims non-equivocable: without it, an active
-    /// position whose payload hashes to the null constant and a genuinely
-    /// inactive position are byte-identical under the root, so inactivity
-    /// would be forgeable by metadata substitution.
+    /// The combined root is the canonicalization fold ([`pmt::combined_root`])
+    /// over the per-algorithm member roots as children, under the target
+    /// algorithm's own hash. The committed epoch timeline of every registered
+    /// algorithm enters the fold as a single coverage child — but only when it
+    /// is non-trivial — because the timeline decides which cells are null
+    /// projections. Binding the timeline makes activity/inactivity claims
+    /// non-equivocable: without it, an active position whose payload hashes to
+    /// the null constant and a genuinely inactive position would be
+    /// byte-identical under the root, so inactivity would be forgeable by
+    /// metadata substitution.
     ///
-    /// **Genesis Promotion:** while the registry has ever contained only one
-    /// algorithm and its timeline is the forced default `[(0, u64::MAX)]`
-    /// (active from position 0, still open), the preimage carries zero
-    /// information beyond the raw root, so the metaroot promotes to the raw
-    /// root — the same discipline as singleton node promotion (hash only when
-    /// hashing adds binding information). Any lifecycle event — a second
-    /// registration, a tip deactivation, or a deactivate/resume — makes the
-    /// timeline information-bearing and permanently switches to the hashed
-    /// form. Promotion is keyed on the REGISTRY (never the active set): a
-    /// sole-active algorithm may carry a pre-activation null prefix, which is
+    /// **Genesis promotion is native.** A single member root under a trivial
+    /// timeline (`[(0, u64::MAX)]` for every algorithm) folds to itself
+    /// (`nary_mr` `len == 1`): the combined root *is* the raw member root for
+    /// the structural reason that there is one child, with no special case. A
+    /// lifecycle event — a second registration, a tip deactivation, a
+    /// deactivate/resume — makes the timeline non-trivial, so a coverage child
+    /// joins the fold and the combined root becomes a genuine multi-child node.
+    /// Triviality is informativeness, not registry cardinality: a sole-active
+    /// algorithm with a pre-activation null prefix is non-trivial, which is
     /// precisely the case the timeline commitment exists to bind.
     pub async fn combined_root_at(&self, alg_id: u64, size: u64) -> Result<Vec<u8>, S::Error> {
         let state = self
@@ -2114,26 +2145,21 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::FrozenAlgorithm(alg_id));
         }
 
-        // 2. Build the metaroot preimage: sorted active roots plus the committed epoch timeline of
-        //    every registered algorithm.
-        let mut active_roots = Vec::with_capacity(active_algs.len());
+        // 2. Gather the per-algorithm member roots (the fold's children) and the committed timeline
+        //    (the coverage child, iff non-trivial).
+        let mut member_roots = Vec::with_capacity(active_algs.len());
         for &id in &active_algs {
             let r = self.root_for_at(id, size).await?;
-            active_roots.push((id, r));
+            member_roots.push((id, r));
         }
         let alg_epochs = self.committed_epochs_at(size);
 
-        // Genesis promotion: registry-singleton with the forced default
-        // timeline carries zero information beyond the raw root — promote.
-        // Any lifecycle event switches permanently to the hashed form.
-        // Keyed on the REGISTRY, not the active set (see doc comment above).
-        if alg_epochs.len() == 1 && alg_epochs[0].1 == vec![(0u64, u64::MAX)] {
-            return Ok(active_roots.into_iter().next().unwrap().1);
-        }
-
-        // 3. Hash the snapshot using the target algorithm's hasher
-        let buf = crate::proof::combined_root_preimage(&active_roots, &alg_epochs);
-        Ok(state.hasher.hash(&buf))
+        // 3. Fold under the target algorithm's hasher. Promotion is native.
+        Ok(pmt::combined_root(
+            state.hasher.as_ref(),
+            &member_roots,
+            &alg_epochs,
+        ))
     }
 
     /// The materialized digest of the frontier peak at coordinate

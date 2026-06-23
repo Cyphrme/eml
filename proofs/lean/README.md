@@ -66,12 +66,12 @@ formalization now models the shipped design (Design A+), which repudiates that i
   not assume the collision away; A+ renders it inert.
 - `inferredActiveFromNull_unsound` proves the legacy inference unsound: reading activity from
   digest null-ness misclassifies such a leaf as inactive.
-- Activity is instead read from the **committed epoch timeline**, bound into the combined-root
-  **metaroot** preimage. `metaroot_binds_timeline` proves non-equivocation: two histories with
-  identical trees but timelines disagreeing on activity at any `(algorithm, position)` cannot
-  share a combined root unless `H` collides. This binding is also the cross-algorithm
-  non-interference statement: per-algorithm activity claims are individually committed and
-  cannot be substituted under a fixed root.
+- Activity is instead read from the **committed epoch timeline**, which enters the combined-root
+  **fold** as a coverage child when it is non-trivial. `combinedRoot_binds_timeline` proves
+  non-equivocation: two histories with identical member roots but distinct non-trivial timelines
+  cannot share a combined root unless the node hash or `H` collides. This binding is also the
+  cross-algorithm non-interference statement: per-algorithm activity claims are individually
+  committed and cannot be substituted under a fixed root.
 - The verification-time consistency check `inactive ⇒ N₀` yields both remaining obligations:
   `real_cell_forces_committed_active` (a logger cannot commit a real leaf and later disown it
   via the epochs) and `committed_inactive_is_null` (no real leaf hides behind a retired claim).
@@ -143,9 +143,15 @@ locations in the source files:
     `eval_flat_null_node`/`eval_node_hash`): a real `def` with proved equations (formerly
     axioms); `eval_singleton`, `eval_flat_null_promotion`: promotion soundness.
   - `null_collision`: the faithful `leaf(b"null") = N₀` identity, now expressible and proved.
-  - Design A+: `inferredActiveFromNull_unsound`, `metaroot_binds_timeline`,
+  - Design A+: `inferredActiveFromNull_unsound`, `combinedRoot_binds_timeline`,
     `real_cell_forces_committed_active`, `committed_inactive_is_null` — activity is read from
-    the committed timeline bound into the combined-root metaroot, not from digest null-ness.
+    the committed timeline, which enters the combined-root fold as a coverage child, not from
+    digest null-ness.
+  - Combined-root fold (post-N29): `combinedChildren_bound`, `coupling_extract_sound`,
+    `binding_root_sound`, `binding_proof_consistent`, `binding_proof_forgery_rejected` — the
+    combined root is the `nary_mr` fold over the member-root child digests (plus the coverage
+    child), so a fixed root pins the member-digest list modulo a node-hash collision; algorithm
+    identities are the verifier's trusted active-set input, not recovered from the root.
   - Canonical inclusion: `not_canonical_of_promoted`, `inclusion_soundness`, and
     `inclusion_proof_unique` (non-malleability) — all fully proved. Uniqueness holds modulo
     `NodeHashCollision` and takes the proof-shape pinning (`hlen`/`hpos`) as premises,
@@ -159,7 +165,8 @@ the Trusted Computing Base (TCB) using Lean's `#print axioms` command:
    ```lean
    #print axioms NEML.projection_equivalence
    #print axioms NEML.eval_flat_null_promotion
-   #print axioms NEML.metaroot_binds_timeline
+   #print axioms NEML.combinedRoot_binds_timeline
+   #print axioms NEML.coupling_extract_sound
    #print axioms NEML.inclusion_proof_unique
    ```
 2. Build the project. The compiler output will display the exact axioms utilized.
@@ -181,8 +188,8 @@ respective Lean symbols in the source code:
 | **Definition 3** | [cto](EMLProof/Tree.lean#L112) | Count Trailing Ones count |
 | **Theorem 1** | [bridge_lemma](EMLProof/Bridge.lean#L155) | Structural Bridge Lemma |
 | **Theorem 2** | [projection_equivalence](EMLProof/Projection.lean) | Projection Equivalence |
-| **Temporal Binding** | [metaroot_binds_timeline](EMLProof/NEML.lean), [real_cell_forces_committed_active](EMLProof/NEML.lean) | Inactivity authenticated by the committed epoch timeline (Design A+); supersedes the removed vacuous `temporal_binding` |
-| **Algorithm Isolation** | [metaroot_binds_timeline](EMLProof/NEML.lean) | Per-algorithm commitments bound into the metaroot; supersedes the removed vacuous `algorithm_isolation` |
+| **Temporal Binding** | [combinedRoot_binds_timeline](EMLProof/NEML.lean), [real_cell_forces_committed_active](EMLProof/NEML.lean) | Inactivity authenticated by the committed epoch timeline (Design A+); supersedes the removed vacuous `temporal_binding` |
+| **Algorithm Isolation** | [combinedChildrenWith_bound](EMLProof/NEML.lean), [binding_proof_consistent](EMLProof/BindingProof.lean) | Per-algorithm binding roots fold under each algorithm's own hash (D9); supersedes the removed vacuous `algorithm_isolation` |
 | **Inclusion Soundness** | [inclusion_soundness](EMLProof/NEML.lean) | Accepting canonical proof commits the leaf at the claimed log position (depth existential) |
 | **Non-Malleability** | [inclusion_proof_unique](EMLProof/NEML.lean) | At most one accepting canonical path per statement, modulo internal-node hash collision |
 | **Theorem 5** | [generalized_bridge_lemma](EMLProof/General/Duality.lean#L444) | Generalized Bridge Lemma |
@@ -225,8 +232,9 @@ To verify that the formalized state machine matches the production implementatio
 4. **NEML Security Layer**: The committed-epoch model in `NEML.lean` mirrors the production
    NEML crate: `nullPreimage`/`nullDigest` match `neml/src/hasher.rs`
    (`null() = hash(b"null")`); `committedActiveAt` matches `committed_active_at` in
-   `neml/src/proof.rs`; the metaroot preimage models `combined_root_preimage`
-   (`neml/src/proof.rs`) and `combined_root_at` (`neml/src/tree.rs`); the `inactive ⇒ N₀`
+   `neml/src/proof.rs`; the combined-root fold (`combinedRoot`/`combinedRootWith`) models
+   `pmt::combined_root` (`pmt/src/proof.rs`) and `combined_root_at` (`eml/src/tree.rs`); the
+   `inactive ⇒ N₀`
    consistency check (`InactiveImpliesNull`) models `verify_audit_payload`
    (`neml/src/tree.rs`); the proof-shape pinning assumed by `inclusion_proof_unique`
    corresponds to the shared topology module `neml/src/topology.rs` (`frontier_for_size`).
@@ -275,9 +283,9 @@ the findings of our formal red-team audit:
   `largestPow2Lt` and structural checks in `mth`.
 - **Activity Forgeries**: The model does *not* rely on domain separation at inactive positions —
   the leaf/null collision is trivially constructible (`null_collision`). Forging an activity
-  status under a fixed combined root instead requires an `H` collision on the metaroot
-  preimage (`metaroot_binds_timeline`), and hiding a real leaf behind an inactive claim is
-  excluded by the `inactive ⇒ N₀` check (`committed_inactive_is_null`).
+  status under a fixed combined root instead requires a node-hash or `H` collision on the
+  coverage child (`combinedRoot_binds_timeline`), and hiding a real leaf behind an inactive
+  claim is excluded by the `inactive ⇒ N₀` check (`committed_inactive_is_null`).
 - **Proof Malleability**: Padding an inclusion proof with promoted (zero-sibling) steps is
   rejected outright under canonical encoding (`not_canonical_of_promoted`); within canonical
   encoding, `inclusion_proof_unique` leaves an internal-node hash collision as the only

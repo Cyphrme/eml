@@ -4,10 +4,10 @@
 //! ([`topology`]), **canonicalization** (collapse + promotion, in [`mr`]), the
 //! [`Hasher`] seam, **inclusion** proof/verify, **embedding** (an opaque
 //! child-tree root as a leaf), the [`Sealed`] carrier, the **metadata
-//! channel** ([`metadata`]), and **epoch construction** — the per-algorithm
-//! binding root (the literal `combined_root_*` symbols) and its coupling. It
-//! depends on nothing; the engineering libraries (append-only / mutable)
-//! depend on it.
+//! channel** ([`metadata`]), and the **combined root** — the canonicalization
+//! fold over the per-algorithm member roots (the [`proof::combined_root`]
+//! primitive, shared by both trees) and its coupling. It depends on nothing;
+//! the engineering libraries (append-only / mutable) depend on it.
 
 pub(crate) mod binding_proof;
 pub(crate) mod error;
@@ -27,10 +27,11 @@ pub use leaf_proof::LeafProof;
 pub use metadata::Meta;
 pub use mr::{count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use proof::{
-    AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root_preimage,
+    AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root,
     committed_active_algs, committed_active_at, committed_is_live, constant_time_eq,
-    reconstruct_inclusion_root, validate_committed_epochs, verify_inactivity_with_coupling,
-    verify_inclusion, verify_inclusion_path_structure, verify_inclusion_with_coupling,
+    reconstruct_inclusion_root, serialize_timeline, timeline_is_trivial, validate_committed_epochs,
+    verify_inactivity_with_coupling, verify_inclusion, verify_inclusion_path_structure,
+    verify_inclusion_with_coupling,
 };
 pub use sealed::{RunExtent, Sealed};
 pub use subtree::{Subtree, embed, extract};
