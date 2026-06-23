@@ -1,4 +1,16 @@
-//! Merkle root and evaluation algorithms for unified n-ary trees.
+//! Merkle root and evaluation over the n-ary subtree, with canonicalization.
+//!
+//! Canonicalization is one generic reduction composed of **two distinct
+//! primitives**, applied structurally on every fold (always-on, never a
+//! toggle):
+//!
+//! - **promotion** — a lone (single) child is lifted in place of the wrapping hashed node.
+//!   Structurally deterministic: a verifier re-derives it.
+//! - **collapse** — children of the *same value* fold to that value. The all-null case below is
+//!   *one instance* of general same-value collapse, not a separate operation.
+//!
+//! The literal `nary_mr` symbol predates this vocabulary and is kept verbatim;
+//! the two primitives are named in this prose, not split in the code here.
 
 use crate::hasher::Hasher;
 use crate::proof::ProofStep;
@@ -6,14 +18,15 @@ use crate::subtree::Subtree;
 
 /// Compute the Merkle root of an ordered sequence of child digests.
 ///
-/// Applies singleton promotion (Definition 2) and null promotion.
+/// Applies the two canonicalization primitives: **promotion** (the lone-child
+/// case) and **collapse** (the all-null case, an instance of same-value fold).
 #[must_use]
 pub fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
     match children.len() {
         0 => hasher.empty(),
         1 => children[0].to_vec(),
         _ => {
-            // Null promotion: if all children are N₀, parent is N₀.
+            // Collapse (null instance): if all children are N₀, the parent is N₀.
             let null_const = hasher.null();
             if children.iter().all(|&c| c == null_const) {
                 null_const
@@ -72,10 +85,11 @@ pub fn within_subtree_path(
                     let mut path =
                         within_subtree_path(hasher, child, leaf_index - cumulative_leaves)?;
 
-                    // Canonical proof encoding: a singleton node is promoted to
-                    // its parent without hashing, so it contributes no proof step
-                    // (the recursion already returns the correct sub-path). Only
-                    // genuinely hashing (multi-child) nodes emit a step.
+                    // Canonical proof encoding: a promoted (lone-child) node is
+                    // lifted to its parent without hashing, so it contributes no
+                    // proof step (the recursion already returns the correct
+                    // sub-path). Only genuinely hashing (multi-child) nodes emit
+                    // a step.
                     if children.len() > 1 {
                         let mut child_hashes = Vec::with_capacity(children.len());
                         for c in children {
@@ -122,7 +136,6 @@ mod tests {
             Sha256::digest(b"").to_vec()
         }
 
-
         fn hash(&self, data: &[u8]) -> Vec<u8> {
             Sha256::digest(data).to_vec()
         }
@@ -140,20 +153,20 @@ mod tests {
     }
 
     #[test]
-    fn test_nary_mr_singleton_promotion() {
+    fn test_nary_mr_promotion() {
         let hasher = Sha256Hasher;
         let leaf_hash = hasher.leaf(b"hello");
         assert_eq!(nary_mr(&hasher, &[&leaf_hash]), leaf_hash);
     }
 
     #[test]
-    fn test_nary_mr_null_promotion() {
+    fn test_nary_mr_null_collapse() {
         let hasher = Sha256Hasher;
         let null = hasher.null();
-        // A node with two null children should evaluate to null
+        // A node with two null children should collapse to null
         assert_eq!(nary_mr(&hasher, &[&null, &null]), null);
 
-        // A node with a mix of null and non-null should NOT evaluate to null
+        // A node with a mix of null and non-null should NOT collapse to null
         let leaf = hasher.leaf(b"hello");
         let expected = hasher.node(&[&null, &leaf]);
         assert_eq!(nary_mr(&hasher, &[&null, &leaf]), expected);
@@ -186,11 +199,15 @@ mod tests {
 
         let leaf_hash = hasher.leaf(b"b");
         let root = evaluate(&hasher, &subtree);
-        let proof = crate::proof::InclusionProof {
-            path,
-        };
+        let proof = crate::proof::InclusionProof { path };
         assert!(crate::proof::verify_inclusion(
-            &hasher, &leaf_hash, 0, 1, 2, &proof.path, &root
+            &hasher,
+            &leaf_hash,
+            0,
+            1,
+            2,
+            &proof.path,
+            &root
         ));
     }
 }

@@ -27,7 +27,6 @@ impl Hasher for Sha256Hasher {
         Sha256::digest(b"").to_vec()
     }
 
-
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
@@ -453,7 +452,15 @@ proptest! {
             let proof = log.inclusion_proof_for(0, index, ts).await.unwrap().unwrap();
 
             prop_assert!(
-                verify_inclusion(&Sha256Hasher, &projected[index as usize], index, ts, k as u64, &proof.path, &root),
+                verify_inclusion(
+                    &Sha256Hasher,
+                    &projected[index as usize],
+                    index,
+                    ts,
+                    k as u64,
+                    &proof.path,
+                    &root
+                ),
                 "I-SOUND-MALT failed to verify valid proof"
             );
 
@@ -484,7 +491,16 @@ proptest! {
             let proof = log.consistency_proof_for(0, old_size, ts).await.unwrap().unwrap();
 
             prop_assert!(
-                verify_consistency(&Sha256Hasher, old_size, ts, k as u64, &proof.start_hash, &proof.path, &old_root, &new_root),
+                verify_consistency(
+                    &Sha256Hasher,
+                    old_size,
+                    ts,
+                    k as u64,
+                    &proof.start_hash,
+                    &proof.path,
+                    &old_root,
+                    &new_root
+                ),
                 "K-SOUND-MALT failed to verify consistency proof"
             );
             Ok(())
@@ -510,7 +526,15 @@ proptest! {
             let proof = log.inclusion_proof_for(0, null_idx, ts).await.unwrap().unwrap();
 
             prop_assert!(
-                !verify_inclusion(&Sha256Hasher, &forged, null_idx, ts, k as u64, &proof.path, &root),
+                !verify_inclusion(
+                    &Sha256Hasher,
+                    &forged,
+                    null_idx,
+                    ts,
+                    k as u64,
+                    &proof.path,
+                    &root
+                ),
                 "T-BOUND-MALT accepted forged leaf at null position"
             );
             Ok(())
@@ -698,8 +722,10 @@ proptest! {
 
     #[test]
     fn metamorphic_mid_stream_registration(
-        first_batch in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..32), 1..10),
-        second_batch in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..32), 1..10),
+        first_batch in
+            proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..32), 1..10),
+        second_batch in
+            proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..32), 1..10),
         k in 2usize..5,
     ) {
         smol::block_on(async {
@@ -899,7 +925,14 @@ proptest! {
             let config = neml::VerifierConfig::default();
 
             // 1. Success case
-            let verified = proof.verify(&hasher, target_alg_id, tree_size, &combined_root, active_algs, config);
+            let verified = proof.verify(
+                &hasher,
+                target_alg_id,
+                tree_size,
+                &combined_root,
+                active_algs,
+                config,
+            );
             prop_assert_eq!(verified.unwrap(), target_root.clone());
 
             // 2. Reject tampered root hash
@@ -910,23 +943,53 @@ proptest! {
                     active_roots: tampered_active_roots,
                     alg_epochs: alg_epochs.clone(),
                 };
-                prop_assert!(tampered_proof.verify(&hasher, target_alg_id, tree_size, &combined_root, active_algs, config).is_none());
+                prop_assert!(
+                    tampered_proof
+                        .verify(
+                            &hasher,
+                            target_alg_id,
+                            tree_size,
+                            &combined_root,
+                            active_algs,
+                            config
+                        )
+                        .is_none()
+                );
             }
 
             // 3. Reject tampered combined root
             let mut bad_combined = combined_root.clone();
             if !bad_combined.is_empty() {
                 bad_combined[0] ^= 0xFF;
-                prop_assert!(proof.verify(&hasher, target_alg_id, tree_size, &bad_combined, active_algs, config).is_none());
+                prop_assert!(
+                    proof
+                        .verify(
+                            &hasher,
+                            target_alg_id,
+                            tree_size,
+                            &bad_combined,
+                            active_algs,
+                            config
+                        )
+                        .is_none()
+                );
             }
 
             // 4. Reject mismatching expected active algs (different length)
             let mut bad_algs = active_algs.to_vec();
             bad_algs.push(999);
-            prop_assert!(proof.verify(&hasher, target_alg_id, tree_size, &combined_root, &bad_algs, config).is_none());
+            prop_assert!(
+                proof
+                    .verify(&hasher, target_alg_id, tree_size, &combined_root, &bad_algs, config)
+                    .is_none()
+            );
 
             // 5. Reject mismatching target alg id (not in active set)
-            prop_assert!(proof.verify(&hasher, 999, tree_size, &combined_root, active_algs, config).is_none());
+            prop_assert!(
+                proof
+                    .verify(&hasher, 999, tree_size, &combined_root, active_algs, config)
+                    .is_none()
+            );
 
             // 6. Reject substituted epoch metadata: the timeline is inside
             // the preimage, so shifting a boundary breaks the binding.
@@ -936,7 +999,18 @@ proptest! {
                 active_roots: active_roots.clone(),
                 alg_epochs: substituted_epochs,
             };
-            prop_assert!(substituted_proof.verify(&hasher, target_alg_id, tree_size, &combined_root, active_algs, config).is_none());
+            prop_assert!(
+                substituted_proof
+                    .verify(
+                        &hasher,
+                        target_alg_id,
+                        tree_size,
+                        &combined_root,
+                        active_algs,
+                        config
+                    )
+                    .is_none()
+            );
         }
     }
 }

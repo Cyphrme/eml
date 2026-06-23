@@ -8,7 +8,8 @@ license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 
 [dependencies]
-# Zero external dependencies.
+# The kernel; neml is the transitional append-only layer over it.
+pmt = { path = "../pmt" }
 
 [dev-dependencies]
 sha2 = "0.10"

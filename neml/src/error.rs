@@ -91,4 +91,3 @@ impl<E> From<E> for Error<E> {
         Self::Storage(err)
     }
 }
-

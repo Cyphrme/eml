@@ -21,7 +21,6 @@ impl Hasher for Sha256Hasher {
         Sha256::digest(b"").to_vec()
     }
 
-
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
@@ -405,9 +404,7 @@ fn test_inclusion_proofs_subtree_log_mode() {
         path.extend(log_proof.path);
 
         let leaf_hash = Sha256Hasher.leaf(b"d");
-        let full_proof = neml::InclusionProof {
-            path,
-        };
+        let full_proof = neml::InclusionProof { path };
 
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
@@ -930,9 +927,7 @@ fn test_deep_subtree_inclusion_proofs() {
             let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
-            let full_proof = neml::InclusionProof {
-                path,
-            };
+            let full_proof = neml::InclusionProof { path };
 
             assert!(
                 neml::verify_inclusion(
@@ -989,9 +984,7 @@ fn test_deep_subtree_inclusion_proofs() {
             let log_proof = log.inclusion_proof(0, 2).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
-            let full_proof = neml::InclusionProof {
-                path,
-            };
+            let full_proof = neml::InclusionProof { path };
 
             assert!(
                 neml::verify_inclusion(
@@ -1159,9 +1152,7 @@ fn test_multi_algorithm_subtree_proofs() {
         let log_proof0 = log.inclusion_proof_for(0, 1, 2).await.unwrap().unwrap();
         path0.extend(log_proof0.path);
 
-        let full_proof0 = neml::InclusionProof {
-            path: path0,
-        };
+        let full_proof0 = neml::InclusionProof { path: path0 };
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
@@ -1179,9 +1170,7 @@ fn test_multi_algorithm_subtree_proofs() {
         let log_proof1 = log.inclusion_proof_for(1, 0, 1).await.unwrap().unwrap();
         path1.extend(log_proof1.path);
 
-        let full_proof1 = neml::InclusionProof {
-            path: path1,
-        };
+        let full_proof1 = neml::InclusionProof { path: path1 };
         assert!(neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
@@ -1258,9 +1247,7 @@ fn test_proof_error_edge_cases() {
         assert!(neml::within_subtree_path(&Sha256Hasher, &node_subtree, 2).is_none());
 
         // 4. Verifier input validation failures
-        let empty_proof = neml::InclusionProof {
-            path: Vec::new(),
-        };
+        let empty_proof = neml::InclusionProof { path: Vec::new() };
         assert!(!neml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"x"),
@@ -1688,7 +1675,14 @@ fn test_coupling_proof_verify_validation() {
         max_active_algorithms: 1,
         ..Default::default()
     };
-    let target_dos = proof.verify(&hasher, 0, tree_size, &combined_root, &[0, 1], strict_config);
+    let target_dos = proof.verify(
+        &hasher,
+        0,
+        tree_size,
+        &combined_root,
+        &[0, 1],
+        strict_config,
+    );
     assert!(target_dos.is_none());
 
     // 3. Reject unsorted algorithm IDs
@@ -1976,13 +1970,9 @@ fn test_late_activated_alg_checkpoint() {
             let config = TreeConfig { log_arity: k };
 
             // ── Build log ──────────────────────────────────────────────────
-            let mut log = NaryMerkleLog::new(
-                MemoryStorage::new(),
-                Box::new(Sha256Hasher),
-                config,
-            )
-            .await
-            .unwrap();
+            let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
+                .await
+                .unwrap();
 
             // Append M leaves with only algorithm 0.
             for i in 0u64..m {
@@ -2000,9 +1990,7 @@ fn test_late_activated_alg_checkpoint() {
             // ── Honest: checkpoint before activation ───────────────────────
             // Algorithm 1 was not yet registered at start_pre; the verifier
             // derives its expected root (null) internally — no entry needed.
-            let trusted_pre = vec![
-                (0u64, log.root_for_at(0, start_pre).await.unwrap()),
-            ];
+            let trusted_pre = vec![(0u64, log.root_for_at(0, start_pre).await.unwrap())];
             let ok = log
                 .verify_non_divergence(Some(start_pre), &trusted_pre)
                 .await
@@ -2122,7 +2110,16 @@ fn test_consistency_proof_overflow_panic() {
             62
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, 1, 1 << 62, 2, &proof.start_hash, &proof.path, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(
+        &Sha256Hasher,
+        1,
+        1 << 62,
+        2,
+        &proof.start_hash,
+        &proof.path,
+        &[0; 32],
+        &[0; 32],
+    );
     assert!(!ok);
 }
 
@@ -2138,7 +2135,16 @@ fn test_consistency_proof_huge_siblings_dos() {
             1
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 2, &proof.start_hash, &proof.path, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(
+        &Sha256Hasher,
+        1,
+        2,
+        2,
+        &proof.start_hash,
+        &proof.path,
+        &[0; 32],
+        &[0; 32],
+    );
     assert!(!ok);
 
     // Path length > 256
@@ -2152,7 +2158,16 @@ fn test_consistency_proof_huge_siblings_dos() {
             257
         ],
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 2, &proof_huge_path.start_hash, &proof_huge_path.path, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(
+        &Sha256Hasher,
+        1,
+        2,
+        2,
+        &proof_huge_path.start_hash,
+        &proof_huge_path.path,
+        &[0; 32],
+        &[0; 32],
+    );
     assert!(!ok);
 
     // Invalid log arity < 2 (e.g. 1)
@@ -2160,7 +2175,16 @@ fn test_consistency_proof_huge_siblings_dos() {
         start_hash: vec![0; 32],
         path: Vec::new(),
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 1, &proof_invalid_arity_low.start_hash, &proof_invalid_arity_low.path, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(
+        &Sha256Hasher,
+        1,
+        2,
+        1,
+        &proof_invalid_arity_low.start_hash,
+        &proof_invalid_arity_low.path,
+        &[0; 32],
+        &[0; 32],
+    );
     assert!(!ok);
 
     // Invalid log arity > 256
@@ -2168,7 +2192,16 @@ fn test_consistency_proof_huge_siblings_dos() {
         start_hash: vec![0; 32],
         path: Vec::new(),
     };
-    let ok = neml::verify_consistency(&Sha256Hasher, 1, 2, 257, &proof_invalid_arity_high.start_hash, &proof_invalid_arity_high.path, &[0; 32], &[0; 32]);
+    let ok = neml::verify_consistency(
+        &Sha256Hasher,
+        1,
+        2,
+        257,
+        &proof_invalid_arity_high.start_hash,
+        &proof_invalid_arity_high.path,
+        &[0; 32],
+        &[0; 32],
+    );
     assert!(!ok);
 }
 
@@ -2179,16 +2212,20 @@ fn test_inclusion_proof_dos_prevention() {
     let root = hasher.empty();
 
     // Large log arity > 256
-    let proof = neml::InclusionProof {
-        path: Vec::new(),
-    };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 1_000_000_000_000, 1_000_000_000_001, &proof.path, &root);
+    let proof = neml::InclusionProof { path: Vec::new() };
+    let ok = neml::verify_inclusion(
+        &hasher,
+        &leaf_hash,
+        0,
+        1_000_000_000_000,
+        1_000_000_000_001,
+        &proof.path,
+        &root,
+    );
     assert!(!ok);
 
     // Invalid log arity = 1
-    let proof = neml::InclusionProof {
-        path: Vec::new(),
-    };
+    let proof = neml::InclusionProof { path: Vec::new() };
     let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 1, &proof.path, &root);
     assert!(!ok);
 
@@ -2212,7 +2249,15 @@ fn test_inclusion_proof_dos_prevention() {
             position: 0,
         }],
     };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 2, &proof_huge_siblings.path, &root);
+    let ok = neml::verify_inclusion(
+        &hasher,
+        &leaf_hash,
+        0,
+        10,
+        2,
+        &proof_huge_siblings.path,
+        &root,
+    );
     assert!(!ok);
 }
 
@@ -2457,7 +2502,10 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
         &[0],
         neml::VerifierConfig::default(),
     );
-    assert!(!is_valid, "Expected arity zero proof to be rejected by verifier API");
+    assert!(
+        !is_valid,
+        "Expected arity zero proof to be rejected by verifier API"
+    );
 }
 
 #[test]
@@ -2476,7 +2524,10 @@ fn test_proof_sibling_digest_length_mismatch() {
     };
 
     let is_valid = neml::verify_inclusion(&hasher, &leaf_a, 0, 2, 2, &malformed_proof.path, &root);
-    assert!(!is_valid, "Expected proof with invalid sibling size to be rejected");
+    assert!(
+        !is_valid,
+        "Expected proof with invalid sibling size to be rejected"
+    );
 }
 
 #[test]
@@ -2485,8 +2536,14 @@ fn test_determine_global_size_probing_out_of_sync() {
         let mut storage = MemoryStorage::new();
 
         // Setup metadata for alg 0 and alg 1, both active starting at size 0
-        storage.store_algorithm_meta(0, &[(0, u64::MAX)]).await.unwrap();
-        storage.store_algorithm_meta(1, &[(0, u64::MAX)]).await.unwrap();
+        storage
+            .store_algorithm_meta(0, &[(0, u64::MAX)])
+            .await
+            .unwrap();
+        storage
+            .store_algorithm_meta(1, &[(0, u64::MAX)])
+            .await
+            .unwrap();
 
         // Write nodes for alg 0 up to index 2 (size 3)
         let node_val = vec![1; 32];
@@ -2499,10 +2556,8 @@ fn test_determine_global_size_probing_out_of_sync() {
         storage.store_node(1, 1, 0, &node_val).await.unwrap();
 
         // Load tree from storage
-        let hashers: Vec<(u64, Box<dyn neml::Hasher>)> = vec![
-            (0, Box::new(Sha256Hasher)),
-            (1, Box::new(Sha256Hasher)),
-        ];
+        let hashers: Vec<(u64, Box<dyn neml::Hasher>)> =
+            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))];
 
         // This fails with CorruptedMetadata as expected under R10.
         let reconstructed = NaryMerkleLog::from_storage_with_config(
@@ -2512,7 +2567,10 @@ fn test_determine_global_size_probing_out_of_sync() {
         )
         .await;
 
-        assert!(reconstructed.is_err(), "Expected from_storage to fail due to out of sync algorithm frontier nodes");
+        assert!(
+            reconstructed.is_err(),
+            "Expected from_storage to fail due to out of sync algorithm frontier nodes"
+        );
     });
 }
 
@@ -2539,7 +2597,10 @@ impl neml::Storage for ErrorMaskingStorage {
     }
 
     async fn len(&self) -> Result<u64, Self::Error> {
-        if self.mask_len_to_zero.load(std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .mask_len_to_zero
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             Ok(0)
         } else {
             self.inner.len().await
@@ -2593,16 +2654,22 @@ impl neml::Storage for ErrorMaskingStorage {
         log_meta: Option<(u64, u8)>,
         checkpoint_roots: &[(u64, &[u8])],
     ) -> Result<(), Self::Error> {
-        self.inner.write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots).await
+        self.inner
+            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
+            .await
     }
 }
 
 #[test]
 fn test_storage_len_error_masking_overwrite() {
     smol::block_on(async {
-        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), TreeConfig::default())
-            .await
-            .unwrap();
+        let mut log = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig::default(),
+        )
+        .await
+        .unwrap();
         log.append_leaf(b"leaf0").await.unwrap();
         log.append_leaf(b"leaf1").await.unwrap();
         let inner = log.into_storage();
@@ -2615,9 +2682,10 @@ fn test_storage_len_error_masking_overwrite() {
 
         // Initially we reconstruct size 2
         {
-            let reconstructed = NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
-                .await
-                .unwrap();
+            let reconstructed =
+                NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
+                    .await
+                    .unwrap();
             assert_eq!(reconstructed.size(), 2);
         }
 
@@ -2626,10 +2694,15 @@ fn test_storage_len_error_masking_overwrite() {
 
         // With persisted log_meta, from_storage reads the authoritative (count, kind)
         // directly and does not rely on len() for mode inference.
-        let log_after_mask = NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
-            .await
-            .unwrap();
-        assert_eq!(log_after_mask.size(), 2, "persisted log_meta wins over masked len()");
+        let log_after_mask =
+            NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
+                .await
+                .unwrap();
+        assert_eq!(
+            log_after_mask.size(),
+            2,
+            "persisted log_meta wins over masked len()"
+        );
         assert_eq!(log_after_mask.subtree_count(), 0);
         assert_eq!(log_after_mask.kind(), neml::LogKind::Flat);
     });
@@ -2639,8 +2712,10 @@ fn test_storage_len_error_masking_overwrite() {
 fn test_boundary_sizes_and_high_arities() {
     smol::block_on(async {
         for &k in &[3u64, 5, 128, 256] {
-            let config = TreeConfig { log_arity: k as usize };
-            
+            let config = TreeConfig {
+                log_arity: k as usize,
+            };
+
             // Boundary sizes around K^1 and K^2
             let mut sizes = vec![k - 1, k, k + 1];
             if k * k <= 512 {
@@ -2649,54 +2724,74 @@ fn test_boundary_sizes_and_high_arities() {
             sizes.retain(|&s| s > 0);
             sizes.sort_unstable();
             sizes.dedup();
-            
+
             let max_size = *sizes.last().unwrap();
             let storage = MemoryStorage::new();
             let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();
-                
+
             let mut leaves = Vec::new();
             for i in 0..max_size {
                 let data = format!("leaf_{}_{}", k, i).into_bytes();
                 log.append_leaf(&data).await.unwrap();
                 leaves.push(Sha256Hasher.leaf(&data));
             }
-            
+
             for &size in &sizes {
                 let root = log.root_for_at(0, size).await.unwrap();
-                
+
                 // Verify inclusion proof for every index in the tree of this size
                 for idx in 0..size {
-                    let proof = log.inclusion_proof_for(0, idx, size).await.unwrap().unwrap();
-                    assert!(neml::verify_inclusion(
-                        &Sha256Hasher,
-                        &leaves[idx as usize],
-                        idx,
+                    let proof = log
+                        .inclusion_proof_for(0, idx, size)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(
+                        neml::verify_inclusion(
+                            &Sha256Hasher,
+                            &leaves[idx as usize],
+                            idx,
+                            size,
+                            k,
+                            &proof.path,
+                            &root
+                        ),
+                        "Inclusion failed for k={}, size={}, idx={}",
+                        k,
                         size,
-                        k as u64,
-                        &proof.path,
-                        &root
-                    ), "Inclusion failed for k={}, size={}, idx={}", k, size, idx);
+                        idx
+                    );
                 }
-                
+
                 // Verify consistency proofs between all smaller valid sizes
                 for &old_size in &sizes {
                     if old_size >= size {
                         break;
                     }
                     let old_root = log.root_for_at(0, old_size).await.unwrap();
-                    let proof = log.consistency_proof_for(0, old_size, size).await.unwrap().unwrap();
-                    assert!(neml::verify_consistency(
-                        &Sha256Hasher,
+                    let proof = log
+                        .consistency_proof_for(0, old_size, size)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(
+                        neml::verify_consistency(
+                            &Sha256Hasher,
+                            old_size,
+                            size,
+                            k,
+                            &proof.start_hash,
+                            &proof.path,
+                            &old_root,
+                            &root
+                        ),
+                        "Consistency failed for k={}, old_size={}, new_size={}",
+                        k,
                         old_size,
-                        size,
-                        k as u64,
-                        &proof.start_hash,
-                        &proof.path,
-                        &old_root,
-                        &root
-                    ), "Consistency failed for k={}, old_size={}, new_size={}", k, old_size, size);
+                        size
+                    );
                 }
             }
         }
@@ -2741,24 +2836,15 @@ fn test_proof_malleability_path_extension() {
         ));
 
         // 2. Prepend a dummy step with empty siblings.
-        let mut malleable_path = vec![
-            neml::ProofStep {
-                siblings: vec![],
-                position: 42,
-            }
-        ];
+        let mut malleable_path = vec![neml::ProofStep {
+            siblings: vec![],
+            position: 42,
+        }];
         malleable_path.extend(proof.path.clone());
 
         // 3. Verifies should fail because of path length mismatch or position spoofing
-        let verified = neml::verify_inclusion(
-            &Sha256Hasher,
-            &leaf_hash,
-            2,
-            4,
-            2,
-            &malleable_path,
-            &root
-        );
+        let verified =
+            neml::verify_inclusion(&Sha256Hasher, &leaf_hash, 2, 4, 2, &malleable_path, &root);
         assert!(!verified, "Malleable proof verification should fail");
     });
 }
@@ -2780,7 +2866,10 @@ fn test_proof_malleability_position_spoofing() {
 
         let root = log.root();
         let path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
-        assert!(path.is_empty(), "promoted unary node must emit no proof step");
+        assert!(
+            path.is_empty(),
+            "promoted unary node must emit no proof step"
+        );
 
         let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
         let mut full_path = path;
@@ -2834,7 +2923,15 @@ fn test_inclusion_truncated_skeleton_rejected() {
 
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"c");
-        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &proof.path, &root));
+        assert!(neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf,
+            2,
+            4,
+            2,
+            &proof.path,
+            &root
+        ));
 
         assert!(!proof.path.is_empty());
         let truncated = &proof.path[..proof.path.len() - 1];
@@ -2863,7 +2960,15 @@ fn test_partial_rightmost_node_sibling_count() {
 
         let proof = log.inclusion_proof(3, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"d");
-        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &proof.path, &root));
+        assert!(neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf,
+            3,
+            4,
+            3,
+            &proof.path,
+            &root
+        ));
 
         // The root joins two frontier nodes here, so the rightmost step carries
         // exactly one sibling.
@@ -2905,7 +3010,15 @@ fn test_skeleton_position_spoof_rejected() {
 
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"c");
-        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &proof.path, &root));
+        assert!(neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf,
+            2,
+            4,
+            2,
+            &proof.path,
+            &root
+        ));
 
         let mut spoofed = proof.path.clone();
         spoofed[0].position ^= 1;
@@ -2943,7 +3056,15 @@ fn test_canonical_encoding_promotion_chain() {
         path.extend(log_proof.path);
 
         let leaf = Sha256Hasher.leaf(b"x");
-        assert!(neml::verify_inclusion(&Sha256Hasher, &leaf, 0, 2, 2, &path, &root));
+        assert!(neml::verify_inclusion(
+            &Sha256Hasher,
+            &leaf,
+            0,
+            2,
+            2,
+            &path,
+            &root
+        ));
 
         for pos in 0..=path.len() {
             let mut tampered = path.clone();
@@ -2994,9 +3115,9 @@ fn test_two_histories_equivocation() {
 
         // History 1: X=1 added before any appends (active from pos 0).
         // Append b"null" at pos 0 → leaf("null") == null() for X.
-        let mut h1 = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut h1 = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         h1.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
         h1.append_leaf(b"null").await.unwrap();
         h1.append_leaf(b"data1").await.unwrap();
@@ -3004,9 +3125,9 @@ fn test_two_histories_equivocation() {
         // History 2: append b"null" first (pos 0, X inactive), then add X=1
         // at size 1 so X's pre-activation null projection at pos 0 also equals
         // null(). Append b"data1" at pos 1.
-        let mut h2 = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut h2 = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         h2.append_leaf(b"null").await.unwrap();
         h2.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
         h2.append_leaf(b"data1").await.unwrap();
@@ -3038,9 +3159,9 @@ fn test_attestation_rejects_contradiction() {
         let cfg = TreeConfig { log_arity: 2 };
 
         // Honest log: X=1 active from pos 0, one real (non-"null") leaf.
-        let mut log = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
         log.append_leaf(b"data").await.unwrap();
 
@@ -3051,33 +3172,36 @@ fn test_attestation_rejects_contradiction() {
         // start at 1 instead of 0. The combined roots no longer match the
         // shifted preimage → root mismatch rejection.
         let mut var_a = honest.clone();
-        var_a.alg_epochs = vec![
-            (0, vec![(0u64, u64::MAX)]),
-            (1, vec![(1u64, u64::MAX)]),
-        ];
+        var_a.alg_epochs = vec![(0, vec![(0u64, u64::MAX)]), (1, vec![(1u64, u64::MAX)])];
         // With X inactive at pos 0, only alg 0 is active at size 1.
         var_a.active_algs = vec![0];
         var_a.combined_roots = vec![(0, log.combined_root_at(0, 1).await.unwrap())];
-        assert!(!log.verify_audit_payload(&var_a).await.unwrap(),
-            "shifted epoch with honest roots must be rejected");
+        assert!(
+            !log.verify_audit_payload(&var_a).await.unwrap(),
+            "shifted epoch with honest roots must be rejected"
+        );
 
         // Variant B: build a second log where X really activates at size 1,
         // obtaining combined roots that DO match the shifted epochs.
-        let mut log2 = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log2 = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log2.append_leaf(b"data").await.unwrap();
         log2.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
 
         let payload2 = log2.audit_payload(log_id).await.unwrap();
-        assert!(log2.verify_audit_payload(&payload2).await.unwrap(),
-            "payload2 must be honest for log2");
+        assert!(
+            log2.verify_audit_payload(&payload2).await.unwrap(),
+            "payload2 must be honest for log2"
+        );
 
         // Present log2's payload (epochs claiming X inactive at pos 0) against
         // log1's storage: stored cell at (X, 0, 0) = H("data") ≠ null() →
         // the contradiction is detected.
-        assert!(!log.verify_audit_payload(&payload2).await.unwrap(),
-            "cross-log payload must be rejected by the cell check");
+        assert!(
+            !log.verify_audit_payload(&payload2).await.unwrap(),
+            "cross-log payload must be rejected by the cell check"
+        );
     });
 }
 
@@ -3089,9 +3213,9 @@ fn test_substituted_metadata_fails_proofs() {
         let cfg = TreeConfig { log_arity: 2 };
 
         // Log: Y=0 active from 0; X=1 added at size 1 (inactive at pos 0).
-        let mut log = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log.append_leaf(b"data0").await.unwrap();
         log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
         log.append_leaf(b"data1").await.unwrap();
@@ -3103,8 +3227,16 @@ fn test_substituted_metadata_fails_proofs() {
         // Honest inactivity proof for X=1 at pos 0 (inactive, null cell).
         let inact_path = log.inclusion_proof_for(1, 0, 2).await.unwrap().unwrap();
         let ok_inact = neml::verify_inactivity_with_coupling(
-            &Sha256Hasher, 1, 0, 2, 2,
-            &inact_path.path, &coupling, &cr, &[0, 1], config,
+            &Sha256Hasher,
+            1,
+            0,
+            2,
+            2,
+            &inact_path.path,
+            &coupling,
+            &cr,
+            &[0, 1],
+            config,
         );
         assert!(ok_inact, "honest inactivity proof must verify");
 
@@ -3112,28 +3244,54 @@ fn test_substituted_metadata_fails_proofs() {
         let incl_path = log.inclusion_proof_for(1, 1, 2).await.unwrap().unwrap();
         let leaf_hash = Sha256Hasher.leaf(b"data1");
         let ok_incl = neml::verify_inclusion_with_coupling(
-            &Sha256Hasher, 1, &leaf_hash, 1, 2, 2,
-            &incl_path.path, &coupling, &cr, &[0, 1], config,
+            &Sha256Hasher,
+            1,
+            &leaf_hash,
+            1,
+            2,
+            2,
+            &incl_path.path,
+            &coupling,
+            &cr,
+            &[0, 1],
+            config,
         );
         assert!(ok_incl, "honest inclusion proof must verify");
 
         // Swap alg_epochs: pretend X was active from position 0.  The
         // preimage hash no longer matches the combined root.
         let mut bad_coupling = coupling.clone();
-        bad_coupling.alg_epochs = vec![
-            (0, vec![(0u64, u64::MAX)]),
-            (1, vec![(0u64, u64::MAX)]),
-        ];
+        bad_coupling.alg_epochs = vec![(0, vec![(0u64, u64::MAX)]), (1, vec![(0u64, u64::MAX)])];
 
         let fail_inact = neml::verify_inactivity_with_coupling(
-            &Sha256Hasher, 1, 0, 2, 2,
-            &inact_path.path, &bad_coupling, &cr, &[0, 1], config,
+            &Sha256Hasher,
+            1,
+            0,
+            2,
+            2,
+            &inact_path.path,
+            &bad_coupling,
+            &cr,
+            &[0, 1],
+            config,
         );
-        assert!(!fail_inact, "substituted epochs must break inactivity proof");
+        assert!(
+            !fail_inact,
+            "substituted epochs must break inactivity proof"
+        );
 
         let fail_incl = neml::verify_inclusion_with_coupling(
-            &Sha256Hasher, 1, &leaf_hash, 1, 2, 2,
-            &incl_path.path, &bad_coupling, &cr, &[0, 1], config,
+            &Sha256Hasher,
+            1,
+            &leaf_hash,
+            1,
+            2,
+            2,
+            &incl_path.path,
+            &bad_coupling,
+            &cr,
+            &[0, 1],
+            config,
         );
         assert!(!fail_incl, "substituted epochs must break inclusion proof");
     });
@@ -3146,9 +3304,9 @@ fn test_substituted_metadata_fails_proofs() {
 fn test_null_payload_stays_legal() {
     smol::block_on(async {
         let cfg = TreeConfig { log_arity: 2 };
-        let mut log = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
 
         // This append must not be rejected.
         log.append_leaf(b"null").await.unwrap();
@@ -3161,12 +3319,25 @@ fn test_null_payload_stays_legal() {
         // check (alg 0 is active at pos 0, so the null-leaf constraint is
         // NOT applied).
         let leaf_hash = Sha256Hasher.leaf(b"null");
-        assert_eq!(leaf_hash, Sha256Hasher.null(), "sanity: leaf(null) == null()");
+        assert_eq!(
+            leaf_hash,
+            Sha256Hasher.null(),
+            "sanity: leaf(null) == null()"
+        );
 
         let path = log.inclusion_proof(0, 1).await.unwrap().unwrap();
         let ok = neml::verify_inclusion_with_coupling(
-            &Sha256Hasher, 0, &leaf_hash, 0, 1, 2,
-            &path.path, &coupling, &cr, &[0], config,
+            &Sha256Hasher,
+            0,
+            &leaf_hash,
+            0,
+            1,
+            2,
+            &path.path,
+            &coupling,
+            &cr,
+            &[0],
+            config,
         );
         assert!(ok, "null-payload inclusion must verify under active epoch");
     });
@@ -3182,14 +3353,14 @@ fn test_frontier_freshness() {
         let cfg = TreeConfig { log_arity: 2 };
 
         // Sole-algorithm variant: identical leaf, deactivated vs live.
-        let mut log_live = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log_live = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log_live.append_leaf(b"data").await.unwrap();
 
-        let mut log_dead = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log_dead = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log_dead.append_leaf(b"data").await.unwrap();
         log_dead.remove_algorithm(0).await.unwrap();
 
@@ -3199,7 +3370,10 @@ fn test_frontier_freshness() {
 
         let cr_live = log_live.combined_root_at(0, 1).await.unwrap();
         let cr_dead = log_dead.combined_root_at(0, 1).await.unwrap();
-        assert_eq!(cr_live, raw_live, "live sole-alg CR is promoted to raw root");
+        assert_eq!(
+            cr_live, raw_live,
+            "live sole-alg CR is promoted to raw root"
+        );
         assert_ne!(cr_dead, raw_dead, "deactivated sole-alg CR must be hashed");
         assert_ne!(cr_live, cr_dead, "combined roots must differ");
 
@@ -3210,16 +3384,22 @@ fn test_frontier_freshness() {
         assert_eq!(neml::committed_is_live(&epochs_dead, 0), Some(false));
 
         // Two-algorithm variant: identical leaves, second alg deactivated in one.
-        let mut log_a = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
-        log_a.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+        let mut log_a = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
+        log_a
+            .add_algorithm(1, Box::new(Sha256Hasher))
+            .await
+            .unwrap();
         log_a.append_leaf(b"x").await.unwrap();
 
-        let mut log_b = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
-        log_b.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+        let mut log_b = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
+        log_b
+            .add_algorithm(1, Box::new(Sha256Hasher))
+            .await
+            .unwrap();
         log_b.append_leaf(b"x").await.unwrap();
         log_b.remove_algorithm(1).await.unwrap();
 
@@ -3241,19 +3421,18 @@ fn test_frontier_freshness() {
 /// Genesis promotion boundary conditions:
 /// - A sole-algorithm log in its default state has CR == raw root.
 /// - Any lifecycle event permanently switches to hashed form.
-/// - A promoted-form coupling proof fails against a hashed-form CR, and
-///   a hashed-form proof fails against a promoted-form CR.
-/// - An active-set singleton whose registry contains more than one
-///   algorithm is NOT promoted.
+/// - A promoted-form coupling proof fails against a hashed-form CR, and a hashed-form proof fails
+///   against a promoted-form CR.
+/// - An active-set singleton whose registry contains more than one algorithm is NOT promoted.
 #[test]
 fn test_genesis_promotion_boundary() {
     smol::block_on(async {
         let cfg = TreeConfig { log_arity: 2 };
 
         // Genesis state: CR is promoted to the raw root.
-        let mut log = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log.append_leaf(b"a").await.unwrap();
         let raw_at_1 = log.root();
         let cr_at_1_genesis = log.combined_root_at(0, 1).await.unwrap();
@@ -3265,8 +3444,10 @@ fn test_genesis_promotion_boundary() {
 
         // CR at size 1 is now hashed (registry has two entries).
         let cr_at_1_after = log.combined_root_at(0, 1).await.unwrap();
-        assert_ne!(cr_at_1_after, raw_at_1,
-            "CR at historical size 1 must be hashed after second alg registration");
+        assert_ne!(
+            cr_at_1_after, raw_at_1,
+            "CR at historical size 1 must be hashed after second alg registration"
+        );
 
         // CR at size 2 is also hashed.
         let raw_at_2 = log.root_for_at(0, 2).await.unwrap();
@@ -3282,31 +3463,34 @@ fn test_genesis_promotion_boundary() {
             alg_epochs: vec![(0, vec![(0u64, u64::MAX)])], // genesis default, 1 entry
         };
         let config = neml::VerifierConfig::default();
-        assert!(!promoted_coupling.authenticate(
-            &Sha256Hasher, 1, &cr_at_1_after, &[0], config,
-        ), "promoted proof against hashed CR must fail");
+        assert!(
+            !promoted_coupling.authenticate(&Sha256Hasher, 1, &cr_at_1_after, &[0], config,),
+            "promoted proof against hashed CR must fail"
+        );
 
         // A hashed-form coupling proof presented against the old promoted CR
         // must be rejected.
+        // 2 entries → hashed form
         let hashed_coupling = neml::CouplingProof {
             active_roots: vec![(0, raw_root_1)],
-            alg_epochs: vec![
-                (0, vec![(0u64, u64::MAX)]),
-                (1, vec![(1u64, u64::MAX)]),
-            ], // 2 entries → hashed form
+            alg_epochs: vec![(0, vec![(0u64, u64::MAX)]), (1, vec![(1u64, u64::MAX)])],
         };
         // cr_at_1_genesis is the promoted form (= raw root).
-        assert!(!hashed_coupling.authenticate(
-            &Sha256Hasher, 1, &cr_at_1_genesis, &[0], config,
-        ), "hashed proof against promoted CR must fail");
+        assert!(
+            !hashed_coupling.authenticate(&Sha256Hasher, 1, &cr_at_1_genesis, &[0], config,),
+            "hashed proof against promoted CR must fail"
+        );
 
         // Active-set singleton with a late-activated algorithm must NOT be
         // promoted.  At size 1, alg 0 is active but alg 1 is registered with
         // epoch (1, MAX) — alg 1 is not active at pos 0.  Registry has two
         // entries → hashed form.
         let cr_active_singleton = log.combined_root_at(0, 1).await.unwrap();
-        assert_ne!(cr_active_singleton, log.root_for_at(0, 1).await.unwrap(),
-            "active-set singleton must not be promoted when registry has >1 alg");
+        assert_ne!(
+            cr_active_singleton,
+            log.root_for_at(0, 1).await.unwrap(),
+            "active-set singleton must not be promoted when registry has >1 alg"
+        );
     });
 }
 
@@ -3319,9 +3503,9 @@ fn test_inactivity_proofs() {
 
         // Build a log with X=1 that has a gap: active at [1,2), inactive
         // at [2,4), re-active at [4, MAX).
-        let mut log = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log.append_leaf(b"a").await.unwrap(); // pos 0: Y active, X not yet registered
         log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap(); // X added at size 1
         log.append_leaf(b"b").await.unwrap(); // pos 1: both active
@@ -3340,26 +3524,48 @@ fn test_inactivity_proofs() {
         // We need the inclusion proof for the null constant at pos 2 in X's tree.
         let inact_path = log.inclusion_proof_for(1, 2, 5).await.unwrap().unwrap();
         let ok_gap = neml::verify_inactivity_with_coupling(
-            &Sha256Hasher, 1, 2, 5, 2,
-            &inact_path.path, &coupling, &cr, &active_algs_5, config,
+            &Sha256Hasher,
+            1,
+            2,
+            5,
+            2,
+            &inact_path.path,
+            &coupling,
+            &cr,
+            &active_algs_5,
+            config,
         );
         assert!(ok_gap, "mid-gap inactivity proof must verify");
 
         // Inactivity proof for an ACTIVE position must fail.
         let active_path = log.inclusion_proof_for(1, 1, 5).await.unwrap().unwrap();
         let fail_active = neml::verify_inactivity_with_coupling(
-            &Sha256Hasher, 1, 1, 5, 2,
-            &active_path.path, &coupling, &cr, &active_algs_5, config,
+            &Sha256Hasher,
+            1,
+            1,
+            5,
+            2,
+            &active_path.path,
+            &coupling,
+            &cr,
+            &active_algs_5,
+            config,
         );
-        assert!(!fail_active, "inactivity proof for active position must fail");
+        assert!(
+            !fail_active,
+            "inactivity proof for active position must fail"
+        );
 
         // Frozen-algorithm case: build a separate log where X is permanently
         // deactivated and not resumed.
-        let mut log_frozen = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log_frozen = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log_frozen.append_leaf(b"a").await.unwrap(); // pos 0: Y only
-        log_frozen.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap(); // X at size 1
+        log_frozen
+            .add_algorithm(1, Box::new(Sha256Hasher))
+            .await
+            .unwrap(); // X at size 1
         log_frozen.append_leaf(b"b").await.unwrap(); // pos 1: both
         log_frozen.remove_algorithm(1).await.unwrap(); // X frozen at size 2
         log_frozen.append_leaf(b"c").await.unwrap(); // pos 2: only Y
@@ -3373,16 +3579,38 @@ fn test_inactivity_proofs() {
 
         // X is inactive at pos 3 (beyond its epoch [1,2)).
         let ok_frozen = neml::verify_inactivity_with_coupling(
-            &Sha256Hasher, 1, 3, 4, 2,
-            &[], &coupling_f, &cr_f, &active_algs_f, config,
+            &Sha256Hasher,
+            1,
+            3,
+            4,
+            2,
+            &[],
+            &coupling_f,
+            &cr_f,
+            &active_algs_f,
+            config,
         );
-        assert!(ok_frozen, "frozen-alg inactivity proof (empty path) must verify");
+        assert!(
+            ok_frozen,
+            "frozen-alg inactivity proof (empty path) must verify"
+        );
 
         // Non-empty path for a frozen alg must fail.
-        let dummy_path = vec![neml::ProofStep { siblings: vec![vec![0u8; 32]], position: 0 }];
+        let dummy_path = vec![neml::ProofStep {
+            siblings: vec![vec![0u8; 32]],
+            position: 0,
+        }];
         let fail_frozen = neml::verify_inactivity_with_coupling(
-            &Sha256Hasher, 1, 3, 4, 2,
-            &dummy_path, &coupling_f, &cr_f, &active_algs_f, config,
+            &Sha256Hasher,
+            1,
+            3,
+            4,
+            2,
+            &dummy_path,
+            &coupling_f,
+            &cr_f,
+            &active_algs_f,
+            config,
         );
         assert!(!fail_frozen, "non-empty path for frozen alg must fail");
     });
@@ -3396,9 +3624,9 @@ fn test_epoch_evolution() {
         let log_id = [2u8; 32];
         let cfg = TreeConfig { log_arity: 2 };
 
-        let mut log = NaryMerkleLog::new(
-            MemoryStorage::new(), Box::new(Sha256Hasher), cfg,
-        ).await.unwrap();
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
+            .await
+            .unwrap();
         log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
         log.append_leaf(b"x").await.unwrap();
         log.append_leaf(b"y").await.unwrap();
@@ -3407,16 +3635,20 @@ fn test_epoch_evolution() {
         let p2 = log.audit_payload_at(log_id, 2).await.unwrap();
 
         // Forward evolution passes.
-        assert!(neml::verify_epoch_evolution(&p1.alg_epochs, 1, &p2.alg_epochs, 2),
-            "forward epoch evolution must pass");
+        assert!(
+            neml::verify_epoch_evolution(&p1.alg_epochs, 1, &p2.alg_epochs, 2),
+            "forward epoch evolution must pass"
+        );
 
         // A rewritten activation boundary must be rejected.
         let mut tampered = p1.alg_epochs.clone();
         // Shift alg 1's activation from 0 to 1 — this is a rewrite, not
         // an allowed extension, so evolution must fail.
         tampered[1].1 = vec![(1u64, u64::MAX)];
-        assert!(!neml::verify_epoch_evolution(&tampered, 1, &p2.alg_epochs, 2),
-            "rewritten activation boundary must fail evolution check");
+        assert!(
+            !neml::verify_epoch_evolution(&tampered, 1, &p2.alg_epochs, 2),
+            "rewritten activation boundary must fail evolution check"
+        );
     });
 }
 
@@ -3500,7 +3732,11 @@ fn test_from_storage_deterministic_repeated() {
             )
             .await
             .unwrap();
-            assert_eq!(r.count(), expected_count, "count must be identical each load");
+            assert_eq!(
+                r.count(),
+                expected_count,
+                "count must be identical each load"
+            );
             assert_eq!(
                 r.root_for(0).unwrap(),
                 expected_root,
@@ -3582,7 +3818,10 @@ fn test_mixed_append_leaf_then_subtree_rejected() {
         .unwrap();
         log.append_leaf(b"a").await.unwrap();
         let result = log.append_subtree(&Subtree::Leaf(b"b".to_vec())).await;
-        assert!(result.is_err(), "subtree append after leaf append must fail");
+        assert!(
+            result.is_err(),
+            "subtree append after leaf append must fail"
+        );
     });
 }
 
@@ -3597,9 +3836,14 @@ fn test_mixed_append_subtree_then_leaf_rejected() {
         )
         .await
         .unwrap();
-        log.append_subtree(&Subtree::Leaf(b"a".to_vec())).await.unwrap();
+        log.append_subtree(&Subtree::Leaf(b"a".to_vec()))
+            .await
+            .unwrap();
         let result = log.append_leaf(b"b").await;
-        assert!(result.is_err(), "leaf append after subtree append must fail");
+        assert!(
+            result.is_err(),
+            "leaf append after subtree append must fail"
+        );
     });
 }
 
@@ -3616,7 +3860,10 @@ fn test_cross_replica_identical_recovery() {
         )
         .await
         .unwrap();
-        log_a.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
+        log_a
+            .add_algorithm(1, Box::new(Sha256Hasher))
+            .await
+            .unwrap();
 
         let st = Subtree::Leaf(b"data".to_vec());
         log_a.append_subtree(&st).await.unwrap();
@@ -3690,7 +3937,11 @@ fn test_legacy_probe_gap_correctness() {
         .await
         .unwrap();
 
-        assert_eq!(r.count(), expected_count, "legacy probe must recover correct count");
+        assert_eq!(
+            r.count(),
+            expected_count,
+            "legacy probe must recover correct count"
+        );
         assert_eq!(
             r.root_for(0).unwrap(),
             expected_root,

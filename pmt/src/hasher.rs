@@ -1,18 +1,19 @@
-//! Hash abstraction for `neml`.
+//! The `Hasher` seam — the multihash interface of the kernel.
 //!
-//! Extends standard n-ary operations with a null constant and prefix-free
-//! hashing semantics.
+//! Provides the n-ary hashing operations the tree is built from, plus a null
+//! constant. Prefix domain-separation is *not* a kernel axis: an application
+//! supplies a prefixing `Hasher` wrapper if it wants one.
 
 use std::fmt::Debug;
 
-/// Hash operations required by the unified n-ary Merkle append-only log tree.
+/// Hash operations required by the Polymorphic Merkle Tree.
 pub trait Hasher: Debug + Send + Sync {
     /// Hash leaf data: H(data). No prefix byte.
     #[must_use]
     fn leaf(&self, data: &[u8]) -> Vec<u8>;
 
     /// Hash n children: H(c₁ ‖ c₂ ‖ ... ‖ cₘ). No prefix byte.
-    /// Caller guarantees m ≥ 2 (singletons are handled by promotion).
+    /// Caller guarantees m ≥ 2 (a lone child is handled by promotion).
     #[must_use]
     fn node(&self, children: &[&[u8]]) -> Vec<u8>;
 

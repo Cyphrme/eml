@@ -785,6 +785,7 @@ dependencies = [
  "bigoish",
  "cpu-time",
  "eml",
+ "pmt",
  "proptest",
  "sha2",
  "smol",
@@ -906,6 +907,13 @@ dependencies = [
  "atomic-waker",
  "fastrand",
  "futures-io",
+]
+
+[[package]]
+name = "pmt"
+version = "0.1.0"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
