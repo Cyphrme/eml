@@ -25,7 +25,7 @@ pub use pmt::hasher::{self, Hasher};
 pub use pmt::mr::{self, count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use pmt::subtree::{self, Subtree};
 pub use pmt::topology::{self, SkeletonStep, frontier_for_size, inclusion_skeleton};
-pub use pmt::{Sealed, null_digest};
+pub use pmt::{LeafProof, Sealed, null_digest};
 pub use proof::{
     AuditPayload, ConsistencyProof, CouplingProof, InclusionProof, ProofStep, VerifierConfig,
     combined_root_preimage, committed_active_algs, committed_active_at, committed_is_live,

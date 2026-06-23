@@ -28,7 +28,7 @@ mod tree;
 pub use error::{Error, Result};
 // The kernel hasher seam is part of EMT's surface: callers construct an `Emt`
 // with their own `Hasher`. Re-exported so they need not also name `pmt`.
-pub use pmt::Hasher;
+pub use pmt::{Hasher, LeafProof};
 pub use tree::{Config, Emt};
 
 #[cfg(test)]
@@ -231,6 +231,30 @@ mod tests {
         ));
         // A present (non-null) cell has no non-membership proof.
         assert_eq!(t.non_membership_proof(ALG, 0), None);
+    }
+
+    #[test]
+    fn leaf_proof_accepts_legit_and_rejects_forged() {
+        let h = Sha256Hasher;
+        for size in 1u64..=20 {
+            let payloads: Vec<Vec<u8>> = (0..size).map(|i| format!("v{i}").into_bytes()).collect();
+            let refs: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+            let t = tree_with(&refs);
+            let root = t.root(ALG).unwrap();
+            for index in 0..size {
+                let proof = t.leaf_proof(ALG, index).expect("in range");
+                // Legitimate leaf accepted.
+                assert!(proof.verify(&h, &root), "size={size} index={index}");
+                // Forged leaf at the same position rejected.
+                let mut forged = proof.clone();
+                forged.leaf_hash = h.leaf(b"forged");
+                assert!(!forged.verify(&h, &root), "size={size} index={index}");
+            }
+        }
+        // Out-of-range and unknown-algorithm produce no proof.
+        let t = tree_with(&[b"a", b"b"]);
+        assert!(t.leaf_proof(ALG, 2).is_none());
+        assert!(t.leaf_proof(99, 0).is_none());
     }
 
     #[test]

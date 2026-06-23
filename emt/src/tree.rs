@@ -331,6 +331,25 @@ impl Emt {
         Some((leaf_hash, path))
     }
 
+    /// Produce a self-contained [`pmt::LeafProof`] for cell `index` under
+    /// `alg_id` — the live "is this a legitimate leaf?" witness, peer of the
+    /// inclusion proof. It bundles the leaf digest with its trusted positional
+    /// parameters `(index, len, arity)` and the inclusion path, so a consumer
+    /// verifies with one [`pmt::LeafProof::verify`] call against an
+    /// authenticated root. Returns `None` for an unregistered algorithm or an
+    /// out-of-range index.
+    #[must_use]
+    pub fn leaf_proof(&self, alg_id: u64, index: u64) -> Option<pmt::LeafProof> {
+        let (leaf_hash, path) = self.inclusion_proof(alg_id, index)?;
+        Some(pmt::LeafProof::new(
+            leaf_hash,
+            index,
+            self.len(),
+            self.config.arity,
+            path,
+        ))
+    }
+
     /// Generate a non-membership proof for `index` under `alg_id`: an inclusion
     /// proof for the kernel null constant (SAD §5, inclusion-of-null via
     /// collapse).
