@@ -179,6 +179,141 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(log)
     }
 
+    /// **Resume** an append-only log onto the committed frontier of a
+    /// [`pmt::Sealed`], consuming nothing but the frontier.
+    ///
+    /// `resume` needs *only* the frontier — which a `Sealed` *is* — so it is
+    /// **always available for any source kind, with no failure conditions**
+    /// beyond storage I/O and a per-algorithm hasher. The `Sealed`'s frontier
+    /// (sparse or dense, nulls and all) becomes the resumed log's **genesis
+    /// frontier**: an EML is "a committed frontier you append real leaves onto"
+    /// (the MMR view), never "a pure append-from-empty sequence", so nulls in
+    /// the genesis frontier (e.g. from a sparse EMT origin) are admitted and
+    /// forward appends add real leaves. The resumed log **cannot read the
+    /// committed past** — only the peaks are carried, not the interior history —
+    /// which is exactly the seal's one-way guarantee; the path to a readable
+    /// historical tree is [`fill`](crate::fill), not `resume`.
+    ///
+    /// The resumed log is [`LogKind::Subtree`]: the committed past is not
+    /// materialized as a dense leaf array, so a forward real leaf is appended as
+    /// a single-leaf subtree via [`Self::append_subtree`] — whose digest is the
+    /// leaf hash, byte-identical to a flat append. The frontier carry proceeds
+    /// from the genesis frontier exactly as a fresh log's would from empty.
+    ///
+    /// `storage` is a fresh backend the resumed log writes forward into;
+    /// `hashers` resolves each active algorithm's own hash (the `Sealed` froze
+    /// digests, not hashers). Every algorithm carried in the `Sealed`'s frontier
+    /// is reopened at the sealed size under its committed timeline; folding the
+    /// seeded frontier reproduces that algorithm's sealed member root, so a
+    /// consistency proof bridges the resume.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownAlgorithm`] if an algorithm in the frontier has
+    /// no hasher in `hashers`, [`Error::CorruptedMetadata`] on an invalid arity,
+    /// or a storage error if the seeded frontier cannot be persisted.
+    pub async fn resume(
+        sealed: &pmt::Sealed,
+        mut storage: S,
+        hashers: Vec<(u64, Box<dyn Hasher>)>,
+    ) -> Result<Self, S::Error> {
+        let k = sealed.arity();
+        if !(2..=256).contains(&k) {
+            return Err(crate::error::Error::CorruptedMetadata {
+                alg_id: 0,
+                reason: format!("invalid arity in sealed frontier: {k}"),
+            });
+        }
+        let config = TreeConfig {
+            log_arity: k as usize,
+        };
+        let size = sealed.tree_size();
+        let coords = frontier_for_size(size, k);
+
+        let mut hasher_map: std::collections::HashMap<u64, Box<dyn Hasher>> =
+            hashers.into_iter().collect();
+
+        let mut algs = std::collections::HashMap::new();
+        let mut node_batch: Vec<(u64, u64, u32, Vec<u8>)> = Vec::new();
+        let mut meta_batch: Vec<(u64, Vec<(u64, u64)>)> = Vec::new();
+        let mut checkpoint_batch: Vec<(u64, Vec<u8>)> = Vec::new();
+
+        for (alg_id, peaks) in sealed.frontiers() {
+            let hasher = hasher_map
+                .remove(alg_id)
+                .ok_or(crate::error::Error::UnknownAlgorithm(*alg_id))?;
+
+            // The resumed algorithm's committed timeline is carried from the
+            // seal so its binding root at the sealed size is reproduced; a live
+            // resumed algorithm keeps its open epoch.
+            let epochs: Vec<(u64, u64)> = sealed
+                .alg_epochs()
+                .iter()
+                .find(|(id, _)| id == alg_id)
+                .map(|(_, e)| e.clone())
+                .unwrap_or_else(|| vec![(0, u64::MAX)]);
+
+            let state = AlgState {
+                hasher,
+                epochs: epochs.clone(),
+                frontier: peaks.clone(),
+                frontier_coords: coords.clone(),
+            };
+
+            // Persist the genesis frontier peaks (active ranges only) and the
+            // checkpoint root so the resumed log is reloadable and forward
+            // appends read a consistent frontier back.
+            for (&(left, height), peak) in coords.iter().zip(peaks.iter()) {
+                let cap = k.pow(height);
+                if state.active_range(left, left + cap) {
+                    node_batch.push((*alg_id, left, height, peak.clone()));
+                }
+            }
+            let root = Self::compute_root_from_state(&state, k as usize);
+            checkpoint_batch.push((*alg_id, root));
+            meta_batch.push((*alg_id, epochs));
+            algs.insert(*alg_id, state);
+        }
+
+        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = node_batch
+            .iter()
+            .map(|(id, left, height, h)| (*id, *left, *height, h.as_slice()))
+            .collect();
+        let metas_ref: Vec<(u64, &[(u64, u64)])> = meta_batch
+            .iter()
+            .map(|(id, e)| (*id, e.as_slice()))
+            .collect();
+        let checkpoints_ref: Vec<(u64, &[u8])> = checkpoint_batch
+            .iter()
+            .map(|(id, r)| (*id, r.as_slice()))
+            .collect();
+
+        storage
+            .write_batch(
+                &[],
+                &nodes_ref,
+                &metas_ref,
+                Some((size, LOG_KIND_SUBTREE)),
+                &checkpoints_ref,
+            )
+            .await
+            .map_err(crate::error::Error::Storage)?;
+
+        // A resumed log is subtree-kind: the committed past is not materialized
+        // as a dense leaf array (the seal carried only the frontier peaks, not
+        // the historical leaves), so forward appends commit leaf *digests* as
+        // nodes rather than raw payloads. A single-leaf subtree's digest is the
+        // leaf hash, so forward "real leaf" appends are byte-identical to a flat
+        // append — the frontier-anchored model, with the past kept unreadable.
+        Ok(Self {
+            storage,
+            config,
+            algs,
+            count: size,
+            kind: LogKind::Subtree,
+        })
+    }
+
     /// Reconstruct an existing Merkle log from storage using the default configuration.
     ///
     /// # Errors
@@ -2002,6 +2137,17 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(state.hasher.hash(&buf))
     }
 
+    /// The materialized digest of the frontier peak at coordinate
+    /// `(left, height)` for `alg_id` — one perfect k-ary subtree root of the
+    /// frontier. Returns the algorithm's null constant for a coordinate whose
+    /// range carries no active leaf, matching the projection the root fold uses.
+    ///
+    /// This is the per-peak read the seal freezes; folding the peaks at
+    /// [`frontier_for_size`]`(size, k)` reproduces [`Self::root_for_at`] exactly.
+    pub async fn peak_at(&self, alg_id: u64, left: u64, height: u32) -> Result<Vec<u8>, S::Error> {
+        self.get_node_hash(alg_id, left, height).await
+    }
+
     /// Retrieve the raw root hash for a specific algorithm at a historical tree size.
     pub async fn root_for_at(&self, alg_id: u64, size: u64) -> Result<Vec<u8>, S::Error> {
         let state = self
@@ -2506,6 +2652,144 @@ mod tests {
                 node_hash.is_some(),
                 "node at coordinate (0, 1) should be stored"
             );
+        });
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use pmt::hasher::Hasher;
+    use sha2::{Digest, Sha256};
+
+    use super::*;
+    use crate::storage::MemoryStorage;
+
+    /// A real fixed-width (32-byte) hasher.
+    #[derive(Debug, Clone)]
+    struct Sha256Hasher;
+    impl Hasher for Sha256Hasher {
+        fn leaf(&self, data: &[u8]) -> Vec<u8> {
+            Sha256::digest(data).to_vec()
+        }
+
+        fn node(&self, children: &[&[u8]]) -> Vec<u8> {
+            let mut h = Sha256::new();
+            for c in children {
+                h.update(c);
+            }
+            h.finalize().to_vec()
+        }
+
+        fn empty(&self) -> Vec<u8> {
+            Sha256::digest(b"").to_vec()
+        }
+
+        fn hash(&self, data: &[u8]) -> Vec<u8> {
+            Sha256::digest(data).to_vec()
+        }
+
+        fn clone_box(&self) -> Box<dyn Hasher> {
+            Box::new(self.clone())
+        }
+    }
+
+    async fn eml_with(n: u64, k: usize) -> NaryMerkleLog<MemoryStorage> {
+        let config = TreeConfig { log_arity: k };
+        let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
+            .await
+            .unwrap();
+        for i in 0..n {
+            log.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        log
+    }
+
+    /// Append a real leaf forward onto a resumed (subtree-kind) log.
+    async fn append_forward(log: &mut NaryMerkleLog<MemoryStorage>, data: &[u8]) {
+        log.append_subtree(&pmt::Subtree::Leaf(data.to_vec()))
+            .await
+            .unwrap();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // RESUME from an EML-origin Sealed: the resumed log reproduces the sealed
+    // member root, appends forward, and a consistency proof bridges the resume.
+    // Swept across sizes and arities — resume has no failure conditions.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn resume_from_eml_origin_reproduces_root_and_appends() {
+        smol::block_on(async {
+            let h = Sha256Hasher;
+            for k in [2usize, 3, 4] {
+                for n in 1u64..16 {
+                    let log = eml_with(n, k).await;
+                    let sealed_member = log.root_for_at(0, n).await.unwrap();
+                    let sealed = log.seal().await.unwrap();
+
+                    let mut resumed = NaryMerkleLog::resume(
+                        &sealed,
+                        MemoryStorage::new(),
+                        vec![(0, Box::new(Sha256Hasher))],
+                    )
+                    .await
+                    .expect("resume never fails for a well-formed Sealed");
+
+                    assert_eq!(resumed.count(), n);
+                    assert_eq!(
+                        resumed.root_for_at(0, n).await.unwrap(),
+                        sealed_member,
+                        "resumed root must reproduce the sealed member root (n={n}, k={k})"
+                    );
+
+                    append_forward(&mut resumed, b"fwd-0").await;
+                    append_forward(&mut resumed, b"fwd-1").await;
+                    assert_eq!(resumed.count(), n + 2);
+
+                    // Consistency across the resume boundary holds.
+                    let proof = resumed.consistency_proof(n, n + 2).await.unwrap();
+                    assert!(
+                        proof.is_some(),
+                        "consistency must bridge resume (n={n}, k={k})"
+                    );
+                    let old_root = sealed_member.clone();
+                    let new_root = resumed.root_for_at(0, n + 2).await.unwrap();
+                    let proof = proof.unwrap();
+                    assert!(
+                        crate::proof::verify_consistency(
+                            &h,
+                            n,
+                            n + 2,
+                            k as u64,
+                            &proof.start_hash,
+                            &proof.path,
+                            &old_root,
+                            &new_root,
+                        ),
+                        "consistency proof must verify across resume (n={n}, k={k})"
+                    );
+                }
+            }
+        });
+    }
+
+    // (EMT-origin resume — building a Sealed from a mutable `emt::Emt` and
+    // resuming an EML onto it — is exercised in `examples/tests/seal_embed.rs`
+    // E5; it lives there to keep the `emt` dependency out of this crate and
+    // preserve the no-EML↔EMT-edge DAG constraint.)
+
+    // A missing hasher for an algorithm in the frontier is the one rejection.
+    #[test]
+    fn resume_rejects_missing_hasher() {
+        smol::block_on(async {
+            let log = eml_with(4, 2).await;
+            let sealed = log.seal().await.unwrap();
+            let err = NaryMerkleLog::resume(&sealed, MemoryStorage::new(), vec![])
+                .await
+                .unwrap_err();
+            assert_eq!(err, crate::error::Error::UnknownAlgorithm(0));
         });
     }
 }

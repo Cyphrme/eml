@@ -263,7 +263,11 @@ mod tests {
         let root = t.root(ALG).unwrap();
         let sealed = t.seal().expect("non-empty seal");
         assert_eq!(sealed.tree_size(), 3);
-        assert_eq!(sealed.active_roots(), &[(ALG, root)]);
+        assert_eq!(sealed.arity(), 2);
+        // The seal computed the resumable frontier; folding its peaks under the
+        // algorithm's own hash reproduces the live root.
+        assert!(sealed.peaks(ALG).is_some());
+        assert_eq!(sealed.member_root(ALG, &Sha256Hasher), Some(root));
         // `sealed` is a kernel value; there is no path back to an `Emt`.
     }
 

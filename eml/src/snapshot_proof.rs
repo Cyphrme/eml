@@ -1,10 +1,10 @@
-//! Snapshot proof — the aggregate proof over a [`Snapshot`].
+//! Snapshot proof — the aggregate proof over a sealed [`Sealed`].
 //!
 //! A snapshot proof answers, in one self-contained witness, "are these leaves
-//! legitimately in the sealed snapshot?" — rooted in the snapshot's **trusted
-//! binding roots**. It is the aggregate peer of inclusion / consistency / leaf /
-//! binding proofs, and its **base case is the PMT leaf proof**
-//! ([`pmt::LeafProof`]).
+//! legitimately in the sealed commitment?" — rooted in the commitment's
+//! **trusted binding roots**. It is the aggregate peer of inclusion /
+//! consistency / leaf / binding proofs, and its **base case is the PMT leaf
+//! proof** ([`pmt::LeafProof`]).
 //!
 //! # The leaf-proof sequence ⇄ snapshot duality
 //!
@@ -31,7 +31,7 @@
 //! [`TrustedBindingRoot`] values — the proof never establishes their origin. A
 //! consumer establishes that trust **out of band**: an optional attestation over
 //! the sealed snapshot rides on the snapshot's **opaque metadata channel**
-//! ([`Snapshot::meta`]), which this library never reads, validates, or
+//! ([`pmt::Sealed::meta`]), which this library never reads, validates, or
 //! interprets. The library has no notion of who attested the head, only that the
 //! caller presents heads it has chosen to trust — exactly the binding-proof
 //! contract ([`pmt::BindingProof`]). Supplying an unauthenticated `BR_i` makes
@@ -41,9 +41,7 @@
 //! [`verify`]: SnapshotProof::verify
 
 use pmt::proof::{combined_root_preimage, committed_active_algs, validate_committed_epochs};
-use pmt::{Hasher, LeafProof, TrustedBindingRoot};
-
-use crate::snapshot::Snapshot;
+use pmt::{Hasher, LeafProof, Sealed, TrustedBindingRoot};
 
 /// One claimed leaf in a snapshot proof: a [`pmt::LeafProof`] paired with the
 /// algorithm whose member root it verifies against.
@@ -69,9 +67,9 @@ impl ClaimedLeaf {
     }
 }
 
-/// An aggregate proof over a sealed [`Snapshot`].
+/// An aggregate proof over a sealed [`Sealed`].
 ///
-/// It carries the snapshot's frozen shared structure — the member roots `MR_i`
+/// It carries the commitment's frozen shared structure — the member roots `MR_i`
 /// and the committed epoch timeline they were bound under, the same material a
 /// [`pmt::BindingProof`] commits to — together with the sequence of claimed
 /// leaves whose base-case [`pmt::LeafProof`]s verify against those member roots.
@@ -97,21 +95,27 @@ pub struct SnapshotProof {
 }
 
 impl SnapshotProof {
-    /// Assemble a snapshot proof from a sealed [`Snapshot`] and the leaves being
+    /// Assemble a snapshot proof from a sealed [`Sealed`] and the leaves being
     /// claimed against it.
     ///
-    /// The shared structure (member roots, committed timeline, sealed size) is
-    /// read straight from the snapshot; the caller supplies the base-case leaf
-    /// proofs. This is the *produce* half — packaging the snapshot's frozen
-    /// material with the leaf-proof sequence for a verifier. Producing the proof
-    /// requires no binding root: the heads are the verifier's trusted inputs,
-    /// recomputed from this shared material at verification time.
+    /// The shared structure is read straight from the `Sealed`: the member roots
+    /// are the *derived view* over its frozen frontier — each algorithm's peaks
+    /// folded under its own hash (`hashers`) — paired with the committed timeline
+    /// and sealed size. The caller supplies the base-case leaf proofs. This is
+    /// the *produce* half — packaging the commitment's frozen material with the
+    /// leaf-proof sequence for a verifier. Producing the proof requires no
+    /// binding root: the heads are the verifier's trusted inputs, recomputed from
+    /// this shared material at verification time.
     #[must_use]
-    pub fn produce(snapshot: &Snapshot, claims: Vec<ClaimedLeaf>) -> Self {
+    pub fn produce(
+        sealed: &Sealed,
+        hashers: &[(u64, &dyn Hasher)],
+        claims: Vec<ClaimedLeaf>,
+    ) -> Self {
         Self {
-            member_roots: snapshot.active_roots().to_vec(),
-            alg_epochs: snapshot.alg_epochs().to_vec(),
-            tree_size: snapshot.tree_size(),
+            member_roots: sealed.member_roots(hashers),
+            alg_epochs: sealed.alg_epochs().to_vec(),
+            tree_size: sealed.tree_size(),
             claims,
         }
     }
@@ -368,9 +372,10 @@ mod tests {
                     let log = log_with(n, k).await;
                     let claims = claims_for_all(&log, n).await;
                     let br = log.combined_root_at(0, n).await.unwrap();
-                    let snap = log.seal_snapshot().await.unwrap();
+                    let sealed = log.seal().await.unwrap();
 
-                    let proof = SnapshotProof::produce(&snap, claims);
+                    let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+                    let proof = SnapshotProof::produce(&sealed, &hashers, claims);
                     let trusted = [TrustedBindingRoot {
                         alg_id: 0,
                         hasher: &h,
@@ -402,22 +407,22 @@ mod tests {
             let br = log.combined_root_at(0, 6).await.unwrap();
             // An arbitrary attestation payload rides the opaque channel; the
             // library never interprets it, so verification ignores it entirely.
-            let snap = log
-                .seal_snapshot_with_meta(pmt::Meta::new(vec![0xAB; 64]))
+            let sealed = log
+                .seal_with_meta(pmt::Meta::new(vec![0xAB; 64]))
                 .await
                 .unwrap();
 
-            let proof = SnapshotProof::produce(&snap, claims);
+            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,
                 root: &br,
             }];
-            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
             assert!(proof.verify(&trusted, &hashers));
             // The proof carries nothing derived from the metadata payload.
             assert_eq!(
-                snap.meta().map(pmt::Meta::as_bytes),
+                sealed.meta().map(pmt::Meta::as_bytes),
                 Some([0xAB; 64].as_slice())
             );
         });
@@ -434,9 +439,10 @@ mod tests {
             let h = Sha256Hasher;
             let log = log_with(7, 2).await;
             let claims = claims_for_all(&log, 7).await;
-            let snap = log.seal_snapshot().await.unwrap();
+            let sealed = log.seal().await.unwrap();
 
-            let proof = SnapshotProof::produce(&snap, claims);
+            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
             let forged = vec![0x00; 32];
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
@@ -463,12 +469,13 @@ mod tests {
             let log = log_with(8, 2).await;
             let mut claims = claims_for_all(&log, 8).await;
             let br = log.combined_root_at(0, 8).await.unwrap();
-            let snap = log.seal_snapshot().await.unwrap();
+            let sealed = log.seal().await.unwrap();
 
             // Tamper with one claimed leaf's hash; the genuine head is unchanged.
             claims[3].leaf_proof.leaf_hash = h.leaf(b"forged-payload");
 
-            let proof = SnapshotProof::produce(&snap, claims);
+            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,
@@ -514,11 +521,12 @@ mod tests {
             }
             let br0 = log.combined_root_at(0, n).await.unwrap();
             let br1 = log.combined_root_at(1, n).await.unwrap();
-            let snap = log.seal_snapshot().await.unwrap();
+            let sealed = log.seal().await.unwrap();
 
             let h0 = Sha256Hasher;
             let h1 = PrefixedSha256Hasher;
-            let proof = SnapshotProof::produce(&snap, claims);
+            let hashers: [(u64, &dyn Hasher); 2] = [(0, &h0), (1, &h1)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
             let trusted = [
                 TrustedBindingRoot {
                     alg_id: 0,
@@ -531,7 +539,6 @@ mod tests {
                     root: &br1,
                 },
             ];
-            let hashers: [(u64, &dyn Hasher); 2] = [(0, &h0), (1, &h1)];
             assert!(proof.verify(&trusted, &hashers));
 
             // Wrong hash on a trusted head (alg 1 verified with alg 0's hash):
@@ -559,11 +566,12 @@ mod tests {
     #[test]
     fn empty_trusted_set_is_rejected() {
         smol::block_on(async {
+            let h = Sha256Hasher;
             let log = log_with(4, 2).await;
             let claims = claims_for_all(&log, 4).await;
-            let snap = log.seal_snapshot().await.unwrap();
-            let proof = SnapshotProof::produce(&snap, claims);
-            let hashers: [(u64, &dyn Hasher); 1] = [(0, &Sha256Hasher)];
+            let sealed = log.seal().await.unwrap();
+            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
             assert!(!proof.verify(&[], &hashers));
         });
     }
@@ -575,8 +583,9 @@ mod tests {
             let log = log_with(4, 2).await;
             let claims = claims_for_all(&log, 4).await;
             let br = log.combined_root_at(0, 4).await.unwrap();
-            let snap = log.seal_snapshot().await.unwrap();
-            let proof = SnapshotProof::produce(&snap, claims);
+            let sealed = log.seal().await.unwrap();
+            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
             // Algorithm 9 has no member root in the snapshot.
             let trusted = [TrustedBindingRoot {
                 alg_id: 9,
@@ -595,8 +604,9 @@ mod tests {
             let log = log_with(5, 2).await;
             let claims = claims_for_all(&log, 5).await;
             let br = log.combined_root_at(0, 5).await.unwrap();
-            let snap = log.seal_snapshot().await.unwrap();
-            let proof = SnapshotProof::produce(&snap, claims);
+            let sealed = log.seal().await.unwrap();
+            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,
@@ -617,8 +627,9 @@ mod tests {
             let h = Sha256Hasher;
             let log = log_with(6, 2).await;
             let br = log.combined_root_at(0, 6).await.unwrap();
-            let snap = log.seal_snapshot().await.unwrap();
-            let proof = SnapshotProof::produce(&snap, vec![]);
+            let sealed = log.seal().await.unwrap();
+            let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
+            let proof = SnapshotProof::produce(&sealed, &hashers, vec![]);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,

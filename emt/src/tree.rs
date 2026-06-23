@@ -451,13 +451,34 @@ impl Emt {
         }
     }
 
-    /// Consume the tree and seal it into the kernel currency [`Sealed`].
+    /// Consume the tree and seal it into the one kernel currency [`Sealed`].
     ///
     /// One-way: there is no `unseal` and no path back to an `Emt`
-    /// (C-SEAL-ONEWAY). The seal freezes the active member roots — every
-    /// registered algorithm's current root — under the default open epoch
-    /// timeline `(0, MAX)`, the only timeline a mutable tree (which has no
+    /// (C-SEAL-ONEWAY). The seal **computes the resumable frontier** — every
+    /// registered algorithm's frontier peaks (the digests of the perfect k-ary
+    /// subtrees the kernel topology names at this size) — under the default open
+    /// epoch timeline `(0, MAX)`, the only timeline a mutable tree (which has no
     /// epoch lifecycle of its own) can assert.
+    ///
+    /// A live `Emt` has no frontier stack — that absence is the EMT/EML tell.
+    /// Computing the peaks at seal erases the distinction, so *every* `Sealed`
+    /// uniformly carries a resumable frontier regardless of source kind, and the
+    /// member root every consumer sees is the fold of those peaks (identical to
+    /// the EMT's own root, since both fold the same perfect-subtree digests).
+    ///
+    /// # No `from_sealed` — why a `Sealed` cannot revive an `Emt`
+    ///
+    /// There is deliberately **no `Emt::from_sealed`**. A frontier is the
+    /// *complete* continuation state of an append-only log (every future append
+    /// folds against the peaks alone), but only *partial* state for a mutable
+    /// tree: mutating an interior cell needs every cell's digest along its
+    /// ancestor path, and the seal dropped all of those, keeping only the peaks.
+    /// Reviving arbitrary mutation over the committed positions would also
+    /// *un-seal the committed past* — the one-way guarantee the seal exists to
+    /// make. The way to a readable, mutable-or-append tree over the committed
+    /// data is [`fill`](../../eml_log/fn.fill.html) (data-required), which
+    /// rebuilds and verifies against the committed binding root; the discarded
+    /// frontier is simply unused when the fill target is an EMT.
     ///
     /// Fails with [`Error::EmptySeal`] on an empty tree (nothing to seal) and
     /// propagates [`Error::MalformedSeal`] if the kernel rejects the timeline.
@@ -466,16 +487,71 @@ impl Emt {
             return Err(Error::EmptySeal);
         }
         let size = self.cells.len() as u64;
-        let mut active_roots: Vec<(u64, Vec<u8>)> = Vec::with_capacity(self.algs.len());
+        let k = self.config.arity;
+        let coords = pmt::topology::frontier_for_size(size, k);
+        let mut frontiers: Vec<(u64, Vec<Vec<u8>>)> = Vec::with_capacity(self.algs.len());
         let mut alg_epochs: Vec<(u64, Vec<(u64, u64)>)> = Vec::with_capacity(self.algs.len());
         for (&id, alg) in &self.algs {
-            if let Some(root) = &alg.root {
-                active_roots.push((id, root.clone()));
-                alg_epochs.push((id, vec![(0, u64::MAX)]));
+            if alg.root.is_none() {
+                continue;
             }
+            // The frontier peaks are the materialized digests of the perfect
+            // k-ary subtrees at the frontier coordinates. Each is the cache
+            // entry keyed by the closed leaf interval the subtree covers.
+            let peaks: Vec<Vec<u8>> = coords
+                .iter()
+                .map(|&(left, height)| self.peak_digest(alg, left, height, k))
+                .collect();
+            frontiers.push((id, peaks));
+            alg_epochs.push((id, vec![(0, u64::MAX)]));
         }
-        Sealed::new(size, active_roots, alg_epochs).map_err(|_| Error::MalformedSeal)
+        Sealed::new(size, k, frontiers, alg_epochs).map_err(|_| Error::MalformedSeal)
     }
+
+    /// The materialized digest of the perfect k-ary subtree at frontier
+    /// coordinate `(left, height)` — the closed leaf interval
+    /// `[left, left + k^height - 1]`. Read from the algorithm's cache, with a
+    /// defensive re-evaluation if the materialization is incomplete (the seal
+    /// always runs on a fully materialized tree, so a miss is a logic error
+    /// rather than a silent wrong digest).
+    fn peak_digest(&self, alg: &Alg, left: u64, height: u32, k: u64) -> Vec<u8> {
+        let right = left + k.pow(height) - 1;
+        if let Some(d) = alg.cache.get(&(left, right)) {
+            return d.clone();
+        }
+        let shape = spine_perfect(left, height, k);
+        self.eval_uncached(alg, &shape)
+    }
+
+    /// Evaluate a spine node's digest without touching the cache — the
+    /// defensive fallback for [`Self::peak_digest`] on a cache miss.
+    fn eval_uncached(&self, alg: &Alg, node: &SpineNode) -> Vec<u8> {
+        match node {
+            SpineNode::Leaf(pos) => self.leaf_digest(alg, *pos),
+            SpineNode::Inner(children) => {
+                let child_digests: Vec<Vec<u8>> = children
+                    .iter()
+                    .map(|c| self.eval_uncached(alg, c))
+                    .collect();
+                let refs: Vec<&[u8]> = child_digests.iter().map(Vec::as_slice).collect();
+                nary_mr(alg.hasher.as_ref(), &refs)
+            },
+        }
+    }
+}
+
+/// A perfect k-ary subtree shape of the given `height`, leftmost leaf at flat
+/// position `left`. Height 0 is a lone leaf. Mirrors [`crate::spine`]'s internal
+/// `perfect`; used only by the defensive seal fallback.
+fn spine_perfect(left: u64, height: u32, k: u64) -> SpineNode {
+    if height == 0 {
+        return SpineNode::Leaf(left);
+    }
+    let child_span = k.pow(height - 1);
+    let children = (0..k)
+        .map(|c| spine_perfect(left + c * child_span, height - 1, k))
+        .collect();
+    SpineNode::Inner(children)
 }
 
 /// A stable cache key for a spine node: the closed interval of leaf positions it

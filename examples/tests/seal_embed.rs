@@ -42,11 +42,11 @@ impl pmt::Hasher for H {
 // ---------------------------------------------------------------------------
 // E1 — mutable-tree seal root byte-equals a natively-appended log root
 //
-// The mutable tree's `seal()` freezes the member roots at that size into
-// `pmt::Sealed`. The append-only log accumulating the same payloads in order
-// under the same hasher must carry an identical root: the two constructions
-// share the kernel topology and the same hash, so the same data maps to the
-// same digest.
+// The mutable tree's `seal()` computes the resumable frontier into the one
+// kernel currency `pmt::Sealed`; the member root is the fold of those frontier
+// peaks. The append-only log accumulating the same payloads in order under the
+// same hasher must carry an identical root: the two constructions share the
+// kernel topology and the same hash, so the same data maps to the same digest.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -72,15 +72,11 @@ fn seal_root_equals_native_append_root() {
         log.root_for(0).unwrap()
     });
 
-    // The sealed member root for algorithm 0 must equal the native log root.
-    let sealed_root = sealed
-        .active_roots()
-        .iter()
-        .find(|(id, _)| *id == 0)
-        .map(|(_, r)| r.as_slice())
-        .expect("algorithm 0 present");
+    // The derived member root for algorithm 0 (the fold of the sealed frontier
+    // peaks) must equal the native log root.
+    let sealed_root = sealed.member_root(0, &H).expect("algorithm 0 present");
 
-    assert_eq!(sealed_root, log_root.as_slice());
+    assert_eq!(sealed_root.as_slice(), log_root.as_slice());
 }
 
 // ---------------------------------------------------------------------------
@@ -150,15 +146,17 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
 }
 
 // ---------------------------------------------------------------------------
-// E3 — seal_snapshot yields a Snapshot carrying binding root + extents + meta
+// E3 — seal yields the one currency `Sealed`; binding root + extents are
+//      derived views, and an opaque attestation rides the metadata channel
 //
-// `seal_snapshot_with_meta` consumes the log and produces a `Snapshot` that
-// freezes the binding root, the committed canonicalization run-extents, and
-// an opaque metadata payload. The seal is one-way: no path back to a log.
+// `seal_with_meta` consumes the log and produces a `pmt::Sealed` carrying the
+// resumable frontier and an opaque metadata payload. The binding root and the
+// committed run-extents are *derived views* of the `Sealed`, computed on demand
+// (D12), never stored. The seal is one-way: no path back to a log.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn seal_snapshot_carries_binding_root_extents_and_meta() {
+fn seal_yields_currency_with_derived_binding_root_and_extents() {
     smol::block_on(async {
         let mut log = eml_log::NaryMerkleLog::new(
             eml_log::MemoryStorage::new(),
@@ -172,18 +170,19 @@ fn seal_snapshot_carries_binding_root_extents_and_meta() {
         }
 
         let attestation = pmt::Meta::new(b"tree-head-sig".to_vec());
-        let snap = log.seal_snapshot_with_meta(attestation).await.unwrap();
+        let sealed = log.seal_with_meta(attestation).await.unwrap();
 
-        // The snapshot carries the binding root for algorithm 0.
-        assert!(snap.binding_root(0).is_some());
+        // The binding root for algorithm 0 is derived from the frontier on demand.
+        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
+        assert!(sealed.binding_root(0, &H, &hashers).is_some());
         // The committed run-extents are the non-promoted frontier nodes (height >= 1).
-        assert!(!snap.run_extents().is_empty());
+        assert!(!sealed.run_extents().is_empty());
         // The opaque metadata channel carries the attestation verbatim.
         assert_eq!(
-            snap.meta().map(pmt::Meta::as_bytes),
+            sealed.meta().map(pmt::Meta::as_bytes),
             Some(b"tree-head-sig".as_slice())
         );
-        // The seal is one-way: no unsnapshot, no field mutator — enforced by the type.
+        // The seal is one-way: no unseal, no field mutator — enforced by the type.
     });
 }
 
@@ -220,19 +219,148 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
             .expect("index 2 in range");
         let binding_root = log.combined_root_at(0, n).await.unwrap();
 
-        let snap = log.seal_snapshot().await.unwrap();
+        let sealed = log.seal().await.unwrap();
+        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
 
         // Assemble the snapshot proof over the single claimed leaf.
-        let proof =
-            eml_log::SnapshotProof::produce(&snap, vec![eml_log::ClaimedLeaf::new(0, leaf_proof)]);
+        let proof = eml_log::SnapshotProof::produce(
+            &sealed,
+            &hashers,
+            vec![eml_log::ClaimedLeaf::new(0, leaf_proof)],
+        );
 
         let trusted = [pmt::TrustedBindingRoot {
             alg_id: 0,
             hasher: &H,
             root: &binding_root,
         }];
-        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
 
         assert!(proof.verify(&trusted, &hashers));
+    });
+}
+
+// ---------------------------------------------------------------------------
+// E5 — seal an EMT, resume an EML onto its frontier, append forward
+//
+// `Emt::seal` computes the resumable frontier; `NaryMerkleLog::resume` reopens
+// an append-only log onto exactly that frontier (frontier-anchored EML) and
+// appends real leaves forward. The resumed log's root at the sealed size equals
+// the sealed member root — the frontier carries forward losslessly.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn seal_emt_then_resume_eml_appends_forward() {
+    smol::block_on(async {
+        // Build and seal a mutable tree of three cells.
+        let mut t = emt::Emt::new(emt::Config { arity: 2 }).unwrap();
+        t.register_algorithm(0, Box::new(H)).unwrap();
+        for (i, p) in [b"a" as &[u8], b"b", b"c"].iter().enumerate() {
+            t.set(i as u64, p.to_vec(), Vec::new()).unwrap();
+        }
+        let sealed = t.seal().unwrap();
+        let sealed_member = sealed.member_root(0, &H).unwrap();
+
+        // Resume an append-only log onto the EMT-origin frontier.
+        let mut log = eml_log::NaryMerkleLog::resume(
+            &sealed,
+            eml_log::MemoryStorage::new(),
+            vec![(0, Box::new(H))],
+        )
+        .await
+        .unwrap();
+
+        // The resumed log carries the sealed size and reproduces the member root.
+        assert_eq!(log.count(), 3);
+        assert_eq!(log.root_for_at(0, 3).await.unwrap(), sealed_member);
+
+        // Append real leaves forward; the log continues from the committed
+        // frontier. A resumed log is subtree-kind, so a real leaf is a
+        // single-leaf subtree (its digest is the leaf hash).
+        log.append_subtree(&pmt::Subtree::Leaf(b"d".to_vec()))
+            .await
+            .unwrap();
+        log.append_subtree(&pmt::Subtree::Leaf(b"e".to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(log.count(), 5);
+        // A consistency proof bridges the resume boundary (3 -> 5).
+        let proof = log.consistency_proof(3, 5).await.unwrap();
+        assert!(proof.is_some());
+    });
+}
+
+// ---------------------------------------------------------------------------
+// E6 — seal an EML, fill an EMT from the data, verify against the binding root
+//
+// `fill` is the trustless verification path: holding the real leaf data and the
+// committed `Sealed`, rebuild a readable tree of the chosen kind and verify the
+// rebuilt binding root equals the committed one — no signature, no signer trust.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn seal_eml_then_fill_emt_verifies_against_binding_root() {
+    smol::block_on(async {
+        let data: Vec<Vec<u8>> = (0..6u64)
+            .map(|i| format!("leaf-{i}").into_bytes())
+            .collect();
+        let mut log = eml_log::NaryMerkleLog::new(
+            eml_log::MemoryStorage::new(),
+            Box::new(H),
+            eml_log::TreeConfig { log_arity: 2 },
+        )
+        .await
+        .unwrap();
+        for leaf in &data {
+            log.append_leaf(leaf).await.unwrap();
+        }
+        let sealed = log.seal().await.unwrap();
+
+        // Fill an EMT-kind tree from the real data; the rebuilt binding root is
+        // verified against the committed one (rejection on mismatch is internal).
+        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
+        let filled =
+            eml_log::fill(&sealed, 0, &H, &data, eml_log::FillKind::Emt, &hashers).unwrap();
+        assert_eq!(filled.tree_size(), 6);
+        // The verified member root equals the sealed member root.
+        assert_eq!(filled.root(), sealed.member_root(0, &H).unwrap().as_slice());
+    });
+}
+
+// ---------------------------------------------------------------------------
+// E7 — fill-and-verify a commitment from data alone, without the signature
+//
+// The whole point of the trustless path: a party holding only the data and the
+// committed binding root (vouched out of band) can confirm the commitment — and
+// reject forged data — without trusting any signer. No attestation is consulted.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn trustless_fill_verify_without_a_signature() {
+    smol::block_on(async {
+        let data: Vec<Vec<u8>> = (0..7u64).map(|i| format!("e-{i}").into_bytes()).collect();
+        let mut log = eml_log::NaryMerkleLog::new(
+            eml_log::MemoryStorage::new(),
+            Box::new(H),
+            eml_log::TreeConfig { log_arity: 2 },
+        )
+        .await
+        .unwrap();
+        for leaf in &data {
+            log.append_leaf(leaf).await.unwrap();
+        }
+        let sealed = log.seal().await.unwrap();
+        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
+
+        // Genuine data verifies — the commitment is confirmed from data alone.
+        assert!(eml_log::fill(&sealed, 0, &H, &data, eml_log::FillKind::Eml, &hashers).is_ok());
+
+        // Forged data cannot reproduce the committed layout — rejected, no
+        // signature needed to detect the tampering.
+        let mut forged = data.clone();
+        forged[2] = b"tampered".to_vec();
+        assert_eq!(
+            eml_log::fill(&sealed, 0, &H, &forged, eml_log::FillKind::Eml, &hashers),
+            Err(eml_log::FillError::BindingRootMismatch { alg_id: 0 })
+        );
     });
 }
