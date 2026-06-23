@@ -17,6 +17,7 @@ pub mod filling;
 pub mod proof;
 pub mod schedule;
 pub mod snapshot;
+pub mod snapshot_proof;
 pub mod storage;
 pub mod tree;
 
@@ -38,5 +39,6 @@ pub use proof::{
 };
 pub use schedule::reduction_count;
 pub use snapshot::{RunExtent, Snapshot};
+pub use snapshot_proof::{ClaimedLeaf, SnapshotProof};
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use tree::{LogKind, NaryMerkleLog, TreeConfig};
