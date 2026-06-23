@@ -28,7 +28,7 @@
 
 use crate::hasher::Hasher;
 use crate::mr::nary_mr;
-use crate::topology::inclusion_skeleton;
+use crate::topology::{ARITY_RANGE, inclusion_skeleton};
 
 /// A single level in a Merkle proof path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -467,7 +467,7 @@ pub fn reconstruct_inclusion_root(
     if leaf_hash.len() != digest_len {
         return None;
     }
-    if !(2..=256).contains(&log_arity) {
+    if !ARITY_RANGE.contains(&log_arity) {
         return None;
     }
     if tree_size == 0 {

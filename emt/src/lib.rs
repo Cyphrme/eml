@@ -147,8 +147,7 @@ mod tests {
     /// Build the canonical kernel subtree for a flat sequence at k=2 and
     /// evaluate it, independent of EMT's materialization.
     fn kernel_root(payloads: &[Vec<u8>]) -> Vec<u8> {
-        use pmt::Subtree;
-        use pmt::topology::frontier_for_size;
+        use pmt::{Subtree, frontier_for_size};
         let h = Sha256Hasher;
         let leaves: Vec<Subtree> = payloads.iter().map(|p| Subtree::Leaf(p.clone())).collect();
         // Reassemble the same frontier-folded shape the kernel topology uses.

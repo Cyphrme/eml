@@ -29,9 +29,7 @@
 //! member root, binding root, and run-extents are *derived views* of the
 //! `Sealed`, not stored (see [`pmt::Sealed`]).
 
-use pmt::Sealed;
-use pmt::metadata::Meta;
-use pmt::topology::frontier_for_size;
+use pmt::{Meta, Sealed, frontier_for_size};
 
 use crate::error::Result;
 use crate::storage::Storage;
@@ -107,7 +105,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
 #[cfg(test)]
 mod tests {
-    use pmt::hasher::Hasher;
+    use pmt::Hasher;
     use sha2::{Digest, Sha256};
 
     use super::*;

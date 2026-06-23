@@ -9,14 +9,14 @@
 //! depends on nothing; the engineering libraries (append-only / mutable)
 //! depend on it.
 
-pub mod binding_proof;
-pub mod error;
+pub(crate) mod binding_proof;
+pub(crate) mod error;
 pub mod hasher;
-pub mod leaf_proof;
-pub mod metadata;
+pub(crate) mod leaf_proof;
+pub(crate) mod metadata;
 pub mod mr;
 pub mod proof;
-pub mod sealed;
+pub(crate) mod sealed;
 pub mod subtree;
 pub mod topology;
 
@@ -34,7 +34,9 @@ pub use proof::{
 };
 pub use sealed::{RunExtent, Sealed};
 pub use subtree::{Subtree, embed, extract};
-pub use topology::{SkeletonStep, frontier_for_size, inclusion_skeleton};
+pub use topology::{
+    ARITY_RANGE, SkeletonStep, fold_frontier, frontier_for_size, inclusion_skeleton,
+};
 
 /// Dynamically generate a null digest constant using the hasher.
 #[must_use]

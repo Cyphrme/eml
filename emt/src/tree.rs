@@ -2,9 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use pmt::mr::nary_mr;
-use pmt::proof::ProofStep;
-use pmt::{Hasher, Sealed};
+use pmt::{ARITY_RANGE, Hasher, ProofStep, Sealed, nary_mr};
 
 use crate::error::{Error, Result};
 use crate::spine::{self, SpineNode, covers, leftmost, rightmost};
@@ -92,7 +90,7 @@ impl Emt {
     /// Fails with [`Error::InvalidArity`] if `config.arity` is outside the
     /// kernel's `2..=256` range.
     pub fn new(config: Config) -> Result<Self> {
-        if !(2..=256).contains(&config.arity) {
+        if !ARITY_RANGE.contains(&config.arity) {
             return Err(Error::InvalidArity(config.arity));
         }
         Ok(Self {
@@ -364,7 +362,7 @@ impl Emt {
         }
         let size = self.cells.len() as u64;
         let k = self.config.arity;
-        let coords = pmt::topology::frontier_for_size(size, k);
+        let coords = pmt::frontier_for_size(size, k);
         let mut frontiers: Vec<(u64, Vec<Vec<u8>>)> = Vec::with_capacity(self.states.len());
         let mut alg_epochs: Vec<(u64, Vec<(u64, u64)>)> = Vec::with_capacity(self.states.len());
         // Iterate states mutably for peak_digest's defensive cache-healing fallback.

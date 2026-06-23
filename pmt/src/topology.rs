@@ -13,6 +13,47 @@
 //! emits the same skeleton. Keeping one source of truth is what prevents the
 //! producer and verifier from drifting into disagreeing topologies.
 
+use std::ops::RangeInclusive;
+
+/// The valid arity range for the proof spine: `2..=256`.
+///
+/// Every caller that validates or branches on `k` uses this constant so the
+/// range is defined exactly once.
+pub const ARITY_RANGE: RangeInclusive<u64> = 2..=256;
+
+/// Fold a non-empty frontier of elements into one root by repeatedly grouping
+/// the rightmost `k`, identical to the log's own root fold.
+///
+/// `items` must be non-empty. `merge` combines a group of `k` elements (or the
+/// final `2..=k` remainder) into one. For digest folds the caller passes
+/// `|chunk| nary_mr(hasher, ...)`.
+///
+/// This is the single implementation of the grouping loop shared by every
+/// frontier-fold site across the crates (the canonical copy lifted from
+/// `eml::filling::fold_components`).
+///
+/// # Panics
+///
+/// Panics (debug) if `items` is empty or `k < 2`.
+#[must_use]
+pub fn fold_frontier<T, F>(mut items: Vec<T>, k: usize, merge: F) -> T
+where
+    F: Fn(&[T]) -> T,
+{
+    debug_assert!(!items.is_empty(), "fold_frontier: items must be non-empty");
+    debug_assert!(k >= 2, "fold_frontier: k must be >= 2");
+    if items.len() == 1 {
+        return items.into_iter().next().unwrap();
+    }
+    while items.len() > k {
+        let split = items.len() - k;
+        let merged = merge(&items[split..]);
+        items.truncate(split);
+        items.push(merged);
+    }
+    merge(&items)
+}
+
 /// Frontier decomposition of a log of `n` leaves at arity `k`.
 ///
 /// Returns `(left, height)` for each perfect k-ary subtree, left to right.
@@ -25,7 +66,7 @@
 #[must_use]
 pub fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
     debug_assert!(
-        (2..=256).contains(&k),
+        ARITY_RANGE.contains(&k),
         "frontier_for_size: arity {k} out of range 2..=256; caller must pre-validate"
     );
     let mut frontier = Vec::new();
@@ -71,7 +112,7 @@ pub struct SkeletonStep {
 /// covered range).
 #[must_use]
 pub fn inclusion_skeleton(k: u64, tree_size: u64, index: u64) -> Option<Vec<SkeletonStep>> {
-    if !(2..=256).contains(&k) {
+    if !ARITY_RANGE.contains(&k) {
         return None;
     }
     let coords = frontier_for_size(tree_size, k);

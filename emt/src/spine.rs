@@ -15,7 +15,7 @@
 //! [`crate::Emt::root`] is property-tested to equal `pmt::evaluate` over the
 //! canonical subtree, so a drift in this shape is caught deterministically.
 
-use pmt::topology::frontier_for_size;
+use pmt::{ARITY_RANGE, frontier_for_size};
 
 /// One node of the materialized proof spine.
 ///
@@ -38,7 +38,7 @@ pub enum SpineNode {
 /// only once it holds at least one cell.
 #[must_use]
 pub fn build(size: u64, k: u64) -> Option<SpineNode> {
-    if !(2..=256).contains(&k) || size == 0 {
+    if !ARITY_RANGE.contains(&k) || size == 0 {
         return None;
     }
     let coords = frontier_for_size(size, k);

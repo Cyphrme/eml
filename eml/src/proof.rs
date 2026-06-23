@@ -11,16 +11,14 @@
 
 // Re-export the kernel proof surface so `eml_log::proof::*` reaches it while
 // the originals live in `pmt`. No parallels: these are the kernel's, not copies.
-pub use pmt::binding_proof::{BindingProof, TrustedBindingRoot};
-use pmt::hasher::Hasher;
-use pmt::mr::nary_mr;
-pub use pmt::proof::{
-    AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root_preimage,
-    committed_active_algs, committed_active_at, committed_is_live, constant_time_eq,
-    reconstruct_inclusion_root, validate_committed_epochs, verify_inactivity_with_coupling,
-    verify_inclusion, verify_inclusion_path_structure, verify_inclusion_with_coupling,
+use pmt::{ARITY_RANGE, Hasher, fold_frontier, frontier_for_size, nary_mr};
+pub use pmt::{
+    AuditPayload, BindingProof, CouplingProof, InclusionProof, ProofStep, TrustedBindingRoot,
+    VerifierConfig, combined_root_preimage, committed_active_algs, committed_active_at,
+    committed_is_live, constant_time_eq, reconstruct_inclusion_root, validate_committed_epochs,
+    verify_inactivity_with_coupling, verify_inclusion, verify_inclusion_path_structure,
+    verify_inclusion_with_coupling,
 };
-use pmt::topology::frontier_for_size;
 
 /// Consistency proof: proves tree at `old_size` is a prefix of tree at `new_size`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,7 +178,7 @@ pub fn reconstruct_consistency_roots(
     if old_size == 0 || old_size >= new_size {
         return None;
     }
-    if !(2..=256).contains(&log_arity) {
+    if !ARITY_RANGE.contains(&log_arity) {
         return None;
     }
     if path.len() > 256 {
@@ -417,24 +415,13 @@ pub fn reconstruct_consistency_roots(
         old_hashes.push(hash);
     }
 
-    let computed_old_root = {
-        if old_hashes.is_empty() {
-            hasher.empty()
-        } else if old_hashes.len() == 1 {
-            old_hashes[0].clone()
-        } else {
-            let mut current = old_hashes;
-            while current.len() > k_usize {
-                let split_idx = current.len() - k_usize;
-                let right_elements = &current[split_idx..];
-                let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-                let merged = nary_mr(hasher, &refs);
-                current.truncate(split_idx);
-                current.push(merged);
-            }
-            let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
+    let computed_old_root = if old_hashes.is_empty() {
+        hasher.empty()
+    } else {
+        fold_frontier(old_hashes, k_usize, |chunk| {
+            let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
             nary_mr(hasher, &refs)
-        }
+        })
     };
 
     // 4. Reconstruct new root

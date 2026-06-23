@@ -40,8 +40,10 @@
 //!
 //! [`verify`]: SnapshotProof::verify
 
-use pmt::proof::{combined_root_preimage, committed_active_algs, validate_committed_epochs};
-use pmt::{Hasher, LeafProof, Sealed, TrustedBindingRoot};
+use pmt::{
+    Hasher, LeafProof, Sealed, TrustedBindingRoot, combined_root_preimage, committed_active_algs,
+    validate_committed_epochs,
+};
 
 /// One claimed leaf in a snapshot proof: a [`pmt::LeafProof`] paired with the
 /// algorithm whose member root it verifies against.
@@ -228,7 +230,7 @@ impl SnapshotProof {
         // is recomputed once per algorithm and bound to all member roots at once.
         for t in trusted {
             let head = self.recompute_head(t.hasher);
-            if !pmt::proof::constant_time_eq(&head, t.root) {
+            if !pmt::constant_time_eq(&head, t.root) {
                 return false;
             }
         }
@@ -255,7 +257,7 @@ impl SnapshotProof {
 
 #[cfg(test)]
 mod tests {
-    use pmt::hasher::Hasher;
+    use pmt::Hasher;
     use sha2::{Digest, Sha256};
 
     use super::*;
