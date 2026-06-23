@@ -20,7 +20,7 @@
 //! ```
 
 use emt::{Config, Emt};
-pub use emt::{Error, Result};
+pub use emt::{Error, ProofStep, Result, Sealed};
 use sha2::{Digest, Sha256};
 
 /// The fixed proof-spine arity of the cyphr tree.
@@ -114,14 +114,14 @@ impl CyphrTree {
     }
 
     /// An inclusion proof for cell `index`: the leaf digest and proof path,
-    /// verifiable with `pmt::verify_inclusion` against `(index, len, 2, root)`.
+    /// verifiable with [`emt::verify_inclusion`] against `(index, len, 2, root)`.
     #[must_use]
-    pub fn inclusion_proof(&self, index: u64) -> Option<(Vec<u8>, Vec<pmt_proof::ProofStep>)> {
+    pub fn inclusion_proof(&self, index: u64) -> Option<(Vec<u8>, Vec<ProofStep>)> {
         self.inner.inclusion_proof(ALG, index)
     }
 
     /// Consume the tree, sealing it into the kernel currency. One-way.
-    pub fn seal(self) -> Result<pmt_sealed::Sealed> {
+    pub fn seal(self) -> Result<Sealed> {
         self.inner.seal()
     }
 }
@@ -130,15 +130,6 @@ impl Default for CyphrTree {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// Re-export the kernel proof/seal types the surface returns, so callers need not
-// add a direct `pmt` dependency to name them.
-pub mod pmt_proof {
-    pub use pmt::proof::ProofStep;
-}
-pub mod pmt_sealed {
-    pub use pmt::Sealed;
 }
 
 #[cfg(test)]
@@ -157,7 +148,7 @@ mod tests {
         let root = tree.root().unwrap();
         let (leaf, path) = tree.inclusion_proof(1).unwrap();
         let h = Sha256Hasher;
-        assert!(pmt::verify_inclusion(&h, &leaf, 1, 3, ARITY, &path, &root));
+        assert!(emt::verify_inclusion(&h, &leaf, 1, 3, ARITY, &path, &root));
         assert_eq!(leaf, Sha256::digest(b"second").to_vec());
     }
 

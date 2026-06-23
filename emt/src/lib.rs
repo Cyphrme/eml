@@ -26,9 +26,10 @@ mod spine;
 mod tree;
 
 pub use error::{Error, Result};
-// The kernel hasher seam is part of EMT's surface: callers construct an `Emt`
-// with their own `Hasher`. Re-exported so they need not also name `pmt`.
-pub use pmt::{Hasher, LeafProof};
+// The kernel hasher seam and the proof/seal types the public surface returns
+// are re-exported so callers need not also name `pmt` directly.
+// Mirrors the re-export symmetry in eml-log (eml/src/lib.rs).
+pub use pmt::{Hasher, LeafProof, ProofStep, Sealed, verify_inclusion};
 pub use tree::{Config, Emt};
 
 #[cfg(test)]
@@ -197,6 +198,31 @@ mod tests {
                     "size={size} index={index}"
                 );
             }
+        }
+    }
+
+    /// F4 regression guard: off-path siblings are served from the materialized
+    /// cache, not re-evaluated. A fully materialized tree must generate inclusion
+    /// proofs with zero cache misses for every index. A positive miss count means
+    /// the cache is being bypassed and proof generation has silently degraded to
+    /// O(n) rather than O(log n).
+    #[test]
+    fn inclusion_proof_uses_cache_zero_misses() {
+        // Use a reasonably large tree (size > k^2) so there are genuine inner
+        // nodes with off-path siblings that would trigger misses without caching.
+        let size = 32u64;
+        let payloads: Vec<Vec<u8>> = (0..size).map(|i| format!("p{i}").into_bytes()).collect();
+        let refs: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+        let t = tree_with(&refs);
+        for index in 0..size {
+            let (_, _, misses) = t
+                .inclusion_proof_miss_count(ALG, index)
+                .expect("in-range index");
+            assert_eq!(
+                misses, 0,
+                "inclusion_proof for index={index} size={size} had {misses} cache miss(es): \
+                 off-path siblings must be served from the materialized cache (F4)"
+            );
         }
     }
 
