@@ -13,6 +13,7 @@
 //! `k = 2` with no prefix) is a thin layer on top.
 
 pub mod error;
+pub mod filling;
 pub mod proof;
 pub mod schedule;
 pub mod snapshot;
@@ -21,6 +22,7 @@ pub mod tree;
 
 // The kernel surface, re-exported so consumers reach it through `eml_log::*`.
 pub use error::{Error, Result};
+pub use filling::{FillError, FilledTree, fill};
 pub use pmt::hasher::{self, Hasher};
 pub use pmt::mr::{self, count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use pmt::subtree::{self, Subtree};
