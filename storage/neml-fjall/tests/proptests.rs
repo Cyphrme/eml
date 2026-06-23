@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use neml::Storage;
+use eml_log::Storage;
 use neml_storage_fjall::FjallStorage;
 use proptest::prelude::*;
 use tempfile::tempdir;
@@ -152,7 +152,10 @@ async fn run_differential_test(actions: Vec<StorageAction>) {
                     .iter()
                     .map(|(alg_id, left, height, hash)| (*alg_id, *left, *height, hash.as_slice()))
                     .collect();
-                storage.write_batch(&leaves_ref, &nodes_ref, &[], None, &[]).await.unwrap();
+                storage
+                    .write_batch(&leaves_ref, &nodes_ref, &[], None, &[])
+                    .await
+                    .unwrap();
             },
         }
     }

@@ -1,7 +1,7 @@
 [package]
 name          = "neml-storage-fjall"
 version       = "0.1.0"
-description   = "Fjall-backed storage implementation for neml"
+description   = "Fjall-backed storage backend for the EML append-only library"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../../LICENSE"
@@ -10,7 +10,7 @@ license-file  = "../../LICENSE"
 doctest = false
 
 [dependencies]
-neml = { version = "0.1.0", path = "../../neml" }
+eml-log = { version = "0.1.0", path = "../../eml" }
 fjall      = "3"
 thiserror  = "2"
 

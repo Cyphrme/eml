@@ -1,15 +1,18 @@
-//! Fjall-backed persistence implementation for neml.
+//! Fjall-backed persistence backend for the EML append-only library.
+//!
+//! Implements the library's generic `Storage` trait, so it serves any EML
+//! instantiation (cyphr-log, CT, …) rather than a specific one.
 
 use std::path::Path;
 
+use eml_log::{AlgorithmMetas, Storage};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
-use neml::{AlgorithmMetas, Storage};
 
 /// Reserved 9-byte key for log metadata in the `neml_metadata` keyspace.
 ///
 /// All algorithm-epoch keys are exactly 8 bytes (alg_id as big-endian u64), so
 /// this 9-byte key never collides with any valid algorithm entry.
-const LOG_META_KEY: [u8; 9] = [b'_', b'l', b'o', b'g', b'm', b'e', b't', b'a', b'_'];
+const LOG_META_KEY: [u8; 9] = *b"_logmeta_";
 
 /// 10-byte key prefix for per-algorithm checkpoint roots in `neml_metadata`.
 ///
@@ -120,12 +123,10 @@ impl Storage for FjallStorage {
                     .key()
                     .map_err(|e| FjallStorageError::Database(e.to_string()))?;
                 let arr: [u8; 8] = key.as_ref().try_into().map_err(|_| {
-                    FjallStorageError::MetadataCorruption(
-                        "leaf key has wrong length".to_string(),
-                    )
+                    FjallStorageError::MetadataCorruption("leaf key has wrong length".to_string())
                 })?;
                 Ok(u64::from_be_bytes(arr) + 1)
-            }
+            },
         }
     }
 
@@ -190,7 +191,9 @@ impl Storage for FjallStorage {
                 .map_err(|e| FjallStorageError::Database(e.to_string()))?;
             // Skip reserved entries: log-metadata (9 bytes) and checkpoint roots (10 bytes).
             let key_ref = key_bytes.as_ref();
-            if key_ref == LOG_META_KEY || (key_ref.len() == 10 && key_ref[0] == b'r' && key_ref[1] == b'o') {
+            if key_ref == LOG_META_KEY
+                || (key_ref.len() == 10 && key_ref[0] == b'r' && key_ref[1] == b'o')
+            {
                 continue;
             }
             let alg_id = {
@@ -245,7 +248,7 @@ impl Storage for FjallStorage {
                 let count = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
                 let kind = bytes[8];
                 Ok(Some((count, kind)))
-            }
+            },
         }
     }
 
