@@ -1,5 +1,7 @@
-import EMLProof.Projection
+import EMLProof.Foundations
+import Mathlib.Tactic
 import Mathlib.Logic.Encodable.Basic
+import Mathlib.Logic.Equiv.List
 
 /-!
 # NEML Formal Soundness and Promotion Properties

@@ -1,4 +1,5 @@
 import EMLProof.Bridge
+import EMLProof.Foundations
 
 /-!
 # EML Cryptographic Projection and Validation Theorems
@@ -56,24 +57,14 @@ def project {α : Type} (epochs : List Epoch) (nullLeaf : α)
     (payloads : List α) : List α :=
   projectAux epochs nullLeaf 0 payloads
 
-/-- Concrete hash abstract types and functions -/
-axiom Digest : Type
-axiom Digest.nonempty : Nonempty Digest
-noncomputable instance : DecidableEq Digest := Classical.typeDecidableEq _
-noncomputable instance : Inhabited Digest :=
-  ⟨Classical.choice Digest.nonempty⟩
+/- The four trust-base axioms (`Digest`, `Digest.nonempty`, `H`, `digestToBytes`),
+   the digest instances, the domain-separation tags, and `emptyHash` now live in
+   `EMLProof.Foundations`; this CT-build module consumes them from there. -/
 
-axiom H : List UInt8 → Digest
-
-def nodeTag : UInt8 := 0x01
-def nullTag : UInt8 := 0x02
-
-axiom digestToBytes : Digest → List UInt8
-
+/-- Tagged binary internal node hash (CT-lineage / binary construction). -/
 noncomputable def nodeHash (l r : Digest) : Digest :=
   H (nodeTag :: digestToBytes l ++ digestToBytes r)
 
-noncomputable def emptyHash : Digest := H []
 noncomputable def nullLeaf : Digest := H [nullTag]
 
 /-- Maps a MerkleTree Digest to a single Digest. -/
