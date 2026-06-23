@@ -1,0 +1,18 @@
+[package]
+name          = "eml-examples"
+version       = "0.0.0"
+description   = "Worked examples / integration tests for the EML stack"
+edition       = "2024"
+rust-version  = "1.85"
+publish       = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+pmt       = { path = "../pmt" }
+eml-log   = { path = "../eml" }
+emt       = { path = "../emt" }
+cyphr-log = { path = "../cyphr-log" }
+sha2      = "0.10"
+smol      = "2.0"

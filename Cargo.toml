@@ -9,4 +9,5 @@ members = [
     "cyphr-tree",
     "storage/neml-fjall",
     "ct",
+    "examples",
 ]
