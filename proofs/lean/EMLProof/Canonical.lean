@@ -291,12 +291,12 @@ theorem normalize_canonical_eq {t : NaryTree (List UInt8)} (h : Canonical t) :
 The "active" restriction (`Active`: every subtree evaluates to a non-null digest)
 is the precise dividing line of the two-primitive asymmetry (INV-AUTH-BOUNDARY): a
 null subtree is a *collapsed* region whose run-extent is the committed metadata
-(the epoch timeline, bound into the binding root by `metaroot_binds_timeline`,
+(the epoch timeline, bound into the binding root by `combinedRoot_binds_timeline`,
 D12). Over the non-collapsed structure, **promotion commits nothing** and the
 encoding is injective on its own; over collapsed regions the committed extent
 disambiguates. So the generic injective-encoding statement factors exactly as the
-design predicts: this theorem is the promotion half, `metaroot_binds_timeline` the
-collapse half. -/
+design predicts: this theorem is the promotion half, `combinedRoot_binds_timeline`
+the collapse half. -/
 
 /-- A tree is **active** when it — and recursively every subtree — evaluates to a
     non-null digest. Active subtrees are the non-collapsed structure; null subtrees
@@ -483,7 +483,7 @@ theorem canonical_eval_injective (L : Nat)
     * **injectivity of the encoding** — distinct active canonical structures map to
       distinct binding roots modulo a hash collision (`canonical_eval_injective`),
       with the collapsed (null) regions' extent carried by the committed timeline
-      (`metaroot_binds_timeline`).
+      (`combinedRoot_binds_timeline`).
 
     Stated for two arbitrary trees via their canonical forms: if the binding roots
     agree and the active canonical normal forms are reached, the structures are the
