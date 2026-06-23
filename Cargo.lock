@@ -396,6 +396,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml-examples"
+version = "0.0.0"
+dependencies = [
+ "cyphr-log",
+ "eml-log",
+ "emt",
+ "pmt",
+ "sha2",
+ "smol",
+]
+
+[[package]]
 name = "eml-log"
 version = "0.1.0"
 dependencies = [
