@@ -7,6 +7,7 @@ import EMLProof.Canonical
 import EMLProof.Compression
 import EMLProof.Kary
 import EMLProof.LeafProof
+import EMLProof.BindingProof
 
 -- EML layer.
 import EMLProof.KaryConsistency
