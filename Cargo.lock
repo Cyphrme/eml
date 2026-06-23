@@ -329,6 +329,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyphr-tree"
+version = "0.1.0"
+dependencies = [
+ "emt",
+ "pmt",
+ "sha2",
+]
+
+[[package]]
 name = "dashmap"
 version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -400,6 +409,15 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "emt"
+version = "0.1.0"
+dependencies = [
+ "pmt",
+ "proptest",
+ "sha2",
 ]
 
 [[package]]

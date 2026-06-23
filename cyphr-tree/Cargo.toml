@@ -1,0 +1,15 @@
+[package]
+name          = "cyphr-tree"
+version       = "0.1.0"
+description   = "Cyphr Tree — the EMT instantiated at k=2 with no prefix"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+
+[dependencies]
+emt = { path = "../emt" }
+# Named only to re-export the kernel proof/seal types the surface returns.
+pmt = { path = "../pmt" }
+# The concrete hash this instantiation fixes (unprefixed SHA-256).
+sha2 = "0.10"

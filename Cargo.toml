@@ -41,6 +41,8 @@ members = [
     "neml",
     "storage/neml-fjall",
     "difftest",
+    "emt",
+    "cyphr-tree",
 ]
 
 
