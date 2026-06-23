@@ -47,7 +47,7 @@ use crate::error::{Error, Result};
 use crate::hasher::Hasher;
 use crate::metadata::Meta;
 use crate::mr::nary_mr;
-use crate::proof::{combined_root_preimage, validate_committed_epochs};
+use crate::proof::{combined_root, validate_committed_epochs};
 use crate::topology::{ARITY_RANGE, fold_frontier, frontier_for_size};
 
 /// One committed canonicalization run-extent: a contiguous collapse of
@@ -257,32 +257,26 @@ impl Sealed {
 
     /// **Derived view.** Each active algorithm's binding root: `(alg_id,
     /// binding_root)`, sorted by algorithm ID. A binding root is the
-    /// promotion-aware combined root over the member roots and the committed
-    /// timeline, under that algorithm's own hash — the head the rest of the
+    /// [`combined_root`] — the canonicalization fold over the member roots as
+    /// children (plus a coverage child iff the committed timeline is
+    /// non-trivial), under that algorithm's own hash — the head the rest of the
     /// structure authenticates against. Computed on demand, never stored.
     ///
-    /// The genesis-promotion rule mirrors the log's live combined root: a
-    /// registry-singleton with the forced default timeline `[(0, MAX)]` binds
-    /// to the *raw* member root; any lifecycle event switches permanently to
-    /// the hashed form (see
-    /// [`combined_root_at`](../../eml_log/tree/struct.NaryMerkleLog.html#method.combined_root_at)).
+    /// Genesis promotion is native to the fold: a single member root under a
+    /// trivial timeline folds (`nary_mr` `len == 1`) to that member root, so the
+    /// promoted form is the structural consequence of having one child — there
+    /// is no promotion predicate.
     ///
     /// `hashers` resolves each algorithm's own hash; an algorithm with no hasher
     /// is skipped.
     #[must_use]
     pub fn binding_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Vec<(u64, Vec<u8>)> {
         let members = self.member_roots(hashers);
-        let promoted = self.is_promoted_registry();
         members
             .iter()
-            .filter_map(|(id, member_root)| {
+            .filter_map(|(id, _)| {
                 let hasher = hashers.iter().find(|(hid, _)| hid == id).map(|(_, h)| *h)?;
-                let br = if promoted {
-                    member_root.clone()
-                } else {
-                    hasher.hash(&combined_root_preimage(&members, &self.alg_epochs))
-                };
-                Some((*id, br))
+                Some((*id, combined_root(hasher, &members, &self.alg_epochs)))
             })
             .collect()
     }
@@ -290,10 +284,9 @@ impl Sealed {
     /// **Derived view.** A single algorithm's binding root under `hasher`.
     /// Returns `None` if the algorithm was not active at the sealed size.
     ///
-    /// Promotion-aware; see [`Self::binding_roots`]. The non-promoted form needs
-    /// every active algorithm's member root for the combined-root preimage, so
-    /// `all_hashers` must resolve them; the single returned binding root is the
-    /// one for `alg_id` under `hasher`.
+    /// The fold is over every active algorithm's member root, so `all_hashers`
+    /// must resolve them; the single returned binding root is the one for
+    /// `alg_id` under `hasher`. See [`Self::binding_roots`].
     #[must_use]
     pub fn binding_root(
         &self,
@@ -301,12 +294,10 @@ impl Sealed {
         hasher: &dyn Hasher,
         all_hashers: &[(u64, &dyn Hasher)],
     ) -> Option<Vec<u8>> {
-        let member_root = self.member_root(alg_id, hasher)?;
-        if self.is_promoted_registry() {
-            return Some(member_root);
-        }
+        // Confirm the algorithm was active at the sealed size before folding.
+        self.member_root(alg_id, hasher)?;
         let members = self.member_roots(all_hashers);
-        Some(hasher.hash(&combined_root_preimage(&members, &self.alg_epochs)))
+        Some(combined_root(hasher, &members, &self.alg_epochs))
     }
 
     /// **Derived view.** The committed canonicalization run-extents: the
@@ -321,13 +312,6 @@ impl Sealed {
             .filter(|&(_, height)| height >= 1)
             .map(|(left, height)| RunExtent { left, height })
             .collect()
-    }
-
-    /// Whether the committed registry is a single algorithm under the forced
-    /// default timeline `[(0, MAX)]` — the genesis-promotion case in which a
-    /// binding root promotes to the raw member root.
-    fn is_promoted_registry(&self) -> bool {
-        self.alg_epochs.len() == 1 && self.alg_epochs[0].1 == vec![(0u64, u64::MAX)]
     }
 }
 

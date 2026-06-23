@@ -110,44 +110,66 @@ pub fn verify_inclusion(
 }
 
 // ============================================================================
-// Committed epoch timeline — epoch construction
+// Combined root — the canonicalization fold over the member-root children
 // ============================================================================
 //
-// The binding root is a per-algorithm structural metaroot: an extra layer
-// that, like any node, commits what is below it — the member roots. Its
-// preimage also covers the per-algorithm epoch timeline `(activation,
-// deactivation)` as it stood at that size, because the timeline is part of the
-// multi-algorithm structure (it decides which cells are null projections).
-// Activity at a position is read from this committed field — never inferred
+// The combined root is the structural metaroot of a multi-algorithm tree: the
+// canonicalization fold ([`nary_mr`] — collapse + promotion) applied one level
+// up, over the per-algorithm **member roots** as children. It is the live
+// primary root of both the append-only log and the mutable tree, and the head
+// the per-algorithm member roots authenticate against.
+//
+// Two facts make this a fold, not a bespoke hash:
+//
+// - **Genesis-promotion is native.** A registry of one algorithm folds
+//   `nary_mr(H, [MR_0])`, whose `len == 1` arm promotes to `MR_0` — the combined
+//   root *is* the member root because there is one child, not because of a
+//   special case. There is no promotion predicate.
+// - **Coverage is a sibling, present only when informative.** The committed
+//   epoch timeline decides which cells are null projections, so a multi-algorithm
+//   structure must commit it. It enters the fold as one extra child
+//   `C = H_i(serialize(timeline))`, appended **iff the timeline is non-trivial**
+//   (some algorithm has anything other than the open-from-genesis epoch
+//   `[(0, u64::MAX)]`). A trivial timeline carries no information beyond the
+//   member roots, so its child is omitted; absence of the child *is* the trivial
+//   encoding (the same way same-value collapse treats the null case). The
+//   timeline is independently bound by [`AuditPayload`], so omitting the
+//   in-root copy on the trivial case loses no security.
+//
+// Activity at a position is read from the committed timeline — never inferred
 // from a digest equaling the null constant — which renders the
 // `leaf(b"null") == null()` collision inert without forbidding any payload.
 
-/// Canonical preimage of the binding root.
+/// Whether a committed epoch timeline is **trivial**: every algorithm is
+/// open-from-genesis (`[(0, u64::MAX)]`).
 ///
-/// Layout (all integers `u64` big-endian; fixed-width counts and lengths make
-/// the encoding unambiguous to parse and therefore injective):
+/// A trivial timeline carries no information beyond the member roots, so the
+/// combined-root fold omits its coverage child. This is informativeness — not
+/// registry cardinality: a single algorithm whose epoch differs from
+/// `[(0, MAX)]` (a pre-activation prefix, a deactivation) is non-trivial.
+#[must_use]
+pub fn timeline_is_trivial(alg_epochs: &[(u64, Vec<(u64, u64)>)]) -> bool {
+    alg_epochs
+        .iter()
+        .all(|(_, epochs)| epochs.as_slice() == [(0u64, u64::MAX)])
+}
+
+/// Canonical serialization of a committed epoch timeline — the preimage of the
+/// combined root's coverage child.
+///
+/// Layout (all integers `u64` big-endian; fixed-width counts make the encoding
+/// unambiguous to parse and therefore injective):
 ///
 /// ```text
-/// n_active ‖ [ id ‖ root_len ‖ root ]*
-/// n_algs   ‖ [ id ‖ n_epochs ‖ (start ‖ end)* ]*
+/// n_algs ‖ [ id ‖ n_epochs ‖ (start ‖ end)* ]*
 /// ```
 ///
-/// `active_roots` lists the raw roots of algorithms active at the tree size;
 /// `alg_epochs` lists the committed epoch timeline of every registered
-/// algorithm (active and frozen). An epoch open at that size is encoded with
-/// `end == u64::MAX`.
+/// algorithm (active and frozen). An epoch open at the committed size is encoded
+/// with `end == u64::MAX`.
 #[must_use]
-pub fn combined_root_preimage(
-    active_roots: &[(u64, Vec<u8>)],
-    alg_epochs: &[(u64, Vec<(u64, u64)>)],
-) -> Vec<u8> {
+pub fn serialize_timeline(alg_epochs: &[(u64, Vec<(u64, u64)>)]) -> Vec<u8> {
     let mut buf = Vec::new();
-    buf.extend_from_slice(&(active_roots.len() as u64).to_be_bytes());
-    for (id, r) in active_roots {
-        buf.extend_from_slice(&id.to_be_bytes());
-        buf.extend_from_slice(&(r.len() as u64).to_be_bytes());
-        buf.extend_from_slice(r);
-    }
     buf.extend_from_slice(&(alg_epochs.len() as u64).to_be_bytes());
     for (id, epochs) in alg_epochs {
         buf.extend_from_slice(&id.to_be_bytes());
@@ -158,6 +180,37 @@ pub fn combined_root_preimage(
         }
     }
     buf
+}
+
+/// The combined root: the canonicalization fold ([`nary_mr`]) over the
+/// per-algorithm member roots as children, under one algorithm's own hash `H`.
+///
+/// The children are the member roots in `member_roots` order (the caller pins
+/// canonical sort by algorithm ID), followed by a single **coverage child**
+/// `H(serialize_timeline(alg_epochs))` **iff** the timeline is non-trivial
+/// ([`timeline_is_trivial`]). They form the children of one [`nary_mr`] node, so
+/// collapse + promotion apply exactly as they do everywhere else:
+///
+/// - one child (single algorithm, trivial timeline) ⇒ the combined root **is**
+///   the member root (genesis promotion, native — no predicate);
+/// - many children ⇒ `nary_mr(H, children)`.
+///
+/// `member_roots` carries the *raw* per-algorithm roots as opaque digests; `H`
+/// is only ever applied to those digests (and the timeline serialization), never
+/// to another algorithm's security material — so each algorithm's combined root
+/// rests solely on its own hash (D9, no security mixing).
+#[must_use]
+pub fn combined_root(
+    hasher: &dyn Hasher,
+    member_roots: &[(u64, Vec<u8>)],
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+) -> Vec<u8> {
+    let mut children: Vec<Vec<u8>> = member_roots.iter().map(|(_, r)| r.clone()).collect();
+    if !timeline_is_trivial(alg_epochs) {
+        children.push(hasher.hash(&serialize_timeline(alg_epochs)));
+    }
+    let refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
+    nary_mr(hasher, &refs)
 }
 
 /// Validate the structural well-formedness of a committed epoch timeline at
@@ -290,18 +343,19 @@ pub struct CouplingProof {
 }
 
 impl CouplingProof {
-    /// Authenticate the proof against a binding root at `tree_size`.
+    /// Authenticate the proof against a combined root at `tree_size`.
     ///
     /// Validates structure (canonical ordering, bounds, well-formed epochs,
-    /// active set consistent with the timeline) and reconstructs the
-    /// binding-root preimage via [`combined_root_preimage`]. On success both
-    /// `active_roots` and `alg_epochs` are authenticated by the root.
+    /// active set consistent with the timeline) and reconstructs the combined
+    /// root via the canonicalization fold ([`combined_root`]) over the
+    /// member-root children. On success both `active_roots` and `alg_epochs` are
+    /// authenticated by the root.
     #[must_use]
     pub fn authenticate(
         &self,
         hasher: &dyn Hasher,
         tree_size: u64,
-        combined_root: &[u8],
+        expected_combined_root: &[u8],
         expected_active_algs: &[u64],
         config: VerifierConfig,
     ) -> bool {
@@ -367,21 +421,13 @@ impl CouplingProof {
             return false;
         }
 
-        // Reconstruct the binding root mirroring the genesis-promotion rule in
-        // the constructor: a registry-singleton with the forced default
-        // timeline [(0, MAX)] means the binding root IS the raw root of that
-        // algorithm (promoted form); otherwise hash the canonical preimage.
-        let is_promoted =
-            self.alg_epochs.len() == 1 && self.alg_epochs[0].1 == vec![(0u64, u64::MAX)];
-        if is_promoted {
-            constant_time_eq(&self.active_roots[0].1, combined_root)
-        } else {
-            let computed = hasher.hash(&combined_root_preimage(
-                &self.active_roots,
-                &self.alg_epochs,
-            ));
-            constant_time_eq(&computed, combined_root)
-        }
+        // Reconstruct the combined root as the canonicalization fold over the
+        // member-root children (plus the coverage child iff the timeline is
+        // non-trivial). Genesis promotion is native: a single member root under
+        // a trivial timeline folds to itself, so the promoted form needs no
+        // special case here.
+        let computed = combined_root(hasher, &self.active_roots, &self.alg_epochs);
+        constant_time_eq(&computed, expected_combined_root)
     }
 
     /// Verify the coupling proof against a binding root for a given target algorithm.
@@ -662,26 +708,110 @@ pub struct AuditPayload {
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest, Sha256};
+
     use super::*;
 
     const MAX: u64 = u64::MAX;
 
+    #[derive(Debug)]
+    struct H;
+    impl Hasher for H {
+        fn leaf(&self, data: &[u8]) -> Vec<u8> {
+            Sha256::digest(data).to_vec()
+        }
+
+        fn node(&self, children: &[&[u8]]) -> Vec<u8> {
+            let mut h = Sha256::new();
+            for c in children {
+                h.update(c);
+            }
+            h.finalize().to_vec()
+        }
+
+        fn empty(&self) -> Vec<u8> {
+            Sha256::digest(b"").to_vec()
+        }
+
+        fn hash(&self, data: &[u8]) -> Vec<u8> {
+            Sha256::digest(data).to_vec()
+        }
+
+        fn clone_box(&self) -> Box<dyn Hasher> {
+            Box::new(H)
+        }
+    }
+
     #[test]
-    fn test_combined_root_preimage_injective_sections() {
-        // Moving an interval between algorithms or shifting a boundary must
-        // change the encoding.
-        let roots = vec![(0u64, vec![0xAA; 32])];
-        let a = combined_root_preimage(&roots, &[(0, vec![(0, MAX)])]);
-        let b = combined_root_preimage(&roots, &[(0, vec![(1, MAX)])]);
-        let c = combined_root_preimage(&roots, &[(0, vec![(0, 5)])]);
-        let d = combined_root_preimage(&roots, &[(0, vec![(0, 5), (7, MAX)])]);
+    fn timeline_trivial_is_informativeness_not_cardinality() {
+        // A single open-from-genesis algorithm is trivial.
+        assert!(timeline_is_trivial(&[(0, vec![(0, MAX)])]));
+        // Many open-from-genesis algorithms are still trivial — informativeness,
+        // not registry cardinality.
+        assert!(timeline_is_trivial(&[
+            (0, vec![(0, MAX)]),
+            (1, vec![(0, MAX)]),
+            (5, vec![(0, MAX)]),
+        ]));
+        // A single algorithm with a pre-activation prefix is non-trivial.
+        assert!(!timeline_is_trivial(&[(0, vec![(2, MAX)])]));
+        // A deactivation is non-trivial.
+        assert!(!timeline_is_trivial(&[(0, vec![(0, 5)])]));
+        // A gap-and-resume is non-trivial.
+        assert!(!timeline_is_trivial(&[(0, vec![(0, 3), (5, MAX)])]));
+        // Empty registry: vacuously trivial (no informative entry).
+        assert!(timeline_is_trivial(&[]));
+    }
+
+    #[test]
+    fn combined_root_is_the_fold_over_member_children() {
+        let mr0 = vec![0xAA; 32];
+        let mr1 = vec![0xBB; 32];
+        let members = vec![(0u64, mr0.clone()), (1u64, mr1.clone())];
+        // Trivial timeline: no coverage child, so the combined root is exactly
+        // nary_mr over the two member roots — never a bespoke preimage hash.
+        let trivial = vec![(0u64, vec![(0u64, MAX)]), (1, vec![(0, MAX)])];
+        let got = combined_root(&H, &members, &trivial);
+        let expected = nary_mr(&H, &[mr0.as_slice(), mr1.as_slice()]);
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn combined_root_singleton_promotes_with_no_predicate() {
+        // One member root, trivial timeline ⇒ nary_mr's len==1 arm promotes:
+        // the combined root IS the member root, structurally (no special case).
+        let mr0 = vec![0xCD; 32];
+        let members = vec![(0u64, mr0.clone())];
+        let got = combined_root(&H, &members, &[(0, vec![(0, MAX)])]);
+        assert_eq!(got, mr0);
+    }
+
+    #[test]
+    fn combined_root_appends_coverage_child_iff_non_trivial() {
+        let mr0 = vec![0x11; 32];
+        let members = vec![(0u64, mr0.clone())];
+        // Non-trivial timeline (a deactivation): a coverage child joins the fold,
+        // so the combined root is now a genuine two-child node, NOT the bare
+        // member root.
+        let non_trivial = vec![(0u64, vec![(0u64, 5u64)])];
+        let got = combined_root(&H, &members, &non_trivial);
+        let coverage = H.hash(&serialize_timeline(&non_trivial));
+        let expected = nary_mr(&H, &[mr0.as_slice(), coverage.as_slice()]);
+        assert_eq!(got, expected);
+        // And it differs from the trivial (coverage-absent) encoding.
+        assert_ne!(got, mr0);
+    }
+
+    #[test]
+    fn serialize_timeline_is_injective_over_boundaries() {
+        // Shifting a boundary or splitting an interval changes the serialization.
+        let a = serialize_timeline(&[(0, vec![(0, MAX)])]);
+        let b = serialize_timeline(&[(0, vec![(1, MAX)])]);
+        let c = serialize_timeline(&[(0, vec![(0, 5)])]);
+        let d = serialize_timeline(&[(0, vec![(0, 5), (7, MAX)])]);
         assert_ne!(a, b);
         assert_ne!(a, c);
         assert_ne!(c, d);
-        // Empty epoch section differs from empty active section swap.
-        let e = combined_root_preimage(&[], &[(0, vec![(0, MAX)])]);
-        let f = combined_root_preimage(&roots, &[]);
-        assert_ne!(e, f);
     }
 
     #[test]
