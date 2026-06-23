@@ -3,13 +3,15 @@
 //! The abstract core shared by every tree built above it: the **proof spine**
 //! ([`topology`]), **canonicalization** (collapse + promotion, in [`mr`]), the
 //! [`Hasher`] seam, **inclusion** proof/verify, **embedding** (an opaque
-//! child-tree root as a leaf), the [`Sealed`] carrier, and **epoch
-//! construction** — the per-algorithm binding root (the literal
-//! `combined_root_*` symbols) and its coupling. It depends on nothing; the
-//! engineering libraries (append-only / mutable) depend on it.
+//! child-tree root as a leaf), the [`Sealed`] carrier, the **metadata
+//! channel** ([`metadata`]), and **epoch construction** — the per-algorithm
+//! binding root (the literal `combined_root_*` symbols) and its coupling. It
+//! depends on nothing; the engineering libraries (append-only / mutable)
+//! depend on it.
 
 pub mod error;
 pub mod hasher;
+pub mod metadata;
 pub mod mr;
 pub mod proof;
 pub mod sealed;
@@ -18,6 +20,7 @@ pub mod topology;
 
 pub use error::{Error, Result};
 pub use hasher::Hasher;
+pub use metadata::Meta;
 pub use mr::{count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use proof::{
     AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root_preimage,
