@@ -2,15 +2,16 @@
 //! surface layered over the kernel's inclusion and epoch construction.
 //!
 //! Inclusion, the binding root, coupling, and the canonical-encoding security
-//! boundary live in the [`pmt`] kernel and are re-exported here so existing
-//! `neml::proof::*` consumers keep their paths. This module owns only what is
+//! boundary live in the [`pmt`] kernel and are re-exported here so consumers
+//! reach the whole proof surface through `eml_log::proof::*`. This module owns
+//! only what is
 //! append-only-specific: the [`ConsistencyProof`] (the tree at `old_size` is a
 //! prefix of the tree at `new_size`) and the temporal analog of consistency
 //! over the committed epoch timeline ([`verify_epoch_evolution`]).
 
 use pmt::hasher::Hasher;
 use pmt::mr::nary_mr;
-// Re-export the kernel proof surface so `neml::proof::*` paths are stable while
+// Re-export the kernel proof surface so `eml_log::proof::*` reaches it while
 // the originals live in `pmt`. No parallels: these are the kernel's, not copies.
 pub use pmt::proof::{
     AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root_preimage,

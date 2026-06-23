@@ -1,10 +1,16 @@
-//! `neml` — transitional append-only Merkle log over the [`pmt`] kernel.
+//! `eml_log` — EML, the append-only Merkle log library over the [`pmt`] kernel.
 //!
-//! The kernel surface (the `Hasher` seam, the proof spine, canonicalization,
-//! inclusion, embedding, `Sealed`, and epoch construction) lives in [`pmt`] and
-//! is re-exported here so existing `neml::*` consumers keep their paths. This
-//! crate owns the append-only mechanism (the frontier carry, the tree builder,
-//! storage) and the consistency surface ([`proof::ConsistencyProof`]).
+//! EML (Epoch Merkle Log) is the append-only engineering construction layered
+//! over the Polymorphic Merkle Tree kernel. The kernel surface (the `Hasher`
+//! seam, the proof spine, canonicalization, inclusion, embedding, [`Sealed`],
+//! and epoch construction) lives in [`pmt`] and is re-exported here so consumers
+//! reach the whole library through `eml_log::*`. This crate owns the
+//! append-only mechanism (the frontier carry, the log builder, storage) and the
+//! consistency surface ([`proof::ConsistencyProof`], [`proof::verify_epoch_evolution`]).
+//!
+//! The library is parameterized essentially by the arity `k` alone
+//! ([`TreeConfig`]); a concrete instantiation (for example a binary log at
+//! `k = 2` with no prefix) is a thin layer on top.
 
 pub mod error;
 pub mod proof;
@@ -12,7 +18,7 @@ pub mod schedule;
 pub mod storage;
 pub mod tree;
 
-// The kernel surface, re-exported at the historical `neml::*` paths.
+// The kernel surface, re-exported so consumers reach it through `eml_log::*`.
 pub use error::{Error, Result};
 pub use pmt::hasher::{self, Hasher};
 pub use pmt::mr::{self, count_leaves, evaluate, nary_mr, within_subtree_path};

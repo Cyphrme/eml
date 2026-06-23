@@ -13,16 +13,18 @@ publish       = false
 path = "src/lib.rs"
 
 [dependencies]
-# The current workspace tree under audit.
-neml = { path = "../neml" }
+# The current side under audit: cyphr-log, the EML instantiation that succeeds
+# the historical `neml`. It re-exports the full EML surface, so the harness
+# drives it through the same `NaryMerkleLog` / `TreeConfig` / `proof` paths the
+# baseline exposes.
+cyphr-log = { path = "../cyphr-log" }
 # The frozen baseline: a git worktree of the pre-campaign HEAD, materialized
 # OUTSIDE this workspace's directory tree (a sibling worktree). Cargo absorbs
 # any path dependency living *under* the workspace root as a workspace member,
-# and two packages both named `neml` (current + baseline) cannot coexist; the
-# baseline must therefore sit out of tree. Its package keeps the name `neml`
+# so the baseline must sit out of tree. Its package keeps the name `neml`
 # (linked here under the `neml_baseline` alias) but carries a distinct
-# `version` in that worktree's manifest so Cargo can tell the two `neml`
-# packages apart in the lockfile. Never committed.
+# `version` in that worktree's manifest so Cargo can tell it apart from the
+# current side in the lockfile. Never committed.
 neml_baseline = { path = "../../baseline-N1/neml", package = "neml" }
 # The shared hashers in src/lib.rs drive both trees with byte-identical logic.
 sha2 = "0.10"

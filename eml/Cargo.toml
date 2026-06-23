@@ -1,14 +1,17 @@
 [package]
-name          = "neml"
+name          = "eml-log"
 version       = "0.1.0"
-description   = "Unified n-ary Merkle append-only log tree"
+description   = "EML — the append-only engineering library over the PMT kernel"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 
+[lib]
+name = "eml_log"
+
 [dependencies]
-# The kernel; neml is the transitional append-only layer over it.
+# The kernel; EML is the append-only engineering library over it.
 pmt = { path = "../pmt" }
 
 [dev-dependencies]
@@ -18,5 +21,3 @@ big_o = "0.1"
 cpu-time = "1"
 proptest = "1"
 smol = "2.0"
-eml = { path = ".." }
-

@@ -1,0 +1,23 @@
+[package]
+name          = "cyphr-log"
+version       = "0.1.0"
+description   = "Cyphr's append-only log: the EML library instantiated at k=2, no prefix"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+
+[lib]
+name = "cyphr_log"
+
+[dependencies]
+# The general append-only library; this crate is its k=2, no-prefix instantiation.
+eml-log = { path = "../eml" }
+
+[dev-dependencies]
+sha2 = "0.10"
+bigoish = "0.1"
+big_o = "0.1"
+cpu-time = "1"
+proptest = "1"
+smol = "2.0"

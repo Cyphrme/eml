@@ -1,4 +1,4 @@
-use neml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig};
+use cyphr_log::{Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -109,7 +109,7 @@ fn test_vector_3_three_leaves_k2() {
 fn test_vector_4_singleton_promotion() {
     let hasher = Sha256Hasher;
     let tree = Subtree::Node(vec![Subtree::Leaf(b"x".to_vec())]);
-    let evaluated = neml::evaluate(&hasher, &tree);
+    let evaluated = cyphr_log::evaluate(&hasher, &tree);
     let expected = Sha256::digest(b"x").to_vec();
     assert_eq!(evaluated, expected);
 }
@@ -118,7 +118,7 @@ fn test_vector_4_singleton_promotion() {
 fn test_vector_5_nested_promotion() {
     let hasher = Sha256Hasher;
     let tree = Subtree::Node(vec![Subtree::Node(vec![Subtree::Leaf(b"x".to_vec())])]);
-    let evaluated = neml::evaluate(&hasher, &tree);
+    let evaluated = cyphr_log::evaluate(&hasher, &tree);
     let expected = Sha256::digest(b"x").to_vec();
     assert_eq!(evaluated, expected);
 }
@@ -161,7 +161,7 @@ fn test_vector_6_subtree_append_k2() {
 fn test_vector_7_null_constant() {
     let hasher = Sha256Hasher;
     let null = hasher.null();
-    let expected = neml::null_digest(&hasher);
+    let expected = cyphr_log::null_digest(&hasher);
     assert_eq!(null, expected);
 }
 
@@ -252,7 +252,7 @@ fn test_inclusion_and_consistency_proofs_simple() {
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf_hash = Sha256Hasher.leaf(b"c");
         let root = log.root();
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
             2,
@@ -275,7 +275,7 @@ fn test_inclusion_and_consistency_proofs_simple() {
             temp_log.append_leaf(b"b").await.unwrap();
             temp_log.root()
         };
-        assert!(neml::verify_consistency(
+        assert!(cyphr_log::verify_consistency(
             &Sha256Hasher,
             2,
             4,
@@ -311,7 +311,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                 // Verify inclusion proof for every index
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
-                    assert!(neml::verify_inclusion(
+                    assert!(cyphr_log::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
                         idx,
@@ -343,7 +343,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                         }
                         temp_log.root()
                     };
-                    if !neml::verify_consistency(
+                    if !cyphr_log::verify_consistency(
                         &Sha256Hasher,
                         old_size,
                         size,
@@ -395,7 +395,7 @@ fn test_inclusion_proofs_subtree_log_mode() {
         let root = log.root();
 
         // Generate within-subtree path
-        let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree1, 1).unwrap();
+        let mut path = cyphr_log::within_subtree_path(&Sha256Hasher, &subtree1, 1).unwrap();
 
         // Generate log-level inclusion proof for Subtree 1
         let log_proof = log.inclusion_proof(1, 2).await.unwrap().unwrap();
@@ -404,9 +404,9 @@ fn test_inclusion_proofs_subtree_log_mode() {
         path.extend(log_proof.path);
 
         let leaf_hash = Sha256Hasher.leaf(b"d");
-        let full_proof = neml::InclusionProof { path };
+        let full_proof = cyphr_log::InclusionProof { path };
 
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
             1,
@@ -581,31 +581,31 @@ fn test_epoch_errors() {
         // Duplicate
         assert!(matches!(
             log.add_algorithm(0, Box::new(Sha256Hasher)).await,
-            Err(neml::error::Error::DuplicateAlgorithm(0))
+            Err(cyphr_log::error::Error::DuplicateAlgorithm(0))
         ));
         // Unknown remove
         assert!(matches!(
             log.remove_algorithm(999).await,
-            Err(neml::error::Error::UnknownAlgorithm(999))
+            Err(cyphr_log::error::Error::UnknownAlgorithm(999))
         ));
         // Unknown resume
         assert!(matches!(
             log.resume_algorithm(999).await,
-            Err(neml::error::Error::UnknownAlgorithm(999))
+            Err(cyphr_log::error::Error::UnknownAlgorithm(999))
         ));
 
         log.remove_algorithm(0).await.unwrap();
         // Already frozen
         assert!(matches!(
             log.remove_algorithm(0).await,
-            Err(neml::error::Error::FrozenAlgorithm(0))
+            Err(cyphr_log::error::Error::FrozenAlgorithm(0))
         ));
 
         log.resume_algorithm(0).await.unwrap();
         // Already active
         assert!(matches!(
             log.resume_algorithm(0).await,
-            Err(neml::error::Error::AlgorithmActive(0))
+            Err(cyphr_log::error::Error::AlgorithmActive(0))
         ));
     });
 }
@@ -666,7 +666,7 @@ fn test_epoch_proofs() {
         // Verify inclusion proof for algorithm 0 (fully active)
         let proof0 = log.inclusion_proof_for(0, 2, 4).await.unwrap().unwrap();
         let root0 = log.root_for(0).unwrap();
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
             2,
@@ -679,7 +679,7 @@ fn test_epoch_proofs() {
         // Verify inclusion proof for algorithm 1 (frozen at size 2)
         let proof1 = log.inclusion_proof_for(1, 1, 2).await.unwrap().unwrap();
         let root1 = log.root_for(1).unwrap();
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
             1,
@@ -795,7 +795,7 @@ fn test_promotion_proofs_malt() {
         let proof = log.inclusion_proof_for(0, 0, 1).await.unwrap().unwrap();
         // Single leaf tree with arity 3 has empty path steps (direct leaf-to-root promotion)
         assert!(proof.path.is_empty());
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"x"),
             0,
@@ -813,7 +813,7 @@ fn test_promotion_proofs_malt() {
         // Inclusion proof for index 2
         let proof = log.inclusion_proof_for(0, 2, 3).await.unwrap().unwrap();
         assert_eq!(proof.path.len(), 1);
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"z"),
             2,
@@ -877,7 +877,7 @@ fn test_subtree_consistency_proofs() {
                         temp_log.root()
                     };
                     assert!(
-                        neml::verify_consistency(
+                        cyphr_log::verify_consistency(
                             &Sha256Hasher,
                             old_size,
                             size,
@@ -923,14 +923,14 @@ fn test_deep_subtree_inclusion_proofs() {
             log.append_subtree(&subtree).await.unwrap();
 
             let root = log.root();
-            let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
+            let mut path = cyphr_log::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
             let log_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
-            let full_proof = neml::InclusionProof { path };
+            let full_proof = cyphr_log::InclusionProof { path };
 
             assert!(
-                neml::verify_inclusion(
+                cyphr_log::verify_inclusion(
                     &Sha256Hasher,
                     &Sha256Hasher.leaf(&data),
                     0,
@@ -980,14 +980,15 @@ fn test_deep_subtree_inclusion_proofs() {
         let test_cases = vec![(0, a_data), (1, b_data), (2, c_data)];
 
         for (leaf_idx, data) in test_cases {
-            let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree, leaf_idx).unwrap();
+            let mut path =
+                cyphr_log::within_subtree_path(&Sha256Hasher, &subtree, leaf_idx).unwrap();
             let log_proof = log.inclusion_proof(0, 2).await.unwrap().unwrap();
             path.extend(log_proof.path);
 
-            let full_proof = neml::InclusionProof { path };
+            let full_proof = cyphr_log::InclusionProof { path };
 
             assert!(
-                neml::verify_inclusion(
+                cyphr_log::verify_inclusion(
                     &Sha256Hasher,
                     &Sha256Hasher.leaf(&data),
                     0,
@@ -1033,9 +1034,9 @@ fn test_subtree_appends_k3_k4() {
 
             let root = log.root();
 
-            let h0 = neml::evaluate(&hasher, &s0);
-            let h1 = neml::evaluate(&hasher, &s1);
-            let h2 = neml::evaluate(&hasher, &s2);
+            let h0 = cyphr_log::evaluate(&hasher, &s0);
+            let h1 = cyphr_log::evaluate(&hasher, &s1);
+            let h2 = cyphr_log::evaluate(&hasher, &s2);
 
             let expected = hasher.node(&[&h0, &h1, &h2]);
             assert_eq!(root, expected, "Root mismatch for k=3 subtree appends");
@@ -1061,10 +1062,10 @@ fn test_subtree_appends_k3_k4() {
 
             let root = log.root();
 
-            let h0 = neml::evaluate(&hasher, &s0);
-            let h1 = neml::evaluate(&hasher, &s1);
-            let h2 = neml::evaluate(&hasher, &s2);
-            let h3 = neml::evaluate(&hasher, &s3);
+            let h0 = cyphr_log::evaluate(&hasher, &s0);
+            let h1 = cyphr_log::evaluate(&hasher, &s1);
+            let h2 = cyphr_log::evaluate(&hasher, &s2);
+            let h3 = cyphr_log::evaluate(&hasher, &s3);
 
             let expected = hasher.node(&[&h0, &h1, &h2, &h3]);
             assert_eq!(root, expected, "Root mismatch for k=4 subtree appends");
@@ -1148,12 +1149,12 @@ fn test_multi_algorithm_subtree_proofs() {
         let root1 = log.root_for(1).unwrap(); // frozen at size 1
 
         // 1. Verify inclusion proof for Algorithm 0 (fully active)
-        let mut path0 = neml::within_subtree_path(&Sha256Hasher, &s1, 0).unwrap();
+        let mut path0 = cyphr_log::within_subtree_path(&Sha256Hasher, &s1, 0).unwrap();
         let log_proof0 = log.inclusion_proof_for(0, 1, 2).await.unwrap().unwrap();
         path0.extend(log_proof0.path);
 
-        let full_proof0 = neml::InclusionProof { path: path0 };
-        assert!(neml::verify_inclusion(
+        let full_proof0 = cyphr_log::InclusionProof { path: path0 };
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
             1,
@@ -1166,12 +1167,12 @@ fn test_multi_algorithm_subtree_proofs() {
         // 2. Verify inclusion proof for Algorithm 1 (frozen at size 1)
         assert!(log.inclusion_proof_for(1, 1, 2).await.unwrap().is_none());
 
-        let mut path1 = neml::within_subtree_path(&Sha256Hasher, &s0, 1).unwrap();
+        let mut path1 = cyphr_log::within_subtree_path(&Sha256Hasher, &s0, 1).unwrap();
         let log_proof1 = log.inclusion_proof_for(1, 0, 1).await.unwrap().unwrap();
         path1.extend(log_proof1.path);
 
-        let full_proof1 = neml::InclusionProof { path: path1 };
-        assert!(neml::verify_inclusion(
+        let full_proof1 = cyphr_log::InclusionProof { path: path1 };
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
             0,
@@ -1194,7 +1195,7 @@ fn test_multi_algorithm_subtree_proofs() {
             temp_log.append_subtree(&s0).await.unwrap();
             temp_log.root_for(0).unwrap()
         };
-        assert!(neml::verify_consistency(
+        assert!(cyphr_log::verify_consistency(
             &Sha256Hasher,
             1,
             2,
@@ -1236,19 +1237,19 @@ fn test_proof_error_edge_cases() {
 
         // 3. within_subtree_path edge cases
         let leaf_subtree = Subtree::Leaf(b"x".to_vec());
-        assert!(neml::within_subtree_path(&Sha256Hasher, &leaf_subtree, 0).is_some());
-        assert!(neml::within_subtree_path(&Sha256Hasher, &leaf_subtree, 1).is_none());
+        assert!(cyphr_log::within_subtree_path(&Sha256Hasher, &leaf_subtree, 0).is_some());
+        assert!(cyphr_log::within_subtree_path(&Sha256Hasher, &leaf_subtree, 1).is_none());
 
         let node_subtree = Subtree::Node(vec![
             Subtree::Leaf(b"a".to_vec()),
             Subtree::Leaf(b"b".to_vec()),
         ]);
-        assert!(neml::within_subtree_path(&Sha256Hasher, &node_subtree, 1).is_some());
-        assert!(neml::within_subtree_path(&Sha256Hasher, &node_subtree, 2).is_none());
+        assert!(cyphr_log::within_subtree_path(&Sha256Hasher, &node_subtree, 1).is_some());
+        assert!(cyphr_log::within_subtree_path(&Sha256Hasher, &node_subtree, 2).is_none());
 
         // 4. Verifier input validation failures
-        let empty_proof = neml::InclusionProof { path: Vec::new() };
-        assert!(!neml::verify_inclusion(
+        let empty_proof = cyphr_log::InclusionProof { path: Vec::new() };
+        assert!(!cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"x"),
             1,
@@ -1258,11 +1259,11 @@ fn test_proof_error_edge_cases() {
             &[0; 32]
         ));
 
-        let empty_cons_proof = neml::ConsistencyProof {
+        let empty_cons_proof = cyphr_log::ConsistencyProof {
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!neml::verify_consistency(
+        assert!(!cyphr_log::verify_consistency(
             &Sha256Hasher,
             0,
             2,
@@ -1273,11 +1274,11 @@ fn test_proof_error_edge_cases() {
             &[0; 32]
         ));
 
-        let empty_cons_proof_invalid_sizes = neml::ConsistencyProof {
+        let empty_cons_proof_invalid_sizes = cyphr_log::ConsistencyProof {
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!neml::verify_consistency(
+        assert!(!cyphr_log::verify_consistency(
             &Sha256Hasher,
             2,
             2,
@@ -1288,11 +1289,11 @@ fn test_proof_error_edge_cases() {
             &[0; 32]
         ));
 
-        let empty_cons_proof_invalid_arity = neml::ConsistencyProof {
+        let empty_cons_proof_invalid_arity = cyphr_log::ConsistencyProof {
             start_hash: vec![0; 32],
             path: Vec::new(),
         };
-        assert!(!neml::verify_consistency(
+        assert!(!cyphr_log::verify_consistency(
             &Sha256Hasher,
             1,
             2,
@@ -1344,7 +1345,7 @@ fn test_power_of_k_boundaries() {
 
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
-                    assert!(neml::verify_inclusion(
+                    assert!(cyphr_log::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
                         idx,
@@ -1389,7 +1390,7 @@ fn test_power_of_k_boundaries() {
                 }
                 temp_log.root()
             };
-            assert!(neml::verify_consistency(
+            assert!(cyphr_log::verify_consistency(
                 &Sha256Hasher,
                 3,
                 9,
@@ -1402,7 +1403,7 @@ fn test_power_of_k_boundaries() {
 
             let proof_9_27 = log.consistency_proof(9, 27).await.unwrap().unwrap();
             let root_27 = log.root();
-            assert!(neml::verify_consistency(
+            assert!(cyphr_log::verify_consistency(
                 &Sha256Hasher,
                 9,
                 27,
@@ -1450,7 +1451,7 @@ fn test_power_of_k_boundaries() {
 
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
-                    assert!(neml::verify_inclusion(
+                    assert!(cyphr_log::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
                         idx,
@@ -1495,7 +1496,7 @@ fn test_power_of_k_boundaries() {
                 }
                 temp_log.root()
             };
-            assert!(neml::verify_consistency(
+            assert!(cyphr_log::verify_consistency(
                 &Sha256Hasher,
                 4,
                 16,
@@ -1508,7 +1509,7 @@ fn test_power_of_k_boundaries() {
 
             let proof_16_64 = log.consistency_proof(16, 64).await.unwrap().unwrap();
             let root_64 = log.root();
-            assert!(neml::verify_consistency(
+            assert!(cyphr_log::verify_consistency(
                 &Sha256Hasher,
                 16,
                 64,
@@ -1552,7 +1553,7 @@ fn test_combined_root_single_alg_commits_epochs() {
 
         // Alg 1's epoch [(1, MAX)] appears in committed_epochs_at(1) even
         // though alg 1 was not active at position 0.
-        let expected = Sha256Hasher.hash(&neml::combined_root_preimage(
+        let expected = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
             &[(0, raw_root_at_1)],
             &[(0, vec![(0u64, u64::MAX)]), (1, vec![(1u64, u64::MAX)])],
         ));
@@ -1579,7 +1580,7 @@ fn test_combined_root_multi_alg() {
 
         // Reconstruct combined root manually from the canonical snapshot
         // serialization: sorted active roots plus the epoch timeline.
-        let buf = neml::combined_root_preimage(
+        let buf = cyphr_log::combined_root_preimage(
             &[(0, root_0), (1, root_1)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(0, u64::MAX)])],
         );
@@ -1613,7 +1614,7 @@ fn test_combined_root_historical_and_epochs() {
         let comb_1 = log.combined_root_at(0, 1).await.unwrap();
         let raw_0_at_1 = log.root_for_at(0, 1).await.unwrap();
         assert_ne!(comb_1, raw_0_at_1);
-        let expected_1 = Sha256Hasher.hash(&neml::combined_root_preimage(
+        let expected_1 = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
             &[(0, raw_0_at_1)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, u64::MAX)])],
         ));
@@ -1623,7 +1624,7 @@ fn test_combined_root_historical_and_epochs() {
         // interval is closed at 2 by the later deactivation.
         let comb_2 = log.combined_root_at(0, 2).await.unwrap();
         assert_ne!(comb_2, log.root_for_at(0, 2).await.unwrap());
-        let expected_2 = Sha256Hasher.hash(&neml::combined_root_preimage(
+        let expected_2 = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
             &[
                 (0, log.root_for_at(0, 2).await.unwrap()),
                 (1, log.root_for_at(1, 2).await.unwrap()),
@@ -1637,7 +1638,7 @@ fn test_combined_root_historical_and_epochs() {
         let comb_3 = log.combined_root_at(0, 3).await.unwrap();
         let raw_0_at_3 = log.root_for_at(0, 3).await.unwrap();
         assert_ne!(comb_3, raw_0_at_3);
-        let expected_3 = Sha256Hasher.hash(&neml::combined_root_preimage(
+        let expected_3 = Sha256Hasher.hash(&cyphr_log::combined_root_preimage(
             &[(0, raw_0_at_3)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, 2)])],
         ));
@@ -1653,25 +1654,25 @@ fn test_coupling_proof_verify_validation() {
     let tree_size = 4u64;
     let epochs = vec![(0u64, vec![(0u64, u64::MAX)]), (1, vec![(0, u64::MAX)])];
 
-    let proof = neml::CouplingProof {
+    let proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
 
     // Correct Combined Root computation
-    let combined_root = hasher.hash(&neml::combined_root_preimage(
+    let combined_root = hasher.hash(&cyphr_log::combined_root_preimage(
         &proof.active_roots,
         &proof.alg_epochs,
     ));
 
-    let config = neml::VerifierConfig::default();
+    let config = cyphr_log::VerifierConfig::default();
 
     // 1. Success case
     let target = proof.verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config);
     assert_eq!(target.unwrap(), raw_root_0);
 
     // 2. Reject because of maximum active algorithms limit
-    let strict_config = neml::VerifierConfig {
+    let strict_config = cyphr_log::VerifierConfig {
         max_active_algorithms: 1,
         ..Default::default()
     };
@@ -1686,7 +1687,7 @@ fn test_coupling_proof_verify_validation() {
     assert!(target_dos.is_none());
 
     // 3. Reject unsorted algorithm IDs
-    let unsorted_proof = neml::CouplingProof {
+    let unsorted_proof = cyphr_log::CouplingProof {
         active_roots: vec![(1, raw_root_1.clone()), (0, raw_root_0.clone())],
         alg_epochs: epochs.clone(),
     };
@@ -1697,7 +1698,7 @@ fn test_coupling_proof_verify_validation() {
     );
 
     // 4. Reject duplicate algorithm IDs
-    let duplicate_proof = neml::CouplingProof {
+    let duplicate_proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, raw_root_0.clone()), (0, raw_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
@@ -1711,7 +1712,7 @@ fn test_coupling_proof_verify_validation() {
     // Modify one byte in raw_root_0
     let mut bad_root_0 = raw_root_0.clone();
     bad_root_0[0] ^= 0xFF;
-    let tampered_proof = neml::CouplingProof {
+    let tampered_proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, bad_root_0), (1, raw_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
@@ -1773,7 +1774,7 @@ fn test_coupling_proof_verify_validation() {
     );
 
     // 10. EMPTY INPUTS HANDLING
-    let empty_proof = neml::CouplingProof {
+    let empty_proof = cyphr_log::CouplingProof {
         active_roots: vec![],
         alg_epochs: vec![],
     };
@@ -1792,7 +1793,7 @@ fn test_coupling_proof_verify_validation() {
     // Shifting an activation boundary must break the combined-root binding:
     // the timeline is inside the hash coverage, so the substituted proof
     // cannot verify against the honest root.
-    let substituted_epochs_proof = neml::CouplingProof {
+    let substituted_epochs_proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
         alg_epochs: vec![(0, vec![(0, u64::MAX)]), (1, vec![(2, u64::MAX)])],
     };
@@ -1805,11 +1806,11 @@ fn test_coupling_proof_verify_validation() {
     // 12. EPOCH / ACTIVE-SET CONSISTENCY REJECTION
     // A timeline that does not cover the final position for a claimed active
     // algorithm is rejected before any hashing.
-    let inconsistent_proof = neml::CouplingProof {
+    let inconsistent_proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
         alg_epochs: vec![(0, vec![(0, u64::MAX)]), (1, vec![(0, 2)])],
     };
-    let inconsistent_root = hasher.hash(&neml::combined_root_preimage(
+    let inconsistent_root = hasher.hash(&cyphr_log::combined_root_preimage(
         &inconsistent_proof.active_roots,
         &inconsistent_proof.alg_epochs,
     ));
@@ -1820,11 +1821,11 @@ fn test_coupling_proof_verify_validation() {
     );
 
     // 13. ILL-FORMED EPOCHS REJECTION (overlapping intervals)
-    let ill_formed_proof = neml::CouplingProof {
+    let ill_formed_proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, raw_root_0.clone()), (1, raw_root_1.clone())],
         alg_epochs: vec![(0, vec![(0, 3), (2, u64::MAX)]), (1, vec![(0, u64::MAX)])],
     };
-    let ill_formed_root = hasher.hash(&neml::combined_root_preimage(
+    let ill_formed_root = hasher.hash(&cyphr_log::combined_root_preimage(
         &ill_formed_proof.active_roots,
         &ill_formed_proof.alg_epochs,
     ));
@@ -1844,11 +1845,11 @@ fn test_coupling_proof_verify_validation() {
     // 15. VARIABLE LENGTH ROOTS (Length-Ambiguity Check)
     let var_root_0 = vec![9; 20]; // 20-byte root (e.g. RIPEMD-160)
     let var_root_1 = vec![5; 32]; // 32-byte root (e.g. SHA-256)
-    let var_proof = neml::CouplingProof {
+    let var_proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, var_root_0.clone()), (1, var_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
-    let var_combined = hasher.hash(&neml::combined_root_preimage(
+    let var_combined = hasher.hash(&cyphr_log::combined_root_preimage(
         &var_proof.active_roots,
         &var_proof.alg_epochs,
     ));
@@ -1857,11 +1858,11 @@ fn test_coupling_proof_verify_validation() {
     assert_eq!(target_var.unwrap(), var_root_0);
 
     // 16. EMPTY ROOTS HANDLING
-    let empty_root_proof = neml::CouplingProof {
+    let empty_root_proof = cyphr_log::CouplingProof {
         active_roots: vec![(0, vec![]), (1, var_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
-    let empty_combined = hasher.hash(&neml::combined_root_preimage(
+    let empty_combined = hasher.hash(&cyphr_log::combined_root_preimage(
         &empty_root_proof.active_roots,
         &empty_root_proof.alg_epochs,
     ));
@@ -1886,13 +1887,13 @@ fn test_verify_inclusion_with_coupling() {
         let raw_root = log.root();
         let combined_root = log.combined_root().await;
         let inclusion_proof = log.inclusion_proof(0, 1).await.unwrap().unwrap();
-        let coupling_proof = neml::CouplingProof {
+        let coupling_proof = cyphr_log::CouplingProof {
             active_roots: vec![(0, raw_root.clone())],
             alg_epochs: log.committed_epochs_at(1),
         };
 
-        let verifier_config = neml::VerifierConfig::default();
-        let ok = neml::verify_inclusion_with_coupling(
+        let verifier_config = cyphr_log::VerifierConfig::default();
+        let ok = cyphr_log::verify_inclusion_with_coupling(
             &Sha256Hasher,
             0,
             &Sha256Hasher.leaf(b"test"),
@@ -2060,14 +2061,14 @@ fn test_verify_consistency_with_coupling() {
 
         log.append_leaf(b"a").await.unwrap();
         let root_a = log.root();
-        let coupling_a = neml::CouplingProof {
+        let coupling_a = cyphr_log::CouplingProof {
             active_roots: vec![(0, root_a.clone())],
             alg_epochs: log.committed_epochs_at(1),
         };
 
         log.append_leaf(b"b").await.unwrap();
         let root_b = log.root();
-        let coupling_b = neml::CouplingProof {
+        let coupling_b = cyphr_log::CouplingProof {
             active_roots: vec![(0, root_b.clone())],
             alg_epochs: log.committed_epochs_at(2),
         };
@@ -2077,8 +2078,8 @@ fn test_verify_consistency_with_coupling() {
 
         let consistency_proof = log.consistency_proof(1, 2).await.unwrap().unwrap();
 
-        let verifier_config = neml::VerifierConfig::default();
-        let ok = neml::verify_consistency_with_coupling(
+        let verifier_config = cyphr_log::VerifierConfig::default();
+        let ok = cyphr_log::verify_consistency_with_coupling(
             &Sha256Hasher,
             0,
             1,
@@ -2100,17 +2101,17 @@ fn test_verify_consistency_with_coupling() {
 
 #[test]
 fn test_consistency_proof_overflow_panic() {
-    let proof = neml::ConsistencyProof {
+    let proof = cyphr_log::ConsistencyProof {
         start_hash: vec![0; 32],
         path: vec![
-            neml::ProofStep {
+            cyphr_log::ProofStep {
                 siblings: vec![vec![0; 32]; 4],
                 position: 4,
             };
             62
         ],
     };
-    let ok = neml::verify_consistency(
+    let ok = cyphr_log::verify_consistency(
         &Sha256Hasher,
         1,
         1 << 62,
@@ -2125,17 +2126,17 @@ fn test_consistency_proof_overflow_panic() {
 
 #[test]
 fn test_consistency_proof_huge_siblings_dos() {
-    let proof = neml::ConsistencyProof {
+    let proof = cyphr_log::ConsistencyProof {
         start_hash: vec![0; 32],
         path: vec![
-            neml::ProofStep {
+            cyphr_log::ProofStep {
                 siblings: vec![vec![0; 32]; 100_000],
                 position: 0,
             };
             1
         ],
     };
-    let ok = neml::verify_consistency(
+    let ok = cyphr_log::verify_consistency(
         &Sha256Hasher,
         1,
         2,
@@ -2148,17 +2149,17 @@ fn test_consistency_proof_huge_siblings_dos() {
     assert!(!ok);
 
     // Path length > 256
-    let proof_huge_path = neml::ConsistencyProof {
+    let proof_huge_path = cyphr_log::ConsistencyProof {
         start_hash: vec![0; 32],
         path: vec![
-            neml::ProofStep {
+            cyphr_log::ProofStep {
                 siblings: vec![vec![0; 32]],
                 position: 0,
             };
             257
         ],
     };
-    let ok = neml::verify_consistency(
+    let ok = cyphr_log::verify_consistency(
         &Sha256Hasher,
         1,
         2,
@@ -2171,11 +2172,11 @@ fn test_consistency_proof_huge_siblings_dos() {
     assert!(!ok);
 
     // Invalid log arity < 2 (e.g. 1)
-    let proof_invalid_arity_low = neml::ConsistencyProof {
+    let proof_invalid_arity_low = cyphr_log::ConsistencyProof {
         start_hash: vec![0; 32],
         path: Vec::new(),
     };
-    let ok = neml::verify_consistency(
+    let ok = cyphr_log::verify_consistency(
         &Sha256Hasher,
         1,
         2,
@@ -2188,11 +2189,11 @@ fn test_consistency_proof_huge_siblings_dos() {
     assert!(!ok);
 
     // Invalid log arity > 256
-    let proof_invalid_arity_high = neml::ConsistencyProof {
+    let proof_invalid_arity_high = cyphr_log::ConsistencyProof {
         start_hash: vec![0; 32],
         path: Vec::new(),
     };
-    let ok = neml::verify_consistency(
+    let ok = cyphr_log::verify_consistency(
         &Sha256Hasher,
         1,
         2,
@@ -2212,8 +2213,8 @@ fn test_inclusion_proof_dos_prevention() {
     let root = hasher.empty();
 
     // Large log arity > 256
-    let proof = neml::InclusionProof { path: Vec::new() };
-    let ok = neml::verify_inclusion(
+    let proof = cyphr_log::InclusionProof { path: Vec::new() };
+    let ok = cyphr_log::verify_inclusion(
         &hasher,
         &leaf_hash,
         0,
@@ -2225,31 +2226,32 @@ fn test_inclusion_proof_dos_prevention() {
     assert!(!ok);
 
     // Invalid log arity = 1
-    let proof = neml::InclusionProof { path: Vec::new() };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 1, &proof.path, &root);
+    let proof = cyphr_log::InclusionProof { path: Vec::new() };
+    let ok = cyphr_log::verify_inclusion(&hasher, &leaf_hash, 0, 10, 1, &proof.path, &root);
     assert!(!ok);
 
     // Path length > 256
-    let proof_huge_path = neml::InclusionProof {
+    let proof_huge_path = cyphr_log::InclusionProof {
         path: vec![
-            neml::ProofStep {
+            cyphr_log::ProofStep {
                 siblings: vec![vec![0; 32]],
                 position: 0,
             };
             257
         ],
     };
-    let ok = neml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 2, &proof_huge_path.path, &root);
+    let ok =
+        cyphr_log::verify_inclusion(&hasher, &leaf_hash, 0, 10, 2, &proof_huge_path.path, &root);
     assert!(!ok);
 
     // Sibling count > 256
-    let proof_huge_siblings = neml::InclusionProof {
-        path: vec![neml::ProofStep {
+    let proof_huge_siblings = cyphr_log::InclusionProof {
+        path: vec![cyphr_log::ProofStep {
             siblings: vec![vec![0; 32]; 257],
             position: 0,
         }],
     };
-    let ok = neml::verify_inclusion(
+    let ok = cyphr_log::verify_inclusion(
         &hasher,
         &leaf_hash,
         0,
@@ -2263,20 +2265,20 @@ fn test_inclusion_proof_dos_prevention() {
 
 #[test]
 fn test_tree_new_error_propagation() {
-    let storage = neml::MemoryStorage::new();
+    let storage = cyphr_log::MemoryStorage::new();
     // Invalid arity 1 should return Err, not panic
-    let res = smol::block_on(neml::NaryMerkleLog::new(
+    let res = smol::block_on(cyphr_log::NaryMerkleLog::new(
         storage.clone(),
         Box::new(Sha256Hasher),
-        neml::TreeConfig { log_arity: 1 },
+        cyphr_log::TreeConfig { log_arity: 1 },
     ));
     assert!(res.is_err());
 
     // Invalid arity 257 should return Err, not panic
-    let res = smol::block_on(neml::NaryMerkleLog::new(
+    let res = smol::block_on(cyphr_log::NaryMerkleLog::new(
         storage,
         Box::new(Sha256Hasher),
-        neml::TreeConfig { log_arity: 257 },
+        cyphr_log::TreeConfig { log_arity: 257 },
     ));
     assert!(res.is_err());
 }
@@ -2285,7 +2287,7 @@ fn test_tree_new_error_propagation() {
 fn test_node_coordinate_storage_roundtrip() {
     // Verify that nodes at left >= 2^48 do not collide with left % 2^48.
     smol::block_on(async {
-        let mut storage = neml::MemoryStorage::new();
+        let mut storage = cyphr_log::MemoryStorage::new();
 
         let left1 = 0u64;
         let height1 = 0u32;
@@ -2310,12 +2312,12 @@ fn test_node_coordinate_storage_roundtrip() {
 }
 
 struct MockStorage {
-    metas: Result<neml::AlgorithmMetas, neml::storage::MemoryStorageError>,
+    metas: Result<cyphr_log::AlgorithmMetas, cyphr_log::storage::MemoryStorageError>,
     len: u64,
 }
 
 impl Storage for MockStorage {
-    type Error = neml::storage::MemoryStorageError;
+    type Error = cyphr_log::storage::MemoryStorageError;
 
     async fn store_leaf(&mut self, _index: u64, _data: &[u8]) -> Result<(), Self::Error> {
         Ok(())
@@ -2356,7 +2358,7 @@ impl Storage for MockStorage {
         Ok(())
     }
 
-    async fn load_algorithm_metas(&self) -> Result<neml::AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<cyphr_log::AlgorithmMetas, Self::Error> {
         self.metas.clone()
     }
 
@@ -2389,10 +2391,11 @@ fn test_from_storage_initialization_errors() {
             len: 0,
         };
         let res =
-            neml::NaryMerkleLog::from_storage(storage_dup, vec![(0, Box::new(Sha256Hasher))]).await;
+            cyphr_log::NaryMerkleLog::from_storage(storage_dup, vec![(0, Box::new(Sha256Hasher))])
+                .await;
         assert!(matches!(
             res,
-            Err(neml::error::Error::DuplicateAlgorithm(0))
+            Err(cyphr_log::error::Error::DuplicateAlgorithm(0))
         ));
 
         // 2. Orphaned metadata error (metas has alg 0, but no hasher for alg 0 is passed)
@@ -2400,27 +2403,33 @@ fn test_from_storage_initialization_errors() {
             metas: Ok(vec![(0, vec![(0, 0)])]),
             len: 0,
         };
-        let res = neml::NaryMerkleLog::from_storage(storage_orphaned, Vec::new()).await;
-        assert!(matches!(res, Err(neml::error::Error::OrphanedMetadata(0))));
+        let res = cyphr_log::NaryMerkleLog::from_storage(storage_orphaned, Vec::new()).await;
+        assert!(matches!(
+            res,
+            Err(cyphr_log::error::Error::OrphanedMetadata(0))
+        ));
 
         // 3. Unknown metadata error (hasher passed for alg 1, but metas only has alg 0)
         let storage_unknown = MockStorage {
             metas: Ok(vec![(0, vec![(0, 0)])]),
             len: 0,
         };
-        let res = neml::NaryMerkleLog::from_storage(
+        let res = cyphr_log::NaryMerkleLog::from_storage(
             storage_unknown,
             vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
         )
         .await;
-        assert!(matches!(res, Err(neml::error::Error::UnknownMetadata(1))));
+        assert!(matches!(
+            res,
+            Err(cyphr_log::error::Error::UnknownMetadata(1))
+        ));
 
         // 4. Corrupted metadata error (invalid log arity < 2)
         let storage_corrupt = MockStorage {
             metas: Ok(vec![(0, vec![(0, 0)])]),
             len: 0,
         };
-        let res = neml::NaryMerkleLog::from_storage_with_config(
+        let res = cyphr_log::NaryMerkleLog::from_storage_with_config(
             storage_corrupt,
             vec![(0, Box::new(Sha256Hasher))],
             TreeConfig { log_arity: 1 },
@@ -2428,23 +2437,24 @@ fn test_from_storage_initialization_errors() {
         .await;
         assert!(matches!(
             res,
-            Err(neml::error::Error::CorruptedMetadata { alg_id: 0, .. })
+            Err(cyphr_log::error::Error::CorruptedMetadata { alg_id: 0, .. })
         ));
 
         // 5. Storage error propagation
         let storage_err = MockStorage {
-            metas: Err(neml::storage::MemoryStorageError {
+            metas: Err(cyphr_log::storage::MemoryStorageError {
                 index: 0,
                 stored: 0,
             }),
             len: 0,
         };
         let res =
-            neml::NaryMerkleLog::from_storage(storage_err, vec![(0, Box::new(Sha256Hasher))]).await;
+            cyphr_log::NaryMerkleLog::from_storage(storage_err, vec![(0, Box::new(Sha256Hasher))])
+                .await;
         assert!(matches!(
             res,
-            Err(neml::error::Error::Storage(
-                neml::storage::MemoryStorageError {
+            Err(cyphr_log::error::Error::Storage(
+                cyphr_log::storage::MemoryStorageError {
                     index: 0,
                     stored: 0
                 }
@@ -2468,28 +2478,28 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
     let leaf_b = hasher.leaf(b"B");
 
     // root = nary_mr(&[leaf_a, leaf_b])
-    let root = neml::mr::nary_mr(&hasher, &[&leaf_a, &leaf_b]);
+    let root = cyphr_log::mr::nary_mr(&hasher, &[&leaf_a, &leaf_b]);
 
     // This proof asserts leaf_a is at index 1 (which is false, it's at index 0)
     // By setting log_arity: 0, verify_inclusion_path_structure is bypassed,
     // but the verifier should reject it because log_arity < 2 is invalid!
-    let spoofed_proof = neml::InclusionProof {
-        path: vec![neml::ProofStep {
+    let spoofed_proof = cyphr_log::InclusionProof {
+        path: vec![cyphr_log::ProofStep {
             siblings: vec![leaf_b.clone()],
             position: 0, // position 0 means leaf_a is at the left (index 0)
         }],
     };
 
-    let coupling = neml::CouplingProof {
+    let coupling = cyphr_log::CouplingProof {
         active_roots: vec![(0, root.clone())],
         alg_epochs: vec![(0, vec![(0, u64::MAX)])],
     };
-    let combined_root = hasher.hash(&neml::combined_root_preimage(
+    let combined_root = hasher.hash(&cyphr_log::combined_root_preimage(
         &coupling.active_roots,
         &coupling.alg_epochs,
     ));
 
-    let is_valid = neml::verify_inclusion_with_coupling(
+    let is_valid = cyphr_log::verify_inclusion_with_coupling(
         &hasher,
         0,
         &leaf_a,
@@ -2500,7 +2510,7 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
         &coupling,
         &combined_root,
         &[0],
-        neml::VerifierConfig::default(),
+        cyphr_log::VerifierConfig::default(),
     );
     assert!(
         !is_valid,
@@ -2513,17 +2523,18 @@ fn test_proof_sibling_digest_length_mismatch() {
     let hasher = Sha256Hasher;
     let leaf_a = hasher.leaf(b"A");
     let leaf_b = hasher.leaf(b"B");
-    let root = neml::mr::nary_mr(&hasher, &[&leaf_a, &leaf_b]);
+    let root = cyphr_log::mr::nary_mr(&hasher, &[&leaf_a, &leaf_b]);
 
     // Proof with malformed sibling digest length (e.g. 16 bytes instead of 32)
-    let malformed_proof = neml::InclusionProof {
-        path: vec![neml::ProofStep {
+    let malformed_proof = cyphr_log::InclusionProof {
+        path: vec![cyphr_log::ProofStep {
             siblings: vec![vec![0; 16]], // invalid sibling size
             position: 0,
         }],
     };
 
-    let is_valid = neml::verify_inclusion(&hasher, &leaf_a, 0, 2, 2, &malformed_proof.path, &root);
+    let is_valid =
+        cyphr_log::verify_inclusion(&hasher, &leaf_a, 0, 2, 2, &malformed_proof.path, &root);
     assert!(
         !is_valid,
         "Expected proof with invalid sibling size to be rejected"
@@ -2556,7 +2567,7 @@ fn test_determine_global_size_probing_out_of_sync() {
         storage.store_node(1, 1, 0, &node_val).await.unwrap();
 
         // Load tree from storage
-        let hashers: Vec<(u64, Box<dyn neml::Hasher>)> =
+        let hashers: Vec<(u64, Box<dyn cyphr_log::Hasher>)> =
             vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))];
 
         // This fails with CorruptedMetadata as expected under R10.
@@ -2580,8 +2591,8 @@ struct ErrorMaskingStorage {
     mask_len_to_zero: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl neml::Storage for ErrorMaskingStorage {
-    type Error = neml::storage::MemoryStorageError;
+impl cyphr_log::Storage for ErrorMaskingStorage {
+    type Error = cyphr_log::storage::MemoryStorageError;
 
     async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
         if index < self.inner.leaves.len() as u64 {
@@ -2634,7 +2645,7 @@ impl neml::Storage for ErrorMaskingStorage {
         self.inner.store_algorithm_meta(alg_id, epochs).await
     }
 
-    async fn load_algorithm_metas(&self) -> Result<neml::AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<cyphr_log::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().await
     }
 
@@ -2704,7 +2715,7 @@ fn test_storage_len_error_masking_overwrite() {
             "persisted log_meta wins over masked len()"
         );
         assert_eq!(log_after_mask.subtree_count(), 0);
-        assert_eq!(log_after_mask.kind(), neml::LogKind::Flat);
+        assert_eq!(log_after_mask.kind(), cyphr_log::LogKind::Flat);
     });
 }
 
@@ -2749,7 +2760,7 @@ fn test_boundary_sizes_and_high_arities() {
                         .unwrap()
                         .unwrap();
                     assert!(
-                        neml::verify_inclusion(
+                        cyphr_log::verify_inclusion(
                             &Sha256Hasher,
                             &leaves[idx as usize],
                             idx,
@@ -2777,7 +2788,7 @@ fn test_boundary_sizes_and_high_arities() {
                         .unwrap()
                         .unwrap();
                     assert!(
-                        neml::verify_consistency(
+                        cyphr_log::verify_consistency(
                             &Sha256Hasher,
                             old_size,
                             size,
@@ -2801,7 +2812,7 @@ fn test_boundary_sizes_and_high_arities() {
 #[test]
 fn test_null_digest() {
     let hasher = Sha256Hasher;
-    let d = neml::null_digest(&hasher);
+    let d = cyphr_log::null_digest(&hasher);
     assert_eq!(d, hasher.hash(b"null"));
 }
 
@@ -2825,7 +2836,7 @@ fn test_proof_malleability_path_extension() {
         let root = log.root();
 
         // 1. Original proof verifies successfully
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
             2,
@@ -2836,7 +2847,7 @@ fn test_proof_malleability_path_extension() {
         ));
 
         // 2. Prepend a dummy step with empty siblings.
-        let mut malleable_path = vec![neml::ProofStep {
+        let mut malleable_path = vec![cyphr_log::ProofStep {
             siblings: vec![],
             position: 42,
         }];
@@ -2844,7 +2855,7 @@ fn test_proof_malleability_path_extension() {
 
         // 3. Verifies should fail because of path length mismatch or position spoofing
         let verified =
-            neml::verify_inclusion(&Sha256Hasher, &leaf_hash, 2, 4, 2, &malleable_path, &root);
+            cyphr_log::verify_inclusion(&Sha256Hasher, &leaf_hash, 2, 4, 2, &malleable_path, &root);
         assert!(!verified, "Malleable proof verification should fail");
     });
 }
@@ -2865,7 +2876,7 @@ fn test_proof_malleability_position_spoofing() {
         log.append_subtree(&subtree).await.unwrap();
 
         let root = log.root();
-        let path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
+        let path = cyphr_log::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
         assert!(
             path.is_empty(),
             "promoted unary node must emit no proof step"
@@ -2876,7 +2887,7 @@ fn test_proof_malleability_position_spoofing() {
         full_path.extend(log_proof.path);
 
         let leaf_hash = Sha256Hasher.leaf(b"a");
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
             0,
@@ -2893,13 +2904,13 @@ fn test_proof_malleability_position_spoofing() {
             let mut spoofed = full_path.clone();
             spoofed.insert(
                 0,
-                neml::ProofStep {
+                cyphr_log::ProofStep {
                     siblings: vec![],
                     position,
                 },
             );
             assert!(
-                !neml::verify_inclusion(&Sha256Hasher, &leaf_hash, 0, 1, 2, &spoofed, &root),
+                !cyphr_log::verify_inclusion(&Sha256Hasher, &leaf_hash, 0, 1, 2, &spoofed, &root),
                 "prepended promoted step (position {position}) must be rejected"
             );
         }
@@ -2923,7 +2934,7 @@ fn test_inclusion_truncated_skeleton_rejected() {
 
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"c");
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf,
             2,
@@ -2936,7 +2947,7 @@ fn test_inclusion_truncated_skeleton_rejected() {
         assert!(!proof.path.is_empty());
         let truncated = &proof.path[..proof.path.len() - 1];
         assert!(
-            !neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, truncated, &root),
+            !cyphr_log::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, truncated, &root),
             "a proof missing a skeleton step must be rejected"
         );
     });
@@ -2960,7 +2971,7 @@ fn test_partial_rightmost_node_sibling_count() {
 
         let proof = log.inclusion_proof(3, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"d");
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf,
             3,
@@ -2979,7 +2990,7 @@ fn test_partial_rightmost_node_sibling_count() {
         let mut extra = proof.path.clone();
         extra.last_mut().unwrap().siblings.push(vec![0u8; 32]);
         assert!(
-            !neml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &extra, &root),
+            !cyphr_log::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &extra, &root),
             "an extra rightmost sibling must be rejected"
         );
 
@@ -2987,7 +2998,7 @@ fn test_partial_rightmost_node_sibling_count() {
         let mut fewer = proof.path.clone();
         fewer.last_mut().unwrap().siblings.clear();
         assert!(
-            !neml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &fewer, &root),
+            !cyphr_log::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &fewer, &root),
             "a missing rightmost sibling must be rejected"
         );
     });
@@ -3010,7 +3021,7 @@ fn test_skeleton_position_spoof_rejected() {
 
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"c");
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf,
             2,
@@ -3023,7 +3034,7 @@ fn test_skeleton_position_spoof_rejected() {
         let mut spoofed = proof.path.clone();
         spoofed[0].position ^= 1;
         assert!(
-            !neml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &spoofed, &root),
+            !cyphr_log::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &spoofed, &root),
             "a spoofed skeleton position must be rejected"
         );
     });
@@ -3050,13 +3061,13 @@ fn test_canonical_encoding_promotion_chain() {
             .unwrap();
         let root = log.root();
 
-        let mut path = neml::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
+        let mut path = cyphr_log::within_subtree_path(&Sha256Hasher, &subtree, 0).unwrap();
         assert_eq!(path.len(), 1, "the unary chain above x must be omitted");
         let log_proof = log.inclusion_proof(0, 2).await.unwrap().unwrap();
         path.extend(log_proof.path);
 
         let leaf = Sha256Hasher.leaf(b"x");
-        assert!(neml::verify_inclusion(
+        assert!(cyphr_log::verify_inclusion(
             &Sha256Hasher,
             &leaf,
             0,
@@ -3070,13 +3081,13 @@ fn test_canonical_encoding_promotion_chain() {
             let mut tampered = path.clone();
             tampered.insert(
                 pos,
-                neml::ProofStep {
+                cyphr_log::ProofStep {
                     siblings: vec![],
                     position: 0,
                 },
             );
             assert!(
-                !neml::verify_inclusion(&Sha256Hasher, &leaf, 0, 2, 2, &tampered, &root),
+                !cyphr_log::verify_inclusion(&Sha256Hasher, &leaf, 0, 2, 2, &tampered, &root),
                 "a zero-sibling step at offset {pos} must be rejected"
             );
         }
@@ -3088,7 +3099,7 @@ fn test_reduction_count_overflow() {
     // u64::MAX + 1 == 2^64, which is divisible by 2 exactly 64 times.
     // Verify the function returns the correct count without panicking or
     // looping infinitely.
-    let res = neml::reduction_count(u64::MAX, 2);
+    let res = cyphr_log::reduction_count(u64::MAX, 2);
     assert_eq!(res, 64);
 }
 
@@ -3096,7 +3107,7 @@ fn test_reduction_count_overflow() {
 fn test_reconstruct_index_oom_dos() {
     // Large log_arity must be rejected without OOMing or panicking
     let large_k = 1u64 << 32;
-    let res = neml::reconstruct_consistency_roots(&Sha256Hasher, 1, 2, large_k, &[0; 32], &[]);
+    let res = cyphr_log::reconstruct_consistency_roots(&Sha256Hasher, 1, 2, large_k, &[0; 32], &[]);
     assert_eq!(res, None);
 }
 
@@ -3222,11 +3233,11 @@ fn test_substituted_metadata_fails_proofs() {
 
         let coupling = log.coupling_proof_at(2).await.unwrap();
         let cr = log.combined_root_at(0, 2).await.unwrap();
-        let config = neml::VerifierConfig::default();
+        let config = cyphr_log::VerifierConfig::default();
 
         // Honest inactivity proof for X=1 at pos 0 (inactive, null cell).
         let inact_path = log.inclusion_proof_for(1, 0, 2).await.unwrap().unwrap();
-        let ok_inact = neml::verify_inactivity_with_coupling(
+        let ok_inact = cyphr_log::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             0,
@@ -3243,7 +3254,7 @@ fn test_substituted_metadata_fails_proofs() {
         // Honest inclusion proof for X=1 at pos 1 (active, real data).
         let incl_path = log.inclusion_proof_for(1, 1, 2).await.unwrap().unwrap();
         let leaf_hash = Sha256Hasher.leaf(b"data1");
-        let ok_incl = neml::verify_inclusion_with_coupling(
+        let ok_incl = cyphr_log::verify_inclusion_with_coupling(
             &Sha256Hasher,
             1,
             &leaf_hash,
@@ -3263,7 +3274,7 @@ fn test_substituted_metadata_fails_proofs() {
         let mut bad_coupling = coupling.clone();
         bad_coupling.alg_epochs = vec![(0, vec![(0u64, u64::MAX)]), (1, vec![(0u64, u64::MAX)])];
 
-        let fail_inact = neml::verify_inactivity_with_coupling(
+        let fail_inact = cyphr_log::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             0,
@@ -3280,7 +3291,7 @@ fn test_substituted_metadata_fails_proofs() {
             "substituted epochs must break inactivity proof"
         );
 
-        let fail_incl = neml::verify_inclusion_with_coupling(
+        let fail_incl = cyphr_log::verify_inclusion_with_coupling(
             &Sha256Hasher,
             1,
             &leaf_hash,
@@ -3313,7 +3324,7 @@ fn test_null_payload_stays_legal() {
 
         let coupling = log.coupling_proof_at(1).await.unwrap();
         let cr = log.combined_root().await;
-        let config = neml::VerifierConfig::default();
+        let config = cyphr_log::VerifierConfig::default();
 
         // leaf(b"null") == null() — verify it is accepted by the inclusion
         // check (alg 0 is active at pos 0, so the null-leaf constraint is
@@ -3326,7 +3337,7 @@ fn test_null_payload_stays_legal() {
         );
 
         let path = log.inclusion_proof(0, 1).await.unwrap().unwrap();
-        let ok = neml::verify_inclusion_with_coupling(
+        let ok = cyphr_log::verify_inclusion_with_coupling(
             &Sha256Hasher,
             0,
             &leaf_hash,
@@ -3380,8 +3391,8 @@ fn test_frontier_freshness() {
         // committed_is_live distinguishes them.
         let epochs_live = log_live.committed_epochs_at(1);
         let epochs_dead = log_dead.committed_epochs_at(1);
-        assert_eq!(neml::committed_is_live(&epochs_live, 0), Some(true));
-        assert_eq!(neml::committed_is_live(&epochs_dead, 0), Some(false));
+        assert_eq!(cyphr_log::committed_is_live(&epochs_live, 0), Some(true));
+        assert_eq!(cyphr_log::committed_is_live(&epochs_dead, 0), Some(false));
 
         // Two-algorithm variant: identical leaves, second alg deactivated in one.
         let mut log_a = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
@@ -3413,8 +3424,8 @@ fn test_frontier_freshness() {
 
         let ep_a = log_a.committed_epochs_at(1);
         let ep_b = log_b.committed_epochs_at(1);
-        assert_eq!(neml::committed_is_live(&ep_a, 1), Some(true));
-        assert_eq!(neml::committed_is_live(&ep_b, 1), Some(false));
+        assert_eq!(cyphr_log::committed_is_live(&ep_a, 1), Some(true));
+        assert_eq!(cyphr_log::committed_is_live(&ep_b, 1), Some(false));
     });
 }
 
@@ -3458,11 +3469,11 @@ fn test_genesis_promotion_boundary() {
         // must be rejected: authenticate computes the promoted form (raw root)
         // but the combined root is the hashed form.
         let raw_root_1 = log.root_for_at(0, 1).await.unwrap();
-        let promoted_coupling = neml::CouplingProof {
+        let promoted_coupling = cyphr_log::CouplingProof {
             active_roots: vec![(0, raw_root_1.clone())],
             alg_epochs: vec![(0, vec![(0u64, u64::MAX)])], // genesis default, 1 entry
         };
-        let config = neml::VerifierConfig::default();
+        let config = cyphr_log::VerifierConfig::default();
         assert!(
             !promoted_coupling.authenticate(&Sha256Hasher, 1, &cr_at_1_after, &[0], config,),
             "promoted proof against hashed CR must fail"
@@ -3471,7 +3482,7 @@ fn test_genesis_promotion_boundary() {
         // A hashed-form coupling proof presented against the old promoted CR
         // must be rejected.
         // 2 entries → hashed form
-        let hashed_coupling = neml::CouplingProof {
+        let hashed_coupling = cyphr_log::CouplingProof {
             active_roots: vec![(0, raw_root_1)],
             alg_epochs: vec![(0, vec![(0u64, u64::MAX)]), (1, vec![(1u64, u64::MAX)])],
         };
@@ -3499,7 +3510,7 @@ fn test_genesis_promotion_boundary() {
 fn test_inactivity_proofs() {
     smol::block_on(async {
         let cfg = TreeConfig { log_arity: 2 };
-        let config = neml::VerifierConfig::default();
+        let config = cyphr_log::VerifierConfig::default();
 
         // Build a log with X=1 that has a gap: active at [1,2), inactive
         // at [2,4), re-active at [4, MAX).
@@ -3518,12 +3529,12 @@ fn test_inactivity_proofs() {
         // Mid-gap: X is inactive at pos 2 (in the gap [2,4)).
         let coupling = log.coupling_proof_at(5).await.unwrap();
         let cr = log.combined_root_at(0, 5).await.unwrap();
-        let active_algs_5 = neml::committed_active_algs(&coupling.alg_epochs, 5);
+        let active_algs_5 = cyphr_log::committed_active_algs(&coupling.alg_epochs, 5);
 
         // X is in coupling.active_roots (it is active at pos 4 = size 5 - 1).
         // We need the inclusion proof for the null constant at pos 2 in X's tree.
         let inact_path = log.inclusion_proof_for(1, 2, 5).await.unwrap().unwrap();
-        let ok_gap = neml::verify_inactivity_with_coupling(
+        let ok_gap = cyphr_log::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             2,
@@ -3539,7 +3550,7 @@ fn test_inactivity_proofs() {
 
         // Inactivity proof for an ACTIVE position must fail.
         let active_path = log.inclusion_proof_for(1, 1, 5).await.unwrap().unwrap();
-        let fail_active = neml::verify_inactivity_with_coupling(
+        let fail_active = cyphr_log::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             1,
@@ -3575,10 +3586,10 @@ fn test_inactivity_proofs() {
         // suffices — the committed timeline carries the inactivity claim.
         let coupling_f = log_frozen.coupling_proof_at(4).await.unwrap();
         let cr_f = log_frozen.combined_root_at(0, 4).await.unwrap();
-        let active_algs_f = neml::committed_active_algs(&coupling_f.alg_epochs, 4);
+        let active_algs_f = cyphr_log::committed_active_algs(&coupling_f.alg_epochs, 4);
 
         // X is inactive at pos 3 (beyond its epoch [1,2)).
-        let ok_frozen = neml::verify_inactivity_with_coupling(
+        let ok_frozen = cyphr_log::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             3,
@@ -3596,11 +3607,11 @@ fn test_inactivity_proofs() {
         );
 
         // Non-empty path for a frozen alg must fail.
-        let dummy_path = vec![neml::ProofStep {
+        let dummy_path = vec![cyphr_log::ProofStep {
             siblings: vec![vec![0u8; 32]],
             position: 0,
         }];
-        let fail_frozen = neml::verify_inactivity_with_coupling(
+        let fail_frozen = cyphr_log::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             3,
@@ -3636,7 +3647,7 @@ fn test_epoch_evolution() {
 
         // Forward evolution passes.
         assert!(
-            neml::verify_epoch_evolution(&p1.alg_epochs, 1, &p2.alg_epochs, 2),
+            cyphr_log::verify_epoch_evolution(&p1.alg_epochs, 1, &p2.alg_epochs, 2),
             "forward epoch evolution must pass"
         );
 
@@ -3646,7 +3657,7 @@ fn test_epoch_evolution() {
         // an allowed extension, so evolution must fail.
         tampered[1].1 = vec![(1u64, u64::MAX)];
         assert!(
-            !neml::verify_epoch_evolution(&tampered, 1, &p2.alg_epochs, 2),
+            !cyphr_log::verify_epoch_evolution(&tampered, 1, &p2.alg_epochs, 2),
             "rewritten activation boundary must fail evolution check"
         );
     });
@@ -3680,14 +3691,14 @@ fn test_empty_store_reload_accepts_either_append() {
                     .append_leaf(b"first")
                     .await
                     .expect("empty reloaded log must accept a leaf append");
-                assert_eq!(reloaded.kind(), neml::LogKind::Flat);
+                assert_eq!(reloaded.kind(), cyphr_log::LogKind::Flat);
             } else {
                 let subtree = Subtree::Leaf(b"first".to_vec());
                 reloaded
                     .append_subtree(&subtree)
                     .await
                     .expect("empty reloaded log must accept a subtree append");
-                assert_eq!(reloaded.kind(), neml::LogKind::Subtree);
+                assert_eq!(reloaded.kind(), cyphr_log::LogKind::Subtree);
             }
         }
     });
@@ -3742,7 +3753,7 @@ fn test_from_storage_deterministic_repeated() {
                 expected_root,
                 "root must be identical each load"
             );
-            assert_eq!(r.kind(), neml::LogKind::Subtree);
+            assert_eq!(r.kind(), cyphr_log::LogKind::Subtree);
         }
     });
 }
@@ -3768,7 +3779,7 @@ fn test_log_kind_persisted_and_restored() {
             let r = NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))])
                 .await
                 .unwrap();
-            assert_eq!(r.kind(), neml::LogKind::Flat);
+            assert_eq!(r.kind(), cyphr_log::LogKind::Flat);
             assert_eq!(r.count(), 2);
             assert_eq!(r.size(), 2);
             assert_eq!(r.subtree_count(), 0);
@@ -3796,7 +3807,7 @@ fn test_log_kind_persisted_and_restored() {
             let r = NaryMerkleLog::from_storage(storage, vec![(0, Box::new(Sha256Hasher))])
                 .await
                 .unwrap();
-            assert_eq!(r.kind(), neml::LogKind::Subtree);
+            assert_eq!(r.kind(), cyphr_log::LogKind::Subtree);
             assert_eq!(r.count(), 2);
             assert_eq!(r.subtree_count(), 2);
             assert_eq!(r.size(), 0);
