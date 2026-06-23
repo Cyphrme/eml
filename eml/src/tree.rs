@@ -109,6 +109,29 @@ impl AlgState {
             .any(|&(start, end)| start <= lo && hi <= end)
     }
 
+    /// The algorithm-local tree size corresponding to global size `size`.
+    ///
+    /// Active algorithms (or null-projection spans before first activation)
+    /// see the full global size. Frozen algorithms cap at their last
+    /// deactivation point; the maximum epoch end that is strictly less than
+    /// `size` is the algorithm's effective size.
+    pub fn effective_size_at(&self, size: u64) -> u64 {
+        if size <= self.first_activation() {
+            // Pre-activation: null projections span [0, size); the frontier
+            // geometry uses the global size.  When size == 0 this is 0.
+            size
+        } else if self.is_active_at(size - 1) {
+            size
+        } else {
+            self.epochs
+                .iter()
+                .filter(|&&(_, end)| end < size)
+                .map(|&(_, end)| end)
+                .max()
+                .unwrap_or(0)
+        }
+    }
+
     /// The epoch timeline as it stood at size `size`, for commitment into
     /// the combined root and audit checkpoints (Design A+).
     ///
@@ -2162,21 +2185,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             });
         }
 
-        let alg_size = if size <= state.first_activation() {
-            // Null projections fill [0, size); frontier geometry uses the global size.
-            // For size == 0 this gives alg_size == 0 → empty() return below.
-            size
-        } else if state.is_active_at(size - 1) {
-            size
-        } else {
-            state
-                .epochs
-                .iter()
-                .filter(|&&(_, end)| end < size)
-                .map(|&(_, end)| end)
-                .max()
-                .unwrap_or(0)
-        };
+        let alg_size = state.effective_size_at(size);
 
         if alg_size == 0 {
             return Ok(state.hasher.empty());
@@ -2229,24 +2238,14 @@ impl<S: Storage> NaryMerkleLog<S> {
             for (&id, state) in &self.algs {
                 let check_start = std::cmp::max(start, state.first_activation());
                 if check_start < end {
-                    let get_alg_size = |s_val: u64| {
-                        if s_val <= state.first_activation() {
-                            0
-                        } else if state.is_active_at(s_val - 1) {
-                            s_val
-                        } else {
-                            state
-                                .epochs
-                                .iter()
-                                .filter(|&&(_, end)| end < s_val)
-                                .map(|&(_, end)| end)
-                                .max()
-                                .unwrap_or(0)
-                        }
+                    // check_start == first_activation() means the algorithm has
+                    // no committed data at the checkpoint boundary; treat as empty.
+                    let old_alg_size = if check_start == state.first_activation() {
+                        0
+                    } else {
+                        state.effective_size_at(check_start)
                     };
-
-                    let old_alg_size = get_alg_size(check_start);
-                    let new_alg_size = get_alg_size(end);
+                    let new_alg_size = state.effective_size_at(end);
 
                     let old_root = if old_alg_size == 0 {
                         state.hasher.empty()
@@ -2338,23 +2337,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let mut frontier_coords = Vec::new();
             let k = self.config.log_arity;
 
-            let alg_size_at_start = if start <= state.first_activation() {
-                // Null projections span [0, start); use the global start so the
-                // carry schedule (reduction_count(alg_size - 1, k)) matches the
-                // global index at each step, matching the append path exactly.
-                // When start == 0 this gives 0, leaving the frontier empty (correct).
-                start
-            } else if state.is_active_at(start - 1) {
-                start
-            } else {
-                state
-                    .epochs
-                    .iter()
-                    .filter(|&&(_, e)| e < start)
-                    .map(|&(_, e)| e)
-                    .max()
-                    .unwrap_or(0)
-            };
+            let alg_size_at_start = state.effective_size_at(start);
 
             if alg_size_at_start > 0 {
                 let coords = frontier_for_size(alg_size_at_start, k as u64);
