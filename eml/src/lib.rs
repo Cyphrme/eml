@@ -15,6 +15,7 @@
 pub mod error;
 pub mod proof;
 pub mod schedule;
+pub mod snapshot;
 pub mod storage;
 pub mod tree;
 
@@ -33,5 +34,6 @@ pub use proof::{
     verify_inactivity_with_coupling, verify_inclusion, verify_inclusion_with_coupling,
 };
 pub use schedule::reduction_count;
+pub use snapshot::{RunExtent, Snapshot};
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use tree::{LogKind, NaryMerkleLog, TreeConfig};
