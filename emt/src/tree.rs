@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use pmt::mr::nary_mr;
 use pmt::proof::ProofStep;
-use pmt::{Hasher, Sealed};
+use pmt::{ARITY_RANGE, Hasher, Sealed};
 
 use crate::error::{Error, Result};
 use crate::spine::{self, SpineNode, covers, leftmost, rightmost};
@@ -92,7 +92,7 @@ impl Emt {
     /// Fails with [`Error::InvalidArity`] if `config.arity` is outside the
     /// kernel's `2..=256` range.
     pub fn new(config: Config) -> Result<Self> {
-        if !(2..=256).contains(&config.arity) {
+        if !ARITY_RANGE.contains(&config.arity) {
             return Err(Error::InvalidArity(config.arity));
         }
         Ok(Self {

@@ -40,7 +40,7 @@ use pmt::Sealed;
 use pmt::hasher::Hasher;
 use pmt::mr::nary_mr;
 use pmt::proof::{combined_root_preimage, constant_time_eq};
-use pmt::topology::frontier_for_size;
+use pmt::topology::{fold_frontier, frontier_for_size};
 
 /// Which readable materialization [`fill`] produces.
 ///
@@ -245,7 +245,14 @@ pub fn fill<D: AsRef<[u8]>>(
         let component = subtree_root(hasher, &leaf_data[lo..lo + span], k);
         component_roots.push(component);
     }
-    let member_root = fold_components(hasher, component_roots, k as usize);
+    let member_root = if component_roots.is_empty() {
+        hasher.empty()
+    } else {
+        fold_frontier(component_roots, k as usize, |chunk| {
+            let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+            nary_mr(hasher, &refs)
+        })
+    };
 
     // ── Trustless verification: the rebuilt binding root must equal the one
     //    the Sealed committed. For a gapless single-algorithm fill the rebuilt
@@ -344,28 +351,6 @@ fn subtree_root<D: AsRef<[u8]>>(hasher: &dyn Hasher, leaves: &[D], k: u64) -> Ve
         level = next;
     }
     level.into_iter().next().unwrap_or_else(|| hasher.empty())
-}
-
-/// Fold the committed partition's component roots into the single tree root,
-/// merging the rightmost `k` repeatedly — identical to the log's own root fold,
-/// so the filled root matches a from-scratch build.
-fn fold_components(hasher: &dyn Hasher, components: Vec<Vec<u8>>, k: usize) -> Vec<u8> {
-    if components.is_empty() {
-        return hasher.empty();
-    }
-    if components.len() == 1 {
-        return components.into_iter().next().unwrap();
-    }
-    let mut current = components;
-    while current.len() > k {
-        let split = current.len() - k;
-        let right: Vec<&[u8]> = current[split..].iter().map(|v| v.as_slice()).collect();
-        let merged = nary_mr(hasher, &right);
-        current.truncate(split);
-        current.push(merged);
-    }
-    let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-    nary_mr(hasher, &refs)
 }
 
 #[cfg(test)]

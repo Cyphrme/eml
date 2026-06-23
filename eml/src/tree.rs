@@ -3,7 +3,7 @@
 use pmt::hasher::Hasher;
 use pmt::mr::{evaluate, nary_mr};
 use pmt::subtree::Subtree;
-use pmt::topology::frontier_for_size;
+use pmt::topology::{ARITY_RANGE, fold_frontier, frontier_for_size};
 
 use crate::error::Result;
 use crate::schedule::reduction_count;
@@ -310,7 +310,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         hasher: Box<dyn Hasher>,
         config: TreeConfig,
     ) -> Result<Self, S::Error> {
-        if config.log_arity < 2 || config.log_arity > 256 {
+        if !ARITY_RANGE.contains(&(config.log_arity as u64)) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: format!(
@@ -370,7 +370,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         hashers: Vec<(u64, Box<dyn Hasher>)>,
     ) -> Result<Self, S::Error> {
         let k = sealed.arity();
-        if !(2..=256).contains(&k) {
+        if !ARITY_RANGE.contains(&k) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: format!("invalid arity in sealed frontier: {k}"),
@@ -488,7 +488,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         hashers: Vec<(u64, Box<dyn Hasher>)>,
         config: TreeConfig,
     ) -> Result<Self, S::Error> {
-        if config.log_arity < 2 || config.log_arity > 256 {
+        if !ARITY_RANGE.contains(&(config.log_arity as u64)) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: format!(
@@ -608,20 +608,11 @@ impl<S: Storage> NaryMerkleLog<S> {
         if state.frontier.is_empty() {
             return state.hasher.empty();
         }
-        if state.frontier.len() == 1 {
-            return state.frontier[0].clone();
-        }
-        let mut current = state.frontier.clone();
-        while current.len() > k {
-            let split_idx = current.len() - k;
-            let right_elements = &current[split_idx..];
-            let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-            let merged = pmt::mr::nary_mr(state.hasher.as_ref(), &refs);
-            current.truncate(split_idx);
-            current.push(merged);
-        }
-        let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-        pmt::mr::nary_mr(state.hasher.as_ref(), &refs)
+        let h = state.hasher.as_ref();
+        fold_frontier(state.frontier.clone(), k, |chunk| {
+            let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+            nary_mr(h, &refs)
+        })
     }
 
     /// Build the next-state algorithm map and the batch to write, without
@@ -1288,18 +1279,13 @@ impl<S: Storage> NaryMerkleLog<S> {
                     mixed_nodes.extend(part_mixed);
                 }
 
-                let mut current = component_hashes;
                 let k_usize = k as usize;
-                while current.len() > k_usize {
-                    let split_idx = current.len() - k_usize;
-                    let right_elements = &current[split_idx..];
-                    let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-                    let merged = nary_mr(state.hasher.as_ref(), &refs);
-                    current.truncate(split_idx);
-                    current.push(merged);
-                }
-                let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-                Ok((nary_mr(state.hasher.as_ref(), &refs), mixed_nodes))
+                let h = state.hasher.as_ref();
+                let root = fold_frontier(component_hashes, k_usize, |chunk| {
+                    let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+                    nary_mr(h, &refs)
+                });
+                Ok((root, mixed_nodes))
             }
         })
     }
@@ -1439,21 +1425,12 @@ impl<S: Storage> NaryMerkleLog<S> {
         if state.frontier.is_empty() {
             return Ok(state.hasher.empty());
         }
-        if state.frontier.len() == 1 {
-            return Ok(state.frontier[0].clone());
-        }
         let k = self.config.log_arity;
-        let mut current = state.frontier.clone();
-        while current.len() > k {
-            let split_idx = current.len() - k;
-            let right_elements = &current[split_idx..];
-            let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-            let merged = nary_mr(state.hasher.as_ref(), &refs);
-            current.truncate(split_idx);
-            current.push(merged);
-        }
-        let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-        Ok(nary_mr(state.hasher.as_ref(), &refs))
+        let h = state.hasher.as_ref();
+        Ok(fold_frontier(state.frontier.clone(), k, |chunk| {
+            let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+            nary_mr(h, &refs)
+        }))
     }
 
     /// Retrieve a node hash from storage, or return the null constant if it's inactive.
@@ -2205,21 +2182,11 @@ impl<S: Storage> NaryMerkleLog<S> {
         if frontier.is_empty() {
             return Ok(state.hasher.empty());
         }
-        if frontier.len() == 1 {
-            return Ok(frontier[0].clone());
-        }
-
-        let mut current = frontier;
-        while current.len() > k {
-            let split_idx = current.len() - k;
-            let right_elements = &current[split_idx..];
-            let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-            let merged = nary_mr(state.hasher.as_ref(), &refs);
-            current.truncate(split_idx);
-            current.push(merged);
-        }
-        let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-        Ok(nary_mr(state.hasher.as_ref(), &refs))
+        let h = state.hasher.as_ref();
+        Ok(fold_frontier(frontier, k, |chunk| {
+            let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+            nary_mr(h, &refs)
+        }))
     }
 
     /// Verify that the trees for all active algorithms have not diverged

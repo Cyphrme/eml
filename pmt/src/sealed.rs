@@ -48,7 +48,7 @@ use crate::hasher::Hasher;
 use crate::metadata::Meta;
 use crate::mr::nary_mr;
 use crate::proof::{combined_root_preimage, validate_committed_epochs};
-use crate::topology::frontier_for_size;
+use crate::topology::{ARITY_RANGE, fold_frontier, frontier_for_size};
 
 /// One committed canonicalization run-extent: a contiguous collapse of
 /// `arity^height` consecutive leaves into a single subtree, beginning at leaf
@@ -145,7 +145,7 @@ impl Sealed {
         frontiers: Vec<(u64, Vec<Vec<u8>>)>,
         alg_epochs: Vec<(u64, Vec<(u64, u64)>)>,
     ) -> Result<Self> {
-        if !(2..=256).contains(&arity) {
+        if !ARITY_RANGE.contains(&arity) {
             return Err(Error::BadArity);
         }
         if !validate_committed_epochs(&alg_epochs, tree_size) {
@@ -331,27 +331,18 @@ impl Sealed {
     }
 }
 
-/// Fold a frontier's peaks into the single member root, merging the rightmost
-/// `k` repeatedly — identical to the append-only log's own root fold, so the
-/// folded member root matches a from-scratch build over the same data.
+/// Fold a frontier's peaks into the single member root using the shared
+/// [`fold_frontier`] combinator — identical to the append-only log's own root
+/// fold, so the folded member root matches a from-scratch build over the same
+/// data.
 fn fold_peaks(hasher: &dyn Hasher, peaks: &[Vec<u8>], k: u64) -> Vec<u8> {
     if peaks.is_empty() {
         return hasher.empty();
     }
-    if peaks.len() == 1 {
-        return peaks[0].clone();
-    }
-    let k_usize = k as usize;
-    let mut current = peaks.to_vec();
-    while current.len() > k_usize {
-        let split = current.len() - k_usize;
-        let refs: Vec<&[u8]> = current[split..].iter().map(|v| v.as_slice()).collect();
-        let merged = nary_mr(hasher, &refs);
-        current.truncate(split);
-        current.push(merged);
-    }
-    let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-    nary_mr(hasher, &refs)
+    fold_frontier(peaks.to_vec(), k as usize, |chunk| {
+        let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+        nary_mr(hasher, &refs)
+    })
 }
 
 #[cfg(test)]
