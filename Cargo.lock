@@ -822,6 +822,19 @@ name = "neml"
 version = "0.1.0-baseline"
 
 [[package]]
+name = "neml-storage-fjall"
+version = "0.1.0"
+dependencies = [
+ "eml-log",
+ "fjall",
+ "proptest",
+ "sha2",
+ "smol",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

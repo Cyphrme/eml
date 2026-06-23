@@ -1,4 +1,4 @@
-use neml::{Hasher, NaryMerkleLog, Storage, TreeConfig};
+use eml_log::{Hasher, NaryMerkleLog, Storage, TreeConfig};
 use neml_storage_fjall::FjallStorage;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -22,7 +22,6 @@ impl Hasher for Sha256Hasher {
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
     }
-
 
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -118,14 +117,16 @@ fn test_fjall_log_integration_and_recovery() {
 fn test_fjall_metadata_corruption() {
     smol::block_on(async {
         let dir = tempdir().unwrap();
-        
+
         // 1. Write corrupted key length (< 8 bytes)
         {
             let db = fjall::Database::builder(dir.path()).open().unwrap();
-            let metadata = db.keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default).unwrap();
-            metadata.insert(b"short", &[0; 16]).unwrap();
+            let metadata = db
+                .keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default)
+                .unwrap();
+            metadata.insert(b"short", [0; 16]).unwrap();
         }
-        
+
         let storage = FjallStorage::open(dir.path()).unwrap();
         let metas_res = storage.load_algorithm_metas().await;
         assert!(metas_res.is_err());
@@ -137,14 +138,16 @@ fn test_fjall_metadata_corruption() {
 
     smol::block_on(async {
         let dir = tempdir().unwrap();
-        
+
         // 2. Write corrupted value length (not a multiple of 16)
         {
             let db = fjall::Database::builder(dir.path()).open().unwrap();
-            let metadata = db.keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default).unwrap();
-            metadata.insert(0u64.to_be_bytes(), &[0; 15]).unwrap();
+            let metadata = db
+                .keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default)
+                .unwrap();
+            metadata.insert(0u64.to_be_bytes(), [0; 15]).unwrap();
         }
-        
+
         let storage = FjallStorage::open(dir.path()).unwrap();
         let metas_res = storage.load_algorithm_metas().await;
         assert!(metas_res.is_err());
@@ -167,7 +170,7 @@ fn test_fjall_out_of_order_and_sparse() {
 
         // Store index 10 first
         storage.store_leaf(10, b"index10").await.unwrap();
-        
+
         // len() should return 11 (highest key + 1)
         assert_eq!(storage.len().await.unwrap(), 11);
 
@@ -187,10 +190,8 @@ fn test_fjall_out_of_order_and_sparse() {
 
         // index 5 should be found
         assert_eq!(storage.get_leaf(5).await.unwrap(), b"index5");
-        
+
         // index 10 should still be found
         assert_eq!(storage.get_leaf(10).await.unwrap(), b"index10");
     });
 }
-
-
