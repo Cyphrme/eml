@@ -130,12 +130,15 @@ impl Sealed {
     /// The committed timeline must be well-formed at `tree_size`
     /// ([`validate_committed_epochs`]); otherwise this returns
     /// [`Error::MalformedEpochs`]. This is the only way to construct a
-    /// `Sealed`, so every value in circulation carries a validated timeline.
+    /// `Sealed`, so every value in circulation carries a validated timeline
+    /// and a correctly-sized frontier.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::MalformedEpochs`] if `arity` is out of range or the
-    /// committed timeline is ill-formed at `tree_size`.
+    /// Returns [`Error::BadArity`] if `arity` is outside `2..=256`. Returns
+    /// [`Error::MalformedEpochs`] if the committed timeline is ill-formed at
+    /// `tree_size`, or if any algorithm's peak count does not match the
+    /// canonical frontier length for `(tree_size, arity)`.
     pub fn new(
         tree_size: u64,
         arity: u64,
@@ -143,10 +146,20 @@ impl Sealed {
         alg_epochs: Vec<(u64, Vec<(u64, u64)>)>,
     ) -> Result<Self> {
         if !(2..=256).contains(&arity) {
-            return Err(Error::MalformedEpochs);
+            return Err(Error::BadArity);
         }
         if !validate_committed_epochs(&alg_epochs, tree_size) {
             return Err(Error::MalformedEpochs);
+        }
+        // Cross-check that every algorithm's peak count matches the canonical
+        // frontier geometry for (tree_size, arity). A mismatched count means
+        // a caller constructed Sealed with a wrong or truncated peaks slice —
+        // a malformed frontier that member_root would silently fold incorrectly.
+        let expected_peak_count = frontier_for_size(tree_size, arity).len();
+        for (_, peaks) in &frontiers {
+            if peaks.len() != expected_peak_count {
+                return Err(Error::MalformedEpochs);
+            }
         }
         Ok(Self {
             tree_size,
@@ -397,13 +410,38 @@ mod tests {
                 vec![(0, vec![vec![0xAA; 32]])],
                 vec![(0, vec![(0, u64::MAX)])]
             ),
-            Err(Error::MalformedEpochs)
+            Err(Error::BadArity)
         );
         assert_eq!(
             Sealed::new(
                 1,
                 257,
                 vec![(0, vec![vec![0xAA; 32]])],
+                vec![(0, vec![(0, u64::MAX)])]
+            ),
+            Err(Error::BadArity)
+        );
+    }
+
+    #[test]
+    fn new_rejects_mismatched_peak_count() {
+        // Size 3, k=2 → frontier = [(0,1),(2,0)] → 2 peaks expected.
+        // Supplying 1 peak is malformed.
+        assert_eq!(
+            Sealed::new(
+                3,
+                2,
+                vec![(0, vec![vec![0xAA; 32]])],
+                vec![(0, vec![(0, u64::MAX)])]
+            ),
+            Err(Error::MalformedEpochs)
+        );
+        // Supplying 3 peaks is also malformed.
+        assert_eq!(
+            Sealed::new(
+                3,
+                2,
+                vec![(0, vec![vec![0xAA; 32], vec![0xBB; 32], vec![0xCC; 32]])],
                 vec![(0, vec![(0, u64::MAX)])]
             ),
             Err(Error::MalformedEpochs)
