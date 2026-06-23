@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use pmt::proof::ProofStep;
+use pmt::ProofStep;
 
 use crate::spine::{self, SpineNode};
 

@@ -11,16 +11,14 @@
 
 // Re-export the kernel proof surface so `eml_log::proof::*` reaches it while
 // the originals live in `pmt`. No parallels: these are the kernel's, not copies.
-pub use pmt::binding_proof::{BindingProof, TrustedBindingRoot};
-use pmt::hasher::Hasher;
-use pmt::mr::nary_mr;
-pub use pmt::proof::{
-    AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root_preimage,
-    committed_active_algs, committed_active_at, committed_is_live, constant_time_eq,
-    reconstruct_inclusion_root, validate_committed_epochs, verify_inactivity_with_coupling,
-    verify_inclusion, verify_inclusion_path_structure, verify_inclusion_with_coupling,
+use pmt::{ARITY_RANGE, Hasher, fold_frontier, frontier_for_size, nary_mr};
+pub use pmt::{
+    AuditPayload, BindingProof, CouplingProof, InclusionProof, ProofStep, TrustedBindingRoot,
+    VerifierConfig, combined_root_preimage, committed_active_algs, committed_active_at,
+    committed_is_live, constant_time_eq, reconstruct_inclusion_root, validate_committed_epochs,
+    verify_inactivity_with_coupling, verify_inclusion, verify_inclusion_path_structure,
+    verify_inclusion_with_coupling,
 };
-use pmt::topology::{ARITY_RANGE, fold_frontier, frontier_for_size};
 
 /// Consistency proof: proves tree at `old_size` is a prefix of tree at `new_size`.
 #[derive(Debug, Clone, PartialEq, Eq)]

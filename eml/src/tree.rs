@@ -1,9 +1,6 @@
 //! Unified n-ary Merkle append-only log state machine.
 
-use pmt::hasher::Hasher;
-use pmt::mr::{evaluate, nary_mr};
-use pmt::subtree::Subtree;
-use pmt::topology::{ARITY_RANGE, fold_frontier, frontier_for_size};
+use pmt::{ARITY_RANGE, Hasher, Subtree, evaluate, fold_frontier, frontier_for_size, nary_mr};
 
 use crate::error::Result;
 use crate::schedule::reduction_count;
@@ -214,7 +211,7 @@ fn merge_frontier_paths(
     hashes: Vec<Vec<u8>>,
     target_idx: usize,
     k: usize,
-    hasher: &dyn pmt::hasher::Hasher,
+    hasher: &dyn Hasher,
     bisect_path: &mut Vec<crate::proof::ProofStep>,
 ) {
     let mut current: Vec<MergeNode> = hashes
@@ -233,7 +230,7 @@ fn merge_frontier_paths(
             .iter()
             .map(|n| n.hash.as_slice())
             .collect();
-        let merged_hash = pmt::mr::nary_mr(hasher, &refs);
+        let merged_hash = nary_mr(hasher, &refs);
 
         let mut target_path = Vec::new();
         let mut is_target_merged = false;
@@ -674,7 +671,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 children.reverse();
                 coords.reverse();
                 let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
-                let parent = pmt::mr::nary_mr(state.hasher.as_ref(), &child_refs);
+                let parent = nary_mr(state.hasher.as_ref(), &child_refs);
 
                 let parent_left_index = coords[0].0;
                 let parent_height = coords[0].1 + 1;
@@ -1559,7 +1556,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         // emit exactly the skeleton the verifier will check against. This holds by
         // construction — the pin guards against the producer and verifier drifting.
         debug_assert!(
-            pmt::topology::inclusion_skeleton(k, tree_size, index).is_some_and(|skeleton| {
+            pmt::inclusion_skeleton(k, tree_size, index).is_some_and(|skeleton| {
                 skeleton.len() == path.len()
                     && path.iter().zip(skeleton.iter()).all(|(step, shape)| {
                         step.position == shape.position
@@ -2610,7 +2607,7 @@ mod tests {
 
 #[cfg(test)]
 mod resume_tests {
-    use pmt::hasher::Hasher;
+    use pmt::Hasher;
     use sha2::{Digest, Sha256};
 
     use super::*;

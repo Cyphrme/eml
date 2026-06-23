@@ -15,7 +15,7 @@
 //! [`crate::Emt::root`] is property-tested to equal `pmt::evaluate` over the
 //! canonical subtree, so a drift in this shape is caught deterministically.
 
-use pmt::topology::{ARITY_RANGE, frontier_for_size};
+use pmt::{ARITY_RANGE, frontier_for_size};
 
 /// One node of the materialized proof spine.
 ///

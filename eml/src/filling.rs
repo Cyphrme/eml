@@ -36,11 +36,10 @@
 //! kind selects only the materialization the caller wants back. A kind that
 //! cannot reproduce the committed layout fails the binding-root check.
 
-use pmt::Sealed;
-use pmt::hasher::Hasher;
-use pmt::mr::nary_mr;
-use pmt::proof::{combined_root_preimage, constant_time_eq};
-use pmt::topology::{fold_frontier, frontier_for_size};
+use pmt::{
+    Hasher, Sealed, combined_root_preimage, constant_time_eq, fold_frontier, frontier_for_size,
+    nary_mr,
+};
 
 /// Which readable materialization [`fill`] produces.
 ///
@@ -355,7 +354,7 @@ fn subtree_root<D: AsRef<[u8]>>(hasher: &dyn Hasher, leaves: &[D], k: u64) -> Ve
 
 #[cfg(test)]
 mod tests {
-    use pmt::hasher::Hasher;
+    use pmt::Hasher;
     use sha2::{Digest, Sha256};
 
     use super::*;

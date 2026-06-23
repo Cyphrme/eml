@@ -83,7 +83,7 @@ mod tests {
     /// both.
     #[test]
     fn lean_guard_parity() {
-        use pmt::topology::{SkeletonStep, frontier_for_size, inclusion_skeleton};
+        use pmt::{SkeletonStep, frontier_for_size, inclusion_skeleton};
 
         let step = |position: usize, sibling_count: usize| SkeletonStep {
             position,

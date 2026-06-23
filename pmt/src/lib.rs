@@ -9,14 +9,14 @@
 //! depends on nothing; the engineering libraries (append-only / mutable)
 //! depend on it.
 
-pub mod binding_proof;
-pub mod error;
+pub(crate) mod binding_proof;
+pub(crate) mod error;
 pub mod hasher;
-pub mod leaf_proof;
-pub mod metadata;
+pub(crate) mod leaf_proof;
+pub(crate) mod metadata;
 pub mod mr;
 pub mod proof;
-pub mod sealed;
+pub(crate) mod sealed;
 pub mod subtree;
 pub mod topology;
 
