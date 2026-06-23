@@ -39,6 +39,7 @@ members = [
     "storage/fjall",
     "neml",
     "storage/neml-fjall",
+    "difftest",
 ]
 
 
