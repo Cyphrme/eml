@@ -16,12 +16,18 @@
 /// Frontier decomposition of a log of `n` leaves at arity `k`.
 ///
 /// Returns `(left, height)` for each perfect k-ary subtree, left to right.
-/// Empty when `k` is out of range (`< 2` or `> 256`).
+///
+/// # Preconditions
+///
+/// `k` must be in `2..=256`. All callers are expected to pre-validate arity
+/// before calling this function. Violated in debug builds only (no-op in
+/// release builds — the caller already checked).
 #[must_use]
 pub fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
-    if !(2..=256).contains(&k) {
-        return Vec::new();
-    }
+    debug_assert!(
+        (2..=256).contains(&k),
+        "frontier_for_size: arity {k} out of range 2..=256; caller must pre-validate"
+    );
     let mut frontier = Vec::new();
     let mut curr_left = 0;
     let mut temp_n = n;
