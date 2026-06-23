@@ -144,6 +144,15 @@ pub fn verify_epoch_evolution(
     true
 }
 
+/// Sentinel height assigned to the synthetic root `FrontierNode` produced
+/// at the end of the frontier merge loop in `reconstruct_consistency_roots`.
+///
+/// The root node is the sole remaining frontier entry after the merge
+/// completes; its height is never read again. The sentinel distinguishes it
+/// from any real node height and documents the intent in place of the magic
+/// literal 9999.
+const ROOT_SENTINEL_HEIGHT: u32 = u32::MAX;
+
 /// Reconstruct the old and new raw roots from a consistency proof path.
 ///
 /// Building block for [`verify_consistency`]; it computes both roots but does
@@ -392,7 +401,7 @@ pub fn reconstruct_consistency_roots(
 
         current_frontier = vec![FrontierNode {
             left: 0,
-            height: 9999,
+            height: ROOT_SENTINEL_HEIGHT,
             hash: Some(parent_hash),
         }];
     }

@@ -21,8 +21,26 @@ pub enum LogKind {
     Subtree,
 }
 
-const LOG_KIND_FLAT: u8 = 0;
-const LOG_KIND_SUBTREE: u8 = 1;
+impl LogKind {
+    /// Serialize to the storage byte representation.
+    pub fn to_byte(self) -> u8 {
+        match self {
+            Self::Flat => 0,
+            Self::Subtree => 1,
+        }
+    }
+
+    /// Deserialize from the storage byte representation.
+    ///
+    /// Returns `None` if the byte is not a recognized `LogKind` variant.
+    pub fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(Self::Flat),
+            1 => Some(Self::Subtree),
+            _ => None,
+        }
+    }
+}
 
 /// Configuration for the n-ary Merkle tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +127,29 @@ impl AlgState {
             .any(|&(start, end)| start <= lo && hi <= end)
     }
 
+    /// The algorithm-local tree size corresponding to global size `size`.
+    ///
+    /// Active algorithms (or null-projection spans before first activation)
+    /// see the full global size. Frozen algorithms cap at their last
+    /// deactivation point; the maximum epoch end that is strictly less than
+    /// `size` is the algorithm's effective size.
+    pub fn effective_size_at(&self, size: u64) -> u64 {
+        if size <= self.first_activation() {
+            // Pre-activation: null projections span [0, size); the frontier
+            // geometry uses the global size.  When size == 0 this is 0.
+            size
+        } else if self.is_active_at(size - 1) {
+            size
+        } else {
+            self.epochs
+                .iter()
+                .filter(|&&(_, end)| end < size)
+                .map(|&(_, end)| end)
+                .max()
+                .unwrap_or(0)
+        }
+    }
+
     /// The epoch timeline as it stood at size `size`, for commitment into
     /// the combined root and audit checkpoints (Design A+).
     ///
@@ -145,6 +186,117 @@ pub struct NaryMerkleLog<S: Storage> {
     count: u64,
     /// Whether appends are flat leaf or subtree appends.
     kind: LogKind,
+}
+
+// ============================================================================
+// Frontier path-accumulation helpers (shared by inclusion and consistency proofs)
+// ============================================================================
+
+/// A frontier node carrying its hash and the path accumulated so far while
+/// merging across the frontier reduction loop.
+struct MergeNode {
+    hash: Vec<u8>,
+    path: Vec<crate::proof::ProofStep>,
+}
+
+/// Fold a set of frontier hashes (and an already-accumulated `bisect_path`)
+/// across the canonical frontier-reduction loop, accumulating
+/// [`crate::proof::ProofStep`]s for `target_idx` and appending them to
+/// `bisect_path`.
+///
+/// `hashes` must be the ordered list of frontier-node hashes (left-to-right).
+/// `target_idx` is the index into `hashes` that the proof is for.
+/// `k` is the log arity.
+/// `hasher` supplies the hash combiner (`nary_mr`).
+///
+/// After the call `bisect_path` contains the complete frontier leg of the proof.
+fn merge_frontier_paths(
+    hashes: Vec<Vec<u8>>,
+    target_idx: usize,
+    k: usize,
+    hasher: &dyn pmt::hasher::Hasher,
+    bisect_path: &mut Vec<crate::proof::ProofStep>,
+) {
+    let mut current: Vec<MergeNode> = hashes
+        .into_iter()
+        .map(|h| MergeNode {
+            hash: h,
+            path: Vec::new(),
+        })
+        .collect();
+
+    let mut target = target_idx;
+    while current.len() > k {
+        let split_idx = current.len() - k;
+
+        let refs: Vec<&[u8]> = current[split_idx..]
+            .iter()
+            .map(|n| n.hash.as_slice())
+            .collect();
+        let merged_hash = pmt::mr::nary_mr(hasher, &refs);
+
+        let mut target_path = Vec::new();
+        let mut is_target_merged = false;
+        if target >= split_idx {
+            let mut siblings = Vec::with_capacity(k - 1);
+            for (j, item) in current.iter().enumerate().skip(split_idx) {
+                if j != target {
+                    siblings.push(item.hash.clone());
+                }
+            }
+            let step = crate::proof::ProofStep {
+                siblings,
+                position: target - split_idx,
+            };
+            let mut p = std::mem::take(&mut current[target].path);
+            p.push(step);
+            target_path = p;
+            is_target_merged = true;
+        }
+
+        if is_target_merged {
+            current.truncate(split_idx);
+            current.push(MergeNode {
+                hash: merged_hash,
+                path: target_path,
+            });
+            target = split_idx;
+        } else {
+            current.truncate(split_idx);
+            current.push(MergeNode {
+                hash: merged_hash,
+                path: Vec::new(),
+            });
+        }
+    }
+
+    if current.len() > 1 {
+        let mut siblings = Vec::with_capacity(current.len() - 1);
+        for (j, item) in current.iter().enumerate() {
+            if j != target {
+                siblings.push(item.hash.clone());
+            }
+        }
+        let step = crate::proof::ProofStep {
+            siblings,
+            position: target,
+        };
+        current[target].path.push(step);
+    }
+
+    bisect_path.extend(std::mem::take(&mut current[target].path));
+}
+
+/// Owned batch data computed by `build_append_state`.
+///
+/// Passed verbatim to `write_batch`; assembled before any state mutation so
+/// a storage failure leaves `self.algs` and `self.count` unchanged.
+/// Leaf payloads are not included here — `append_leaf` passes them directly
+/// to `write_batch` because the raw bytes are also stored separately.
+struct OwnedBatch {
+    nodes: Vec<(u64, u64, u32, Vec<u8>)>,
+    log_meta: Option<(u64, u8)>,
+    checkpoint_roots: Vec<(u64, Vec<u8>)>,
 }
 
 impl<S: Storage> NaryMerkleLog<S> {
@@ -293,7 +445,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 &[],
                 &nodes_ref,
                 &metas_ref,
-                Some((size, LOG_KIND_SUBTREE)),
+                Some((size, LogKind::Subtree.to_byte())),
                 &checkpoints_ref,
             )
             .await
@@ -379,11 +531,12 @@ impl<S: Storage> NaryMerkleLog<S> {
             .map_err(crate::error::Error::Storage)?
         {
             Some((count, kind_byte)) => {
-                let kind = if kind_byte == LOG_KIND_SUBTREE {
-                    LogKind::Subtree
-                } else {
-                    LogKind::Flat
-                };
+                let kind = LogKind::from_byte(kind_byte).ok_or_else(|| {
+                    crate::error::Error::CorruptedMetadata {
+                        alg_id: 0,
+                        reason: format!("unknown LogKind byte: {}", kind_byte),
+                    }
+                })?;
                 (count, kind)
             },
             None => {
@@ -469,6 +622,100 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
         pmt::mr::nary_mr(state.hasher.as_ref(), &refs)
+    }
+
+    /// Build the next-state algorithm map and the batch to write, without
+    /// mutating `self`.
+    ///
+    /// `digest_fn(alg_id, state)` returns the per-algorithm digest for the
+    /// item being appended; it may also push node entries into `batch_nodes`
+    /// via side-channel. To keep ownership clean the closure instead returns
+    /// `(digest, extra_nodes)` where `extra_nodes` are `(left, height, hash)`
+    /// triples for the leaf-level node (if any).
+    ///
+    /// Returns the proposed new algorithm map and an [`OwnedBatch`] ready to
+    /// pass directly to `write_batch`. The caller MUST write the batch to
+    /// storage before swapping the returned map into `self.algs`.
+    fn build_append_state<F>(
+        &self,
+        kind: LogKind,
+        digest_fn: F,
+    ) -> Result<(std::collections::HashMap<u64, AlgState>, OwnedBatch), S::Error>
+    where
+        F: Fn(u64, &AlgState) -> (Vec<u8>, Option<(u64, u64, u32, Vec<u8>)>),
+        S::Error: Send,
+    {
+        let mut new_algs = self.algs.clone();
+        let mut batch_nodes: Vec<(u64, u64, u32, Vec<u8>)> = Vec::new();
+        let log_meta_kind = kind;
+
+        for (&alg_id, state) in &mut new_algs {
+            if !state.is_active() {
+                continue;
+            }
+
+            let (digest, extra_node) = digest_fn(alg_id, state);
+            if let Some(node) = extra_node {
+                batch_nodes.push(node);
+            }
+
+            state.frontier.push(digest);
+            state.frontier_coords.push((self.count, 0));
+
+            let merges = reduction_count(self.count, self.config.log_arity as u64);
+            for _ in 0..merges {
+                let mut children = Vec::with_capacity(self.config.log_arity);
+                let mut coords = Vec::with_capacity(self.config.log_arity);
+                for _ in 0..self.config.log_arity {
+                    children.push(state.frontier.pop().ok_or_else(|| {
+                        crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier stack underflow during reduction".to_string(),
+                        }
+                    })?);
+                    coords.push(state.frontier_coords.pop().ok_or_else(|| {
+                        crate::error::Error::CorruptedMetadata {
+                            alg_id,
+                            reason: "frontier_coords stack underflow during reduction".to_string(),
+                        }
+                    })?);
+                }
+                children.reverse();
+                coords.reverse();
+                let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
+                let parent = pmt::mr::nary_mr(state.hasher.as_ref(), &child_refs);
+
+                let parent_left_index = coords[0].0;
+                let parent_height = coords[0].1 + 1;
+
+                if parent != state.hasher.null() {
+                    batch_nodes.push((alg_id, parent_left_index, parent_height, parent.clone()));
+                }
+
+                state.frontier.push(parent);
+                state
+                    .frontier_coords
+                    .push((parent_left_index, parent_height));
+            }
+        }
+
+        let new_count = self.count + 1;
+        let checkpoint_roots: Vec<(u64, Vec<u8>)> = new_algs
+            .iter()
+            .filter(|(_, s)| s.is_active())
+            .map(|(&alg_id, s)| {
+                let root = Self::compute_root_from_state(s, self.config.log_arity);
+                (alg_id, root)
+            })
+            .collect();
+
+        let batch = OwnedBatch {
+            nodes: batch_nodes,
+            log_meta: Some((new_count, log_meta_kind.to_byte())),
+            checkpoint_roots,
+        };
+
+        Ok((new_algs, batch))
     }
 
     /// Probe storage to estimate the current global size (legacy fallback only).
@@ -759,11 +1006,36 @@ impl<S: Storage> NaryMerkleLog<S> {
             last.1 = current_size;
         }
 
+        // Build updated state for checkpoint root computation.
+        let frozen_root = {
+            let mut frozen = AlgState {
+                hasher: state.hasher.clone_box(),
+                epochs: new_epochs.clone(),
+                frontier: state.frontier.clone(),
+                frontier_coords: state.frontier_coords.clone(),
+            };
+            // Reflect the closed epoch so effective_size_at returns the frozen size.
+            frozen.epochs = new_epochs.clone();
+            Self::compute_root_from_state(&frozen, self.config.log_arity)
+        };
+
+        let epochs_ref: &[(u64, u64)] = &new_epochs;
+        // Commit epoch update + checkpoint root atomically (mirrors resume_algorithm).
         self.storage
-            .store_algorithm_meta(alg_id, &new_epochs)
+            .write_batch(
+                &[],
+                &[],
+                &[(alg_id, epochs_ref)],
+                None,
+                &[(alg_id, frozen_root.as_slice())],
+            )
             .await
             .map_err(crate::error::Error::Storage)?;
 
+        let state = self
+            .algs
+            .get_mut(&alg_id)
+            .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
         state.epochs = new_epochs;
         Ok(())
     }
@@ -1054,99 +1326,46 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
 
-        let mut temp_algs = self.algs.clone();
-        let mut batch_leaves = Vec::new();
-        let mut batch_nodes = Vec::new();
-
-        batch_leaves.push((self.count, data));
-
-        for (&alg_id, state) in &mut temp_algs {
-            if !state.is_active() {
-                continue;
-            }
-
-            let digest = if state.is_active_at(self.count) {
+        // `build_append_state` takes &self: the new alg map and batch are
+        // assembled without touching self.algs; the swap happens only after
+        // write_batch succeeds (structural rollback guarantee).
+        let (new_algs, batch) = self.build_append_state(LogKind::Flat, |alg_id, state| {
+            if state.is_active_at(self.count) {
                 let leaf_hash = state.hasher.leaf(data);
-                batch_nodes.push((alg_id, self.count, 0, leaf_hash.clone()));
-                leaf_hash
+                let node = (alg_id, self.count, 0u32, leaf_hash.clone());
+                (leaf_hash, Some(node))
             } else {
-                state.hasher.null()
-            };
-
-            state.frontier.push(digest);
-            state.frontier_coords.push((self.count, 0));
-
-            let merges = reduction_count(self.count, self.config.log_arity as u64);
-            for _ in 0..merges {
-                let mut children = Vec::with_capacity(self.config.log_arity);
-                let mut coords = Vec::with_capacity(self.config.log_arity);
-                for _ in 0..self.config.log_arity {
-                    children.push(state.frontier.pop().ok_or_else(|| {
-                        crate::error::Error::CorruptedMetadata {
-                            alg_id,
-                            reason: "frontier stack underflow during reduction".to_string(),
-                        }
-                    })?);
-                    coords.push(state.frontier_coords.pop().ok_or_else(|| {
-                        crate::error::Error::CorruptedMetadata {
-                            alg_id,
-                            reason: "frontier_coords stack underflow during reduction".to_string(),
-                        }
-                    })?);
-                }
-                children.reverse();
-                coords.reverse();
-                let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
-                let parent = nary_mr(state.hasher.as_ref(), &child_refs);
-
-                let parent_left_index = coords[0].0;
-                let parent_height = coords[0].1 + 1;
-
-                if parent != state.hasher.null() {
-                    batch_nodes.push((alg_id, parent_left_index, parent_height, parent.clone()));
-                }
-
-                state.frontier.push(parent);
-                state
-                    .frontier_coords
-                    .push((parent_left_index, parent_height));
+                (state.hasher.null(), None)
             }
-        }
+        })?;
 
-        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch_nodes
+        let leaf_entry = (self.count, data.to_vec());
+        let leaves_ref: &[(u64, &[u8])] = &[(leaf_entry.0, leaf_entry.1.as_slice())];
+        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch
+            .nodes
             .iter()
-            .map(|&(alg_id, left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
+            .map(|(a, l, h, hash)| (*a, *l, *h, hash.as_slice()))
             .collect();
-
-        let new_count = self.count + 1;
-
-        // Compute checkpoint roots from the updated temp frontier for all active algorithms.
-        let checkpoint_roots_owned: Vec<(u64, Vec<u8>)> = temp_algs
-            .iter()
-            .filter(|(_, s)| s.is_active())
-            .map(|(&alg_id, s)| {
-                let root = Self::compute_root_from_state(s, self.config.log_arity);
-                (alg_id, root)
-            })
-            .collect();
-        let checkpoint_refs: Vec<(u64, &[u8])> = checkpoint_roots_owned
+        let checkpoint_refs: Vec<(u64, &[u8])> = batch
+            .checkpoint_roots
             .iter()
             .map(|(id, r)| (*id, r.as_slice()))
             .collect();
 
         self.storage
             .write_batch(
-                &batch_leaves,
+                leaves_ref,
                 &nodes_ref,
                 &[],
-                Some((new_count, LOG_KIND_FLAT)),
+                batch.log_meta,
                 &checkpoint_refs,
             )
             .await
             .map_err(crate::error::Error::Storage)?;
 
-        self.algs = temp_algs;
-        self.count = new_count;
+        // Storage committed: safe to update in-memory state.
+        self.algs = new_algs;
+        self.count = batch.log_meta.unwrap().0;
         self.kind = LogKind::Flat;
         Ok(())
     }
@@ -1171,95 +1390,35 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::NoActiveAlgorithms);
         }
 
-        let mut temp_algs = self.algs.clone();
-        let mut batch_nodes = Vec::new();
-
-        for (&alg_id, state) in &mut temp_algs {
-            if !state.is_active() {
-                continue;
-            }
-
-            let digest = if state.is_active_at(self.count) {
+        let (new_algs, batch) = self.build_append_state(LogKind::Subtree, |alg_id, state| {
+            if state.is_active_at(self.count) {
                 let root_hash = evaluate(state.hasher.as_ref(), subtree);
-                batch_nodes.push((alg_id, self.count, 0, root_hash.clone()));
-                root_hash
+                let node = (alg_id, self.count, 0u32, root_hash.clone());
+                (root_hash, Some(node))
             } else {
-                state.hasher.null()
-            };
-
-            state.frontier.push(digest);
-            state.frontier_coords.push((self.count, 0));
-
-            let merges = reduction_count(self.count, self.config.log_arity as u64);
-            for _ in 0..merges {
-                let mut children = Vec::with_capacity(self.config.log_arity);
-                let mut coords = Vec::with_capacity(self.config.log_arity);
-                for _ in 0..self.config.log_arity {
-                    children.push(state.frontier.pop().ok_or_else(|| {
-                        crate::error::Error::CorruptedMetadata {
-                            alg_id,
-                            reason: "frontier stack underflow during reduction".to_string(),
-                        }
-                    })?);
-                    coords.push(state.frontier_coords.pop().ok_or_else(|| {
-                        crate::error::Error::CorruptedMetadata {
-                            alg_id,
-                            reason: "frontier_coords stack underflow during reduction".to_string(),
-                        }
-                    })?);
-                }
-                children.reverse();
-                coords.reverse();
-                let child_refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
-                let parent = nary_mr(state.hasher.as_ref(), &child_refs);
-
-                let parent_left_index = coords[0].0;
-                let parent_height = coords[0].1 + 1;
-
-                if parent != state.hasher.null() {
-                    batch_nodes.push((alg_id, parent_left_index, parent_height, parent.clone()));
-                }
-
-                state.frontier.push(parent);
-                state
-                    .frontier_coords
-                    .push((parent_left_index, parent_height));
+                (state.hasher.null(), None)
             }
-        }
+        })?;
 
-        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch_nodes
+        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch
+            .nodes
             .iter()
-            .map(|&(alg_id, left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
+            .map(|(a, l, h, hash)| (*a, *l, *h, hash.as_slice()))
             .collect();
-
-        let new_count = self.count + 1;
-
-        let checkpoint_roots_owned: Vec<(u64, Vec<u8>)> = temp_algs
-            .iter()
-            .filter(|(_, s)| s.is_active())
-            .map(|(&alg_id, s)| {
-                let root = Self::compute_root_from_state(s, self.config.log_arity);
-                (alg_id, root)
-            })
-            .collect();
-        let checkpoint_refs: Vec<(u64, &[u8])> = checkpoint_roots_owned
+        let checkpoint_refs: Vec<(u64, &[u8])> = batch
+            .checkpoint_roots
             .iter()
             .map(|(id, r)| (*id, r.as_slice()))
             .collect();
 
         self.storage
-            .write_batch(
-                &[],
-                &nodes_ref,
-                &[],
-                Some((new_count, LOG_KIND_SUBTREE)),
-                &checkpoint_refs,
-            )
+            .write_batch(&[], &nodes_ref, &[], batch.log_meta, &checkpoint_refs)
             .await
             .map_err(crate::error::Error::Storage)?;
 
-        self.algs = temp_algs;
-        self.count = new_count;
+        // Storage committed: safe to update in-memory state.
+        self.algs = new_algs;
+        self.count = batch.log_meta.unwrap().0;
         self.kind = LogKind::Subtree;
         Ok(())
     }
@@ -1411,80 +1570,13 @@ impl<S: Storage> NaryMerkleLog<S> {
             hashes.push(hash);
         }
 
-        struct MergeNode {
-            hash: Vec<u8>,
-            path: Vec<crate::proof::ProofStep>,
-        }
-
-        let mut current: Vec<MergeNode> = hashes
-            .into_iter()
-            .map(|h| MergeNode {
-                hash: h,
-                path: Vec::new(),
-            })
-            .collect();
-
-        let mut target_idx = f_idx;
-        let k_usize = self.config.log_arity;
-        while current.len() > k_usize {
-            let split_idx = current.len() - k_usize;
-
-            let refs: Vec<&[u8]> = current[split_idx..]
-                .iter()
-                .map(|n| n.hash.as_slice())
-                .collect();
-            let merged_hash = nary_mr(state.hasher.as_ref(), &refs);
-
-            let mut target_path = Vec::new();
-            let mut is_target_merged = false;
-            if target_idx >= split_idx {
-                let mut siblings = Vec::with_capacity(k_usize - 1);
-                for (j, item) in current.iter().enumerate().skip(split_idx) {
-                    if j != target_idx {
-                        siblings.push(item.hash.clone());
-                    }
-                }
-                let step = crate::proof::ProofStep {
-                    siblings,
-                    position: target_idx - split_idx,
-                };
-                let mut p = std::mem::take(&mut current[target_idx].path);
-                p.push(step);
-                target_path = p;
-                is_target_merged = true;
-            }
-
-            if is_target_merged {
-                current.truncate(split_idx);
-                current.push(MergeNode {
-                    hash: merged_hash,
-                    path: target_path,
-                });
-                target_idx = split_idx;
-            } else {
-                current.truncate(split_idx);
-                current.push(MergeNode {
-                    hash: merged_hash,
-                    path: Vec::new(),
-                });
-            }
-        }
-
-        if current.len() > 1 {
-            let mut siblings = Vec::with_capacity(current.len() - 1);
-            for (j, item) in current.iter().enumerate() {
-                if j != target_idx {
-                    siblings.push(item.hash.clone());
-                }
-            }
-            let step = crate::proof::ProofStep {
-                siblings,
-                position: target_idx,
-            };
-            current[target_idx].path.push(step);
-        }
-
-        path.extend(std::mem::take(&mut current[target_idx].path));
+        merge_frontier_paths(
+            hashes,
+            f_idx,
+            self.config.log_arity,
+            state.hasher.as_ref(),
+            &mut path,
+        );
 
         // The log spine's shape is owned by the topology module; generation must
         // emit exactly the skeleton the verifier will check against. This holds by
@@ -1618,80 +1710,13 @@ impl<S: Storage> NaryMerkleLog<S> {
             hashes.push(hash);
         }
 
-        struct MergeNode {
-            hash: Vec<u8>,
-            path: Vec<crate::proof::ProofStep>,
-        }
-
-        let mut current: Vec<MergeNode> = hashes
-            .into_iter()
-            .map(|h| MergeNode {
-                hash: h,
-                path: Vec::new(),
-            })
-            .collect();
-
-        let mut target_idx = f_idx;
-        let k_usize = self.config.log_arity;
-        while current.len() > k_usize {
-            let split_idx = current.len() - k_usize;
-
-            let refs: Vec<&[u8]> = current[split_idx..]
-                .iter()
-                .map(|n| n.hash.as_slice())
-                .collect();
-            let merged_hash = nary_mr(state.hasher.as_ref(), &refs);
-
-            let mut target_path = Vec::new();
-            let mut is_target_merged = false;
-            if target_idx >= split_idx {
-                let mut siblings = Vec::with_capacity(k_usize - 1);
-                for (j, item) in current.iter().enumerate().skip(split_idx) {
-                    if j != target_idx {
-                        siblings.push(item.hash.clone());
-                    }
-                }
-                let step = crate::proof::ProofStep {
-                    siblings,
-                    position: target_idx - split_idx,
-                };
-                let mut p = std::mem::take(&mut current[target_idx].path);
-                p.push(step);
-                target_path = p;
-                is_target_merged = true;
-            }
-
-            if is_target_merged {
-                current.truncate(split_idx);
-                current.push(MergeNode {
-                    hash: merged_hash,
-                    path: target_path,
-                });
-                target_idx = split_idx;
-            } else {
-                current.truncate(split_idx);
-                current.push(MergeNode {
-                    hash: merged_hash,
-                    path: Vec::new(),
-                });
-            }
-        }
-
-        if current.len() > 1 {
-            let mut siblings = Vec::with_capacity(current.len() - 1);
-            for (j, item) in current.iter().enumerate() {
-                if j != target_idx {
-                    siblings.push(item.hash.clone());
-                }
-            }
-            let step = crate::proof::ProofStep {
-                siblings,
-                position: target_idx,
-            };
-            current[target_idx].path.push(step);
-        }
-
-        path.extend(std::mem::take(&mut current[target_idx].path));
+        merge_frontier_paths(
+            hashes,
+            f_idx,
+            self.config.log_arity,
+            state.hasher.as_ref(),
+            &mut path,
+        );
 
         Ok(Some(crate::proof::ConsistencyProof { start_hash, path }))
     }
@@ -2162,21 +2187,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             });
         }
 
-        let alg_size = if size <= state.first_activation() {
-            // Null projections fill [0, size); frontier geometry uses the global size.
-            // For size == 0 this gives alg_size == 0 → empty() return below.
-            size
-        } else if state.is_active_at(size - 1) {
-            size
-        } else {
-            state
-                .epochs
-                .iter()
-                .filter(|&&(_, end)| end < size)
-                .map(|&(_, end)| end)
-                .max()
-                .unwrap_or(0)
-        };
+        let alg_size = state.effective_size_at(size);
 
         if alg_size == 0 {
             return Ok(state.hasher.empty());
@@ -2229,24 +2240,14 @@ impl<S: Storage> NaryMerkleLog<S> {
             for (&id, state) in &self.algs {
                 let check_start = std::cmp::max(start, state.first_activation());
                 if check_start < end {
-                    let get_alg_size = |s_val: u64| {
-                        if s_val <= state.first_activation() {
-                            0
-                        } else if state.is_active_at(s_val - 1) {
-                            s_val
-                        } else {
-                            state
-                                .epochs
-                                .iter()
-                                .filter(|&&(_, end)| end < s_val)
-                                .map(|&(_, end)| end)
-                                .max()
-                                .unwrap_or(0)
-                        }
+                    // check_start == first_activation() means the algorithm has
+                    // no committed data at the checkpoint boundary; treat as empty.
+                    let old_alg_size = if check_start == state.first_activation() {
+                        0
+                    } else {
+                        state.effective_size_at(check_start)
                     };
-
-                    let old_alg_size = get_alg_size(check_start);
-                    let new_alg_size = get_alg_size(end);
+                    let new_alg_size = state.effective_size_at(end);
 
                     let old_root = if old_alg_size == 0 {
                         state.hasher.empty()
@@ -2338,23 +2339,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             let mut frontier_coords = Vec::new();
             let k = self.config.log_arity;
 
-            let alg_size_at_start = if start <= state.first_activation() {
-                // Null projections span [0, start); use the global start so the
-                // carry schedule (reduction_count(alg_size - 1, k)) matches the
-                // global index at each step, matching the append path exactly.
-                // When start == 0 this gives 0, leaving the frontier empty (correct).
-                start
-            } else if state.is_active_at(start - 1) {
-                start
-            } else {
-                state
-                    .epochs
-                    .iter()
-                    .filter(|&&(_, e)| e < start)
-                    .map(|&(_, e)| e)
-                    .max()
-                    .unwrap_or(0)
-            };
+            let alg_size_at_start = state.effective_size_at(start);
 
             if alg_size_at_start > 0 {
                 let coords = frontier_for_size(alg_size_at_start, k as u64);
