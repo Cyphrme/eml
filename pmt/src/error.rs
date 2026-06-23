@@ -12,15 +12,19 @@ use std::fmt;
 /// A kernel construction error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// The spine arity is outside the valid range `2..=256`.
+    BadArity,
     /// A frontier was sealed with a malformed committed epoch timeline (not
     /// well-formed at the sealed tree size; see
-    /// [`crate::proof::validate_committed_epochs`]).
+    /// [`crate::proof::validate_committed_epochs`]), or the number of frontier
+    /// peaks supplied does not match the expected count for `(tree_size, arity)`.
     MalformedEpochs,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::BadArity => write!(f, "spine arity is outside the valid range 2..=256"),
             Self::MalformedEpochs => {
                 write!(
                     f,

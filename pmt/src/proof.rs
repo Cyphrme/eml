@@ -40,6 +40,20 @@ pub struct ProofStep {
     pub position: usize,
 }
 
+impl ProofStep {
+    /// Project this step's structural shape — position and sibling count —
+    /// as a [`crate::topology::SkeletonStep`]. Used by
+    /// [`verify_inclusion_path_structure`] to compare against the canonical
+    /// skeleton without open-coding the field correspondence.
+    #[must_use]
+    pub fn shape(&self) -> crate::topology::SkeletonStep {
+        crate::topology::SkeletonStep {
+            position: self.position,
+            sibling_count: self.siblings.len(),
+        }
+    }
+}
+
 /// Inclusion proof: path from a leaf to the root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InclusionProof {
@@ -424,9 +438,10 @@ pub fn verify_inclusion_path_structure(
         return false;
     }
     let d = path.len() - skeleton.len();
-    path[d..].iter().zip(skeleton.iter()).all(|(step, shape)| {
-        step.position == shape.position && step.siblings.len() == shape.sibling_count
-    })
+    path[d..]
+        .iter()
+        .zip(skeleton.iter())
+        .all(|(step, shape)| step.shape() == *shape)
 }
 
 /// Reconstruct the raw root from an inclusion proof path.
