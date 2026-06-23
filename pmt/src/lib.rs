@@ -32,7 +32,7 @@ pub use proof::{
     reconstruct_inclusion_root, validate_committed_epochs, verify_inactivity_with_coupling,
     verify_inclusion, verify_inclusion_path_structure, verify_inclusion_with_coupling,
 };
-pub use sealed::Sealed;
+pub use sealed::{RunExtent, Sealed};
 pub use subtree::{Subtree, embed, extract};
 pub use topology::{SkeletonStep, frontier_for_size, inclusion_skeleton};
 
