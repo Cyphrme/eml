@@ -204,10 +204,7 @@ mod tests {
                     continue;
                 }
                 proof.leaf_hash = hasher.leaf(format!("leaf-{other}").into_bytes().as_slice());
-                assert!(
-                    !proof.verify(&hasher, &root),
-                    "index={index} other={other}"
-                );
+                assert!(!proof.verify(&hasher, &root), "index={index} other={other}");
             }
             // Restore: the genuine leaf still verifies.
             proof.leaf_hash = hasher.leaf(format!("leaf-{index}").into_bytes().as_slice());
