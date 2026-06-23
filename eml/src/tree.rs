@@ -1368,6 +1368,43 @@ impl<S: Storage> NaryMerkleLog<S> {
         Ok(Some(crate::proof::InclusionProof { path }))
     }
 
+    /// Produce a self-contained [`pmt::LeafProof`] for the item at `index` in a
+    /// tree of size `tree_size` — the live "is this a legitimate leaf?"
+    /// witness, peer of the inclusion proof. It bundles the leaf digest with its
+    /// trusted positional parameters `(index, tree_size, arity)` and the
+    /// inclusion path, so a consumer verifies with one [`pmt::LeafProof::verify`]
+    /// call against an authenticated root.
+    pub async fn leaf_proof(
+        &self,
+        index: u64,
+        tree_size: u64,
+    ) -> Result<Option<pmt::LeafProof>, S::Error> {
+        self.leaf_proof_for(0, index, tree_size).await
+    }
+
+    /// Produce a leaf proof for a specific algorithm. Returns `None` when no
+    /// inclusion proof exists for `(index, tree_size)` (out of range, or
+    /// `tree_size` beyond the algorithm's committed size).
+    pub async fn leaf_proof_for(
+        &self,
+        alg_id: u64,
+        index: u64,
+        tree_size: u64,
+    ) -> Result<Option<pmt::LeafProof>, S::Error> {
+        let Some(proof) = self.inclusion_proof_for(alg_id, index, tree_size).await? else {
+            return Ok(None);
+        };
+        // The leaf digest is the height-0 node at the leaf's position.
+        let leaf_hash = self.get_node_hash(alg_id, index, 0).await?;
+        Ok(Some(pmt::LeafProof::new(
+            leaf_hash,
+            index,
+            tree_size,
+            self.config.log_arity as u64,
+            proof.path,
+        )))
+    }
+
     /// Generate a consistency proof between `old_size` and `new_size`.
     pub async fn consistency_proof(
         &self,
@@ -2376,6 +2413,73 @@ mod tests {
             state.epochs_at(20),
             Some(vec![(2, 5), (7, 12), (15, u64::MAX)])
         );
+    }
+
+    #[test]
+    fn test_leaf_proof_accepts_legit_and_rejects_forged() {
+        use sha2::{Digest as _, Sha256};
+
+        #[derive(Debug)]
+        struct Sha256Hasher;
+        impl Hasher for Sha256Hasher {
+            fn leaf(&self, data: &[u8]) -> Vec<u8> {
+                Sha256::digest(data).to_vec()
+            }
+            fn node(&self, children: &[&[u8]]) -> Vec<u8> {
+                let mut h = Sha256::new();
+                for c in children {
+                    h.update(c);
+                }
+                h.finalize().to_vec()
+            }
+            fn empty(&self) -> Vec<u8> {
+                Sha256::digest(b"").to_vec()
+            }
+            fn hash(&self, data: &[u8]) -> Vec<u8> {
+                Sha256::digest(data).to_vec()
+            }
+            fn clone_box(&self) -> Box<dyn Hasher> {
+                Box::new(Sha256Hasher)
+            }
+        }
+
+        smol::block_on(async {
+            let storage = MemoryStorage::new();
+            let config = TreeConfig { log_arity: 2 };
+            let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
+                .await
+                .unwrap();
+
+            let payloads: Vec<Vec<u8>> = (0..12u64).map(|i| format!("item-{i}").into_bytes()).collect();
+            for p in &payloads {
+                log.append_leaf(p).await.unwrap();
+            }
+
+            let size = payloads.len() as u64;
+            let root = log.root_for_at(0, size).await.unwrap();
+            let h = Sha256Hasher;
+
+            for index in 0..size {
+                let proof = log
+                    .leaf_proof(index, size)
+                    .await
+                    .unwrap()
+                    .expect("in range");
+                // Self-describing: positional fields carried, no re-supply.
+                assert_eq!(proof.index, index);
+                assert_eq!(proof.tree_size, size);
+                assert_eq!(proof.log_arity, 2);
+                // Legitimate leaf accepted.
+                assert!(proof.verify(&h, &root), "index={index}");
+                // Forged leaf at the same position rejected.
+                let mut forged = proof.clone();
+                forged.leaf_hash = h.leaf(b"forged-item");
+                assert!(!forged.verify(&h, &root), "index={index}");
+            }
+
+            // Out of range yields no proof.
+            assert!(log.leaf_proof(size, size).await.unwrap().is_none());
+        });
     }
 
     #[test]

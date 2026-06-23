@@ -11,6 +11,7 @@
 
 pub mod error;
 pub mod hasher;
+pub mod leaf_proof;
 pub mod metadata;
 pub mod mr;
 pub mod proof;
@@ -20,6 +21,7 @@ pub mod topology;
 
 pub use error::{Error, Result};
 pub use hasher::Hasher;
+pub use leaf_proof::LeafProof;
 pub use metadata::Meta;
 pub use mr::{count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use proof::{
