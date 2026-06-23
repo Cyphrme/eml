@@ -130,7 +130,15 @@ pub(crate) fn inclusion_path_with_miss_count(
 ) -> (Vec<ProofStep>, usize) {
     let mut path = Vec::new();
     let mut misses = 0usize;
-    descend_counted(shape, index, cache, leaf_digest, node, &mut path, &mut misses);
+    descend_counted(
+        shape,
+        index,
+        cache,
+        leaf_digest,
+        node,
+        &mut path,
+        &mut misses,
+    );
     (path, misses)
 }
 
@@ -156,7 +164,13 @@ fn descend_counted(
             for (i, child) in children.iter().enumerate() {
                 if i == position {
                     child_digests.push(descend_counted(
-                        child, index, cache, leaf_digest, node, path, misses,
+                        child,
+                        index,
+                        cache,
+                        leaf_digest,
+                        node,
+                        path,
+                        misses,
                     ));
                 } else {
                     child_digests.push(eval(child, cache, leaf_digest, node, misses));

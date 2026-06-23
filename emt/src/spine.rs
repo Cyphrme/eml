@@ -92,9 +92,7 @@ pub(crate) fn leftmost(node: &SpineNode) -> u64 {
 pub(crate) fn rightmost(node: &SpineNode) -> u64 {
     match node {
         SpineNode::Leaf(pos) => *pos,
-        SpineNode::Inner(children) => {
-            rightmost(children.last().expect("inner node has children"))
-        },
+        SpineNode::Inner(children) => rightmost(children.last().expect("inner node has children")),
     }
 }
 
