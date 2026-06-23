@@ -22,7 +22,10 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MalformedEpochs => {
-                write!(f, "committed epoch timeline is not well-formed at the sealed tree size")
+                write!(
+                    f,
+                    "committed epoch timeline is not well-formed at the sealed tree size"
+                )
             },
         }
     }

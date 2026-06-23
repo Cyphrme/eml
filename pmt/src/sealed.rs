@@ -77,12 +77,8 @@ mod tests {
 
     #[test]
     fn new_accepts_well_formed_and_reads_back() {
-        let sealed = Sealed::new(
-            5,
-            vec![(0, vec![0xAA; 32])],
-            vec![(0, vec![(0, u64::MAX)])],
-        )
-        .expect("well-formed timeline");
+        let sealed = Sealed::new(5, vec![(0, vec![0xAA; 32])], vec![(0, vec![(0, u64::MAX)])])
+            .expect("well-formed timeline");
         assert_eq!(sealed.tree_size(), 5);
         assert_eq!(sealed.active_roots(), &[(0, vec![0xAA; 32])]);
         assert_eq!(sealed.alg_epochs(), &[(0, vec![(0, u64::MAX)])]);

@@ -258,13 +258,13 @@ fn test_verify_non_divergence_tamper_detection() {
                     .await;
             // Either from_storage errors (checkpoint mismatch) or verify_non_divergence detects it.
             match tampered_log {
-                Err(_) => {}
+                Err(_) => {},
                 Ok(log) => {
                     assert!(
                         !log.verify_non_divergence(None, &[]).await.unwrap(),
                         "Failed to detect tampered leaf data"
                     );
-                }
+                },
             }
         }
 
@@ -401,7 +401,10 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
 
         // Write a garbage node to storage at alg 0, left 0, height 2 (root of size 4)
         // representing a corrupted/partial write.
-        mutated_storage.store_node(0, 0, 2, &[0xAA; 32]).await.unwrap();
+        mutated_storage
+            .store_node(0, 0, 2, &[0xAA; 32])
+            .await
+            .unwrap();
         // Also corrupt the checkpoint root so from_storage doesn't reject alg 0's
         // current frozen state (we're simulating a pre-resume partial write, not
         // a post-resume corruption).
@@ -496,9 +499,7 @@ fn test_v12_boundary_band_corruption_detected() {
 
         // Clean log: verify_non_divergence must succeed.
         assert!(
-            log.verify_non_divergence(None, &[])
-                .await
-                .unwrap(),
+            log.verify_non_divergence(None, &[]).await.unwrap(),
             "clean log after resume_algorithm + extra leaf failed non-divergence check"
         );
 
@@ -510,8 +511,7 @@ fn test_v12_boundary_band_corruption_detected() {
         let mut tampered = log.storage().clone();
         tampered.nodes.remove(&(1, 2, 1));
 
-        let tampered_log =
-            NaryMerkleLog::from_storage(tampered, metas).await.unwrap();
+        let tampered_log = NaryMerkleLog::from_storage(tampered, metas).await.unwrap();
 
         let result = tampered_log.verify_non_divergence(None, &[]).await;
         assert!(
@@ -552,19 +552,18 @@ fn test_v16_subtree_mode_tamper_detected() {
         tampered.nodes.insert((0, 0, 0), vec![0xDE; 32]);
 
         let tampered_log =
-            NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))])
-                .await;
+            NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))]).await;
 
         // from_storage may reject via checkpoint mismatch, or verify_non_divergence
         // catches the tampered parent via recomputation.
         match tampered_log {
-            Err(_) => {}
+            Err(_) => {},
             Ok(log) => {
                 assert!(
                     !log.verify_non_divergence(None, &[]).await.unwrap(),
                     "subtree-mode tampering was not detected"
                 );
-            }
+            },
         }
     });
 }
@@ -589,10 +588,9 @@ fn test_v16_wrong_length_digest_rejected() {
         // (alg=0, left=0, height=1) is a fully-active height-1 node.
         tampered.nodes.insert((0, 0, 1), vec![0xAB; 16]); // 16 bytes, not 32
 
-        let tampered_log =
-            NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))])
-                .await
-                .unwrap();
+        let tampered_log = NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))])
+            .await
+            .unwrap();
 
         // get_node_hash must detect the wrong-length value and return
         // CorruptedMetadata rather than folding it into a silently wrong root.

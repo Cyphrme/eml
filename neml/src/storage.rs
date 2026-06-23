@@ -30,14 +30,10 @@ pub trait Storage: Send + Sync {
     /// The number of leaves currently stored, or an error if storage is
     /// unreadable.  Never returns 0 on error; a storage failure must be
     /// propagated so callers can distinguish "empty log" from "broken store".
-    fn len(
-        &self,
-    ) -> impl std::future::Future<Output = Result<u64, Self::Error>> + Send;
+    fn len(&self) -> impl std::future::Future<Output = Result<u64, Self::Error>> + Send;
 
     /// Whether the storage contains no leaves.
-    fn is_empty(
-        &self,
-    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
+    fn is_empty(&self) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         async move { self.len().await.map(|n| n == 0) }
     }
 

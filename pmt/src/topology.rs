@@ -145,8 +145,8 @@ mod tests {
         for k in [2u64, 3, 5, 16] {
             for tree_size in 1..=130u64 {
                 for index in 0..tree_size {
-                    let skeleton = inclusion_skeleton(k, tree_size, index)
-                        .expect("valid log position");
+                    let skeleton =
+                        inclusion_skeleton(k, tree_size, index).expect("valid log position");
                     for step in &skeleton {
                         assert!(step.sibling_count >= 1, "k={k} n={tree_size} i={index}");
                         assert!(step.position <= step.sibling_count);

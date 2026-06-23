@@ -4,11 +4,10 @@
 //! primitives**, applied structurally on every fold (always-on, never a
 //! toggle):
 //!
-//! - **promotion** — a lone (single) child is lifted in place of the wrapping
-//!   hashed node. Structurally deterministic: a verifier re-derives it.
-//! - **collapse** — children of the *same value* fold to that value. The
-//!   all-null case below is *one instance* of general same-value collapse, not
-//!   a separate operation.
+//! - **promotion** — a lone (single) child is lifted in place of the wrapping hashed node.
+//!   Structurally deterministic: a verifier re-derives it.
+//! - **collapse** — children of the *same value* fold to that value. The all-null case below is
+//!   *one instance* of general same-value collapse, not a separate operation.
 //!
 //! The literal `nary_mr` symbol predates this vocabulary and is kept verbatim;
 //! the two primitives are named in this prose, not split in the code here.
@@ -137,7 +136,6 @@ mod tests {
             Sha256::digest(b"").to_vec()
         }
 
-
         fn hash(&self, data: &[u8]) -> Vec<u8> {
             Sha256::digest(data).to_vec()
         }
@@ -201,11 +199,15 @@ mod tests {
 
         let leaf_hash = hasher.leaf(b"b");
         let root = evaluate(&hasher, &subtree);
-        let proof = crate::proof::InclusionProof {
-            path,
-        };
+        let proof = crate::proof::InclusionProof { path };
         assert!(crate::proof::verify_inclusion(
-            &hasher, &leaf_hash, 0, 1, 2, &proof.path, &root
+            &hasher,
+            &leaf_hash,
+            0,
+            1,
+            2,
+            &proof.path,
+            &root
         ));
     }
 }

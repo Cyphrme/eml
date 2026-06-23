@@ -4,15 +4,14 @@
 //!
 //! An inclusion proof path runs leaf → root and splits into two regions:
 //!
-//! - The **log skeleton** — the trailing steps along the fixed-arity proof
-//!   spine. Their shape (count, per-step position and sibling count) is fully
-//!   determined by `(index, tree_size, log_arity)` and is pinned exactly against
-//!   [`crate::topology::inclusion_skeleton`]. Because there is no per-node domain
-//!   separation, second-preimage safety rests entirely on this exactness: the
-//!   verifier reconstructs the canonical topology and rejects any deviation.
-//! - The **subtree prefix** — the leading steps below the leaf's log position,
-//!   in application-defined (non-uniform) subtrees. These carry no topological
-//!   claim and are verified by hash chaining alone.
+//! - The **log skeleton** — the trailing steps along the fixed-arity proof spine. Their shape
+//!   (count, per-step position and sibling count) is fully determined by `(index, tree_size,
+//!   log_arity)` and is pinned exactly against [`crate::topology::inclusion_skeleton`]. Because
+//!   there is no per-node domain separation, second-preimage safety rests entirely on this
+//!   exactness: the verifier reconstructs the canonical topology and rejects any deviation.
+//! - The **subtree prefix** — the leading steps below the leaf's log position, in
+//!   application-defined (non-uniform) subtrees. These carry no topological claim and are verified
+//!   by hash chaining alone.
 //!
 //! ## Canonical proof encoding
 //!
@@ -153,10 +152,7 @@ pub fn combined_root_preimage(
 /// `start >= prior end`); only the final interval may be open
 /// (`end == u64::MAX`); closed ends and open starts do not exceed `tree_size`.
 #[must_use]
-pub fn validate_committed_epochs(
-    alg_epochs: &[(u64, Vec<(u64, u64)>)],
-    tree_size: u64,
-) -> bool {
+pub fn validate_committed_epochs(alg_epochs: &[(u64, Vec<(u64, u64)>)], tree_size: u64) -> bool {
     if alg_epochs.windows(2).any(|w| w[0].0 >= w[1].0) {
         return false;
     }
@@ -226,17 +222,18 @@ pub fn committed_is_live(alg_epochs: &[(u64, Vec<(u64, u64)>)], alg_id: u64) -> 
 /// the algorithms whose epochs cover the final position `tree_size - 1`.
 /// Returned sorted by algorithm ID (inherited from the timeline ordering).
 #[must_use]
-pub fn committed_active_algs(
-    alg_epochs: &[(u64, Vec<(u64, u64)>)],
-    tree_size: u64,
-) -> Vec<u64> {
+pub fn committed_active_algs(alg_epochs: &[(u64, Vec<(u64, u64)>)], tree_size: u64) -> Vec<u64> {
     if tree_size == 0 {
         return Vec::new();
     }
     let last = tree_size - 1;
     alg_epochs
         .iter()
-        .filter(|(_, epochs)| epochs.iter().any(|&(start, end)| start <= last && last < end))
+        .filter(|(_, epochs)| {
+            epochs
+                .iter()
+                .any(|&(start, end)| start <= last && last < end)
+        })
         .map(|&(id, _)| id)
         .collect()
 }
@@ -365,8 +362,10 @@ impl CouplingProof {
         if is_promoted {
             constant_time_eq(&self.active_roots[0].1, combined_root)
         } else {
-            let computed =
-                hasher.hash(&combined_root_preimage(&self.active_roots, &self.alg_epochs));
+            let computed = hasher.hash(&combined_root_preimage(
+                &self.active_roots,
+                &self.alg_epochs,
+            ));
             constant_time_eq(&computed, combined_root)
         }
     }
@@ -383,7 +382,13 @@ impl CouplingProof {
         expected_active_algs: &[u64],
         config: VerifierConfig,
     ) -> Option<Vec<u8>> {
-        if !self.authenticate(hasher, tree_size, combined_root, expected_active_algs, config) {
+        if !self.authenticate(
+            hasher,
+            tree_size,
+            combined_root,
+            expected_active_algs,
+            config,
+        ) {
             return None;
         }
 
@@ -419,12 +424,9 @@ pub fn verify_inclusion_path_structure(
         return false;
     }
     let d = path.len() - skeleton.len();
-    path[d..]
-        .iter()
-        .zip(skeleton.iter())
-        .all(|(step, shape)| {
-            step.position == shape.position && step.siblings.len() == shape.sibling_count
-        })
+    path[d..].iter().zip(skeleton.iter()).all(|(step, shape)| {
+        step.position == shape.position && step.siblings.len() == shape.sibling_count
+    })
 }
 
 /// Reconstruct the raw root from an inclusion proof path.
@@ -463,12 +465,7 @@ pub fn reconstruct_inclusion_root(
         return None;
     }
 
-    if !verify_inclusion_path_structure(
-        log_arity as usize,
-        index,
-        tree_size,
-        path,
-    ) {
+    if !verify_inclusion_path_structure(log_arity as usize, index, tree_size, path) {
         return None;
     }
 
@@ -556,7 +553,9 @@ pub fn verify_inclusion_with_coupling(
         None => return false,
     }
 
-    verify_inclusion(hasher, leaf_hash, index, tree_size, log_arity, path, &raw_root)
+    verify_inclusion(
+        hasher, leaf_hash, index, tree_size, log_arity, path, &raw_root,
+    )
 }
 
 /// Verify an inactivity claim for a leaf at `index` using a coupling proof.
@@ -565,11 +564,11 @@ pub fn verify_inclusion_with_coupling(
 /// - `index < tree_size`
 /// - The coupling proof authenticates against `combined_root`.
 /// - The committed timeline marks `alg_id` **inactive** at `index`.
-/// - If `alg_id` has a committed root (it appears in `coupling.active_roots`),
-///   an inclusion proof for the null constant at `index` verifies against that
-///   root.  The caller must provide the matching Merkle path.
-/// - If `alg_id` is frozen at `tree_size` (no committed root), `path` must be
-///   empty — the committed timeline alone is sufficient evidence.
+/// - If `alg_id` has a committed root (it appears in `coupling.active_roots`), an inclusion proof
+///   for the null constant at `index` verifies against that root.  The caller must provide the
+///   matching Merkle path.
+/// - If `alg_id` is frozen at `tree_size` (no committed root), `path` must be empty — the committed
+///   timeline alone is sufficient evidence.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn verify_inactivity_with_coupling(
@@ -588,7 +587,13 @@ pub fn verify_inactivity_with_coupling(
         return false;
     }
 
-    if !coupling.authenticate(hasher, tree_size, combined_root, expected_active_algs, config) {
+    if !coupling.authenticate(
+        hasher,
+        tree_size,
+        combined_root,
+        expected_active_algs,
+        config,
+    ) {
         return false;
     }
 
@@ -601,10 +606,16 @@ pub fn verify_inactivity_with_coupling(
     // If alg_id has an active committed root, open it with a null-leaf
     // inclusion proof.  If it is frozen (not in active_roots), the timeline
     // commitment alone is the evidence and the path must be empty.
-    if let Some((_, raw_root)) =
-        coupling.active_roots.iter().find(|&&(id, _)| id == alg_id)
-    {
-        verify_inclusion(hasher, &hasher.null(), index, tree_size, log_arity, path, raw_root)
+    if let Some((_, raw_root)) = coupling.active_roots.iter().find(|&&(id, _)| id == alg_id) {
+        verify_inclusion(
+            hasher,
+            &hasher.null(),
+            index,
+            tree_size,
+            log_arity,
+            path,
+            raw_root,
+        )
     } else {
         path.is_empty()
     }
@@ -667,7 +678,10 @@ mod tests {
             10
         ));
         // Resume at the deactivation boundary is legal.
-        assert!(validate_committed_epochs(&[(0, vec![(0, 5), (5, MAX)])], 10));
+        assert!(validate_committed_epochs(
+            &[(0, vec![(0, 5), (5, MAX)])],
+            10
+        ));
 
         // Unsorted / duplicate algorithm IDs.
         assert!(!validate_committed_epochs(
@@ -681,7 +695,10 @@ mod tests {
         // Empty timeline.
         assert!(!validate_committed_epochs(&[(0, vec![])], 10));
         // Overlap / disorder.
-        assert!(!validate_committed_epochs(&[(0, vec![(0, 5), (4, MAX)])], 10));
+        assert!(!validate_committed_epochs(
+            &[(0, vec![(0, 5), (4, MAX)])],
+            10
+        ));
         assert!(!validate_committed_epochs(&[(0, vec![(5, 3)])], 10));
         // Open epoch not last.
         assert!(!validate_committed_epochs(

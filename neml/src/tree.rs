@@ -1,12 +1,13 @@
 //! Unified n-ary Merkle append-only log state machine.
 
+use pmt::hasher::Hasher;
+use pmt::mr::{evaluate, nary_mr};
+use pmt::subtree::Subtree;
+use pmt::topology::frontier_for_size;
+
 use crate::error::Result;
-use crate::hasher::Hasher;
-use crate::mr::{evaluate, nary_mr};
 use crate::schedule::reduction_count;
 use crate::storage::Storage;
-use crate::subtree::Subtree;
-use crate::topology::frontier_for_size;
 
 /// Whether log-level appends are flat leaf appends or subtree appends.
 ///
@@ -237,26 +238,29 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // Recover authoritative (count, kind) from persisted log metadata when
         // available; fall back to deterministic probing for legacy stores.
-        let (global_size, kind) =
-            match storage.load_log_meta().await.map_err(crate::error::Error::Storage)? {
-                Some((count, kind_byte)) => {
-                    let kind = if kind_byte == LOG_KIND_SUBTREE {
-                        LogKind::Subtree
-                    } else {
-                        LogKind::Flat
-                    };
-                    (count, kind)
-                }
-                None => {
-                    let size = Self::determine_global_size(&storage, &metas).await?;
-                    let kind = if storage.len().await.map_err(crate::error::Error::Storage)? > 0 {
-                        LogKind::Flat
-                    } else {
-                        LogKind::Subtree
-                    };
-                    (size, kind)
-                }
-            };
+        let (global_size, kind) = match storage
+            .load_log_meta()
+            .await
+            .map_err(crate::error::Error::Storage)?
+        {
+            Some((count, kind_byte)) => {
+                let kind = if kind_byte == LOG_KIND_SUBTREE {
+                    LogKind::Subtree
+                } else {
+                    LogKind::Flat
+                };
+                (count, kind)
+            },
+            None => {
+                let size = Self::determine_global_size(&storage, &metas).await?;
+                let kind = if storage.len().await.map_err(crate::error::Error::Storage)? > 0 {
+                    LogKind::Flat
+                } else {
+                    LogKind::Subtree
+                };
+                (size, kind)
+            },
+        };
 
         let mut algs = std::collections::HashMap::new();
         let k = config.log_arity as u64;
@@ -293,8 +297,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                     return Err(crate::error::Error::CorruptedMetadata {
                         alg_id,
                         reason: format!(
-                            "checkpoint root mismatch for algorithm {}: \
-                             recomputed root differs from stored checkpoint",
+                            "checkpoint root mismatch for algorithm {}: recomputed root differs \
+                             from stored checkpoint",
                             alg_id
                         ),
                     });
@@ -324,12 +328,12 @@ impl<S: Storage> NaryMerkleLog<S> {
             let split_idx = current.len() - k;
             let right_elements = &current[split_idx..];
             let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-            let merged = crate::mr::nary_mr(state.hasher.as_ref(), &refs);
+            let merged = pmt::mr::nary_mr(state.hasher.as_ref(), &refs);
             current.truncate(split_idx);
             current.push(merged);
         }
         let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-        crate::mr::nary_mr(state.hasher.as_ref(), &refs)
+        pmt::mr::nary_mr(state.hasher.as_ref(), &refs)
     }
 
     /// Probe storage to estimate the current global size (legacy fallback only).
@@ -425,14 +429,12 @@ impl<S: Storage> NaryMerkleLog<S> {
                     .get_node(alg_id, left, height)
                     .await
                     .map_err(crate::error::Error::Storage)?
-                    .ok_or_else(|| {
-                        crate::error::Error::CorruptedMetadata {
-                            alg_id,
-                            reason: format!(
-                                "missing frontier node for algorithm {} at left {} height {}",
-                                alg_id, left, height
-                            ),
-                        }
+                    .ok_or_else(|| crate::error::Error::CorruptedMetadata {
+                        alg_id,
+                        reason: format!(
+                            "missing frontier node for algorithm {} at left {} height {}",
+                            alg_id, left, height
+                        ),
                     })?
             };
             frontier.push(hash);
@@ -515,13 +517,21 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// Number of flat leaf appends (0 for subtree logs).
     #[must_use]
     pub fn size(&self) -> u64 {
-        if self.kind == LogKind::Flat { self.count } else { 0 }
+        if self.kind == LogKind::Flat {
+            self.count
+        } else {
+            0
+        }
     }
 
     /// Number of subtree appends (0 for flat logs).
     #[must_use]
     pub fn subtree_count(&self) -> u64 {
-        if self.kind == LogKind::Subtree { self.count } else { 0 }
+        if self.kind == LogKind::Subtree {
+            self.count
+        } else {
+            0
+        }
     }
 
     /// Access the frontier stack of the default algorithm (0).
@@ -714,6 +724,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Recursively resolve a subtree root and collect mixed boundary nodes.
     #[allow(clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments)]
     fn reconstruct_subtree_root<'a>(
         storage: &'a S,
         alg_id: u64,
@@ -753,7 +764,9 @@ impl<S: Storage> NaryMerkleLog<S> {
                                     reason: format!(
                                         "subtree node at left {} height 0 has wrong digest \
                                          length: expected {}, got {}",
-                                        lo, expected, hash.len()
+                                        lo,
+                                        expected,
+                                        hash.len()
                                     ),
                                 });
                             }
@@ -805,9 +818,12 @@ impl<S: Storage> NaryMerkleLog<S> {
                             return Err(crate::error::Error::CorruptedMetadata {
                                 alg_id,
                                 reason: format!(
-                                    "node at left {} height {} has wrong digest length: \
-                                     expected {}, got {}",
-                                    lo, height, expected, hash.len()
+                                    "node at left {} height {} has wrong digest length: expected \
+                                     {}, got {}",
+                                    lo,
+                                    height,
+                                    expected,
+                                    hash.len()
                                 ),
                             });
                         }
@@ -1180,9 +1196,11 @@ impl<S: Storage> NaryMerkleLog<S> {
                 return Err(crate::error::Error::CorruptedMetadata {
                     alg_id,
                     reason: format!(
-                        "node at left {} height {} has wrong digest length: \
-                         expected {}, got {}",
-                        left, height, expected, hash.len()
+                        "node at left {} height {} has wrong digest length: expected {}, got {}",
+                        left,
+                        height,
+                        expected,
+                        hash.len()
                     ),
                 });
             }
@@ -1337,7 +1355,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         // emit exactly the skeleton the verifier will check against. This holds by
         // construction — the pin guards against the producer and verifier drifting.
         debug_assert!(
-            crate::topology::inclusion_skeleton(k, tree_size, index).is_some_and(|skeleton| {
+            pmt::topology::inclusion_skeleton(k, tree_size, index).is_some_and(|skeleton| {
                 skeleton.len() == path.len()
                     && path.iter().zip(skeleton.iter()).all(|(step, shape)| {
                         step.position == shape.position
@@ -1347,9 +1365,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             "generated inclusion proof must match the canonical log skeleton"
         );
 
-        Ok(Some(crate::proof::InclusionProof {
-            path,
-        }))
+        Ok(Some(crate::proof::InclusionProof { path }))
     }
 
     /// Generate a consistency proof between `old_size` and `new_size`.
@@ -1505,10 +1521,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         path.extend(std::mem::take(&mut current[target_idx].path));
 
-        Ok(Some(crate::proof::ConsistencyProof {
-            start_hash,
-            path,
-        }))
+        Ok(Some(crate::proof::ConsistencyProof { start_hash, path }))
     }
 
     async fn log_level_bisection_path_to_height(
@@ -1586,7 +1599,10 @@ impl<S: Storage> NaryMerkleLog<S> {
         size: u64,
     ) -> Result<crate::proof::AuditPayload, S::Error> {
         if size == 0 {
-            return Err(crate::error::Error::IndexOutOfBounds { index: 0, tree_size: 0 });
+            return Err(crate::error::Error::IndexOutOfBounds {
+                index: 0,
+                tree_size: 0,
+            });
         }
         let active_algs = self.active_algs_at(size);
         if active_algs.is_empty() {
@@ -1624,7 +1640,10 @@ impl<S: Storage> NaryMerkleLog<S> {
         size: u64,
     ) -> Result<crate::proof::CouplingProof, S::Error> {
         if size == 0 {
-            return Err(crate::error::Error::IndexOutOfBounds { index: 0, tree_size: 0 });
+            return Err(crate::error::Error::IndexOutOfBounds {
+                index: 0,
+                tree_size: 0,
+            });
         }
         let active_algs = self.active_algs_at(size);
         if active_algs.is_empty() {
@@ -1636,23 +1655,23 @@ impl<S: Storage> NaryMerkleLog<S> {
             let r = self.root_for_at(id, size).await?;
             active_roots.push((id, r));
         }
-        Ok(crate::proof::CouplingProof { active_roots, alg_epochs })
+        Ok(crate::proof::CouplingProof {
+            active_roots,
+            alg_epochs,
+        })
     }
 
     /// Verify an `AuditPayload` against the stored log data.
     ///
     /// Checks three things in sequence:
-    /// 1. Structural validity: the payload's epoch timeline is well-formed,
-    ///    consistent with the locally registered algorithms, and the derived
-    ///    active set matches `payload.active_algs`.
-    /// 2. Cell integrity: streaming over every position in `0..tree_size`
-    ///    for every registered algorithm; active cells must match the stored
-    ///    leaf or subtree-root hash; committed-inactive cells must be the
-    ///    null constant (a non-null stored cell is a baked tree↔epoch
-    ///    contradiction — the repudiation evidence).
-    /// 3. Root recomputation: each active algorithm's combined root is
-    ///    recomputed from the data seen during the pass and compared to
-    ///    `payload.combined_roots`; all must match.
+    /// 1. Structural validity: the payload's epoch timeline is well-formed, consistent with the
+    ///    locally registered algorithms, and the derived active set matches `payload.active_algs`.
+    /// 2. Cell integrity: streaming over every position in `0..tree_size` for every registered
+    ///    algorithm; active cells must match the stored leaf or subtree-root hash;
+    ///    committed-inactive cells must be the null constant (a non-null stored cell is a baked
+    ///    tree↔epoch contradiction — the repudiation evidence).
+    /// 3. Root recomputation: each active algorithm's combined root is recomputed from the data
+    ///    seen during the pass and compared to `payload.combined_roots`; all must match.
     ///
     /// Activity is read from `payload.alg_epochs` (the committed timeline),
     /// never from local uncommitted epoch state — using local state would be
@@ -1693,7 +1712,10 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // combined_roots must be indexed by exactly the active alg IDs.
         if payload.combined_roots.len() != payload.active_algs.len()
-            || payload.combined_roots.iter().zip(payload.active_algs.iter())
+            || payload
+                .combined_roots
+                .iter()
+                .zip(payload.active_algs.iter())
                 .any(|((id, _), &expected)| *id != expected)
         {
             return Ok(false);
@@ -1706,8 +1728,11 @@ impl<S: Storage> NaryMerkleLog<S> {
             payload.active_algs.iter().copied().collect();
 
         // Per-algorithm rolling frontier (active-set only).
-        let mut frontiers: std::collections::HashMap<u64, Vec<Vec<u8>>> =
-            payload.active_algs.iter().map(|&id| (id, Vec::new())).collect();
+        let mut frontiers: std::collections::HashMap<u64, Vec<Vec<u8>>> = payload
+            .active_algs
+            .iter()
+            .map(|&id| (id, Vec::new()))
+            .collect();
 
         for i in 0..size {
             let leaf_data = if is_flat {
@@ -1725,11 +1750,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                     .get(&alg_id)
                     .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
 
-                let digest = match crate::proof::committed_active_at(
-                    &payload.alg_epochs,
-                    alg_id,
-                    i,
-                ) {
+                let digest = match crate::proof::committed_active_at(&payload.alg_epochs, alg_id, i)
+                {
                     Some(true) => {
                         if let Some(ref d) = leaf_data {
                             let expected = state.hasher.leaf(d);
@@ -1849,10 +1871,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             let computed_cr = if is_promoted {
                 recomputed_roots[i].1.clone()
             } else {
-                let buf = crate::proof::combined_root_preimage(
-                    &recomputed_roots,
-                    &payload.alg_epochs,
-                );
+                let buf =
+                    crate::proof::combined_root_preimage(&recomputed_roots, &payload.alg_epochs);
                 state.hasher.hash(&buf)
             };
 
@@ -1923,8 +1943,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::FrozenAlgorithm(alg_id));
         }
 
-        // 2. Build the metaroot preimage: sorted active roots plus the
-        //    committed epoch timeline of every registered algorithm.
+        // 2. Build the metaroot preimage: sorted active roots plus the committed epoch timeline of
+        //    every registered algorithm.
         let mut active_roots = Vec::with_capacity(active_algs.len());
         for &id in &active_algs {
             let r = self.root_for_at(id, size).await?;
@@ -2119,16 +2139,15 @@ impl<S: Storage> NaryMerkleLog<S> {
         for (&alg_id, state) in &self.algs {
             if !state.is_active() {
                 let deact_index = state.epochs.last().map_or(0, |&(_, end)| end);
-                if deact_index < end {
-                    if self
+                if deact_index < end
+                    && self
                         .storage
                         .get_node(alg_id, deact_index, 0)
                         .await
                         .map_err(crate::error::Error::Storage)?
                         .is_some()
-                    {
-                        return Ok(false); // Tampered: nodes exist beyond deactivation point!
-                    }
+                {
+                    return Ok(false); // Tampered: nodes exist beyond deactivation point!
                 }
             }
 
@@ -2324,7 +2343,6 @@ mod tests {
         fn empty(&self) -> Vec<u8> {
             Vec::new()
         }
-
 
         fn hash(&self, data: &[u8]) -> Vec<u8> {
             data.to_vec()
