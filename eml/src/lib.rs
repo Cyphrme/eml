@@ -16,19 +16,19 @@ pub mod error;
 pub mod filling;
 pub mod proof;
 pub mod schedule;
-pub mod snapshot;
+pub mod seal;
 pub mod snapshot_proof;
 pub mod storage;
 pub mod tree;
 
 // The kernel surface, re-exported so consumers reach it through `eml_log::*`.
 pub use error::{Error, Result};
-pub use filling::{FillError, FilledTree, fill};
+pub use filling::{FillError, FillKind, FilledTree, fill};
 pub use pmt::hasher::{self, Hasher};
 pub use pmt::mr::{self, count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use pmt::subtree::{self, Subtree};
 pub use pmt::topology::{self, SkeletonStep, frontier_for_size, inclusion_skeleton};
-pub use pmt::{LeafProof, Sealed, null_digest};
+pub use pmt::{LeafProof, RunExtent, Sealed, null_digest};
 pub use proof::{
     AuditPayload, BindingProof, ConsistencyProof, CouplingProof, InclusionProof, ProofStep,
     TrustedBindingRoot, VerifierConfig, combined_root_preimage, committed_active_algs,
@@ -38,7 +38,6 @@ pub use proof::{
     verify_inclusion, verify_inclusion_with_coupling,
 };
 pub use schedule::reduction_count;
-pub use snapshot::{RunExtent, Snapshot};
 pub use snapshot_proof::{ClaimedLeaf, SnapshotProof};
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use tree::{LogKind, NaryMerkleLog, TreeConfig};

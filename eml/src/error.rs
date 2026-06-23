@@ -35,6 +35,9 @@ pub enum Error<E> {
         /// Description of why it is corrupted.
         reason: String,
     },
+    /// The kernel rejected the timeline while building a [`pmt::Sealed`] (the
+    /// committed epochs are not well-formed at the sealed size).
+    MalformedSeal,
 }
 
 impl<E: fmt::Display> fmt::Display for Error<E> {
@@ -69,6 +72,9 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
             },
             Self::CorruptedMetadata { alg_id, reason } => {
                 write!(f, "corrupted metadata for algorithm {}: {}", alg_id, reason)
+            },
+            Self::MalformedSeal => {
+                write!(f, "kernel rejected the timeline while sealing")
             },
         }
     }
