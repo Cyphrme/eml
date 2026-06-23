@@ -41,7 +41,7 @@
 //! [`verify`]: SnapshotProof::verify
 
 use pmt::{
-    Hasher, LeafProof, Sealed, TrustedBindingRoot, combined_root_preimage, committed_active_algs,
+    Hasher, LeafProof, Sealed, TrustedBindingRoot, combined_root, committed_active_algs,
     validate_committed_epochs,
 };
 
@@ -131,26 +131,16 @@ impl SnapshotProof {
             .map(|(_, r)| r.as_slice())
     }
 
-    /// Recompute the head an algorithm's member roots bind to, mirroring the
-    /// genesis-promotion rule the log seals under
-    /// ([`NaryMerkleLog::combined_root_at`](crate::tree::NaryMerkleLog::combined_root_at)):
-    /// a registry-singleton with the forced default timeline `[(0, MAX)]` binds
-    /// to the **raw** member root (promoted form); otherwise the head is that
-    /// algorithm's hash over the canonical member-root/timeline preimage. The
-    /// returned bytes are compared, in constant time, against the trusted head.
+    /// Recompute the head an algorithm's member roots bind to: the
+    /// canonicalization fold ([`pmt::combined_root`]) over the member roots as
+    /// children, plus a coverage child iff the timeline is non-trivial, under
+    /// that algorithm's hash — exactly the head the log seals under
+    /// ([`NaryMerkleLog::combined_root_at`](crate::tree::NaryMerkleLog::combined_root_at)).
+    /// Genesis promotion is native: a single member root under a trivial
+    /// timeline folds to itself, no special case. The returned bytes are
+    /// compared, in constant time, against the trusted head.
     fn recompute_head(&self, hasher: &dyn Hasher) -> Vec<u8> {
-        let is_promoted =
-            self.alg_epochs.len() == 1 && self.alg_epochs[0].1 == vec![(0u64, u64::MAX)];
-        if is_promoted {
-            // The single registry-singleton root *is* the head; promotion commits
-            // nothing beyond it. `member_roots` has exactly one entry here.
-            self.member_roots[0].1.clone()
-        } else {
-            hasher.hash(&combined_root_preimage(
-                &self.member_roots,
-                &self.alg_epochs,
-            ))
-        }
+        combined_root(hasher, &self.member_roots, &self.alg_epochs)
     }
 
     /// Verify the snapshot proof against the snapshot's **trusted binding roots**.
