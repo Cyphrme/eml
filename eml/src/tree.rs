@@ -2425,6 +2425,7 @@ mod tests {
             fn leaf(&self, data: &[u8]) -> Vec<u8> {
                 Sha256::digest(data).to_vec()
             }
+
             fn node(&self, children: &[&[u8]]) -> Vec<u8> {
                 let mut h = Sha256::new();
                 for c in children {
@@ -2432,12 +2433,15 @@ mod tests {
                 }
                 h.finalize().to_vec()
             }
+
             fn empty(&self) -> Vec<u8> {
                 Sha256::digest(b"").to_vec()
             }
+
             fn hash(&self, data: &[u8]) -> Vec<u8> {
                 Sha256::digest(data).to_vec()
             }
+
             fn clone_box(&self) -> Box<dyn Hasher> {
                 Box::new(Sha256Hasher)
             }
@@ -2450,7 +2454,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let payloads: Vec<Vec<u8>> = (0..12u64).map(|i| format!("item-{i}").into_bytes()).collect();
+            let payloads: Vec<Vec<u8>> = (0..12u64)
+                .map(|i| format!("item-{i}").into_bytes())
+                .collect();
             for p in &payloads {
                 log.append_leaf(p).await.unwrap();
             }

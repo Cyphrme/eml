@@ -1,42 +1,6 @@
-[package]
-name          = "eml"
-version       = "0.10.0"
-description   = "Epoch Merkle Log — multi-algorithm append-only log with epoch semantics"
-edition       = "2024"
-rust-version  = "1.85"
-license-file  = "LICENSE"
-readme        = "README.md"
-repository    = "https://github.com/Cyphrme/eml"
-homepage      = "https://github.com/Cyphrme/eml"
-documentation = "https://docs.rs/eml"
-keywords      = ["merkle", "cryptography", "log", "security", "audit"]
-categories    = ["cryptography", "data-structures"]
-exclude = [
-    "/docs",
-    "/proofs",
-    "/fuzz",
-    "/shell.nix",
-    "/.envrc",
-]
-
-[dependencies]
-# Zero external dependencies. Hash operations injected via the Hasher trait.
-
-[dev-dependencies]
-sha2 = "0.10"
-sha3 = "0.10"
-blake2 = "0.10"
-proptest = "1"
-bigoish = "0.1"
-big_o = "0.1"
-cpu-time = "1"
-smol = "2.0"
-malt = "0.1.1"
-
 [workspace]
+resolver = "2"
 members = [
-    ".",
-    "storage/fjall",
     "pmt",
     "eml",
     "cyphr-log",
@@ -46,5 +10,3 @@ members = [
     "storage/neml-fjall",
     "ct",
 ]
-
-
