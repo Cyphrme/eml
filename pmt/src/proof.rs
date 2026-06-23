@@ -623,9 +623,10 @@ pub fn verify_inactivity_with_coupling(
 
 /// The raw payload of an audit verification checkpoint.
 ///
-/// This is the Coz `pay` field — Cyphr signs this struct over a Coz
-/// envelope to produce a checkpoint attestation; the kernel does not implement
-/// signing or consensus.
+/// This is the agnostic attestation payload: an out-of-band signer may sign
+/// this struct to produce a checkpoint attestation, but the kernel never
+/// interprets, signs, or reaches consensus over it — the type names no signing
+/// scheme or envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditPayload {
     /// Identifier of the log being audited.
