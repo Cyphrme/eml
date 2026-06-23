@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use neml::{
+use cyphr_log::{
     Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig, evaluate,
     verify_consistency, verify_inclusion,
 };
@@ -32,35 +32,6 @@ impl Hasher for Sha256Hasher {
     }
 
     fn clone_box(&self) -> Box<dyn Hasher> {
-        Box::new(Sha256Hasher)
-    }
-}
-
-impl eml::Hasher for Sha256Hasher {
-    fn leaf(&self, data: &[u8]) -> Vec<u8> {
-        Sha256::digest(data).to_vec()
-    }
-
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update(left);
-        h.update(right);
-        h.finalize().to_vec()
-    }
-
-    fn empty(&self) -> Vec<u8> {
-        Sha256::digest(b"").to_vec()
-    }
-
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02]).to_vec()
-    }
-
-    fn hash(&self, data: &[u8]) -> Vec<u8> {
-        Sha256::digest(data).to_vec()
-    }
-
-    fn clone_box(&self) -> Box<dyn eml::Hasher> {
         Box::new(Sha256Hasher)
     }
 }
@@ -106,46 +77,6 @@ impl Hasher for SaltedHasher {
     }
 
     fn clone_box(&self) -> Box<dyn Hasher> {
-        Box::new(SaltedHasher(self.0))
-    }
-}
-
-impl eml::Hasher for SaltedHasher {
-    fn leaf(&self, data: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([self.0]);
-        h.update(data);
-        h.finalize().to_vec()
-    }
-
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([self.0]);
-        h.update(left);
-        h.update(right);
-        h.finalize().to_vec()
-    }
-
-    fn empty(&self) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([self.0]);
-        h.finalize().to_vec()
-    }
-
-    fn null(&self) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([self.0, 0x02]);
-        h.finalize().to_vec()
-    }
-
-    fn hash(&self, data: &[u8]) -> Vec<u8> {
-        let mut h = Sha256::new();
-        h.update([self.0]);
-        h.update(data);
-        h.finalize().to_vec()
-    }
-
-    fn clone_box(&self) -> Box<dyn eml::Hasher> {
         Box::new(SaltedHasher(self.0))
     }
 }
@@ -311,7 +242,7 @@ fn recursive_subtree_root(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> 
 }
 
 // Read leaf projection for given algorithm
-async fn project<S: neml::Storage>(
+async fn project<S: cyphr_log::Storage>(
     log: &NaryMerkleLog<S>,
     alg_id: u64,
     hasher: &dyn Hasher,
@@ -578,7 +509,7 @@ fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
     ]
 }
 
-async fn check_state_invariants<S: neml::Storage>(
+async fn check_state_invariants<S: cyphr_log::Storage>(
     log: &NaryMerkleLog<S>,
     frozen_roots: &BTreeMap<u64, Vec<u8>>,
     k: usize,
@@ -906,7 +837,7 @@ proptest! {
                 .collect();
             let tree_size = 1u64;
 
-            let proof = neml::CouplingProof {
+            let proof = cyphr_log::CouplingProof {
                 active_roots: active_roots.clone(),
                 alg_epochs: alg_epochs.clone(),
             };
@@ -919,10 +850,10 @@ proptest! {
             let combined_root = if is_promoted {
                 active_roots[0].1.clone()
             } else {
-                hasher.hash(&neml::combined_root_preimage(&active_roots, &alg_epochs))
+                hasher.hash(&cyphr_log::combined_root_preimage(&active_roots, &alg_epochs))
             };
 
-            let config = neml::VerifierConfig::default();
+            let config = cyphr_log::VerifierConfig::default();
 
             // 1. Success case
             let verified = proof.verify(
@@ -939,7 +870,7 @@ proptest! {
             let mut tampered_active_roots = active_roots.clone();
             if !tampered_active_roots[target_idx].1.is_empty() {
                 tampered_active_roots[target_idx].1[0] ^= 0xFF;
-                let tampered_proof = neml::CouplingProof {
+                let tampered_proof = cyphr_log::CouplingProof {
                     active_roots: tampered_active_roots,
                     alg_epochs: alg_epochs.clone(),
                 };
@@ -995,7 +926,7 @@ proptest! {
             // the preimage, so shifting a boundary breaks the binding.
             let mut substituted_epochs = alg_epochs.clone();
             substituted_epochs[target_idx].1 = vec![(0, 1), (1, u64::MAX)];
-            let substituted_proof = neml::CouplingProof {
+            let substituted_proof = cyphr_log::CouplingProof {
                 active_roots: active_roots.clone(),
                 alg_epochs: substituted_epochs,
             };
@@ -1045,63 +976,6 @@ proptest! {
                 );
             }
             Ok(())
-        })?;
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
-
-    #[test]
-    fn differential_neml_eml_binary_equivalence(
-        ops in proptest::collection::vec(op_strategy(4), 5..15),
-    ) {
-        use eml::Log as EmlLog;
-        use eml::MemoryStorage as EmlMemoryStorage;
-
-        smol::block_on(async {
-            let config = TreeConfig { log_arity: 2 };
-            let mut neml_log = NaryMerkleLog::new(
-                MemoryStorage::new(),
-                Box::new(Sha256Hasher),
-                config,
-            )
-            .await.unwrap();
-
-            let mut eml_log = EmlLog::new(EmlMemoryStorage::new());
-            eml_log.add_algorithm(0, Box::new(Sha256Hasher)).await.unwrap();
-
-            // Track algorithm IDs to keep them aligned (both logs support algorithm 0 and 1)
-            neml_log.add_algorithm(1, new_hasher_for(1)).await.unwrap();
-            eml_log.add_algorithm(1, Box::new(SaltedHasher(1))).await.unwrap();
-
-
-            for op in ops {
-                match op {
-                    Op::AppendLeaf(data) => {
-                        neml_log.append_leaf(&data).await.unwrap();
-                        eml_log.append(&data).await.unwrap();
-                    }
-                    Op::AppendSubtree(subtree) => {
-                        // Subtrees are promoted in NEML. EML has no subtree support,
-                        // so we can only compare their flat log mode binary equivalence.
-                        let evaluated = evaluate(&Sha256Hasher, &subtree);
-                        neml_log.append_leaf(&evaluated).await.unwrap();
-                        eml_log.append(&evaluated).await.unwrap();
-                    }
-                    Op::RemoveAlg(_) => {}
-                    Op::ResumeAlg(_) => {}
-                    _ => {} // Ignore other algorithms for this differential test
-                }
-
-                // Assert root equivalence for all registered algorithms
-                for id in &[0, 1] {
-                    let neml_root = neml_log.root_for(*id).unwrap();
-                    let eml_root = eml_log.root(*id).unwrap();
-                    prop_assert_eq!(neml_root, eml_root, "Divergence found for alg {}", id);
-                }
-            }
-            Ok::<(), proptest::test_runner::TestCaseError>(())
         })?;
     }
 }

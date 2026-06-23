@@ -1,6 +1,6 @@
-//! Differential property tests: the current `neml` tree must produce output
-//! structurally identical to the frozen baseline (`neml_baseline`) for every
-//! sampled history.
+//! Differential property tests: the current side (`cyphr_log`) must produce
+//! output structurally identical to the frozen baseline (`neml_baseline`) for
+//! every sampled history.
 //!
 //! Comparison is **structural** — proofs and roots are compared through the
 //! types' derived `Eq`, never a byte encoder. The two crates define distinct
@@ -13,11 +13,11 @@
 //! Any divergence here means a change altered an observable output of the log —
 //! exactly what this harness exists to catch.
 
-use difftest::{RevSha256Hasher, Sha256Hasher, TaggedSha256Hasher};
-use neml::proof::{
+use cyphr_log::proof::{
     ConsistencyProof as CurConsistency, InclusionProof as CurInclusion, ProofStep as CurStep,
 };
-use neml::{MemoryStorage as CurStorage, NaryMerkleLog as CurLog, TreeConfig as CurConfig};
+use cyphr_log::{MemoryStorage as CurStorage, NaryMerkleLog as CurLog, TreeConfig as CurConfig};
+use difftest::{RevSha256Hasher, Sha256Hasher, TaggedSha256Hasher};
 use neml_baseline::proof::{
     ConsistencyProof as BaseConsistency, InclusionProof as BaseInclusion, ProofStep as BaseStep,
 };
@@ -201,7 +201,7 @@ enum Op {
     ResumeAlg(u64),
 }
 
-fn alg_hasher_cur(alg_id: u64) -> Box<dyn neml::Hasher> {
+fn alg_hasher_cur(alg_id: u64) -> Box<dyn cyphr_log::Hasher> {
     match alg_id % 3 {
         1 => Box::new(TaggedSha256Hasher),
         2 => Box::new(RevSha256Hasher),

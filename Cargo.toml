@@ -38,9 +38,14 @@ members = [
     ".",
     "storage/fjall",
     "pmt",
-    "neml",
-    "storage/neml-fjall",
+    "eml",
+    "cyphr-log",
     "difftest",
 ]
+# `storage/neml-fjall` still depends on the dissolved `neml` crate, which this
+# change removes. It is dropped from the build here (its files are outside this
+# change's surface) until a later step re-homes it onto the EML library or
+# removes it with the rest of the deprecated remnants.
+exclude = ["storage/neml-fjall"]
 
 

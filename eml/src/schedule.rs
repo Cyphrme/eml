@@ -77,7 +77,7 @@ mod tests {
     /// (`frontier_for_size(n, k)`, `reduction_count(n, k)`) or first
     /// (`inclusion_skeleton(k, tree_size, index)`).
     ///
-    /// This guard couples both crates: `reduction_count` lives here in `neml`
+    /// This guard couples both crates: `reduction_count` lives here in EML
     /// (the frontier carry); `frontier_for_size` / `inclusion_skeleton` /
     /// `SkeletonStep` live in the `pmt` kernel. It stays where it can reach
     /// both.

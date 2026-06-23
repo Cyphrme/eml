@@ -329,6 +329,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyphr-log"
+version = "0.1.0"
+dependencies = [
+ "big_o",
+ "bigoish",
+ "cpu-time",
+ "eml-log",
+ "proptest",
+ "sha2",
+ "smol",
+]
+
+[[package]]
 name = "dashmap"
 version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -346,8 +359,8 @@ dependencies = [
 name = "difftest"
 version = "0.0.0"
 dependencies = [
- "neml 0.1.0",
- "neml 0.1.0-baseline",
+ "cyphr-log",
+ "neml",
  "proptest",
  "sha2",
  "smol",
@@ -386,6 +399,19 @@ dependencies = [
  "proptest",
  "sha2",
  "sha3",
+ "smol",
+]
+
+[[package]]
+name = "eml-log"
+version = "0.1.0"
+dependencies = [
+ "big_o",
+ "bigoish",
+ "cpu-time",
+ "pmt",
+ "proptest",
+ "sha2",
  "smol",
 ]
 
@@ -776,33 +802,6 @@ dependencies = [
 [[package]]
 name = "neml"
 version = "0.1.0-baseline"
-
-[[package]]
-name = "neml"
-version = "0.1.0"
-dependencies = [
- "big_o",
- "bigoish",
- "cpu-time",
- "eml",
- "pmt",
- "proptest",
- "sha2",
- "smol",
-]
-
-[[package]]
-name = "neml-storage-fjall"
-version = "0.1.0"
-dependencies = [
- "fjall",
- "neml 0.1.0",
- "proptest",
- "sha2",
- "smol",
- "tempfile",
- "thiserror",
-]
 
 [[package]]
 name = "num-complex"
