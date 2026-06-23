@@ -2073,8 +2073,11 @@ impl<S: Storage> NaryMerkleLog<S> {
                 .get(&id)
                 .ok_or(crate::error::Error::UnknownAlgorithm(id))?;
 
-            let computed_cr =
-                pmt::combined_root(state.hasher.as_ref(), &recomputed_roots, &payload.alg_epochs);
+            let computed_cr = pmt::combined_root(
+                state.hasher.as_ref(),
+                &recomputed_roots,
+                &payload.alg_epochs,
+            );
 
             if !crate::proof::constant_time_eq(&computed_cr, &payload.combined_roots[i].1) {
                 return Ok(false);
@@ -2142,8 +2145,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(crate::error::Error::FrozenAlgorithm(alg_id));
         }
 
-        // 2. Gather the per-algorithm member roots (the fold's children) and the
-        //    committed timeline (the coverage child, iff non-trivial).
+        // 2. Gather the per-algorithm member roots (the fold's children) and the committed timeline
+        //    (the coverage child, iff non-trivial).
         let mut member_roots = Vec::with_capacity(active_algs.len());
         for &id in &active_algs {
             let r = self.root_for_at(id, size).await?;

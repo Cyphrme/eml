@@ -121,19 +121,16 @@ pub fn verify_inclusion(
 //
 // Two facts make this a fold, not a bespoke hash:
 //
-// - **Genesis-promotion is native.** A registry of one algorithm folds
-//   `nary_mr(H, [MR_0])`, whose `len == 1` arm promotes to `MR_0` — the combined
-//   root *is* the member root because there is one child, not because of a
-//   special case. There is no promotion predicate.
-// - **Coverage is a sibling, present only when informative.** The committed
-//   epoch timeline decides which cells are null projections, so a multi-algorithm
-//   structure must commit it. It enters the fold as one extra child
-//   `C = H_i(serialize(timeline))`, appended **iff the timeline is non-trivial**
-//   (some algorithm has anything other than the open-from-genesis epoch
-//   `[(0, u64::MAX)]`). A trivial timeline carries no information beyond the
-//   member roots, so its child is omitted; absence of the child *is* the trivial
-//   encoding (the same way same-value collapse treats the null case). The
-//   timeline is independently bound by [`AuditPayload`], so omitting the
+// - **Genesis-promotion is native.** A registry of one algorithm folds `nary_mr(H, [MR_0])`, whose
+//   `len == 1` arm promotes to `MR_0` — the combined root *is* the member root because there is one
+//   child, not because of a special case. There is no promotion predicate.
+// - **Coverage is a sibling, present only when informative.** The committed epoch timeline decides
+//   which cells are null projections, so a multi-algorithm structure must commit it. It enters the
+//   fold as one extra child `C = H_i(serialize(timeline))`, appended **iff the timeline is
+//   non-trivial** (some algorithm has anything other than the open-from-genesis epoch `[(0,
+//   u64::MAX)]`). A trivial timeline carries no information beyond the member roots, so its child
+//   is omitted; absence of the child *is* the trivial encoding (the same way same-value collapse
+//   treats the null case). The timeline is independently bound by [`AuditPayload`], so omitting the
 //   in-root copy on the trivial case loses no security.
 //
 // Activity at a position is read from the committed timeline — never inferred
@@ -191,8 +188,8 @@ pub fn serialize_timeline(alg_epochs: &[(u64, Vec<(u64, u64)>)]) -> Vec<u8> {
 /// ([`timeline_is_trivial`]). They form the children of one [`nary_mr`] node, so
 /// collapse + promotion apply exactly as they do everywhere else:
 ///
-/// - one child (single algorithm, trivial timeline) ⇒ the combined root **is**
-///   the member root (genesis promotion, native — no predicate);
+/// - one child (single algorithm, trivial timeline) ⇒ the combined root **is** the member root
+///   (genesis promotion, native — no predicate);
 /// - many children ⇒ `nary_mr(H, children)`.
 ///
 /// `member_roots` carries the *raw* per-algorithm roots as opaque digests; `H`

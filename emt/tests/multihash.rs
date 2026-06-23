@@ -177,8 +177,13 @@ fn single_algorithm_combined_root_promotes_to_member_root() {
         let payloads: Vec<Vec<u8>> = (0..n).map(|i| format!("c{i}").into_bytes()).collect();
         let t = build(&payloads);
         let member = t.root(ALG0).unwrap();
-        let combined = t.combined_root(ALG0).expect("non-empty tree has a combined root");
-        assert_eq!(combined, member, "single-alg combined root must promote (n={n})");
+        let combined = t
+            .combined_root(ALG0)
+            .expect("non-empty tree has a combined root");
+        assert_eq!(
+            combined, member,
+            "single-alg combined root must promote (n={n})"
+        );
     }
 }
 
@@ -221,9 +226,19 @@ fn multi_algorithm_combined_root_is_the_fold_over_members() {
 #[test]
 fn combined_root_is_none_for_empty_or_unregistered() {
     let mut empty = Emt::new(Config { arity: K }).unwrap();
-    empty.register_algorithm(ALG0, Box::new(Sha256Hasher)).unwrap();
-    assert_eq!(empty.combined_root(ALG0), None, "empty tree has no combined root");
+    empty
+        .register_algorithm(ALG0, Box::new(Sha256Hasher))
+        .unwrap();
+    assert_eq!(
+        empty.combined_root(ALG0),
+        None,
+        "empty tree has no combined root"
+    );
 
     let t = build(&[b"a".to_vec()]);
-    assert_eq!(t.combined_root(99), None, "unregistered algorithm has no combined root");
+    assert_eq!(
+        t.combined_root(99),
+        None,
+        "unregistered algorithm has no combined root"
+    );
 }
