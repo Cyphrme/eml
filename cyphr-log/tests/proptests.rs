@@ -842,16 +842,11 @@ proptest! {
                 alg_epochs: alg_epochs.clone(),
             };
 
-            // Construct combined root mirroring the genesis-promotion rule:
-            // a registry-singleton with the forced default timeline promotes
-            // to the raw root; otherwise hash the canonical preimage.
-            let is_promoted =
-                alg_epochs.len() == 1 && alg_epochs[0].1 == vec![(0u64, u64::MAX)];
-            let combined_root = if is_promoted {
-                active_roots[0].1.clone()
-            } else {
-                hasher.hash(&cyphr_log::combined_root_preimage(&active_roots, &alg_epochs))
-            };
+            // The combined root is the canonicalization fold over the member
+            // roots. The timeline is trivial here (every algorithm open from
+            // genesis), so there is no coverage child: a single algorithm
+            // promotes to its raw root, many fold under nary_mr — no predicate.
+            let combined_root = cyphr_log::combined_root(&hasher, &active_roots, &alg_epochs);
 
             let config = cyphr_log::VerifierConfig::default();
 
