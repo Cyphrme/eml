@@ -1,0 +1,19 @@
+[package]
+name          = "ct-build"
+version       = "0.1.0"
+description   = "CT build: EML at k=2, prefixed (RFC-9162) hashing, subtrees banned"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+
+[lib]
+name = "ct_build"
+
+[dependencies]
+# The general append-only library; this crate fixes k=2 + prefixed Hasher.
+eml-log = { path = "../eml" }
+
+[dev-dependencies]
+sha2 = "0.10"
+smol = "2.0"
