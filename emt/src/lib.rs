@@ -26,9 +26,10 @@ mod spine;
 mod tree;
 
 pub use error::{Error, Result};
-// The kernel hasher seam is part of EMT's surface: callers construct an `Emt`
-// with their own `Hasher`. Re-exported so they need not also name `pmt`.
-pub use pmt::{Hasher, LeafProof};
+// The kernel hasher seam and the proof/seal types the public surface returns
+// are re-exported so callers need not also name `pmt` directly.
+// Mirrors the re-export symmetry in eml-log (eml/src/lib.rs).
+pub use pmt::{Hasher, LeafProof, ProofStep, Sealed, verify_inclusion};
 pub use tree::{Config, Emt};
 
 #[cfg(test)]

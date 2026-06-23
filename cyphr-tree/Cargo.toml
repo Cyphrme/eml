@@ -9,7 +9,5 @@ repository    = "https://github.com/Cyphrme/eml"
 
 [dependencies]
 emt = { path = "../emt" }
-# Named only to re-export the kernel proof/seal types the surface returns.
-pmt = { path = "../pmt" }
 # The concrete hash this instantiation fixes (unprefixed SHA-256).
 sha2 = "0.10"
