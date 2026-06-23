@@ -9,10 +9,11 @@
 //! prefix of the tree at `new_size`) and the temporal analog of consistency
 //! over the committed epoch timeline ([`verify_epoch_evolution`]).
 
-use pmt::hasher::Hasher;
-use pmt::mr::nary_mr;
 // Re-export the kernel proof surface so `eml_log::proof::*` reaches it while
 // the originals live in `pmt`. No parallels: these are the kernel's, not copies.
+pub use pmt::binding_proof::{BindingProof, TrustedBindingRoot};
+use pmt::hasher::Hasher;
+use pmt::mr::nary_mr;
 pub use pmt::proof::{
     AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root_preimage,
     committed_active_algs, committed_active_at, committed_is_live, constant_time_eq,

@@ -9,6 +9,7 @@
 //! depends on nothing; the engineering libraries (append-only / mutable)
 //! depend on it.
 
+pub mod binding_proof;
 pub mod error;
 pub mod hasher;
 pub mod metadata;
@@ -18,6 +19,7 @@ pub mod sealed;
 pub mod subtree;
 pub mod topology;
 
+pub use binding_proof::{BindingProof, TrustedBindingRoot};
 pub use error::{Error, Result};
 pub use hasher::Hasher;
 pub use metadata::Meta;
