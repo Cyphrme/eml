@@ -1,0 +1,32 @@
+[package]
+name          = "difftest"
+version       = "0.0.0"
+description   = "Differential property tests pinning current log behavior against a frozen baseline"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+publish       = false
+
+# The crate is pure test scaffolding; the comparison cases live in tests/.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The current workspace tree under audit.
+neml = { path = "../neml" }
+# The frozen baseline: a git worktree of the pre-campaign HEAD, materialized
+# OUTSIDE this workspace's directory tree (a sibling worktree). Cargo absorbs
+# any path dependency living *under* the workspace root as a workspace member,
+# and two packages both named `neml` (current + baseline) cannot coexist; the
+# baseline must therefore sit out of tree. Its package keeps the name `neml`
+# (linked here under the `neml_baseline` alias) but carries a distinct
+# `version` in that worktree's manifest so Cargo can tell the two `neml`
+# packages apart in the lockfile. Never committed.
+neml_baseline = { path = "../../baseline-N1/neml", package = "neml" }
+# The shared hashers in src/lib.rs drive both trees with byte-identical logic.
+sha2 = "0.10"
+
+[dev-dependencies]
+proptest = "1"
+smol = "2.0"

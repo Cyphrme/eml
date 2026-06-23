@@ -343,6 +343,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "difftest"
+version = "0.0.0"
+dependencies = [
+ "neml 0.1.0",
+ "neml 0.1.0-baseline",
+ "proptest",
+ "sha2",
+ "smol",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -764,6 +775,10 @@ dependencies = [
 
 [[package]]
 name = "neml"
+version = "0.1.0-baseline"
+
+[[package]]
+name = "neml"
 version = "0.1.0"
 dependencies = [
  "big_o",
@@ -780,7 +795,7 @@ name = "neml-storage-fjall"
 version = "0.1.0"
 dependencies = [
  "fjall",
- "neml",
+ "neml 0.1.0",
  "proptest",
  "sha2",
  "smol",
