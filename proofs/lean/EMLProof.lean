@@ -11,6 +11,7 @@ import EMLProof.BindingProof
 
 -- EML layer.
 import EMLProof.KaryConsistency
+import EMLProof.SnapshotProof
 
 -- CT-lineage (relegated CT-build reference; not authoritative).
 import EMLProof.Projection
