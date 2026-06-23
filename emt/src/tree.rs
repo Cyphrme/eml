@@ -7,7 +7,7 @@ use pmt::proof::ProofStep;
 use pmt::{Hasher, Sealed};
 
 use crate::error::{Error, Result};
-use crate::spine::{self, SpineNode};
+use crate::spine::{self, SpineNode, covers, leftmost, rightmost};
 
 /// Configuration for an [`Emt`].
 ///
@@ -205,8 +205,16 @@ impl Emt {
     /// registration and on append, where the spine shape may change.
     fn recompute_full(&self, alg: &mut Alg) {
         alg.cache.clear();
-        alg.root =
-            spine::build(self.len(), self.config.arity).map(|shape| self.eval_node(alg, &shape));
+        let cells = &self.cells;
+        alg.root = spine::build(self.len(), self.config.arity).map(|shape| {
+            let h = alg.hasher.as_ref();
+            eval_subtree(
+                &mut alg.cache,
+                h,
+                &shape,
+                &mut |pos| leaf_digest_raw(cells, h, pos),
+            )
+        });
     }
 
     /// Recompute only the ancestor path of cell `index` (`O(log n)`), returning
@@ -228,29 +236,6 @@ impl Emt {
         recomputed
     }
 
-    /// Evaluate `node`'s digest, materializing every node — leaves and inner
-    /// nodes alike — into the cache. Caching leaves is what lets a later
-    /// path-recompute read every off-path sibling from the cache without ever
-    /// re-hashing it, and lets the null seeding ([`Emt::seed_null`]) record a
-    /// distinct (all-null) materialization for a freshly added algorithm.
-    fn eval_node(&self, alg: &mut Alg, node: &SpineNode) -> Vec<u8> {
-        match node {
-            SpineNode::Leaf(pos) => {
-                let digest = self.leaf_digest(alg, *pos);
-                alg.cache.insert(node_key(node), digest.clone());
-                digest
-            },
-            SpineNode::Inner(children) => {
-                let child_digests: Vec<Vec<u8>> =
-                    children.iter().map(|c| self.eval_node(alg, c)).collect();
-                let refs: Vec<&[u8]> = child_digests.iter().map(Vec::as_slice).collect();
-                let digest = nary_mr(alg.hasher.as_ref(), &refs);
-                alg.cache.insert(node_key(node), digest.clone());
-                digest
-            },
-        }
-    }
-
     /// Recompute the digests on the path to `index`, reading every off-path node
     /// from the cache. Only nodes on the path (the changed leaf and its
     /// ancestors) are recomputed and re-cached; counts the inner nodes
@@ -262,9 +247,11 @@ impl Emt {
         index: u64,
         recomputed: &mut usize,
     ) -> Vec<u8> {
+        let cells = &self.cells;
         match node {
-            SpineNode::Leaf(pos) => {
-                let digest = self.leaf_digest(alg, *pos);
+            SpineNode::Leaf(_) => {
+                let h = alg.hasher.as_ref();
+                let digest = leaf_digest_raw(cells, h, spine::leftmost(node));
                 alg.cache.insert(node_key(node), digest.clone());
                 digest
             },
@@ -279,11 +266,10 @@ impl Emt {
                         // complete materialization, so a miss is a logic error;
                         // fall back to a full eval defensively rather than
                         // silently producing a wrong root.
-                        let cached = alg
-                            .cache
-                            .get(&node_key(child))
-                            .cloned()
-                            .unwrap_or_else(|| self.eval_node(alg, child));
+                        let h = alg.hasher.as_ref();
+                        let cached = alg.cache.get(&node_key(child)).cloned().unwrap_or_else(
+                            || eval_subtree(&mut alg.cache, h, child, &mut |pos| leaf_digest_raw(cells, h, pos)),
+                        );
                         refs_owned.push(cached);
                     }
                 }
@@ -299,10 +285,7 @@ impl Emt {
     /// The leaf digest of cell `pos` under this algorithm. An absent cell (off
     /// the end) hashes the null constant, matching a vacant kernel position.
     fn leaf_digest(&self, alg: &Alg, pos: u64) -> Vec<u8> {
-        match self.cells.get(pos as usize) {
-            Some(cell) => alg.hasher.leaf(&cell.payload),
-            None => alg.hasher.null(),
-        }
+        leaf_digest_raw(&self.cells, alg.hasher.as_ref(), pos)
     }
 
     // --- proofs --------------------------------------------------------------
@@ -325,6 +308,7 @@ impl Emt {
         let path = crate::proof::inclusion_path(
             &shape,
             index,
+            &alg.cache,
             &mut |pos| self.leaf_digest(alg, pos),
             &mut |children| nary_mr(alg.hasher.as_ref(), children),
         );
@@ -413,10 +397,18 @@ impl Emt {
             root: None,
             cache: BTreeMap::new(),
         };
-        self.seed_null(&mut alg);
-        let recomputed = self.recompute_path(&mut alg, index);
+        let recomputed = self.add_alg_seeded(&mut alg, index);
         self.algs.insert(alg_id, alg);
         Ok(recomputed)
+    }
+
+    /// Seed a fresh algorithm with all-null digests and then recompute the
+    /// single path to `index`. The ordering is structural: seed MUST precede
+    /// path-recompute (a swapped call order produces a correct root at O(n)
+    /// cost instead of O(log n), caught only by a perf property test).
+    fn add_alg_seeded(&self, alg: &mut Alg, index: u64) -> usize {
+        self.seed_null(alg);
+        self.recompute_path(alg, index)
     }
 
     /// Materialize every spine node as the null digest (the state before any
@@ -425,30 +417,13 @@ impl Emt {
     fn seed_null(&self, alg: &mut Alg) {
         alg.cache.clear();
         let null = alg.hasher.null();
-        alg.root = spine::build(self.len(), self.config.arity)
-            .map(|shape| self.seed_node(alg, &shape, &null));
-    }
-
-    fn seed_node(&self, alg: &mut Alg, node: &SpineNode, null: &[u8]) -> Vec<u8> {
-        match node {
-            SpineNode::Leaf(_) => {
-                // Cache the leaf as null so the subsequent path-recompute reads
-                // every off-path sibling from the cache (never the real
-                // payload): only the target cell gains a real digest.
-                alg.cache.insert(node_key(node), null.to_vec());
-                null.to_vec()
-            },
-            SpineNode::Inner(children) => {
-                let child_digests: Vec<Vec<u8>> = children
-                    .iter()
-                    .map(|c| self.seed_node(alg, c, null))
-                    .collect();
-                let refs: Vec<&[u8]> = child_digests.iter().map(Vec::as_slice).collect();
-                let digest = nary_mr(alg.hasher.as_ref(), &refs);
-                alg.cache.insert(node_key(node), digest.clone());
-                digest
-            },
-        }
+        alg.root = spine::build(self.len(), self.config.arity).map(|shape| {
+            let h = alg.hasher.as_ref();
+            // Cache the leaf as null so the subsequent path-recompute reads
+            // every off-path sibling from the cache (never the real
+            // payload): only the target cell gains a real digest.
+            eval_subtree(&mut alg.cache, h, &shape, &mut |_| null.clone())
+        });
     }
 
     /// Consume the tree and seal it into the one kernel currency [`Sealed`].
@@ -491,7 +466,10 @@ impl Emt {
         let coords = pmt::topology::frontier_for_size(size, k);
         let mut frontiers: Vec<(u64, Vec<Vec<u8>>)> = Vec::with_capacity(self.algs.len());
         let mut alg_epochs: Vec<(u64, Vec<(u64, u64)>)> = Vec::with_capacity(self.algs.len());
-        for (&id, alg) in &self.algs {
+        // `seal` consumes `self`; iterate mutably so `peak_digest`'s defensive
+        // fallback can cache-heal on a miss.
+        let mut algs = self.algs;
+        for (id, alg) in &mut algs {
             if alg.root.is_none() {
                 continue;
             }
@@ -500,58 +478,100 @@ impl Emt {
             // entry keyed by the closed leaf interval the subtree covers.
             let peaks: Vec<Vec<u8>> = coords
                 .iter()
-                .map(|&(left, height)| self.peak_digest(alg, left, height, k))
+                .map(|&(left, height)| peak_digest(&self.cells, alg, left, height, k))
                 .collect();
-            frontiers.push((id, peaks));
-            alg_epochs.push((id, vec![(0, u64::MAX)]));
+            frontiers.push((*id, peaks));
+            alg_epochs.push((*id, vec![(0, u64::MAX)]));
         }
         Sealed::new(size, k, frontiers, alg_epochs).map_err(|_| Error::MalformedSeal)
     }
 
-    /// The materialized digest of the perfect k-ary subtree at frontier
-    /// coordinate `(left, height)` — the closed leaf interval
-    /// `[left, left + k^height - 1]`. Read from the algorithm's cache, with a
-    /// defensive re-evaluation if the materialization is incomplete (the seal
-    /// always runs on a fully materialized tree, so a miss is a logic error
-    /// rather than a silent wrong digest).
-    fn peak_digest(&self, alg: &Alg, left: u64, height: u32, k: u64) -> Vec<u8> {
-        let right = left + k.pow(height) - 1;
-        if let Some(d) = alg.cache.get(&(left, right)) {
-            return d.clone();
+    /// Like [`Self::inclusion_proof`] but also returns the number of off-path
+    /// cache misses during proof generation. A fully materialized tree has zero
+    /// misses; any positive count is a regression signal (F4 perf invariant).
+    #[cfg(test)]
+    pub(crate) fn inclusion_proof_miss_count(
+        &self,
+        alg_id: u64,
+        index: u64,
+    ) -> Option<(Vec<u8>, Vec<ProofStep>, usize)> {
+        if index >= self.len() {
+            return None;
         }
-        let shape = spine_perfect(left, height, k);
-        self.eval_uncached(alg, &shape)
+        let alg = self.algs.get(&alg_id)?;
+        let shape = spine::build(self.len(), self.config.arity)?;
+        let leaf_hash = self.leaf_digest(alg, index);
+        let (path, misses) = crate::proof::inclusion_path_with_miss_count(
+            &shape,
+            index,
+            &alg.cache,
+            &mut |pos| self.leaf_digest(alg, pos),
+            &mut |children| nary_mr(alg.hasher.as_ref(), children),
+        );
+        Some((leaf_hash, path, misses))
     }
 
-    /// Evaluate a spine node's digest without touching the cache — the
-    /// defensive fallback for [`Self::peak_digest`] on a cache miss.
-    fn eval_uncached(&self, alg: &Alg, node: &SpineNode) -> Vec<u8> {
-        match node {
-            SpineNode::Leaf(pos) => self.leaf_digest(alg, *pos),
-            SpineNode::Inner(children) => {
-                let child_digests: Vec<Vec<u8>> = children
-                    .iter()
-                    .map(|c| self.eval_uncached(alg, c))
-                    .collect();
-                let refs: Vec<&[u8]> = child_digests.iter().map(Vec::as_slice).collect();
-                nary_mr(alg.hasher.as_ref(), &refs)
-            },
-        }
+}
+
+/// The materialized digest of the perfect k-ary subtree at frontier
+/// coordinate `(left, height)` — the closed leaf interval
+/// `[left, left + k^height - 1]`. Read from the algorithm's cache; a miss
+/// is a logic error (the tree is always fully materialized before seal), but
+/// the defensive fallback re-evaluates and caches the subtree rather than
+/// silently producing a wrong digest.
+fn peak_digest(cells: &[Cell], alg: &mut Alg, left: u64, height: u32, k: u64) -> Vec<u8> {
+    let right = left + k.pow(height) - 1;
+    if let Some(d) = alg.cache.get(&(left, right)) {
+        return d.clone();
+    }
+    let shape = spine::perfect(left, height, k);
+    let h = alg.hasher.as_ref();
+    eval_subtree(&mut alg.cache, h, &shape, &mut |pos| {
+        leaf_digest_raw(cells, h, pos)
+    })
+}
+
+/// Evaluate a subtree's digest, materializing every node — leaves and inner
+/// nodes alike — into `cache`. Parameterized over leaf behavior via `leaf_fn`:
+///
+/// - Real digests: `|pos| leaf_digest_raw(cells, hasher, pos)`
+/// - Null seeding: `|_| null_digest.clone()`
+///
+/// Caching leaves lets a later path-recompute ([`Emt::recompute_path`]) read
+/// every off-path sibling from the cache without ever re-hashing the subtree.
+fn eval_subtree(
+    cache: &mut BTreeMap<(u64, u64), Vec<u8>>,
+    hasher: &dyn Hasher,
+    node: &SpineNode,
+    leaf_fn: &mut dyn FnMut(u64) -> Vec<u8>,
+) -> Vec<u8> {
+    let key = node_key(node);
+    match node {
+        SpineNode::Leaf(pos) => {
+            let digest = leaf_fn(*pos);
+            cache.insert(key, digest.clone());
+            digest
+        },
+        SpineNode::Inner(children) => {
+            let child_digests: Vec<Vec<u8>> = children
+                .iter()
+                .map(|c| eval_subtree(cache, hasher, c, leaf_fn))
+                .collect();
+            let refs: Vec<&[u8]> = child_digests.iter().map(Vec::as_slice).collect();
+            let digest = nary_mr(hasher, &refs);
+            cache.insert(key, digest.clone());
+            digest
+        },
     }
 }
 
-/// A perfect k-ary subtree shape of the given `height`, leftmost leaf at flat
-/// position `left`. Height 0 is a lone leaf. Mirrors [`crate::spine`]'s internal
-/// `perfect`; used only by the defensive seal fallback.
-fn spine_perfect(left: u64, height: u32, k: u64) -> SpineNode {
-    if height == 0 {
-        return SpineNode::Leaf(left);
+/// The leaf digest of cell `pos` in `cells` under `hasher`. An absent cell
+/// (position beyond the end) hashes the null constant.
+fn leaf_digest_raw(cells: &[Cell], hasher: &dyn Hasher, pos: u64) -> Vec<u8> {
+    match cells.get(pos as usize) {
+        Some(cell) => hasher.leaf(&cell.payload),
+        None => hasher.null(),
     }
-    let child_span = k.pow(height - 1);
-    let children = (0..k)
-        .map(|c| spine_perfect(left + c * child_span, height - 1, k))
-        .collect();
-    SpineNode::Inner(children)
 }
 
 /// A stable cache key for a spine node: the closed interval of leaf positions it
@@ -561,25 +581,4 @@ fn spine_perfect(left: u64, height: u32, k: u64) -> SpineNode {
 /// `(leftmost, child_count)` key would alias.
 fn node_key(node: &SpineNode) -> (u64, u64) {
     (leftmost(node), rightmost(node))
-}
-
-/// The leftmost flat leaf position covered by `node`.
-fn leftmost(node: &SpineNode) -> u64 {
-    match node {
-        SpineNode::Leaf(pos) => *pos,
-        SpineNode::Inner(children) => leftmost(&children[0]),
-    }
-}
-
-/// The rightmost flat leaf position covered by `node`.
-fn rightmost(node: &SpineNode) -> u64 {
-    match node {
-        SpineNode::Leaf(pos) => *pos,
-        SpineNode::Inner(children) => rightmost(children.last().expect("inner node has children")),
-    }
-}
-
-/// Whether `node` covers flat position `index`.
-fn covers(node: &SpineNode, index: u64) -> bool {
-    leftmost(node) <= index && index <= rightmost(node)
 }

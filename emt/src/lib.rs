@@ -200,6 +200,31 @@ mod tests {
         }
     }
 
+    /// F4 regression guard: off-path siblings are served from the materialized
+    /// cache, not re-evaluated. A fully materialized tree must generate inclusion
+    /// proofs with zero cache misses for every index. A positive miss count means
+    /// the cache is being bypassed and proof generation has silently degraded to
+    /// O(n) rather than O(log n).
+    #[test]
+    fn inclusion_proof_uses_cache_zero_misses() {
+        // Use a reasonably large tree (size > k^2) so there are genuine inner
+        // nodes with off-path siblings that would trigger misses without caching.
+        let size = 32u64;
+        let payloads: Vec<Vec<u8>> = (0..size).map(|i| format!("p{i}").into_bytes()).collect();
+        let refs: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+        let t = tree_with(&refs);
+        for index in 0..size {
+            let (_, _, misses) = t
+                .inclusion_proof_miss_count(ALG, index)
+                .expect("in-range index");
+            assert_eq!(
+                misses, 0,
+                "inclusion_proof for index={index} size={size} had {misses} cache miss(es): \
+                 off-path siblings must be served from the materialized cache (F4)"
+            );
+        }
+    }
+
     #[test]
     fn inclusion_proof_rejects_wrong_leaf() {
         let t = tree_with(&[b"a", b"b", b"c", b"d"]);

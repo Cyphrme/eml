@@ -69,7 +69,7 @@ pub fn build(size: u64, k: u64) -> Option<SpineNode> {
 
 /// A perfect k-ary subtree of the given `height`, rooted so its leftmost leaf is
 /// flat position `left`. Height 0 is a lone leaf.
-fn perfect(left: u64, height: u32, k: u64) -> SpineNode {
+pub(crate) fn perfect(left: u64, height: u32, k: u64) -> SpineNode {
     if height == 0 {
         return SpineNode::Leaf(left);
     }
@@ -78,6 +78,29 @@ fn perfect(left: u64, height: u32, k: u64) -> SpineNode {
         .map(|c| perfect(left + c * child_span, height - 1, k))
         .collect();
     SpineNode::Inner(children)
+}
+
+/// The leftmost flat leaf position covered by `node`.
+pub(crate) fn leftmost(node: &SpineNode) -> u64 {
+    match node {
+        SpineNode::Leaf(pos) => *pos,
+        SpineNode::Inner(children) => leftmost(&children[0]),
+    }
+}
+
+/// The rightmost flat leaf position covered by `node`.
+pub(crate) fn rightmost(node: &SpineNode) -> u64 {
+    match node {
+        SpineNode::Leaf(pos) => *pos,
+        SpineNode::Inner(children) => {
+            rightmost(children.last().expect("inner node has children"))
+        },
+    }
+}
+
+/// Whether `node` covers flat position `index`.
+pub(crate) fn covers(node: &SpineNode, index: u64) -> bool {
+    leftmost(node) <= index && index <= rightmost(node)
 }
 
 #[cfg(test)]
