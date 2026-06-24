@@ -121,8 +121,7 @@ Fuzz targets (nightly Rust):
 ```sh
 cargo +nightly fuzz run <target>
 # targets: verify_inclusion, verify_consistency, rehydrate_proof,
-#          proof_mutation, state_machine,
-#          cyphr_malt_verify_inclusion, cyphr_malt_verify_consistency
+#          proof_mutation, state_machine
 ```
 
 ## License

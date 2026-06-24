@@ -1,14 +1,14 @@
-//! Fuzz target: rehydrate_inclusion_proof must never panic.
+//! Fuzz target: reconstruct_inclusion_root must never panic.
 //!
-//! Feeds arbitrary elided proof structures and asserts the rehydration
-//! function returns an InclusionProof without panicking.
+//! Feeds arbitrary proof structures to `reconstruct_inclusion_root` and
+//! asserts it returns an Option without panicking. Any panic is a defect.
 
 #![no_main]
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use eml::rehydrate_inclusion_proof;
+use eml::{ProofStep, reconstruct_inclusion_root};
 
 #[derive(Debug)]
 struct FuzzHasher;
@@ -20,18 +20,16 @@ impl eml::Hasher for FuzzHasher {
         h.update(data);
         h.finalize().to_vec()
     }
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01]);
-        h.update(left);
-        h.update(right);
+        for c in children {
+            h.update(c);
+        }
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
-    }
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02]).to_vec()
     }
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -42,18 +40,32 @@ impl eml::Hasher for FuzzHasher {
 }
 
 #[derive(Debug, Arbitrary)]
+struct FuzzStep {
+    siblings: Vec<Vec<u8>>,
+    position: usize,
+}
+
+#[derive(Debug, Arbitrary)]
 struct Input {
     index: u64,
     tree_size: u64,
-    /// Each entry: None = elided, Some(bytes) = real sibling.
-    path: Vec<Option<Vec<u8>>>,
+    arity: u64,
+    path: Vec<FuzzStep>,
+    leaf_hash: Vec<u8>,
 }
 
 fuzz_target!(|input: Input| {
-    let elided = eml::ElidedInclusionProof {
-        index: input.index,
-        tree_size: input.tree_size,
-        path: input.path,
-    };
-    let _ = rehydrate_inclusion_proof(&elided, &FuzzHasher);
+    let path: Vec<ProofStep> = input
+        .path
+        .into_iter()
+        .map(|s| ProofStep { siblings: s.siblings, position: s.position })
+        .collect();
+    let _ = reconstruct_inclusion_root(
+        &FuzzHasher,
+        &input.leaf_hash,
+        input.index,
+        input.tree_size,
+        input.arity,
+        &path,
+    );
 });

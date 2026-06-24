@@ -8,9 +8,9 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use eml::verify_inclusion;
+use eml::{ProofStep, verify_inclusion};
 
-/// Hasher for fuzz context — SHA-256 with RFC 9162 domain separation.
+/// Hasher for fuzz context — SHA-256 with domain separation.
 #[derive(Debug)]
 struct FuzzHasher;
 
@@ -21,18 +21,16 @@ impl eml::Hasher for FuzzHasher {
         h.update(data);
         h.finalize().to_vec()
     }
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01]);
-        h.update(left);
-        h.update(right);
+        for c in children {
+            h.update(c);
+        }
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
-    }
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02]).to_vec()
     }
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -43,21 +41,35 @@ impl eml::Hasher for FuzzHasher {
 }
 
 #[derive(Debug, Arbitrary)]
+struct FuzzStep {
+    siblings: Vec<Vec<u8>>,
+    position: usize,
+}
+
+#[derive(Debug, Arbitrary)]
 struct Input {
     index: u64,
     tree_size: u64,
-    /// Sibling hashes — up to 64 entries (log2(u64::MAX)).
-    path: Vec<Vec<u8>>,
+    arity: u64,
+    path: Vec<FuzzStep>,
     leaf_hash: Vec<u8>,
     root: Vec<u8>,
 }
 
 fuzz_target!(|input: Input| {
-    let proof = eml::InclusionProof {
-        index: input.index,
-        tree_size: input.tree_size,
-        path: input.path,
-    };
+    let path: Vec<ProofStep> = input
+        .path
+        .into_iter()
+        .map(|s| ProofStep { siblings: s.siblings, position: s.position })
+        .collect();
     // Must not panic — result is discarded.
-    let _ = verify_inclusion(&FuzzHasher, &input.leaf_hash, &proof, &input.root);
+    let _ = verify_inclusion(
+        &FuzzHasher,
+        &input.leaf_hash,
+        input.index,
+        input.tree_size,
+        input.arity,
+        &path,
+        &input.root,
+    );
 });

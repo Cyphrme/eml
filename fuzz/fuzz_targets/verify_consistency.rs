@@ -8,7 +8,7 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use eml::verify_consistency;
+use eml::{ProofStep, verify_consistency};
 
 #[derive(Debug)]
 struct FuzzHasher;
@@ -20,18 +20,16 @@ impl eml::Hasher for FuzzHasher {
         h.update(data);
         h.finalize().to_vec()
     }
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01]);
-        h.update(left);
-        h.update(right);
+        for c in children {
+            h.update(c);
+        }
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
-    }
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02]).to_vec()
     }
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -42,19 +40,36 @@ impl eml::Hasher for FuzzHasher {
 }
 
 #[derive(Debug, Arbitrary)]
+struct FuzzStep {
+    siblings: Vec<Vec<u8>>,
+    position: usize,
+}
+
+#[derive(Debug, Arbitrary)]
 struct Input {
     old_size: u64,
     new_size: u64,
-    path: Vec<Vec<u8>>,
+    arity: u64,
+    start_hash: Vec<u8>,
+    path: Vec<FuzzStep>,
     old_root: Vec<u8>,
     new_root: Vec<u8>,
 }
 
 fuzz_target!(|input: Input| {
-    let proof = eml::ConsistencyProof {
-        old_size: input.old_size,
-        new_size: input.new_size,
-        path: input.path,
-    };
-    let _ = verify_consistency(&FuzzHasher, &proof, &input.old_root, &input.new_root);
+    let path: Vec<ProofStep> = input
+        .path
+        .into_iter()
+        .map(|s| ProofStep { siblings: s.siblings, position: s.position })
+        .collect();
+    let _ = verify_consistency(
+        &FuzzHasher,
+        input.old_size,
+        input.new_size,
+        input.arity,
+        &input.start_hash,
+        &path,
+        &input.old_root,
+        &input.new_root,
+    );
 });
