@@ -195,7 +195,7 @@ impl Storage for FaultInjectingStorage {
 fn test_mid_batch_failure_recovery() {
     smol::block_on(async {
         let storage = FaultInjectingStorage::new(MemoryStorage::new());
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage.clone(), Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -235,7 +235,7 @@ fn test_verify_non_divergence_tamper_detection() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -314,7 +314,7 @@ fn test_verify_non_divergence_tamper_detection() {
 fn test_verify_non_divergence_legitimate_frozen() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -375,7 +375,7 @@ fn test_verify_non_divergence_legitimate_frozen() {
 fn test_resume_algorithm_non_atomic_crash_recovery() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -460,7 +460,7 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
 fn test_v12_boundary_band_corruption_detected() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -533,7 +533,7 @@ fn test_v12_boundary_band_corruption_detected() {
 fn test_v16_subtree_mode_tamper_detected() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -577,7 +577,7 @@ fn test_v16_subtree_mode_tamper_detected() {
 fn test_v16_wrong_length_digest_rejected() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();

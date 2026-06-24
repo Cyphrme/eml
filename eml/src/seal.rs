@@ -71,7 +71,7 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// committed timeline, then build the one-way [`Sealed`]. Consumes `self`.
     async fn seal_inner(self, meta: Option<Meta>) -> Result<Sealed, S::Error> {
         let size = self.count();
-        let k = self.config().log_arity as u64;
+        let k = self.config().arity;
 
         // At size 0 there is no active algorithm and no timeline to freeze.
         let (frontiers, alg_epochs) = if size == 0 {
@@ -142,7 +142,7 @@ mod tests {
     }
 
     async fn log_with(n: u64, k: usize) -> NaryMerkleLog<MemoryStorage> {
-        let config = TreeConfig { log_arity: k };
+        let config = TreeConfig { arity: k as u64 };
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn binding_root_per_active_algorithm() {
         smol::block_on(async {
-            let config = TreeConfig { log_arity: 2 };
+            let config = TreeConfig { arity: 2 };
             let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();

@@ -161,7 +161,7 @@ fn seal_yields_currency_with_derived_binding_root_and_extents() {
         let mut log = eml::NaryMerkleLog::new(
             eml::MemoryStorage::new(),
             Box::new(H),
-            eml::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -202,7 +202,7 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
         let mut log = eml::NaryMerkleLog::new(
             eml::MemoryStorage::new(),
             Box::new(H),
-            eml::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -306,7 +306,7 @@ fn seal_eml_then_fill_emt_verifies_against_binding_root() {
         let mut log = eml::NaryMerkleLog::new(
             eml::MemoryStorage::new(),
             Box::new(H),
-            eml::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -341,7 +341,7 @@ fn trustless_fill_verify_without_a_signature() {
         let mut log = eml::NaryMerkleLog::new(
             eml::MemoryStorage::new(),
             Box::new(H),
-            eml::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();

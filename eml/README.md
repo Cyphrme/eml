@@ -142,7 +142,7 @@ impl Hasher for Sha256Hasher {
 
 fn main() {
     smol::block_on(async {
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),

@@ -287,7 +287,7 @@ async fn project<S: cyphr_log::Storage>(
 }
 
 async fn build_log(size: usize, activation: usize, k: usize) -> NaryMerkleLog<MemoryStorage> {
-    let config = TreeConfig { log_arity: k };
+    let config = TreeConfig { arity: k as u64 };
     let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
         .await
         .unwrap();
@@ -616,7 +616,7 @@ proptest! {
         k in 2usize..5,
     ) {
         smol::block_on(async {
-            let config = TreeConfig { log_arity: k };
+            let config = TreeConfig { arity: k as u64 };
             let alg_ids = [10, 20, 30];
 
             let mut log1 = NaryMerkleLog::new(
@@ -662,7 +662,7 @@ proptest! {
         k in 2usize..5,
     ) {
         smol::block_on(async {
-            let config = TreeConfig { log_arity: k };
+            let config = TreeConfig { arity: k as u64 };
             let alg_ids = [40, 50];
 
             let mut log1 = NaryMerkleLog::new(
@@ -711,7 +711,7 @@ proptest! {
         is_state_mode in any::<bool>(),
     ) {
         smol::block_on(async {
-            let config = TreeConfig { log_arity: k };
+            let config = TreeConfig { arity: k as u64 };
             let mut log = NaryMerkleLog::new(
                 MemoryStorage::new(),
                 Box::new(Sha256Hasher),

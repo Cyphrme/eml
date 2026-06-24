@@ -34,11 +34,11 @@ pub struct ConsistencyProof {
 ///
 /// Returns `true` if the proof demonstrates that the tree of size `old_size`
 /// with root `old_root` is an append-only prefix of the tree of size `new_size`
-/// with root `new_root` (arity `log_arity`).
+/// with root `new_root` (arity `arity`).
 ///
 /// # Trust contract (security-critical)
 ///
-/// `old_size`, `new_size`, `log_arity`, `old_root`, and `new_root` are
+/// `old_size`, `new_size`, `arity`, `old_root`, and `new_root` are
 /// **trusted parameters** and MUST come from an authenticated source — signed
 /// Tree Heads (STHs) or trusted checkpoints — never from the proof or any
 /// caller-untrusted input. The verifier reconstructs both roots from the sizes
@@ -63,13 +63,13 @@ pub fn verify_consistency(
     hasher: &dyn Hasher,
     old_size: u64,
     new_size: u64,
-    log_arity: u64,
+    arity: u64,
     start_hash: &[u8],
     path: &[ProofStep],
     old_root: &[u8],
     new_root: &[u8],
 ) -> bool {
-    reconstruct_consistency_roots(hasher, old_size, new_size, log_arity, start_hash, path)
+    reconstruct_consistency_roots(hasher, old_size, new_size, arity, start_hash, path)
         .is_some_and(|(computed_old, computed_new)| {
             constant_time_eq(&computed_old, old_root) & constant_time_eq(&computed_new, new_root)
         })
@@ -156,7 +156,7 @@ const ROOT_SENTINEL_HEIGHT: u32 = u32::MAX;
 ///
 /// Building block for [`verify_consistency`]; it computes both roots but does
 /// not compare them to trusted ones. Callers must hold to the same trust
-/// contract: `old_size`, `new_size`, and `log_arity` must be authenticated, and
+/// contract: `old_size`, `new_size`, and `arity` must be authenticated, and
 /// the returned roots are only meaningful when checked against authenticated
 /// roots with the matching sizes bound (see [`verify_consistency`] for the
 /// length-binding and both-roots-authenticated obligations).
@@ -165,7 +165,7 @@ pub fn reconstruct_consistency_roots(
     hasher: &dyn Hasher,
     old_size: u64,
     new_size: u64,
-    log_arity: u64,
+    arity: u64,
     start_hash: &[u8],
     path: &[ProofStep],
 ) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -179,7 +179,7 @@ pub fn reconstruct_consistency_roots(
     if old_size == 0 || old_size >= new_size {
         return None;
     }
-    if !ARITY_RANGE.contains(&log_arity) {
+    if !ARITY_RANGE.contains(&arity) {
         return None;
     }
     if path.len() > 256 {
@@ -196,7 +196,7 @@ pub fn reconstruct_consistency_roots(
         }
     }
 
-    let k = log_arity;
+    let k = arity;
 
     let old_coords = frontier_for_size(old_size, k);
     let new_coords = frontier_for_size(new_size, k);
@@ -439,7 +439,7 @@ pub fn verify_consistency_with_coupling(
     alg_id: u64,
     old_size: u64,
     new_size: u64,
-    log_arity: u64,
+    arity: u64,
     start_hash: &[u8],
     path: &[ProofStep],
     old_coupling: &CouplingProof,
@@ -454,7 +454,7 @@ pub fn verify_consistency_with_coupling(
         hasher,
         alg_id,
         old_size,
-        log_arity,
+        arity,
         old_combined_root,
         old_expected_active_algs,
         config,
@@ -463,7 +463,7 @@ pub fn verify_consistency_with_coupling(
         hasher,
         alg_id,
         new_size,
-        log_arity,
+        arity,
         new_combined_root,
         new_expected_active_algs,
         config,
@@ -474,7 +474,7 @@ pub fn verify_consistency_with_coupling(
             hasher,
             old_size,
             new_size,
-            log_arity,
+            arity,
             start_hash,
             path,
             &old_raw_root,

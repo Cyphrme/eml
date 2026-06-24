@@ -49,7 +49,7 @@ use pmt::{
 /// algorithm whose member root it verifies against.
 ///
 /// The leaf proof's own trusted positional parameters
-/// (`index`, `tree_size`, `log_arity`) pin the topology; `alg_id` selects which
+/// (`index`, `tree_size`, `arity`) pin the topology; `alg_id` selects which
 /// of the snapshot's member roots is the authenticated root the proof reconstructs
 /// to. This is the base-case unit the aggregate proof composes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,7 +337,7 @@ mod tests {
     }
 
     async fn log_with(n: u64, k: usize) -> NaryMerkleLog<MemoryStorage> {
-        let config = TreeConfig { log_arity: k };
+        let config = TreeConfig { arity: k as u64 };
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn multi_algorithm_snapshot_verifies() {
         smol::block_on(async {
-            let config = TreeConfig { log_arity: 2 };
+            let config = TreeConfig { arity: 2 };
             let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();

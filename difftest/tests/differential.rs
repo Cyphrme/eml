@@ -92,7 +92,7 @@ fn build_cur(k: usize, leaves: &[Vec<u8>]) -> CurLog<CurStorage> {
         let mut log = CurLog::new(
             CurStorage::new(),
             Box::new(Sha256Hasher),
-            CurConfig { log_arity: k },
+            CurConfig { arity: k as u64 },
         )
         .await
         .unwrap();
@@ -326,7 +326,7 @@ proptest! {
     ) {
         smol::block_on(async {
             let mut cur = CurLog::new(
-                CurStorage::new(), Box::new(Sha256Hasher), CurConfig { log_arity: 2 },
+                CurStorage::new(), Box::new(Sha256Hasher), CurConfig { arity: 2 },
             ).await.unwrap();
             let mut base = BaseLog::new(
                 BaseStorage::new(), Box::new(Sha256Hasher), BaseConfig { log_arity: 2 },

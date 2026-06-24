@@ -433,7 +433,7 @@ mod tests {
 
     /// Build a single-algorithm (alg 0 from genesis) log over `data` and seal it.
     async fn gapless_sealed(data: &[Vec<u8>], k: usize) -> Sealed {
-        let config = TreeConfig { log_arity: k };
+        let config = TreeConfig { arity: k as u64 };
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -445,7 +445,7 @@ mod tests {
 
     /// The from-scratch oracle: a fresh single-algorithm log over the same data.
     async fn from_scratch_root(data: &[Vec<u8>], k: usize) -> Vec<u8> {
-        let config = TreeConfig { log_arity: k };
+        let config = TreeConfig { arity: k as u64 };
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn multi_algorithm_gapless_fill_verifies() {
         smol::block_on(async {
-            let config = TreeConfig { log_arity: 2 };
+            let config = TreeConfig { arity: 2 };
             let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();

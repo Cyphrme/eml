@@ -14,13 +14,13 @@
 pub use eml::*;
 
 /// Cyphr's log arity: binary (`k = 2`).
-pub const LOG_ARITY: usize = 2;
+pub const LOG_ARITY: u64 = 2;
 
 /// The cyphr-log configuration: arity `k = 2`, no prefix.
 #[must_use]
 pub fn config() -> TreeConfig {
     TreeConfig {
-        log_arity: LOG_ARITY,
+        arity: LOG_ARITY,
     }
 }
 
@@ -94,7 +94,7 @@ mod tests {
     /// The preset fixes binary arity.
     #[test]
     fn preset_is_binary() {
-        assert_eq!(config().log_arity, 2);
+        assert_eq!(config().arity, 2);
     }
 
     /// The preset constructor builds a working binary log.
@@ -104,7 +104,7 @@ mod tests {
             let mut log = new(MemoryStorage::new(), Box::new(Sha256Hasher))
                 .await
                 .unwrap();
-            assert_eq!(log.config().log_arity, 2);
+            assert_eq!(log.config().arity, 2);
             log.append_leaf(b"a").await.unwrap();
             log.append_leaf(b"b").await.unwrap();
             assert_eq!(log.size(), 2);

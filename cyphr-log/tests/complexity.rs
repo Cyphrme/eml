@@ -39,7 +39,7 @@ impl Hasher for Sha256Hasher {
 fn make_log(n: usize) -> Arc<NaryMerkleLog<MemoryStorage>> {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -133,7 +133,7 @@ fn complexity_append_amortized_constant() {
                 let mut log = NaryMerkleLog::new(
                     MemoryStorage::new(),
                     Box::new(Sha256Hasher),
-                    TreeConfig { log_arity: 2 },
+                    TreeConfig { arity: 2 },
                 )
                 .await
                 .unwrap();
@@ -168,7 +168,7 @@ fn complexity_resume_algorithm_log_n() {
                 let mut log = NaryMerkleLog::new(
                     MemoryStorage::new(),
                     Box::new(Sha256Hasher),
-                    TreeConfig { log_arity: 2 },
+                    TreeConfig { arity: 2 },
                 )
                 .await
                 .unwrap();
@@ -240,7 +240,7 @@ fn complexity_append_subtree_linear_in_nodes() {
                 let mut log = NaryMerkleLog::new(
                     MemoryStorage::new(),
                     Box::new(Sha256Hasher),
-                    TreeConfig { log_arity: 2 },
+                    TreeConfig { arity: 2 },
                 )
                 .await
                 .unwrap();
@@ -297,7 +297,7 @@ fn complexity_e2e_inclusion_subtree_log_n() {
             let mut log = NaryMerkleLog::new(
                 MemoryStorage::new(),
                 Box::new(Sha256Hasher),
-                TreeConfig { log_arity: 2 },
+                TreeConfig { arity: 2 },
             )
             .await
             .unwrap();

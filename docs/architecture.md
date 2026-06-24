@@ -259,14 +259,14 @@ member-root fold unambiguous.
 A `LeafProof` (`pmt/src/leaf_proof.rs`) is the peer of the inclusion proof over
 the *same* shared positional topology, packaged as a self-contained witness: a
 leaf hash bound to its trusted positional parameters `(index, tree_size,
-log_arity)` plus the path, so a consumer asks one question — `verify(hasher,
+arity)` plus the path, so a consumer asks one question — `verify(hasher,
 root)`. It runs over a **live** tree and is exposed by *both* EML and EMT; it is
 not consistency-coupled, and it is the base case the snapshot proof composes.
 
 ### Inclusion and its trust contract
 
 `verify_inclusion` (`pmt/src/proof.rs`) binds a leaf hash to a log position by
-reconstructing the exact topology from `(index, tree_size, log_arity)` and
+reconstructing the exact topology from `(index, tree_size, arity)` and
 rejecting any deviation; the proof supplies only sibling digests. Those
 parameters and the `root` are **trusted** — they must come from an authenticated
 source (a signed tree head or trusted checkpoint), never from the proof or

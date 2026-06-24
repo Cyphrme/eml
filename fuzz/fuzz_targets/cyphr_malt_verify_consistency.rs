@@ -52,7 +52,7 @@ struct FuzzProofStep {
 struct Input {
     old_size: u64,
     new_size: u64,
-    log_arity: u64,
+    arity: u64,
     start_hash: Vec<u8>,
     path: Vec<FuzzProofStep>,
     old_root: Vec<u8>,
@@ -69,7 +69,7 @@ fuzz_target!(|input: Input| {
         &FuzzHasher,
         input.old_size,
         input.new_size,
-        input.log_arity,
+        input.arity,
         &input.start_hash,
         &path,
         &input.old_root,

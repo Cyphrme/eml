@@ -44,12 +44,12 @@ impl LogKind {
 pub struct TreeConfig {
     /// Arity for log-level nodes (k >= 2).
     /// Controls the base-k carry reduction schedule.
-    pub log_arity: usize,
+    pub arity: u64,
 }
 
 impl Default for TreeConfig {
     fn default() -> Self {
-        Self { log_arity: 2 }
+        Self { arity: 2 }
     }
 }
 
@@ -307,12 +307,12 @@ impl<S: Storage> NaryMerkleLog<S> {
         hasher: Box<dyn Hasher>,
         config: TreeConfig,
     ) -> Result<Self, S::Error> {
-        if !ARITY_RANGE.contains(&(config.log_arity as u64)) {
+        if !ARITY_RANGE.contains(&(config.arity)) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: format!(
-                    "invalid log_arity: must be between 2 and 256, got {}",
-                    config.log_arity
+                    "invalid arity: must be between 2 and 256, got {}",
+                    config.arity
                 ),
             });
         }
@@ -374,7 +374,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             });
         }
         let config = TreeConfig {
-            log_arity: k as usize,
+            arity: k,
         };
         let size = sealed.tree_size();
         let coords = frontier_for_size(size, k);
@@ -485,12 +485,12 @@ impl<S: Storage> NaryMerkleLog<S> {
         hashers: Vec<(u64, Box<dyn Hasher>)>,
         config: TreeConfig,
     ) -> Result<Self, S::Error> {
-        if !ARITY_RANGE.contains(&(config.log_arity as u64)) {
+        if !ARITY_RANGE.contains(&(config.arity)) {
             return Err(crate::error::Error::CorruptedMetadata {
                 alg_id: 0,
                 reason: format!(
-                    "invalid log_arity: must be between 2 and 256, got {}",
-                    config.log_arity
+                    "invalid arity: must be between 2 and 256, got {}",
+                    config.arity
                 ),
             });
         }
@@ -548,7 +548,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         };
 
         let mut algs = std::collections::HashMap::new();
-        let k = config.log_arity as u64;
+        let k = config.arity;
         for (alg_id, epochs) in metas {
             let hasher = hasher_map
                 .remove(&alg_id)
@@ -577,7 +577,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         for (&alg_id, state) in &algs {
             if let Some(stored_root) = stored_roots.get(&alg_id) {
-                let actual_root = Self::compute_root_from_state(state, config.log_arity);
+                let actual_root = Self::compute_root_from_state(state, config.arity as usize);
                 if &actual_root != stored_root {
                     return Err(crate::error::Error::CorruptedMetadata {
                         alg_id,
@@ -650,11 +650,11 @@ impl<S: Storage> NaryMerkleLog<S> {
             state.frontier.push(digest);
             state.frontier_coords.push((self.count, 0));
 
-            let merges = reduction_count(self.count, self.config.log_arity as u64);
+            let merges = reduction_count(self.count, self.config.arity);
             for _ in 0..merges {
-                let mut children = Vec::with_capacity(self.config.log_arity);
-                let mut coords = Vec::with_capacity(self.config.log_arity);
-                for _ in 0..self.config.log_arity {
+                let mut children = Vec::with_capacity(self.config.arity as usize);
+                let mut coords = Vec::with_capacity(self.config.arity as usize);
+                for _ in 0..self.config.arity as usize {
                     children.push(state.frontier.pop().ok_or_else(|| {
                         crate::error::Error::CorruptedMetadata {
                             alg_id,
@@ -692,7 +692,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .iter()
             .filter(|(_, s)| s.is_active())
             .map(|(&alg_id, s)| {
-                let root = Self::compute_root_from_state(s, self.config.log_arity);
+                let root = Self::compute_root_from_state(s, self.config.arity as usize);
                 (alg_id, root)
             })
             .collect();
@@ -959,7 +959,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .await
             .map_err(crate::error::Error::Storage)?;
 
-        let k = self.config.log_arity as u64;
+        let k = self.config.arity;
         let coords = frontier_for_size(current_size, k);
         let stack = vec![hasher.null(); coords.len()];
 
@@ -1004,7 +1004,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             };
             // Reflect the closed epoch so effective_size_at returns the frozen size.
             frozen.epochs = new_epochs.clone();
-            Self::compute_root_from_state(&frozen, self.config.log_arity)
+            Self::compute_root_from_state(&frozen, self.config.arity as usize)
         };
 
         let epochs_ref: &[(u64, u64)] = &new_epochs;
@@ -1047,7 +1047,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         new_epochs.push((current_size, u64::MAX));
 
-        let k = self.config.log_arity as u64;
+        let k = self.config.arity;
         let coords = frontier_for_size(current_size, k);
         let mut frontier = Vec::with_capacity(coords.len());
 
@@ -1091,7 +1091,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             frontier: frontier.clone(),
             frontier_coords: coords.clone(),
         };
-        let resumed_root = Self::compute_root_from_state(&resumed_state, self.config.log_arity);
+        let resumed_root = Self::compute_root_from_state(&resumed_state, self.config.arity as usize);
 
         let epochs_ref: &[(u64, u64)] = &new_epochs;
         // Commit nodes + epoch update + checkpoint root atomically (closes V13).
@@ -1443,7 +1443,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             &member_roots,
             &alg_epochs,
             self.count,
-            self.config.log_arity as u64,
+            self.config.arity,
         ))
     }
 
@@ -1459,7 +1459,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         if state.frontier.is_empty() {
             return Ok(state.hasher.empty());
         }
-        let k = self.config.log_arity;
+        let k = self.config.arity as usize;
         let h = state.hasher.as_ref();
         Ok(fold_frontier(state.frontier.clone(), k, |chunk| {
             let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
@@ -1478,7 +1478,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .algs
             .get(&alg_id)
             .ok_or(crate::error::Error::UnknownAlgorithm(alg_id))?;
-        let k = self.config.log_arity as u64;
+        let k = self.config.arity;
         let cap = match k.checked_pow(height) {
             Some(c) => c,
             None => return Ok(state.hasher.null()),
@@ -1553,7 +1553,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Ok(None);
         }
 
-        let k = self.config.log_arity as u64;
+        let k = self.config.arity;
         let coords = frontier_for_size(tree_size, k);
 
         let mut target_f_idx = None;
@@ -1584,7 +1584,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         merge_frontier_paths(
             hashes,
             f_idx,
-            self.config.log_arity,
+            self.config.arity as usize,
             state.hasher.as_ref(),
             &mut path,
         );
@@ -1638,7 +1638,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             leaf_hash,
             index,
             tree_size,
-            self.config.log_arity as u64,
+            self.config.arity,
             proof.path,
         )))
     }
@@ -1670,7 +1670,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Ok(None);
         }
 
-        let k = self.config.log_arity as u64;
+        let k = self.config.arity;
         let old_coords = frontier_for_size(old_size, k);
         let &(boundary_left, boundary_height) =
             old_coords
@@ -1724,7 +1724,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         merge_frontier_paths(
             hashes,
             f_idx,
-            self.config.log_arity,
+            self.config.arity as usize,
             state.hasher.as_ref(),
             &mut path,
         );
@@ -1743,14 +1743,14 @@ impl<S: Storage> NaryMerkleLog<S> {
     ) -> Result<(), S::Error> {
         let mut curr_left = left_index;
         let mut curr_height = height;
-        let k = self.config.log_arity as u64;
+        let k = self.config.arity;
 
         while curr_height > target_height {
             let child_capacity = k.pow(curr_height - 1);
             let child_idx = (target_index - curr_left) / child_capacity;
 
-            let mut siblings = Vec::with_capacity(self.config.log_arity - 1);
-            for j in 0..self.config.log_arity {
+            let mut siblings = Vec::with_capacity(self.config.arity as usize - 1);
+            for j in 0..self.config.arity as usize {
                 let j_u64 = j as u64;
                 if j_u64 == child_idx {
                     continue;
@@ -1931,7 +1931,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // ── 2. Streaming cell check ───────────────────────────────────────
         let is_flat = self.kind == LogKind::Flat;
-        let k = self.config.log_arity;
+        let k = self.config.arity as usize;
         let active_set: std::collections::HashSet<u64> =
             payload.active_algs.iter().copied().collect();
 
@@ -2165,7 +2165,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             &member_roots,
             &alg_epochs,
             size,
-            self.config.log_arity as u64,
+            self.config.arity,
         ))
     }
 
@@ -2200,7 +2200,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Ok(state.hasher.empty());
         }
 
-        let k = self.config.log_arity;
+        let k = self.config.arity as usize;
         let coords = frontier_for_size(alg_size, k as u64);
 
         let mut frontier = Vec::with_capacity(coords.len());
@@ -2273,7 +2273,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                                 state.hasher.as_ref(),
                                 old_alg_size,
                                 new_alg_size,
-                                self.config.log_arity as u64,
+                                self.config.arity,
                                 &proof.start_hash,
                                 &proof.path,
                                 &old_root,
@@ -2334,7 +2334,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
             let mut frontier = Vec::new();
             let mut frontier_coords = Vec::new();
-            let k = self.config.log_arity;
+            let k = self.config.arity as usize;
 
             let alg_size_at_start = state.effective_size_at(start);
 
@@ -2432,14 +2432,14 @@ impl<S: Storage> NaryMerkleLog<S> {
                 frontier_coords.push((i, 0));
                 *alg_size += 1;
 
-                let merges = reduction_count(*alg_size - 1, self.config.log_arity as u64);
+                let merges = reduction_count(*alg_size - 1, self.config.arity);
                 for _ in 0..merges {
-                    if frontier.len() < self.config.log_arity {
+                    if frontier.len() < self.config.arity as usize {
                         return Ok(false); // Frontier underflow!
                     }
-                    let mut children = Vec::with_capacity(self.config.log_arity);
-                    let mut coords = Vec::with_capacity(self.config.log_arity);
-                    for _ in 0..self.config.log_arity {
+                    let mut children = Vec::with_capacity(self.config.arity as usize);
+                    let mut coords = Vec::with_capacity(self.config.arity as usize);
+                    for _ in 0..self.config.arity as usize {
                         children.push(frontier.pop().ok_or_else(|| {
                             crate::error::Error::CorruptedMetadata {
                                 alg_id,
@@ -2478,7 +2478,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         // Verify final recomputed roots match the current logger roots
         for (&alg_id, state) in &self.algs {
             let (frontier, ..) = &alg_frontiers[&alg_id];
-            let folded = fold_frontier(state.hasher.as_ref(), frontier, self.config.log_arity);
+            let folded = fold_frontier(state.hasher.as_ref(), frontier, self.config.arity as usize);
             let final_root = self.root_for_at(alg_id, end).await?;
             if !crate::proof::constant_time_eq(&folded, &final_root) {
                 return Ok(false); // Final root mismatch!
@@ -2587,7 +2587,7 @@ mod tests {
 
         smol::block_on(async {
             let storage = MemoryStorage::new();
-            let config = TreeConfig { log_arity: 2 };
+            let config = TreeConfig { arity: 2 };
             let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();
@@ -2612,7 +2612,7 @@ mod tests {
                 // Self-describing: positional fields carried, no re-supply.
                 assert_eq!(proof.index, index);
                 assert_eq!(proof.tree_size, size);
-                assert_eq!(proof.log_arity, 2);
+                assert_eq!(proof.arity, 2);
                 // Legitimate leaf accepted.
                 assert!(proof.verify(&h, &root), "index={index}");
                 // Forged leaf at the same position rejected.
@@ -2630,7 +2630,7 @@ mod tests {
     fn test_structural_node_id_storage() {
         smol::block_on(async {
             let storage = MemoryStorage::new();
-            let config = TreeConfig { log_arity: 2 };
+            let config = TreeConfig { arity: 2 };
             let mut log = NaryMerkleLog::new(storage, Box::new(TestHasher), config)
                 .await
                 .unwrap();
@@ -2686,7 +2686,7 @@ mod resume_tests {
     }
 
     async fn eml_with(n: u64, k: usize) -> NaryMerkleLog<MemoryStorage> {
-        let config = TreeConfig { log_arity: k };
+        let config = TreeConfig { arity: k as u64 };
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
             .await
             .unwrap();

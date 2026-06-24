@@ -6,7 +6,7 @@
 //!
 //! - The **log skeleton** — the trailing steps along the fixed-arity proof spine. Their shape
 //!   (count, per-step position and sibling count) is fully determined by `(index, tree_size,
-//!   log_arity)` and is pinned exactly against [`crate::topology::inclusion_skeleton`]. Because
+//!   arity)` and is pinned exactly against [`crate::topology::inclusion_skeleton`]. Because
 //!   there is no per-node domain separation, second-preimage safety rests entirely on this
 //!   exactness: the verifier reconstructs the canonical topology and rejects any deviation.
 //! - The **subtree prefix** — the leading steps below the leaf's log position, in
@@ -77,14 +77,14 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// Verify an inclusion proof.
 ///
 /// Returns `true` if the proof demonstrates that `leaf_hash` is the leaf at
-/// `index` in a tree of size `tree_size` and arity `log_arity` whose root is
+/// `index` in a tree of size `tree_size` and arity `arity` whose root is
 /// `root`.
 ///
 /// # Trust contract (security-critical)
 ///
-/// `index`, `tree_size`, `log_arity`, and `root` are **trusted parameters**.
+/// `index`, `tree_size`, `arity`, and `root` are **trusted parameters**.
 /// Soundness comes from the verifier reconstructing the exact tree topology
-/// from `(tree_size, log_arity, index)` and rejecting any deviation; the proof
+/// from `(tree_size, arity, index)` and rejecting any deviation; the proof
 /// supplies only sibling digests. These parameters MUST therefore be obtained
 /// from an authenticated source — a signed Tree Head (STH) or trusted
 /// checkpoint — and never from the proof itself or any caller-untrusted input.
@@ -101,11 +101,11 @@ pub fn verify_inclusion(
     leaf_hash: &[u8],
     index: u64,
     tree_size: u64,
-    log_arity: u64,
+    arity: u64,
     path: &[ProofStep],
     root: &[u8],
 ) -> bool {
-    reconstruct_inclusion_root(hasher, leaf_hash, index, tree_size, log_arity, path)
+    reconstruct_inclusion_root(hasher, leaf_hash, index, tree_size, arity, path)
         .is_some_and(|computed| constant_time_eq(&computed, root))
 }
 
@@ -602,7 +602,7 @@ pub fn verify_inclusion_path_structure(
 ///
 /// Building block for [`verify_inclusion`]; it computes a root but does not
 /// compare it to a trusted one. Callers must hold to the same trust contract:
-/// `index`, `tree_size`, and `log_arity` must be authenticated (see
+/// `index`, `tree_size`, and `arity` must be authenticated (see
 /// [`verify_inclusion`]), and the returned root is only meaningful when checked
 /// against an authenticated root.
 #[must_use]
@@ -611,7 +611,7 @@ pub fn reconstruct_inclusion_root(
     leaf_hash: &[u8],
     index: u64,
     tree_size: u64,
-    log_arity: u64,
+    arity: u64,
     path: &[ProofStep],
 ) -> Option<Vec<u8>> {
     let digest_len = hasher.empty().len();
@@ -621,7 +621,7 @@ pub fn reconstruct_inclusion_root(
     if leaf_hash.len() != digest_len {
         return None;
     }
-    if !ARITY_RANGE.contains(&log_arity) {
+    if !ARITY_RANGE.contains(&arity) {
         return None;
     }
     if tree_size == 0 {
@@ -634,7 +634,7 @@ pub fn reconstruct_inclusion_root(
         return None;
     }
 
-    if !verify_inclusion_path_structure(log_arity as usize, index, tree_size, path) {
+    if !verify_inclusion_path_structure(arity as usize, index, tree_size, path) {
         return None;
     }
 
@@ -688,7 +688,7 @@ pub fn verify_inclusion_with_coupling(
     leaf_hash: &[u8],
     index: u64,
     tree_size: u64,
-    log_arity: u64,
+    arity: u64,
     path: &[ProofStep],
     coupling: &CouplingProof,
     combined_root: &[u8],
@@ -699,7 +699,7 @@ pub fn verify_inclusion_with_coupling(
         hasher,
         alg_id,
         tree_size,
-        log_arity,
+        arity,
         combined_root,
         expected_active_algs,
         config,
@@ -727,7 +727,7 @@ pub fn verify_inclusion_with_coupling(
     }
 
     verify_inclusion(
-        hasher, leaf_hash, index, tree_size, log_arity, path, &raw_root,
+        hasher, leaf_hash, index, tree_size, arity, path, &raw_root,
     )
 }
 
@@ -749,7 +749,7 @@ pub fn verify_inactivity_with_coupling(
     alg_id: u64,
     index: u64,
     tree_size: u64,
-    log_arity: u64,
+    arity: u64,
     path: &[ProofStep],
     coupling: &CouplingProof,
     combined_root: &[u8],
@@ -763,7 +763,7 @@ pub fn verify_inactivity_with_coupling(
     if !coupling.authenticate(
         hasher,
         tree_size,
-        log_arity,
+        arity,
         combined_root,
         expected_active_algs,
         config,
@@ -787,7 +787,7 @@ pub fn verify_inactivity_with_coupling(
             &hasher.null(),
             index,
             tree_size,
-            log_arity,
+            arity,
             path,
             raw_root,
         )
