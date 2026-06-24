@@ -255,6 +255,34 @@ impl Sealed {
         Some(fold_peaks(hasher, peaks, self.arity))
     }
 
+    /// **Derived view.** Every active algorithm's member root, in sealed
+    /// (sorted) order, folded under the supplied hashers — or
+    /// [`Error::MissingHasher`] naming the first active algorithm with no hasher.
+    ///
+    /// Unlike [`Self::member_roots`], which is the *produce*-side view a caller
+    /// may legitimately take over a subset of hashers, this is the *complete*
+    /// child set the binding-root fold commits. Folding over a truncated child
+    /// list would yield a combined root no algorithm published, so a missing
+    /// hasher is an error, never a silent skip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MissingHasher`] (naming the algorithm) if any algorithm
+    /// active at the sealed size has no hasher in `hashers`.
+    pub fn all_member_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
+        self.frontiers
+            .iter()
+            .map(|(id, peaks)| {
+                let hasher = hashers
+                    .iter()
+                    .find(|(hid, _)| hid == id)
+                    .map(|(_, h)| *h)
+                    .ok_or(Error::MissingHasher { alg_id: *id })?;
+                Ok((*id, fold_peaks(hasher, peaks, self.arity)))
+            })
+            .collect()
+    }
+
     /// **Derived view.** Each active algorithm's binding root: `(alg_id,
     /// binding_root)`, sorted by algorithm ID. A binding root is the
     /// [`combined_root`] — the canonicalization fold over the member roots as
@@ -267,16 +295,27 @@ impl Sealed {
     /// promoted form is the structural consequence of having one child — there
     /// is no promotion predicate.
     ///
-    /// `hashers` resolves each algorithm's own hash; an algorithm with no hasher
-    /// is skipped.
-    #[must_use]
-    pub fn binding_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Vec<(u64, Vec<u8>)> {
-        let members = self.member_roots(hashers);
+    /// `hashers` must resolve **every** active algorithm's own hash: the fold
+    /// commits all of them as children, so a missing one is
+    /// [`Error::MissingHasher`], not a silent skip — a binding root folded over
+    /// a truncated child set is one no algorithm published.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MissingHasher`] (naming the algorithm) if any algorithm
+    /// active at the sealed size has no hasher in `hashers`.
+    pub fn binding_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
+        let members = self.all_member_roots(hashers)?;
         members
             .iter()
-            .filter_map(|(id, _)| {
-                let hasher = hashers.iter().find(|(hid, _)| hid == id).map(|(_, h)| *h)?;
-                Some((
+            .map(|(id, _)| {
+                // Resolved already by `all_member_roots`, so this lookup cannot fail.
+                let hasher = hashers
+                    .iter()
+                    .find(|(hid, _)| hid == id)
+                    .map(|(_, h)| *h)
+                    .ok_or(Error::MissingHasher { alg_id: *id })?;
+                Ok((
                     *id,
                     combined_root(hasher, &members, &self.alg_epochs, self.tree_size, self.arity),
                 ))
@@ -285,28 +324,41 @@ impl Sealed {
     }
 
     /// **Derived view.** A single algorithm's binding root under `hasher`.
-    /// Returns `None` if the algorithm was not active at the sealed size.
     ///
-    /// The fold is over every active algorithm's member root, so `all_hashers`
-    /// must resolve them; the single returned binding root is the one for
-    /// `alg_id` under `hasher`. See [`Self::binding_roots`].
-    #[must_use]
+    /// The fold is over **every** active algorithm's member root, so
+    /// `all_hashers` must resolve them all; the single returned binding root is
+    /// the one for `alg_id` under `hasher`. See [`Self::binding_roots`].
+    ///
+    /// Returns `Ok(None)` if `alg_id` was not active at the sealed size (a
+    /// well-formed query about an absent algorithm, not an error).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MissingHasher`] (naming the algorithm) if any algorithm
+    /// active at the sealed size — including `alg_id` itself — has no hasher in
+    /// `all_hashers`. A missing hasher would silently fold over a truncated
+    /// child set and yield a binding root no algorithm committed.
     pub fn binding_root(
         &self,
         alg_id: u64,
         hasher: &dyn Hasher,
         all_hashers: &[(u64, &dyn Hasher)],
-    ) -> Option<Vec<u8>> {
-        // Confirm the algorithm was active at the sealed size before folding.
-        self.member_root(alg_id, hasher)?;
-        let members = self.member_roots(all_hashers);
-        Some(combined_root(
+    ) -> Result<Option<Vec<u8>>> {
+        // An algorithm with no frontier was never active at the sealed size:
+        // a well-formed `None`, distinct from a missing-hasher error.
+        if self.peaks(alg_id).is_none() {
+            return Ok(None);
+        }
+        // The complete child set the fold commits — errors if any active
+        // algorithm lacks a hasher, rather than silently dropping it.
+        let members = self.all_member_roots(all_hashers)?;
+        Ok(Some(combined_root(
             hasher,
             &members,
             &self.alg_epochs,
             self.tree_size,
             self.arity,
-        ))
+        )))
     }
 
     /// **Derived view.** The committed canonicalization run-extents: the
@@ -490,8 +542,47 @@ mod tests {
         .expect("well-formed");
         let member = sealed.member_root(0, &H).unwrap();
         let hashers: [(u64, &dyn Hasher); 1] = [(0, &H)];
-        assert_eq!(sealed.binding_root(0, &H, &hashers), Some(member.clone()));
-        assert_eq!(sealed.binding_roots(&hashers), vec![(0, member)]);
+        assert_eq!(sealed.binding_root(0, &H, &hashers), Ok(Some(member.clone())));
+        assert_eq!(sealed.binding_roots(&hashers), Ok(vec![(0, member)]));
+    }
+
+    #[test]
+    fn binding_root_errors_on_a_missing_active_hasher() {
+        // Two active algorithms, but the caller supplies a hasher only for alg 0.
+        // The binding-root fold commits *both* member roots as children, so a
+        // missing hasher for alg 1 must surface as a clear error rather than
+        // silently folding over a truncated child set (yielding a binding root
+        // no algorithm committed).
+        let p0 = vec![0x11; 32];
+        let p1 = vec![0x22; 32];
+        let sealed = Sealed::new(
+            3,
+            2,
+            vec![(0, vec![p0.clone(), p0.clone()]), (1, vec![p1.clone(), p1])],
+            vec![(0, vec![(0, u64::MAX)]), (1, vec![(0, u64::MAX)])],
+        )
+        .expect("well-formed");
+        let partial: [(u64, &dyn Hasher); 1] = [(0, &H)];
+
+        // The single-root accessor errors naming the absent algorithm …
+        assert_eq!(
+            sealed.binding_root(0, &H, &partial),
+            Err(Error::MissingHasher { alg_id: 1 })
+        );
+        // … and so does the all-roots accessor.
+        assert_eq!(
+            sealed.binding_roots(&partial),
+            Err(Error::MissingHasher { alg_id: 1 })
+        );
+
+        // With every active hasher present the fold succeeds.
+        let full: [(u64, &dyn Hasher); 2] = [(0, &H), (1, &H)];
+        assert!(sealed.binding_root(0, &H, &full).unwrap().is_some());
+        assert_eq!(sealed.binding_roots(&full).unwrap().len(), 2);
+
+        // An algorithm with no frontier is a well-formed `Ok(None)`, never an
+        // error — distinct from a missing hasher for an active algorithm.
+        assert_eq!(sealed.binding_root(9, &H, &full), Ok(None));
     }
 
     #[test]

@@ -1863,35 +1863,33 @@ fn test_coupling_proof_verify_validation() {
             .is_none()
     );
 
-    // 15. VARIABLE LENGTH ROOTS (Length-Ambiguity Check)
-    let var_root_0 = vec![9; 20]; // 20-byte root (e.g. RIPEMD-160)
-    let var_root_1 = vec![5; 32]; // 32-byte root (e.g. SHA-256)
-    let var_proof = cyphr_log::CouplingProof {
-        active_roots: vec![(0, var_root_0.clone()), (1, var_root_1.clone())],
+    // 15-16. FIXED-WIDTH MEMBER ROOTS (was "Length-Ambiguity / Empty Roots").
+    //
+    // These cases formerly fed *variable-width* member roots (a 20-byte root
+    // beside a 32-byte one) and an *empty* root into `combined_root` and asserted
+    // the verifier accepted them. That asserted design-forbidden behavior: the
+    // combined root concatenates member roots **raw, with no length prefix**
+    // (`pmt::combined_root`), so distinct member-root lists of unequal widths can
+    // share a node preimage — an ambiguity that voids binding-root soundness. The
+    // `Hasher` fixed-width contract now makes this explicit, and `nary_mr`
+    // `debug_assert`s that a node's children share a width; the inclusion verifier
+    // (`pmt::reconstruct_inclusion_root`) already rejects any sibling whose length
+    // differs from `digest_len`. So variable/empty-width member roots are a
+    // contract violation, not a supported input — there is nothing to "accept".
+    //
+    // The supported path is equal-width member roots, exercised throughout this
+    // suite (32-byte SHA-256 roots) and re-confirmed here: two same-width roots
+    // fold to a combined root the coupling proof verifies and extracts from.
+    let fw_root_0 = vec![9u8; 32];
+    let fw_root_1 = vec![5u8; 32];
+    let fw_proof = cyphr_log::CouplingProof {
+        active_roots: vec![(0, fw_root_0.clone()), (1, fw_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
-    let var_combined =
-        cyphr_log::combined_root(&hasher, &var_proof.active_roots, &var_proof.alg_epochs, tree_size, 2);
-
-    let target_var = var_proof.verify(&hasher, 0, tree_size, 2, &var_combined, &[0, 1], config);
-    assert_eq!(target_var.unwrap(), var_root_0);
-
-    // 16. EMPTY ROOTS HANDLING
-    let empty_root_proof = cyphr_log::CouplingProof {
-        active_roots: vec![(0, vec![]), (1, var_root_1.clone())],
-        alg_epochs: epochs.clone(),
-    };
-    let empty_combined = cyphr_log::combined_root(
-        &hasher,
-        &empty_root_proof.active_roots,
-        &empty_root_proof.alg_epochs,
-        tree_size,
-        2,
-    );
-
-    let target_empty =
-        empty_root_proof.verify(&hasher, 0, tree_size, 2, &empty_combined, &[0, 1], config);
-    assert_eq!(target_empty.unwrap(), Vec::<u8>::new());
+    let fw_combined =
+        cyphr_log::combined_root(&hasher, &fw_proof.active_roots, &fw_proof.alg_epochs, tree_size, 2);
+    let target_fw = fw_proof.verify(&hasher, 0, tree_size, 2, &fw_combined, &[0, 1], config);
+    assert_eq!(target_fw.unwrap(), fw_root_0);
 }
 
 #[test]

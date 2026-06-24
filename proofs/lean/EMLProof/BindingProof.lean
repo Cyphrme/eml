@@ -124,6 +124,30 @@ theorem binding_root_sound (alg : Algorithm)
     simpa only [combinedChildrenWith] using List.append_inj_left hch hplen
   · exact Or.inr hcol
 
+/-- **Singleton (promoted) binding-root soundness.** The one-member regime the
+    multi-member `binding_root_sound` excludes (`ar.length ≥ 2`), closing the
+    coverage gap the shipped API (`promoted_binding_root_verifies`) exercises. A
+    single member root under a trivial activation promotes: `BRᵢ` *is* that member
+    digest (`combinedRootWith_singleton`), with no node hash. So if algorithm `i`
+    committed `[e_i]` (trivial `tl_i`) under `BRᵢ`, and a presented `[e']` (trivial
+    `tl'`) verifies, the presented member digest equals the committed one —
+    `memberDigestWith alg.hash e' = memberDigestWith alg.hash e_i` —
+    **unconditionally**: promotion carries no hash, so no collision lever is
+    needed (the conclusion has no `NodeHashCollisionFor` disjunct). -/
+theorem binding_root_singleton_sound (alg : Algorithm)
+    (e_i e' : AlgId × List UInt8) (tl_i tl' : Timeline)
+    (htriv_i : timelineTrivial tl_i = true) (htriv' : timelineTrivial tl' = true)
+    (hcommit : bindingRoot alg [e_i] tl_i = alg.root)
+    (haccept : Verifies alg [e'] tl') :
+    memberDigestWith alg.hash e' = memberDigestWith alg.hash e_i := by
+  -- Both binding roots promote to their lone member digest.
+  have hc : memberDigestWith alg.hash e_i = alg.root := by
+    simpa only [bindingRoot, combinedRootWith_singleton alg.hash e_i tl_i htriv_i] using hcommit
+  have ha : memberDigestWith alg.hash e' = alg.root := by
+    simpa only [Verifies, bindingRoot, combinedRootWith_singleton alg.hash e' tl' htriv']
+      using haccept
+  rw [ha, hc]
+
 /-- **Cross-algorithm consistency (`BRᵢ ≘ BRⱼ`).** If algorithms `i` and `j`
     genuinely committed structures under their own (independent) hashes, both in
     the multi-member regime over the presented active-set length, and a *single*

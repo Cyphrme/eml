@@ -86,6 +86,16 @@ pub enum FillError {
     /// The named algorithm has no committed frontier in the `Sealed`, so there
     /// is no committed binding root to fill against.
     UnknownAlgorithm(u64),
+    /// No hasher was supplied for an algorithm active in the `Sealed`.
+    ///
+    /// The committed binding root commits *every* active algorithm's member
+    /// root as a child, so the trustless check cannot recompute it with a
+    /// missing hasher — supplying an incomplete `all_hashers` would silently
+    /// fold over a truncated child set. Surfaced rather than dropped.
+    MissingHasher {
+        /// The active algorithm whose hasher was absent from `all_hashers`.
+        alg_id: u64,
+    },
     /// The rebuilt binding root does not match the `Sealed`'s committed binding
     /// root for the filled algorithm.
     ///
@@ -118,6 +128,13 @@ impl std::fmt::Display for FillError {
                 write!(
                     f,
                     "algorithm {id} has no committed frontier in the sealed commitment"
+                )
+            },
+            Self::MissingHasher { alg_id } => {
+                write!(
+                    f,
+                    "no hasher supplied for algorithm {alg_id}, which is active in the sealed \
+                     commitment; the binding-root check needs every active algorithm's hasher"
                 )
             },
             Self::BindingRootMismatch { alg_id } => write!(
@@ -260,8 +277,10 @@ pub fn fill<D: AsRef<[u8]>>(
     //    means the data could not reproduce the committed layout. ──
     let committed = sealed
         .binding_root(alg_id, hasher, all_hashers)
+        .map_err(fill_error_from_missing_hasher)?
         .ok_or(FillError::UnknownAlgorithm(alg_id))?;
-    let rebuilt_binding = rebuilt_binding_root(sealed, alg_id, hasher, &member_root, all_hashers);
+    let rebuilt_binding =
+        rebuilt_binding_root(sealed, alg_id, hasher, &member_root, all_hashers)?;
     if !constant_time_eq(&rebuilt_binding, &committed) {
         return Err(FillError::BindingRootMismatch { alg_id });
     }
@@ -286,23 +305,40 @@ fn rebuilt_binding_root(
     hasher: &dyn Hasher,
     member_root: &[u8],
     all_hashers: &[(u64, &dyn Hasher)],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, FillError> {
     // The fold's children are every active algorithm's member root; for the
     // filled algorithm we substitute the rebuilt root so the check verifies the
-    // data reproduces the committed layout exactly.
-    let mut members: Vec<(u64, Vec<u8>)> = sealed.member_roots(all_hashers);
+    // data reproduces the committed layout exactly. Use the *complete* member-
+    // root set: folding over a truncated one (a missing hasher silently dropped)
+    // would compare against a binding root no algorithm committed.
+    let mut members = sealed
+        .all_member_roots(all_hashers)
+        .map_err(fill_error_from_missing_hasher)?;
     for (id, mr) in &mut members {
         if *id == alg_id {
             *mr = member_root.to_vec();
         }
     }
-    combined_root(
+    Ok(combined_root(
         hasher,
         &members,
         sealed.alg_epochs(),
         sealed.tree_size(),
         sealed.arity(),
-    )
+    ))
+}
+
+/// Map a kernel [`pmt::Error`] from a member/binding-root fold into the fill
+/// error channel. Only [`pmt::Error::MissingHasher`] can arise here — the
+/// timeline and arity were validated when the `Sealed` was constructed — so any
+/// other variant is unreachable on this path.
+fn fill_error_from_missing_hasher(e: pmt::Error) -> FillError {
+    match e {
+        pmt::Error::MissingHasher { alg_id } => FillError::MissingHasher { alg_id },
+        pmt::Error::BadArity | pmt::Error::MalformedEpochs => {
+            unreachable!("binding-root fold over a validated Sealed yields only MissingHasher")
+        },
+    }
 }
 
 /// Reconstruct the committed frontier partition of `[0, tree_size)`: the

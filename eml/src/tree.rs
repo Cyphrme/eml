@@ -2491,26 +2491,36 @@ impl<S: Storage> NaryMerkleLog<S> {
 
 #[cfg(test)]
 mod tests {
+    use sha2::Digest as _;
+
     use super::*;
     use crate::storage::MemoryStorage;
 
+    /// A real fixed-width (32-byte) hasher. These tests exercise epoch and
+    /// node-storage *structure*, independent of digest content, so any
+    /// contract-honoring hasher serves; a passthrough hasher would violate the
+    /// `Hasher` fixed-width contract (and trip `nary_mr`'s `debug_assert`).
     #[derive(Debug)]
     struct TestHasher;
     impl Hasher for TestHasher {
         fn leaf(&self, data: &[u8]) -> Vec<u8> {
-            data.to_vec()
+            sha2::Sha256::digest(data).to_vec()
         }
 
         fn node(&self, children: &[&[u8]]) -> Vec<u8> {
-            children.concat()
+            let mut h = sha2::Sha256::new();
+            for c in children {
+                h.update(c);
+            }
+            h.finalize().to_vec()
         }
 
         fn empty(&self) -> Vec<u8> {
-            Vec::new()
+            sha2::Sha256::digest(b"").to_vec()
         }
 
         fn hash(&self, data: &[u8]) -> Vec<u8> {
-            data.to_vec()
+            sha2::Sha256::digest(data).to_vec()
         }
 
         fn clone_box(&self) -> Box<dyn Hasher> {

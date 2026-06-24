@@ -38,6 +38,26 @@ pub fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
         0 => hasher.empty(),
         1 => children[0].to_vec(),
         _ => {
+            // Fixed-width contract (see `Hasher`): the node hash concatenates
+            // these child digests with no length prefix, so the child *boundaries*
+            // are recoverable only if the children share a width — otherwise a
+            // different split of the same bytes is an equally valid child list and
+            // the node digest fails to bind its children. Checked here, at the one
+            // fold boundary, so a contract violation trips in debug/test builds
+            // rather than silently producing an unbinding root.
+            //
+            // The check is mutual sibling-width-equality, not equality to
+            // `hasher.digest_len()`: a binding-root node folds *other* algorithms'
+            // member roots (raw, opaque digests — D9) under this hasher, so the
+            // children are not this hasher's own outputs. Within a single tree
+            // they are, and either way the soundness property is that the siblings
+            // agree on a width.
+            debug_assert!(
+                children.windows(2).all(|w| w[0].len() == w[1].len()),
+                "node() children must share a digest width (got widths {:?}); \
+                 the unprefixed concatenation is otherwise not uniquely parseable",
+                children.iter().map(|c| c.len()).collect::<Vec<_>>()
+            );
             // Collapse: if every child is the same value, the parent is that
             // value. The all-null run is the dominant instance of this one rule.
             let first = children[0];

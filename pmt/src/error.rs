@@ -19,6 +19,15 @@ pub enum Error {
     /// [`crate::proof::validate_committed_epochs`]), or the number of frontier
     /// peaks supplied does not match the expected count for `(tree_size, arity)`.
     MalformedEpochs,
+    /// A binding-root fold was requested but no hasher was supplied for an
+    /// algorithm that is active at the sealed size. The combined root commits
+    /// *every* active algorithm's member root as a child, so a missing hasher
+    /// would silently fold over a truncated child list and yield a binding root
+    /// that no algorithm committed. Carries the offending algorithm ID.
+    MissingHasher {
+        /// The active algorithm whose hasher was absent from the supplied set.
+        alg_id: u64,
+    },
 }
 
 impl fmt::Display for Error {
@@ -29,6 +38,14 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "committed epoch timeline is not well-formed at the sealed tree size"
+                )
+            },
+            Self::MissingHasher { alg_id } => {
+                write!(
+                    f,
+                    "no hasher supplied for algorithm {alg_id}, which is active at the sealed \
+                     size; the binding root commits every active algorithm's member root, so it \
+                     cannot be folded with a missing hasher"
                 )
             },
         }
