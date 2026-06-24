@@ -2035,25 +2035,6 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
 
         // ── 3. Root recomputation ─────────────────────────────────────────
-        fn fold_to_root(hasher: &dyn Hasher, frontier: &[Vec<u8>], k: usize) -> Vec<u8> {
-            if frontier.is_empty() {
-                return hasher.empty();
-            }
-            if frontier.len() == 1 {
-                return frontier[0].clone();
-            }
-            let mut cur = frontier.to_vec();
-            while cur.len() > k {
-                let split = cur.len() - k;
-                let right: Vec<&[u8]> = cur[split..].iter().map(|v| v.as_slice()).collect();
-                let merged = nary_mr(hasher, &right);
-                cur.truncate(split);
-                cur.push(merged);
-            }
-            let refs: Vec<&[u8]> = cur.iter().map(|v| v.as_slice()).collect();
-            nary_mr(hasher, &refs)
-        }
-
         let mut recomputed_roots: Vec<(u64, Vec<u8>)> =
             Vec::with_capacity(payload.active_algs.len());
         for &id in &payload.active_algs {
@@ -2062,7 +2043,14 @@ impl<S: Storage> NaryMerkleLog<S> {
                 .get(&id)
                 .ok_or(crate::error::Error::UnknownAlgorithm(id))?;
             let frontier = &frontiers[&id];
-            let raw_root = fold_to_root(state.hasher.as_ref(), frontier, k);
+            let raw_root = if frontier.is_empty() {
+                state.hasher.empty()
+            } else {
+                fold_frontier(frontier.clone(), k, |chunk| {
+                    let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+                    nary_mr(state.hasher.as_ref(), &refs)
+                })
+            };
             recomputed_roots.push((id, raw_root));
         }
 
