@@ -2,12 +2,12 @@
 //!
 //! The abstract core shared by every tree built above it: the **proof spine**
 //! ([`topology`]), **canonicalization** (collapse + promotion, in [`mr`]), the
-//! [`Hasher`] seam, **inclusion** proof/verify, **embedding** (an opaque
-//! child-tree root as a leaf), the [`Sealed`] carrier, the **metadata
-//! channel** ([`Meta`]), and the **combined root** — the canonicalization
-//! fold over the per-algorithm member roots (the [`proof::combined_root`]
-//! primitive, shared by both trees) and its coupling. It depends on nothing;
-//! the engineering libraries (append-only / mutable) depend on it.
+//! [`Hasher`] seam, **inclusion** proof/verify, the [`Sealed`] carrier, the
+//! **metadata channel** ([`Meta`]), and the **combined root** — the
+//! canonicalization fold over the per-algorithm member roots (the
+//! [`proof::combined_root`] primitive, shared by both trees) and its
+//! coupling. It depends on nothing; the engineering libraries (append-only /
+//! mutable) depend on it.
 
 pub(crate) mod binding_proof;
 pub(crate) mod error;
@@ -34,7 +34,7 @@ pub use proof::{
     verify_inclusion_path_structure, verify_inclusion_with_coupling,
 };
 pub use sealed::{RunExtent, Sealed};
-pub use subtree::{Subtree, embed, extract};
+pub use subtree::Subtree;
 pub use topology::{
     ARITY_RANGE, SkeletonStep, fold_frontier, frontier_for_size, inclusion_skeleton,
 };
@@ -81,11 +81,11 @@ mod tests {
         }
     }
 
-    /// An embedded child root reads back byte-identically and is opaque: the
-    /// embedded leaf is indistinguishable from a raw-payload leaf carrying the
-    /// same bytes.
+    /// A child-tree root carried as `Subtree::Leaf` is indistinguishable from
+    /// a raw-payload leaf carrying the same bytes — the opacity contract.
+    /// The kernel sees identical structure regardless of origin.
     #[test]
-    fn embed_round_trips_and_is_opaque() {
+    fn leaf_carrying_child_root_is_opaque() {
         let hasher = Sha256Hasher;
         let child_root = evaluate(
             &hasher,
@@ -95,12 +95,16 @@ mod tests {
             ]),
         );
 
-        let leaf = embed(child_root.clone());
-        assert_eq!(extract(&leaf), Some(child_root.as_slice()));
+        // A leaf wrapping a child root is structurally identical to a raw-payload
+        // leaf carrying the same bytes — no origin tag exists to distinguish them.
+        let via_child_root = Subtree::Leaf(child_root.clone());
+        let via_raw_payload = Subtree::Leaf(child_root.clone());
+        assert_eq!(via_child_root, via_raw_payload);
 
-        // Opaque: a raw-payload leaf with the same bytes is the same value.
-        assert_eq!(leaf, Subtree::Leaf(child_root.clone()));
-        // An internal node has nothing to extract.
-        assert_eq!(extract(&Subtree::Node(vec![leaf])), None);
+        // The kernel evaluates both identically: same digest, no branching on origin.
+        assert_eq!(
+            evaluate(&hasher, &via_child_root),
+            evaluate(&hasher, &via_raw_payload)
+        );
     }
 }
