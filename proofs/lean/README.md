@@ -137,44 +137,56 @@ locations in the source files:
   - `projection_equivalence`: EML Theorem 1 (Projection Equivalence).
   - The former "Temporal Binding" and "Algorithm Isolation" theorems were removed as vacuous
     (an axiom echo, and two independent copies of Projection Equivalence). Their intended
-    security content is formalized in `NEML.lean`'s committed-epoch (Design A+) layer.
-- **[NEML.lean](EMLProof/NEML.lean)** (security layer):
+    security content is formalized in the committed-epoch (Design A+) layer in `Epoch.lean`.
+- **[NEML.lean](EMLProof/NEML.lean)** (Merkle Spine — structural core):
   - `eval` and its five evaluation equations (`eval_leaf`/`eval_empty`/`eval_singleton_node`/
     `eval_flat_null_node`/`eval_node_hash`): a real `def` with proved equations (formerly
     axioms); `eval_singleton`, `eval_flat_null_promotion`: promotion soundness.
   - `null_collision`: the faithful `leaf(b"null") = N₀` identity, now expressible and proved.
-  - Design A+: `inferredActiveFromNull_unsound`, `combinedRoot_binds_timeline`,
-    `real_cell_forces_committed_active`, `committed_inactive_is_null` — activity is read from
-    the committed timeline, which enters the combined-root fold as a coverage child, not from
-    digest null-ness.
-  - Combined-root fold (post-N29, raw-concat per D9): `combinedChildren_bound`,
-    `coupling_extract_sound`, `binding_root_sound`, `binding_proof_consistent`,
-    `binding_proof_forgery_rejected` — the combined root is the `nary_mr` fold over the
-    member-root **bytes** fed raw (no per-member re-hash; `pmt::combined_root` → `pmt::nary_mr`),
-    plus the coverage child. So a fixed root pins the raw member-byte list modulo a byte-hash
-    collision — *under the fixed-width contract* (`EqWidth`, the `Hasher` digest-width
-    hypothesis, N32) that makes the unprefixed concat parseable (`flatten_inj_of_eqWidth`);
-    algorithm identities are the verifier's trusted active-set input, not recovered from the
-    root.
   - Canonical inclusion: `not_canonical_of_promoted`, `inclusion_soundness`, and
     `inclusion_proof_unique` (non-malleability) — all fully proved. Uniqueness holds modulo
     `NodeHashCollision` and takes the proof-shape pinning (`hlen`/`hpos`) as premises,
     mirroring the guarantees of `neml/src/topology.rs`
     (see [Future Formalization Work](#7-future-formalization-work)).
+  - Epoch-free: no timeline, binding root, or null-run-extent. This is the structural half
+    of C-CANONICAL-UNIQUE — distinct canonical structures ⇒ distinct roots — and it stands
+    alone for a single-algorithm consumer with no epoch.
+- **[Epoch.lean](EMLProof/Epoch.lean)** (epoch combinator — over the spine):
+  - Design A+: `inferredActiveFromNull_unsound`, `combinedRoot_binds_timeline`,
+    `real_cell_forces_committed_active`, `committed_inactive_is_null` — activity is read from
+    the committed timeline, which enters the combined-root fold as a coverage child, not from
+    digest null-ness. `combinedRoot_binds_timeline` is the **timeline-binding half** of
+    C-CANONICAL-UNIQUE: distinct committed activations ⇒ distinct binding roots. The two
+    halves are distinct-but-composing (the structural half above carries no epoch hypothesis;
+    this half consumes only opaque digests), kept physically separate.
+  - Combined-root fold (post-N29, raw-concat per D9): `combinedChildren_bound`,
+    `coupling_extract_sound` — the combined root is the `nary_mr` fold over the member-root
+    **bytes** fed raw (no per-member re-hash; `pmt::combined_root` → `pmt::nary_mr`), plus the
+    coverage child. So a fixed root pins the raw member-byte list modulo a byte-hash collision
+    — *under the fixed-width contract* (`EqWidth`, the `Hasher` digest-width hypothesis, N32)
+    that makes the unprefixed concat parseable (`flatten_inj_of_eqWidth`); algorithm identities
+    are the verifier's trusted active-set input, not recovered from the root. The combinator
+    imports the spine; the arrow runs epoch → spine only.
+- **[BindingProof.lean](EMLProof/BindingProof.lean)** (epoch combinator):
+  - `binding_root_sound`, `binding_proof_consistent`, `binding_proof_forgery_rejected` — the
+    cross-algorithm binding-proof soundness theorems over the per-algorithm binding root
+    `combinedRootWith Hᵢ` (D9, no security mixing).
 
 ### 2.1. How to Audit and Verify Axioms (TCB)
 To verify which axioms and `sorry` placeholders the theorems depend on, a reviewer can inspect
 the Trusted Computing Base (TCB) using Lean's `#print axioms` command:
-1. Append the following diagnostics to the end of [NEML.lean](EMLProof/NEML.lean):
+1. Place the following diagnostics in a scratch file that imports the corpus
+   (the spine theorems live in [NEML.lean](EMLProof/NEML.lean), the epoch ones in
+   [Epoch.lean](EMLProof/Epoch.lean); importing `Epoch` reaches both):
    ```lean
-   #print axioms NEML.projection_equivalence
+   import EMLProof.Epoch
    #print axioms NEML.eval_flat_null_promotion
+   #print axioms NEML.inclusion_proof_unique
    #print axioms NEML.combinedRoot_binds_timeline
    #print axioms NEML.coupling_extract_sound
-   #print axioms NEML.inclusion_proof_unique
    ```
 2. Build the project. The compiler output will display the exact axioms utilized.
-3. The NEML/Projection layer declares **exactly four** domain constants:
+3. The spine/epoch layer declares **exactly four** domain constants:
    `Digest`, `Digest.nonempty`, `H`, and `digestToBytes` (plus Lean built-ins `propext`,
    `Classical.choice`, `Quot.sound`). This corrects the earlier claim of five — the
    `domain_separation` axiom and the NEML `numsSeed`/`xof`/`eval`-cluster axioms (thirteen in
@@ -192,8 +204,8 @@ respective Lean symbols in the source code:
 | **Definition 3** | [cto](EMLProof/Tree.lean#L112) | Count Trailing Ones count |
 | **Theorem 1** | [bridge_lemma](EMLProof/Bridge.lean#L155) | Structural Bridge Lemma |
 | **Theorem 2** | [projection_equivalence](EMLProof/Projection.lean) | Projection Equivalence |
-| **Temporal Binding** | [combinedRoot_binds_timeline](EMLProof/NEML.lean), [real_cell_forces_committed_active](EMLProof/NEML.lean) | Inactivity authenticated by the committed epoch timeline (Design A+); supersedes the removed vacuous `temporal_binding` |
-| **Algorithm Isolation** | [combinedChildrenWith_bound](EMLProof/NEML.lean), [binding_proof_consistent](EMLProof/BindingProof.lean) | Per-algorithm binding roots fold under each algorithm's own hash (D9); supersedes the removed vacuous `algorithm_isolation` |
+| **Temporal Binding** | [combinedRoot_binds_timeline](EMLProof/Epoch.lean), [real_cell_forces_committed_active](EMLProof/Epoch.lean) | Inactivity authenticated by the committed epoch timeline (Design A+); supersedes the removed vacuous `temporal_binding` |
+| **Algorithm Isolation** | [combinedChildrenWith_bound](EMLProof/Epoch.lean), [binding_proof_consistent](EMLProof/BindingProof.lean) | Per-algorithm binding roots fold under each algorithm's own hash (D9); supersedes the removed vacuous `algorithm_isolation` |
 | **Inclusion Soundness** | [inclusion_soundness](EMLProof/NEML.lean) | Accepting canonical proof commits the leaf at the claimed log position (depth existential) |
 | **Non-Malleability** | [inclusion_proof_unique](EMLProof/NEML.lean) | At most one accepting canonical path per statement, modulo internal-node hash collision |
 | **Theorem 5** | [generalized_bridge_lemma](EMLProof/General/Duality.lean#L444) | Generalized Bridge Lemma |
@@ -233,7 +245,7 @@ To verify that the formalized state machine matches the production implementatio
    `node(left_sibling, right_accumulator)`.
 3. **Null Prefix Peaks**: The MMR peaks initialized during algorithm activation in `src/log.rs`
    (`null_prefix_peaks`) match `null_prefix_peaks` in the formal model.
-4. **NEML Security Layer**: The committed-epoch model in `NEML.lean` mirrors the production
+4. **Epoch Combinator Layer**: The committed-epoch model in `Epoch.lean` mirrors the production
    NEML crate: `nullPreimage`/`nullDigest` match `neml/src/hasher.rs`
    (`null() = hash(b"null")`); `committedActiveAt` matches `committed_active_at` in
    `neml/src/proof.rs`; the combined-root fold (`combinedRoot`/`combinedRootWith`) models
@@ -329,14 +341,32 @@ the findings of our formal red-team audit:
 The transcription is pinned to `topology.rs` test vectors by 11 `#guard` checks,
 so definitional drift breaks the build rather than passing silently.
 
+**Immutability (the permanent/ephemeral model).** No separate theorem is needed:
+`consistency_append_only` *is* the immutability guarantee. The spine decomposes a
+log into a frontier of perfect k-ary subtrees; a complete subtree's hash is
+**permanent** (it appears in every larger tree and the proofs bind only these),
+while the frontier-fold is **ephemeral** (recomputed per size, never proven
+against). "Append never mutates a permanent (bound) hash" is exactly
+`oldCells <+: newCells` read on the permanent hashes — the prefix the new tree
+extends is the old tree's committed structure, untouched. The dense log spine does
+no promotion (the inclusion skeleton has no zero-sibling step), so the only churn
+is the ephemeral frontier (SAD §4.2 / D17).
+
 **Trust base unchanged:** the four structural axioms below still bound the TCB.
 The k-ary soundness adds **no axioms** — its two collision-style escape hatches
 (`NodeHashCollision`, `NullAmbiguity`) appear as explicit *hypotheses* on the
 theorems, not as axioms.
 
-**Still UNVERIFIED** (honest scope): the coupling verifier;
-multi-algorithm/epoch interaction with the k-ary spine; and Rust-to-Lean
-transcription fidelity itself (mitigated, not eliminated, by the `#guard` pins).
+The **coupling verifier** is now discharged in [Epoch.lean](EMLProof/Epoch.lean)
+(`coupling_extract_sound`): an accepting coupling proof extracts a member root
+carrying the same bytes a committed algorithm bound, modulo a byte-hash collision,
+under the fixed-width contract.
+
+**Still UNVERIFIED** (honest scope): the full multi-algorithm/epoch interaction
+with the k-ary spine (the combinator soundness is proven over opaque digests, but
+its composition with the concrete k-ary roots is not yet end-to-end); and
+Rust-to-Lean transcription fidelity itself (mitigated, not eliminated, by the
+`#guard` pins).
 
 ---
 
