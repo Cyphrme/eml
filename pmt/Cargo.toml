@@ -1,14 +1,13 @@
 [package]
 name          = "pmt"
 version       = "0.1.0"
-description   = "Polymorphic Merkle Tree — the abstract kernel: proof spine, canonicalization, inclusion, and epoch construction"
+description   = "Compatibility facade over the re-layered spine + epoch crates (transitional; consumers are being re-pointed at spine/epoch directly)"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 
 [dependencies]
-# Zero external dependencies. Hash operations injected via the Hasher trait.
-
-[dev-dependencies]
-sha2 = "0.10"
+# The facade re-exports both halves of the split kernel.
+spine = { path = "../spine" }
+epoch = { path = "../epoch" }

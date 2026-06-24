@@ -1,150 +1,46 @@
-//! Inclusion proof structures, verification, and epoch construction.
+//! The epoch combinator's root construction and coupling verification.
 //!
-//! # Security boundary: skeleton-pinned, prefix-chained
+//! The structural spine ([`spine`]) folds a single tree to a member root. The
+//! epoch combinator lifts that across N algorithms over one shared data
+//! substrate: it adds the **activation timeline**, the **null-run-extents** (the
+//! one logical count), and the **binding root** — the atomic multi-tree
+//! commitment. None of this lives in the structural core.
 //!
-//! An inclusion proof path runs leaf → root and splits into two regions:
+//! # Combined (binding) root — the canonicalization fold over the member-root children
 //!
-//! - The **log skeleton** — the trailing steps along the fixed-arity proof spine. Their shape
-//!   (count, per-step position and sibling count) is fully determined by `(index, tree_size,
-//!   arity)` and is pinned exactly against [`crate::topology::inclusion_skeleton`]. Because
-//!   there is no per-node domain separation, second-preimage safety rests entirely on this
-//!   exactness: the verifier reconstructs the canonical topology and rejects any deviation.
-//! - The **subtree prefix** — the leading steps below the leaf's log position, in
-//!   application-defined (non-uniform) subtrees. These carry no topological claim and are verified
-//!   by hash chaining alone.
+//! The combined root is the structural metaroot of a multi-algorithm tree: the
+//! canonicalization fold ([`spine::nary_mr`] — collapse + promotion) applied one
+//! level up, over the per-algorithm **member roots** as children. It is the live
+//! primary root of both the append-only log and the mutable tree, and the head
+//! the per-algorithm member roots authenticate against.
 //!
-//! ## Canonical proof encoding
+//! Two facts make this a fold, not a bespoke hash:
 //!
-//! Every accepted step hashes: it must carry at least one sibling. A zero-sibling
-//! step would represent a *promoted* (lone-child) node, whose parent equals its
-//! child without any hashing — an inert no-op. Such steps are therefore rejected
-//! everywhere ([`reconstruct_inclusion_root`]), and honest provers omit them
-//! ([`crate::within_subtree_path`]). Omitting a promoted step never changes the
-//! computed root, so completeness is preserved; in exchange, a fixed
-//! `(leaf_hash, index, tree_size, root)` admits at most one accepting path
-//! (modulo hash collisions), which closes prepend/insert malleability. This
-//! concerns zero-*sibling* steps only; null-*valued* siblings from a null
-//! collapse are unaffected.
+//! - **Genesis-promotion is native.** A registry of one algorithm folds `nary_mr(H, [MR_0])`, whose
+//!   `len == 1` arm promotes to `MR_0` — the combined root *is* the member root because there is
+//!   one child, not because of a special case. There is no promotion predicate.
+//! - **Coverage is a sibling, present only when informative.** The committed epoch timeline decides
+//!   which cells are null projections, so a multi-algorithm structure must commit it. It enters the
+//!   fold as one extra child `C = H_i(serialize(timeline))`, appended **iff the timeline is
+//!   non-trivial** (some algorithm has anything other than the open-from-genesis epoch `[(0,
+//!   u64::MAX)]`). A trivial timeline carries no information beyond the member roots, so its child
+//!   is omitted; absence of the child *is* the trivial encoding (the same way same-value collapse
+//!   treats the null case). The timeline is independently bound by [`AuditPayload`], so omitting
+//!   the in-root copy on the trivial case loses no security.
+//!
+//! Activity at a position is read from the committed timeline — never inferred
+//! from a digest equaling the null constant — which renders the
+//! `leaf(b"null") == null()` collision inert without forbidding any payload.
 
-use crate::hasher::Hasher;
-use crate::mr::nary_mr;
-use crate::topology::{ARITY_RANGE, inclusion_skeleton};
-
-/// A single level in a Merkle proof path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProofStep {
-    /// Sibling digests at this level (excluding the path node).
-    /// Empty for promoted (lone-child) nodes.
-    pub siblings: Vec<Vec<u8>>,
-    /// Position of the path node among all children (0-indexed).
-    pub position: usize,
-}
-
-impl ProofStep {
-    /// Project this step's structural shape — position and sibling count —
-    /// as a [`crate::topology::SkeletonStep`]. Used by
-    /// [`verify_inclusion_path_structure`] to compare against the canonical
-    /// skeleton without open-coding the field correspondence.
-    #[must_use]
-    pub fn shape(&self) -> crate::topology::SkeletonStep {
-        crate::topology::SkeletonStep {
-            position: self.position,
-            sibling_count: self.siblings.len(),
-        }
-    }
-}
-
-/// Inclusion proof: path from a leaf to the root.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InclusionProof {
-    /// Path steps from leaf to root.
-    pub path: Vec<ProofStep>,
-}
-
-/// Timing-safe comparison of two byte slices.
-#[inline]
-pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut result = 0;
-    for (&x, &y) in a.iter().zip(b.iter()) {
-        result |= std::hint::black_box(x) ^ std::hint::black_box(y);
-    }
-    std::hint::black_box(result) == 0
-}
-
-/// Verify an inclusion proof.
-///
-/// Returns `true` if the proof demonstrates that `leaf_hash` is the leaf at
-/// `index` in a tree of size `tree_size` and arity `arity` whose root is
-/// `root`.
-///
-/// # Trust contract (security-critical)
-///
-/// `index`, `tree_size`, `arity`, and `root` are **trusted parameters**.
-/// Soundness comes from the verifier reconstructing the exact tree topology
-/// from `(tree_size, arity, index)` and rejecting any deviation; the proof
-/// supplies only sibling digests. These parameters MUST therefore be obtained
-/// from an authenticated source — a signed Tree Head (STH) or trusted
-/// checkpoint — and never from the proof itself or any caller-untrusted input.
-/// If `tree_size`/`index` are attacker-controlled the guarantee is vacuous: the
-/// attacker picks the topology the verifier checks against, and an arbitrary
-/// `leaf_hash` can be made to "verify" against a matching forged `root`.
-///
-/// A `true` result binds `leaf_hash` to log position `index` only. The cell's
-/// payload and activity are not asserted here — activity is read from the
-/// committed epoch timeline, never inferred from a digest.
-#[must_use]
-pub fn verify_inclusion(
-    hasher: &dyn Hasher,
-    leaf_hash: &[u8],
-    index: u64,
-    tree_size: u64,
-    arity: u64,
-    path: &[ProofStep],
-    root: &[u8],
-) -> bool {
-    reconstruct_inclusion_root(hasher, leaf_hash, index, tree_size, arity, path)
-        .is_some_and(|computed| constant_time_eq(&computed, root))
-}
-
-// ============================================================================
-// Combined root — the canonicalization fold over the member-root children
-// ============================================================================
-//
-// The combined root is the structural metaroot of a multi-algorithm tree: the
-// canonicalization fold ([`nary_mr`] — collapse + promotion) applied one level
-// up, over the per-algorithm **member roots** as children. It is the live
-// primary root of both the append-only log and the mutable tree, and the head
-// the per-algorithm member roots authenticate against.
-//
-// Two facts make this a fold, not a bespoke hash:
-//
-// - **Genesis-promotion is native.** A registry of one algorithm folds `nary_mr(H, [MR_0])`, whose
-//   `len == 1` arm promotes to `MR_0` — the combined root *is* the member root because there is one
-//   child, not because of a special case. There is no promotion predicate.
-// - **Coverage is a sibling, present only when informative.** The committed epoch timeline decides
-//   which cells are null projections, so a multi-algorithm structure must commit it. It enters the
-//   fold as one extra child `C = H_i(serialize(timeline))`, appended **iff the timeline is
-//   non-trivial** (some algorithm has anything other than the open-from-genesis epoch `[(0,
-//   u64::MAX)]`). A trivial timeline carries no information beyond the member roots, so its child
-//   is omitted; absence of the child *is* the trivial encoding (the same way same-value collapse
-//   treats the null case). The timeline is independently bound by [`AuditPayload`], so omitting the
-//   in-root copy on the trivial case loses no security.
-//
-// Activity at a position is read from the committed timeline — never inferred
-// from a digest equaling the null constant — which renders the
-// `leaf(b"null") == null()` collision inert without forbidding any payload.
+use spine::{ARITY_RANGE, Hasher, ProofStep, constant_time_eq, nary_mr, verify_inclusion};
 
 /// One null collapse run of a single algorithm: the algorithm projects to the
 /// null constant across the aligned k-ary block `[left, left + k^height)`.
 ///
 /// This is the **null subset** of the general collapse run-extents — the only
 /// per-algorithm-divergent collapse, hence the minimal committed activation
-/// information (D12 REVISED / SAD §3.1). Non-null equal-value runs are mirrored
-/// across every algorithm's tree and recovered from the shared data, so they are
-/// never tracked here.
+/// information. Non-null equal-value runs are mirrored across every algorithm's
+/// tree and recovered from the shared data, so they are never tracked here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NullRun {
     /// First leaf index of the null block.
@@ -157,15 +53,15 @@ pub struct NullRun {
 /// Decompose algorithm `eps`'s **inactive** positions in `[0, tree_size)` into
 /// the canonical null collapse runs: the maximal aligned `k`-ary blocks the
 /// tree folds to null, greatest-block-first within each contiguous inactive
-/// span (the same greedy decomposition [`crate::topology::frontier_for_size`]
-/// applies to the whole tree, here applied to each inactive gap).
+/// span (the same greedy decomposition [`spine::frontier_for_size`] applies to
+/// the whole tree, here applied to each inactive gap).
 ///
 /// This is the committed activation in geometric form. It is a *canonical
 /// function of the active intervals* `eps` and `(tree_size, arity)`: the union
 /// of the returned block spans is exactly the inactive position set, so the
 /// active set — and therefore `eps` in canonical form — is recoverable as the
-/// complement (`null_runs_active_set` is the inverse). Committing these runs
-/// commits the identical activity the epoch intervals carry.
+/// complement. Committing these runs commits the identical activity the epoch
+/// intervals carry.
 #[must_use]
 pub fn null_runs_for_alg(eps: &[(u64, u64)], tree_size: u64, arity: u64) -> Vec<NullRun> {
     // Collect the maximal contiguous inactive intervals (the complement of the
@@ -214,7 +110,7 @@ pub fn null_runs_for_alg(eps: &[(u64, u64)], tree_size: u64, arity: u64) -> Vec<
 /// committed epoch intervals: `(alg_id, runs)` for every registered algorithm,
 /// sorted by algorithm ID, omitting algorithms with no null run (fully active
 /// over `[0, tree_size)`). This is the activation committed in **every** binding
-/// root; the redundancy physically binds the trees (D12).
+/// root; the redundancy physically binds the trees.
 #[must_use]
 pub fn all_null_runs(
     alg_epochs: &[(u64, Vec<(u64, u64)>)],
@@ -284,7 +180,7 @@ pub fn serialize_null_runs(
     buf
 }
 
-/// The combined root: the canonicalization fold ([`nary_mr`]) over the
+/// The combined root: the canonicalization fold ([`spine::nary_mr`]) over the
 /// per-algorithm member roots as children, under one algorithm's own hash `H`.
 ///
 /// The children are the member roots in `member_roots` order (the caller pins
@@ -292,27 +188,25 @@ pub fn serialize_null_runs(
 /// `H(serialize_null_runs(alg_epochs, tree_size, arity))` committing **all
 /// algorithms' null-run-extents**, present **iff** the activation is non-trivial
 /// ([`null_runs_are_trivial`] — some algorithm has a null run). They form the
-/// children of one [`nary_mr`] node, so collapse + promotion apply exactly as
-/// they do everywhere else:
+/// children of one [`spine::nary_mr`] node, so collapse + promotion apply
+/// exactly as they do everywhere else:
 ///
-/// - one child (single algorithm, fully active) ⇒ the combined root **is** the member root
-///   (genesis promotion, native — no predicate);
+/// - one child (single algorithm, fully active) ⇒ the combined root **is** the member root (genesis
+///   promotion, native — no predicate);
 /// - many children ⇒ `nary_mr(H, children)`.
 ///
-/// The coverage child is the **activation commitment** (D12 REVISED): the
-/// null-valued run-extents are the only per-tree-divergent collapse, so they are
-/// the minimal information needed to reconstruct the multi-tree structure, and
-/// **every** binding root commits **every** algorithm's null runs — that
-/// redundancy is what physically binds the trees. It replaces the old
-/// `alg_epochs` timeline serialization; the activity an inactivity/coupling proof
-/// reads is grounded in these committed runs (the runs cover exactly the inactive
-/// positions, so the active set is their complement — see
-/// `null_runs_cover_exactly_the_inactive_positions`).
+/// The coverage child is the **activation commitment**: the null-valued
+/// run-extents are the only per-tree-divergent collapse, so they are the minimal
+/// information needed to reconstruct the multi-tree structure, and **every**
+/// binding root commits **every** algorithm's null runs — that redundancy is
+/// what physically binds the trees. The activity an inactivity/coupling proof
+/// reads is grounded in these committed runs (the runs cover exactly the
+/// inactive positions, so the active set is their complement).
 ///
 /// `member_roots` carries the *raw* per-algorithm roots as opaque digests; `H`
 /// is only ever applied to those digests (and the null-run serialization), never
 /// to another algorithm's security material — so each algorithm's combined root
-/// rests solely on its own hash (D9, no security mixing).
+/// rests solely on its own hash (no security mixing).
 #[must_use]
 pub fn combined_root(
     hasher: &dyn Hasher,
@@ -529,8 +423,13 @@ impl CouplingProof {
         // recomputed root will not match — so the activity the proof reads is
         // grounded in the committed runs. Genesis promotion is native: a single
         // member root under a trivial activation folds to itself.
-        let computed =
-            combined_root(hasher, &self.active_roots, &self.alg_epochs, tree_size, arity);
+        let computed = combined_root(
+            hasher,
+            &self.active_roots,
+            &self.alg_epochs,
+            tree_size,
+            arity,
+        );
         constant_time_eq(&computed, expected_combined_root)
     }
 
@@ -565,117 +464,6 @@ impl CouplingProof {
             .find(|&&(id, _)| id == target_alg_id)
             .map(|(_, r)| r.clone())
     }
-}
-
-/// Validate that the trailing steps of an inclusion proof path match the
-/// log-spine skeleton pinned by `(index, tree_size, k)`.
-///
-/// The skeleton — its length and, per step, the path node's position and sibling
-/// count — is derived once by [`inclusion_skeleton`], the single authority on log
-/// topology shared with proof generation. The trailing `skeleton.len()` steps are
-/// checked field-by-field against it; the leading `path.len() - skeleton.len()`
-/// steps are the subtree portion and carry no topological claim here (they are
-/// verified by hash chaining in [`reconstruct_inclusion_root`]).
-#[must_use]
-pub fn verify_inclusion_path_structure(
-    k: usize,
-    index: u64,
-    tree_size: u64,
-    path: &[ProofStep],
-) -> bool {
-    let skeleton = match inclusion_skeleton(k as u64, tree_size, index) {
-        Some(s) => s,
-        None => return false,
-    };
-    if path.len() < skeleton.len() {
-        return false;
-    }
-    let d = path.len() - skeleton.len();
-    path[d..]
-        .iter()
-        .zip(skeleton.iter())
-        .all(|(step, shape)| step.shape() == *shape)
-}
-
-/// Reconstruct the raw root from an inclusion proof path.
-///
-/// Building block for [`verify_inclusion`]; it computes a root but does not
-/// compare it to a trusted one. Callers must hold to the same trust contract:
-/// `index`, `tree_size`, and `arity` must be authenticated (see
-/// [`verify_inclusion`]), and the returned root is only meaningful when checked
-/// against an authenticated root.
-#[must_use]
-pub fn reconstruct_inclusion_root(
-    hasher: &dyn Hasher,
-    leaf_hash: &[u8],
-    index: u64,
-    tree_size: u64,
-    arity: u64,
-    path: &[ProofStep],
-) -> Option<Vec<u8>> {
-    let digest_len = hasher.empty().len();
-    if digest_len == 0 || digest_len > 64 {
-        return None;
-    }
-    if leaf_hash.len() != digest_len {
-        return None;
-    }
-    if !ARITY_RANGE.contains(&arity) {
-        return None;
-    }
-    if tree_size == 0 {
-        return None;
-    }
-    if index >= tree_size {
-        return None;
-    }
-    if path.len() > 256 {
-        return None;
-    }
-
-    if !verify_inclusion_path_structure(arity as usize, index, tree_size, path) {
-        return None;
-    }
-
-    let mut current = leaf_hash.to_vec();
-
-    for step in path {
-        if step.siblings.len() > 256 {
-            return None;
-        }
-        for sib in &step.siblings {
-            if sib.len() != digest_len {
-                return None;
-            }
-        }
-        if step.siblings.is_empty() {
-            // Canonical proof encoding: a zero-sibling step would be a promoted
-            // (lone-child) node, whose parent equals the child without hashing.
-            // Such steps are inert no-ops, so honest provers omit them; rejecting
-            // them here makes the accepting path unique for a fixed
-            // (leaf_hash, index, tree_size, root). See the module docs.
-            return None;
-        }
-        if step.position > step.siblings.len() {
-            return None;
-        }
-
-        // Reconstruct the parent: insert current at position among siblings
-        let mut children = Vec::with_capacity(step.siblings.len() + 1);
-        for (i, sib) in step.siblings.iter().enumerate() {
-            if i == step.position {
-                children.push(current.as_slice());
-            }
-            children.push(sib.as_slice());
-        }
-        if step.position == step.siblings.len() {
-            children.push(current.as_slice());
-        }
-
-        current = nary_mr(hasher, &children);
-    }
-
-    Some(current)
 }
 
 /// Helper wrapper demonstrating inclusion verification with decoupled coupling proofs.
@@ -725,9 +513,7 @@ pub fn verify_inclusion_with_coupling(
         None => return false,
     }
 
-    verify_inclusion(
-        hasher, leaf_hash, index, tree_size, arity, path, &raw_root,
-    )
+    verify_inclusion(hasher, leaf_hash, index, tree_size, arity, path, &raw_root)
 }
 
 /// Verify an inactivity claim for a leaf at `index` using a coupling proof.
@@ -798,7 +584,7 @@ pub fn verify_inactivity_with_coupling(
 /// The raw payload of an audit verification checkpoint.
 ///
 /// This is the agnostic attestation payload: an out-of-band signer may sign
-/// this struct to produce a checkpoint attestation, but the kernel never
+/// this struct to produce a checkpoint attestation, but the combinator never
 /// interprets, signs, or reaches consensus over it — the type names no signing
 /// scheme or envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -862,7 +648,11 @@ mod tests {
         // Many fully-active algorithms are still trivial — informativeness, not
         // registry cardinality.
         assert!(null_runs_are_trivial(
-            &[(0, vec![(0, MAX)]), (1, vec![(0, MAX)]), (5, vec![(0, MAX)])],
+            &[
+                (0, vec![(0, MAX)]),
+                (1, vec![(0, MAX)]),
+                (5, vec![(0, MAX)])
+            ],
             8,
             2
         ));
@@ -992,22 +782,22 @@ mod tests {
         assert!(committed_active_algs(&timeline, 0).is_empty());
     }
 
-    /// The soundness guard (architect): the committed null runs ARE the activity
-    /// source. Their span-union must equal the inactive position set exactly, so
-    /// the active set — hence the epochs in canonical form — is recoverable as
-    /// the complement. Committing the null runs commits the identical activity
-    /// the intervals carry. Checked exhaustively over many timelines and arities.
+    /// The soundness guard: the committed null runs ARE the activity source.
+    /// Their span-union must equal the inactive position set exactly, so the
+    /// active set — hence the epochs in canonical form — is recoverable as the
+    /// complement. Committing the null runs commits the identical activity the
+    /// intervals carry. Checked exhaustively over many timelines and arities.
     #[test]
     fn null_runs_cover_exactly_the_inactive_positions() {
         let active_at = |eps: &[(u64, u64)], i: u64| eps.iter().any(|&(s, e)| s <= i && i < e);
         let cases: Vec<Vec<(u64, u64)>> = vec![
-            vec![(0, MAX)],            // fully active
-            vec![(0, 0)],              // fully inactive (genesis frozen)
-            vec![(3, MAX)],            // pre-activation prefix
-            vec![(0, 5)],              // deactivated at 5
-            vec![(0, 3), (5, MAX)],    // gap-and-resume
+            vec![(0, MAX)],               // fully active
+            vec![(0, 0)],                 // fully inactive (genesis frozen)
+            vec![(3, MAX)],               // pre-activation prefix
+            vec![(0, 5)],                 // deactivated at 5
+            vec![(0, 3), (5, MAX)],       // gap-and-resume
             vec![(0, 1), (2, 3), (4, 5)], // alternating
-            vec![(2, 4), (7, 9)],      // two interior active runs
+            vec![(2, 4), (7, 9)],         // two interior active runs
         ];
         for eps in &cases {
             for &tree_size in &[0u64, 1, 2, 3, 4, 7, 8, 9, 16, 27] {
@@ -1030,8 +820,8 @@ mod tests {
                         let active = active_at(eps, i);
                         assert_eq!(
                             covered[i as usize], !active,
-                            "position {i} (eps={eps:?} size={tree_size} k={k}): \
-                             null-run cover {} disagrees with inactive {}",
+                            "position {i} (eps={eps:?} size={tree_size} k={k}): null-run cover {} \
+                             disagrees with inactive {}",
                             covered[i as usize], !active
                         );
                     }

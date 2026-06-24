@@ -1,0 +1,14 @@
+[package]
+name          = "spine"
+version       = "0.1.0"
+description   = "Merkle Spine — the structural core: canonicalization (collapse + promotion), the proof spine, inclusion and leaf proofs, and the general structural Seal. Epoch-free."
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+
+[dependencies]
+# Zero external dependencies. Hash operations injected via the Hasher trait.
+
+[dev-dependencies]
+sha2 = "0.10"

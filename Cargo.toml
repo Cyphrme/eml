@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "spine",
+    "epoch",
     "pmt",
     "eml",
     "cyphr-log",

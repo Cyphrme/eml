@@ -41,8 +41,8 @@
 //! A binding proof proves **consistency given trusted binding roots**. The
 //! binding roots `BR_i` are *trusted inputs* — the verifier never learns their
 //! origin from the proof. (A consumer establishes that trust out of band, via an
-//! optional attestation carried on the opaque metadata channel; the kernel is
-//! agnostic to how.) Given trusted `BR_i, BR_j, …`, the verifier recomputes
+//! optional attestation carried on the opaque metadata channel; the combinator
+//! is agnostic to how.) Given trusted `BR_i, BR_j, …`, the verifier recomputes
 //! `H_i(preimage) == BR_i` for **every** algorithm over the **same** member
 //! roots and timeline. If all check, the algorithms provably commit to the same
 //! structure: `BR_i ≘ BR_j`. A client must support every algorithm involved.
@@ -50,8 +50,9 @@
 //! Verification reads **digests only** — the binding roots and the member roots
 //! are all hashes; no leaf payloads or proof paths are consulted.
 
-use crate::hasher::Hasher;
-use crate::proof::{combined_root, constant_time_eq, validate_committed_epochs};
+use spine::{Hasher, constant_time_eq};
+
+use crate::root::{combined_root, validate_committed_epochs};
 
 /// A trusted per-algorithm binding root presented to a binding proof.
 ///
@@ -126,7 +127,7 @@ impl BindingProof {
     /// `trusted` carries **trusted** binding roots: the verifier proves
     /// consistency *given* them, never their origin. Supplying an unauthenticated
     /// `BR_i` makes the guarantee vacuous, exactly as for a forged `root` in
-    /// [`crate::proof::verify_inclusion`].
+    /// [`spine::verify_inclusion`].
     ///
     /// # Well-formedness
     ///
@@ -172,8 +173,13 @@ impl BindingProof {
         // to the fold, so a promoted binding root reconstructs with no special
         // branch (the omission bug dissolves).
         trusted.iter().all(|t| {
-            let computed =
-                combined_root(t.hasher, &self.member_roots, &self.alg_epochs, tree_size, arity);
+            let computed = combined_root(
+                t.hasher,
+                &self.member_roots,
+                &self.alg_epochs,
+                tree_size,
+                arity,
+            );
             constant_time_eq(&computed, t.root)
         })
     }
