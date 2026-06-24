@@ -98,9 +98,9 @@ structure SnapshotValid (L k : Nat) (cells : List Digest)
 theorem snapshot_proof_sound (L k : Nat) (cells : List Digest)
     (root : Digest) (claims : List SnapshotClaim)
     (hvalid : SnapshotValid L k cells root claims)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     ∀ c ∈ claims,
-      c.leaf = cells.getD c.index emptyHash ∨ NodeHashCollision ∨ NullAmbiguity L := by
+      c.leaf = cells.getD c.index emptyHash ∨ NodeHashCollision ∨ CollapseAmbiguity L := by
   intro c hc
   exact leaf_proof_flat_sound L k cells c.leaf root c.index c.path
     (hvalid.claimsVerify c hc) hvalid.headBinds (hvalid.flatShape c hc) hH hN
@@ -116,7 +116,7 @@ theorem snapshot_proof_forged_leaf_rejected (L k : Nat) (cells : List Digest)
     (hroot : root = karyRoot L k cells)
     (hflat : ∀ skel, inclusionSkeleton k cells.length c.index = some skel →
       skel.length = c.path.length)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L)
     (hforged : c.leaf ≠ cells.getD c.index emptyHash) :
     ¬ ClaimVerifies L k cells root c := by
   exact leaf_proof_forged_rejected L k cells c.leaf root c.index c.path

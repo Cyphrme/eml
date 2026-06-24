@@ -59,27 +59,22 @@ namespace NEML
 /-! ## Layer 0 — `eval` of a node is a function of the child digest list -/
 
 /-- The node-combining function: how a node's digest is built from its already-
-    evaluated children. Mirrors the node arms of `eval` exactly. -/
+    evaluated children. Mirrors the node arms of `eval` exactly — including the
+    **general same-value collapse** (a node all of whose children carry one
+    value `v` folds to `v`; the all-null case is its dominant instance). -/
 noncomputable def combine (L : Nat) : List Digest → Digest
   | [] => emptyHash
   | [d] => d
-  | ds =>
-      if ds.all (· == nullDigest L) then nullDigest L
-      else nodeHash ds
+  | a :: b :: zs =>
+      if (a :: b :: zs).all (· == a) then a
+      else nodeHash (a :: b :: zs)
 
-/-- `combine` on a list of arity ≥ 2 takes its guarded arm. -/
+/-- `combine` on a list of arity ≥ 2 takes its guarded same-value-collapse arm. -/
 theorem combine_cons2 (L : Nat) (x y : Digest) (zs : List Digest) :
     combine L (x :: y :: zs) =
-      if (x :: y :: zs).all (· == nullDigest L) then nullDigest L
+      if (x :: y :: zs).all (· == x) then x
       else nodeHash (x :: y :: zs) := by
   rfl
-
-/-- `List.all (· == nullDigest L)` is the boolean reflection of `evalAllNull`. -/
-theorem all_map_eq_evalAllNull (L : Nat) (children : List (NaryTree (List UInt8))) :
-    (children.map (eval L)).all (· == nullDigest L) = evalAllNull L children := by
-  induction children with
-  | nil => simp [evalAllNull]
-  | cons c cs ih => simp only [List.map_cons, List.all_cons, evalAllNull, ih]
 
 /-- **`eval` factors through `combine`.** A node's digest depends on its children
     only through their evaluated digests: `eval (node cs) = combine (cs.map eval)`.
@@ -92,22 +87,27 @@ theorem eval_node_combine (L : Nat) (children : List (NaryTree (List UInt8))) :
   | [] => rw [eval_empty]; rfl
   | [c] => rw [eval_singleton_node]; rfl
   | a :: b :: rest =>
-    have hguard : ((a :: b :: rest).map (eval L)).all (· == nullDigest L)
-        = evalAllNull L (a :: b :: rest) := all_map_eq_evalAllNull L _
-    by_cases hnull : evalAllNull L (a :: b :: rest) = true
-    · rw [eval_flat_null_node L _ (by simp) ((evalAllNull_eq_true_iff L _).mp hnull)]
-      rw [show (a :: b :: rest).map (eval L)
-            = eval L a :: eval L b :: rest.map (eval L) from by simp]
-      rw [combine_cons2, if_pos]
-      rw [← List.map_cons, ← List.map_cons, hguard]; exact hnull
-    · rw [eval_node_hash L _ (by simp) (by
-        by_contra hc
-        simp only [not_exists, not_and, not_not] at hc
-        exact hnull ((evalAllNull_eq_true_iff L _).mpr (fun t ht => hc t ht)))]
-      rw [show (a :: b :: rest).map (eval L)
-            = eval L a :: eval L b :: rest.map (eval L) from by simp]
-      rw [combine_cons2, if_neg]
-      rw [← List.map_cons, ← List.map_cons, hguard]; exact hnull
+    have hmap : (a :: b :: rest).map (eval L)
+        = eval L a :: eval L b :: rest.map (eval L) := by simp
+    by_cases hcol : ∀ t ∈ (a :: b :: rest), eval L t = eval L a
+    · -- same-value collapse fires (value = eval a)
+      rw [eval_collapse_node L _ (by simp) (fun t ht => by rw [hcol t ht])]
+      rw [hmap, combine_cons2, if_pos]
+      rw [← hmap, List.all_eq_true]
+      intro d hd
+      rw [List.mem_map] at hd
+      obtain ⟨t, ht, rfl⟩ := hd
+      simpa using hcol t ht
+    · -- some two children differ ⇒ hash
+      push_neg at hcol
+      obtain ⟨t, ht, htne⟩ := hcol
+      rw [eval_node_hash L _ (by simp) ⟨t, ht, a, by simp, htne⟩]
+      rw [hmap, combine_cons2, if_neg]
+      rw [← hmap, List.all_eq_true]
+      push_neg
+      refine ⟨eval L t, ?_, ?_⟩
+      · rw [List.mem_map]; exact ⟨t, ht, rfl⟩
+      · simpa using htne
 
 /-! ## Layer 1 — promotion as a terminating rewrite system -/
 
@@ -286,69 +286,73 @@ theorem normalize_canonical_eq {t : NaryTree (List UInt8)} (h : Canonical t) :
 
 /-! ## Layer 3 — canonical injectivity (the C-CANONICAL-UNIQUE core)
 
-`eval` is **injective on the active canonical domain** modulo a hash collision.
+`eval` is **injective on the collapse-free canonical domain** modulo a hash
+collision.
 
-The "active" restriction (`Active`: every subtree evaluates to a non-null digest)
-is the precise dividing line of the two-primitive asymmetry (INV-AUTH-BOUNDARY): a
-null subtree is a *collapsed* region whose run-extent is the committed metadata
-(the epoch timeline, bound into the binding root by `combinedRoot_binds_timeline`,
-D12). Over the non-collapsed structure, **promotion commits nothing** and the
-encoding is injective on its own; over collapsed regions the committed extent
-disambiguates. So the generic injective-encoding statement factors exactly as the
-design predicts: this theorem is the promotion half, `combinedRoot_binds_timeline`
-the collapse half. -/
+The dividing line of the two-primitive asymmetry (INV-AUTH-BOUNDARY) is
+`NoCollapse`: no node — anywhere — has arity ≥ 2 with every child of one value.
+A node whose children are all equal is a *collapse redex*: it folds to that value
+and loses its multiplicity, so the **committed run-extent** disambiguates it
+(SAD §3.1; for null runs the null-run-extent bound into the binding root, for
+non-null runs the data-mirrored extent). Over the collapse-free structure,
+**promotion commits nothing and collapse never fires**, so the encoding is
+injective on its own; over collapsed regions the committed extent disambiguates.
+So the generic injective-encoding statement factors exactly as the design
+predicts: this theorem is the collapse-free half (which subsumes the old
+all-non-null "active" half — the all-null collapse is one instance of the general
+collapse this domain excludes), and the committed extent is the collapse half.
 
-/-- A tree is **active** when it — and recursively every subtree — evaluates to a
-    non-null digest. Active subtrees are the non-collapsed structure; null subtrees
-    are the collapsed regions carried by the committed extent. -/
-def Active (L : Nat) : NaryTree (List UInt8) → Prop
-  | NaryTree.leaf d => leafHash d ≠ nullDigest L
+`Active` (every subtree non-null) is the dominant instance of `NoCollapse`
+relevant to a log's null gaps; the general theorem is stated over `NoCollapse`. -/
+
+/-- A node is a **collapse redex** when it has arity ≥ 2 and every child
+    evaluates to one value — the same-value fold fires. -/
+def IsCollapseRedex (L : Nat) (children : List (NaryTree (List UInt8))) : Prop :=
+  2 ≤ children.length ∧ ∃ v, ∀ c ∈ children, eval L c = v
+
+/-- A tree is **collapse-free** when no node anywhere is a collapse redex. This is
+    the precise non-collapsed canonical domain: promotion is already excluded by
+    `Canonical`, and `NoCollapse` excludes the other primitive. -/
+def NoCollapse (L : Nat) : NaryTree (List UInt8) → Prop
+  | NaryTree.leaf _ => True
   | NaryTree.node children =>
-      eval L (NaryTree.node children) ≠ nullDigest L ∧ ∀ c ∈ children, Active L c
+      ¬ IsCollapseRedex L children ∧ ∀ c ∈ children, NoCollapse L c
 
-/-- Characterization of `Active` on a node. -/
-@[simp] theorem Active_node (L : Nat) (children : List (NaryTree (List UInt8))) :
-    Active L (NaryTree.node children) ↔
-      eval L (NaryTree.node children) ≠ nullDigest L ∧ ∀ c ∈ children, Active L c := by
-  rw [Active]
+/-- Characterization of `NoCollapse` on a node. -/
+@[simp] theorem NoCollapse_node (L : Nat) (children : List (NaryTree (List UInt8))) :
+    NoCollapse L (NaryTree.node children) ↔
+      ¬ IsCollapseRedex L children ∧ ∀ c ∈ children, NoCollapse L c := by
+  rw [NoCollapse]
 
-/-- A canonical, active node does not evaluate to the null digest. -/
-theorem Active.not_null {L : Nat} {children : List (NaryTree (List UInt8))}
-    (h : Active L (NaryTree.node children)) :
-    eval L (NaryTree.node children) ≠ nullDigest L := (Active_node L children |>.mp h).1
+/-- A collapse-free node is not a collapse redex. -/
+theorem NoCollapse.not_redex {L : Nat} {children : List (NaryTree (List UInt8))}
+    (h : NoCollapse L (NaryTree.node children)) :
+    ¬ IsCollapseRedex L children := (NoCollapse_node L children |>.mp h).1
 
-/-- Children of an active node are active. -/
-theorem Active.children {L : Nat} {children : List (NaryTree (List UInt8))}
-    (h : Active L (NaryTree.node children)) : ∀ c ∈ children, Active L c :=
-  (Active_node L children |>.mp h).2
+/-- Children of a collapse-free node are collapse-free. -/
+theorem NoCollapse.children {L : Nat} {children : List (NaryTree (List UInt8))}
+    (h : NoCollapse L (NaryTree.node children)) : ∀ c ∈ children, NoCollapse L c :=
+  (NoCollapse_node L children |>.mp h).2
 
-/-- **Canonical-active node evaluation has two forms.** A canonical (arity ≠ 1),
-    active (not all-null) node evaluates either to `emptyHash` (when empty) or to
-    `nodeHash` of its evaluated children (when non-empty). The all-null collapse
-    branch is excluded by activeness — this is exactly where the two-primitive
+/-- **Canonical, collapse-free node evaluation has two forms.** A canonical
+    (arity ≠ 1), collapse-free node evaluates either to `emptyHash` (when empty)
+    or to `nodeHash` of its evaluated children (when non-empty). The collapse
+    branch is excluded by `NoCollapse` — exactly where the two-primitive
     asymmetry lands: collapse is delegated to the committed extent. -/
 theorem node_combine_form (L : Nat) (cs : List (NaryTree (List UInt8)))
-    (hcan : Canonical (NaryTree.node cs)) (hact : Active L (NaryTree.node cs)) :
+    (hcan : Canonical (NaryTree.node cs)) (hnc : NoCollapse L (NaryTree.node cs)) :
     (cs = [] ∧ eval L (NaryTree.node cs) = emptyHash) ∨
     (cs ≠ [] ∧ eval L (NaryTree.node cs) = nodeHash (cs.map (eval L))) := by
   rcases cs with _ | ⟨a, _ | ⟨b, rest⟩⟩
   · exact Or.inl ⟨rfl, by rw [eval_empty]⟩
   · exact absurd hcan.length_ne (by simp)
   · refine Or.inr ⟨by simp, ?_⟩
-    rw [eval_node_combine]
-    have hguard : ((a :: b :: rest).map (eval L)).all (· == nullDigest L) = false := by
-      by_contra hg
-      simp only [Bool.not_eq_false] at hg
-      apply hact.not_null
-      rw [eval_node_combine,
-        show (a :: b :: rest).map (eval L)
-          = eval L a :: eval L b :: rest.map (eval L) from by simp,
-        combine_cons2, if_pos]
-      rw [← List.map_cons, ← List.map_cons]; exact hg
-    have hcons : (a :: b :: rest).map (eval L)
-        = eval L a :: eval L b :: rest.map (eval L) := by simp
-    rw [hcons] at hguard
-    rw [hcons, combine_cons2, if_neg (by rw [hguard]; simp)]
+    -- Not a collapse redex ⇒ two children differ ⇒ the hashing arm fires.
+    have hne : ∃ t ∈ (a :: b :: rest), ∃ u ∈ (a :: b :: rest), eval L t ≠ eval L u := by
+      by_contra hc
+      push_neg at hc
+      exact hnc.not_redex ⟨by simp, eval L a, fun c hc' => hc c hc' a (by simp)⟩
+    exact eval_node_hash L _ (by simp) hne
 
 /-- **Pointwise child recursion.** If two child lists have equal evaluated-digest
     lists and each `as`-element is injective-on-eval against an arbitrary tree
@@ -358,10 +362,10 @@ theorem node_combine_form (L : Nat) (cs : List (NaryTree (List UInt8)))
 theorem map_eval_inj (L : Nat) :
     ∀ (as bs : List (NaryTree (List UInt8))),
       (∀ a ∈ as, ∀ (t₂ : NaryTree (List UInt8)),
-        Canonical a → Canonical t₂ → Active L a → Active L t₂ →
+        Canonical a → Canonical t₂ → NoCollapse L a → NoCollapse L t₂ →
         eval L a = eval L t₂ → a = t₂ ∨ HashCollision ∨ NodeHashCollision) →
       (∀ a ∈ as, Canonical a) → (∀ b ∈ bs, Canonical b) →
-      (∀ a ∈ as, Active L a) → (∀ b ∈ bs, Active L b) →
+      (∀ a ∈ as, NoCollapse L a) → (∀ b ∈ bs, NoCollapse L b) →
       as.map (eval L) = bs.map (eval L) →
       as = bs ∨ HashCollision ∨ NodeHashCollision := by
   intro as
@@ -395,21 +399,25 @@ theorem map_eval_inj (L : Nat) :
         · exact Or.inr hcol
       · exact Or.inr hcol
 
-/-- **Canonical injectivity (C-CANONICAL-UNIQUE core).** Over the active canonical
-    domain, distinct logical structures produce distinct binding roots unless `H`
-    collides. Under the domain-separation facts a tagged hasher provides (leaf
-    preimages disjoint from node/empty preimages — the same collision-resistance-
-    style hypotheses `expand_compress` already takes), `eval`-equal active canonical
-    trees are equal or exhibit an explicit `HashCollision` / `NodeHashCollision`.
+/-- **Canonical injectivity (C-CANONICAL-UNIQUE core).** Over the collapse-free
+    canonical domain, distinct logical structures produce distinct binding roots
+    unless `H` collides. Under the domain-separation facts a tagged hasher
+    provides (leaf preimages disjoint from node/empty preimages — the same
+    collision-resistance-style hypotheses `expand_compress` already takes),
+    `eval`-equal canonical collapse-free trees are equal or exhibit an explicit
+    `HashCollision` / `NodeHashCollision`.
 
-    Generic and PMT-level: any arity, any structure — not the k = 2 cyphr-log
-    instance. -/
+    This is the GENERAL collapse statement: `NoCollapse` excludes every same-value
+    fold (the all-null collapse is one instance), so distinct equal-entry runs —
+    which a collapse would conflate — are outside the domain and disambiguated by
+    the committed run-extent (SAD §3.1). Generic and PMT-level: any arity, any
+    structure — not the k = 2 cyphr-log instance. -/
 theorem canonical_eval_injective (L : Nat)
     (leaf_node_sep : ∀ (d : List UInt8) (ds : List Digest), leafHash d ≠ nodeHash ds)
     (leaf_empty_sep : ∀ (d : List UInt8), leafHash d ≠ emptyHash)
     (node_empty_sep : ∀ (ds : List Digest), nodeHash ds ≠ emptyHash) :
     ∀ (t₁ t₂ : NaryTree (List UInt8)),
-      Canonical t₁ → Canonical t₂ → Active L t₁ → Active L t₂ →
+      Canonical t₁ → Canonical t₂ → NoCollapse L t₁ → NoCollapse L t₂ →
       eval L t₁ = eval L t₂ →
       t₁ = t₂ ∨ HashCollision ∨ NodeHashCollision := by
   -- A leaf is `H d`; collision-resistance turns equal leaf hashes into equal
@@ -480,20 +488,22 @@ theorem canonical_eval_injective (L : Nat)
     * **uniqueness of canonical form** — promotion is a confluent terminating
       rewrite system, so each logical structure has exactly one canonical
       representative (`normalize`, `normalize_canonical`, `normalize_canonical_eq`);
-    * **injectivity of the encoding** — distinct active canonical structures map to
-      distinct binding roots modulo a hash collision (`canonical_eval_injective`),
-      with the collapsed (null) regions' extent carried by the committed timeline
-      (`combinedRoot_binds_timeline`).
+    * **injectivity of the encoding** — distinct collapse-free canonical structures
+      map to distinct binding roots modulo a hash collision
+      (`canonical_eval_injective`), with the collapsed regions' multiplicity
+      carried by the committed run-extent (`combinedRoot_binds_timeline` for the
+      null subset bound into the binding root; the data-mirrored extent for
+      non-null runs).
 
     Stated for two arbitrary trees via their canonical forms: if the binding roots
-    agree and the active canonical normal forms are reached, the structures are the
-    same canonical form or `H` collides. -/
+    agree and the collapse-free canonical normal forms are reached, the structures
+    are the same canonical form or `H` collides. -/
 theorem canonical_unique (L : Nat)
     (leaf_node_sep : ∀ (d : List UInt8) (ds : List Digest), leafHash d ≠ nodeHash ds)
     (leaf_empty_sep : ∀ (d : List UInt8), leafHash d ≠ emptyHash)
     (node_empty_sep : ∀ (ds : List Digest), nodeHash ds ≠ emptyHash)
     (t₁ t₂ : NaryTree (List UInt8))
-    (ha₁ : Active L (normalize t₁)) (ha₂ : Active L (normalize t₂))
+    (ha₁ : NoCollapse L (normalize t₁)) (ha₂ : NoCollapse L (normalize t₂))
     (hroot : eval L t₁ = eval L t₂) :
     normalize t₁ = normalize t₂ ∨ HashCollision ∨ NodeHashCollision := by
   have heval : eval L (normalize t₁) = eval L (normalize t₂) := by

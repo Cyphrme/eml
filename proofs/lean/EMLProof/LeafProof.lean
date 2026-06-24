@@ -72,7 +72,7 @@ theorem leaf_proof_sound (L k : Nat) (cells : List Digest)
     (leaf root : Digest) (index : Nat) (path : List ProofStep)
     (hver : LeafVerifies L k leaf index cells.length root path)
     (hroot : root = karyRoot L k cells)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     ∃ (d : Nat) (skel : List (Nat × Nat)),
       inclusionSkeleton k cells.length index = some skel ∧
       d + skel.length = path.length ∧
@@ -92,8 +92,8 @@ theorem leaf_proof_flat_sound (L k : Nat) (cells : List Digest)
     (hroot : root = karyRoot L k cells)
     (hflat : ∀ skel, inclusionSkeleton k cells.length index = some skel →
       skel.length = path.length)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
-    leaf = cells.getD index emptyHash ∨ NodeHashCollision ∨ NullAmbiguity L := by
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+    leaf = cells.getD index emptyHash ∨ NodeHashCollision ∨ CollapseAmbiguity L := by
   obtain ⟨d, skel, hskel, hsum, hfold⟩ :=
     leaf_proof_sound L k cells leaf root index path hver hroot hH hN
   -- The flat-tree shape forces `d = 0`: the skeleton already spans the path.
@@ -116,7 +116,7 @@ theorem leaf_proof_forged_rejected (L k : Nat) (cells : List Digest)
     (hroot : root = karyRoot L k cells)
     (hflat : ∀ skel, inclusionSkeleton k cells.length index = some skel →
       skel.length = path.length)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L)
     (hforged : leaf ≠ cells.getD index emptyHash) :
     ¬ LeafVerifies L k leaf index cells.length root path := by
   intro hver

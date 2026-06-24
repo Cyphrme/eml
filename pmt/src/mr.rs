@@ -6,8 +6,9 @@
 //!
 //! - **promotion** — a lone (single) child is lifted in place of the wrapping hashed node.
 //!   Structurally deterministic: a verifier re-derives it.
-//! - **collapse** — children of the *same value* fold to that value. The all-null case below is
-//!   *one instance* of general same-value collapse, not a separate operation.
+//! - **collapse** — children of the *same value* fold to that value. The all-null
+//!   case is *one instance* of general same-value collapse, not a separate
+//!   operation; an all-null run is just the dominant instance in a sparse log.
 //!
 //! The literal `nary_mr` symbol predates this vocabulary and is kept verbatim;
 //! the two primitives are named in this prose, not split in the code here.
@@ -19,17 +20,29 @@ use crate::subtree::Subtree;
 /// Compute the Merkle root of an ordered sequence of child digests.
 ///
 /// Applies the two canonicalization primitives: **promotion** (the lone-child
-/// case) and **collapse** (the all-null case, an instance of same-value fold).
+/// case) and **collapse** (the same-value fold). Collapse is general —
+/// *any* run of equal children folds to that value, with the all-null run the
+/// dominant instance in a sparse log, not a special case. The collapse is
+/// value-dependent and always-on; there is no toggle.
+///
+/// The collapsed value's *multiplicity* (how many leaves the run spans) is not
+/// in the digest — it is committed separately as the minimal run-extent
+/// (INV-AUTH-BOUNDARY), so distinct equal-entry runs are never conflated on
+/// unroll. For non-null runs that extent is mirrored across every algorithm's
+/// tree (equal logical data ⇒ equal digest under every hash) and rides free;
+/// only null runs are per-tree-divergent and are committed (the null-run-extents
+/// in the binding root).
 #[must_use]
 pub fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
     match children.len() {
         0 => hasher.empty(),
         1 => children[0].to_vec(),
         _ => {
-            // Collapse (null instance): if all children are N₀, the parent is N₀.
-            let null_const = hasher.null();
-            if children.iter().all(|&c| c == null_const) {
-                null_const
+            // Collapse: if every child is the same value, the parent is that
+            // value. The all-null run is the dominant instance of this one rule.
+            let first = children[0];
+            if children.iter().all(|&c| c == first) {
+                first.to_vec()
             } else {
                 hasher.node(children)
             }
@@ -170,6 +183,41 @@ mod tests {
         let leaf = hasher.leaf(b"hello");
         let expected = hasher.node(&[&null, &leaf]);
         assert_eq!(nary_mr(&hasher, &[&null, &leaf]), expected);
+    }
+
+    #[test]
+    fn test_nary_mr_general_same_value_collapse() {
+        let hasher = Sha256Hasher;
+        // General collapse: all children EQUAL to the same non-null value fold to
+        // that value. Null is one instance of this, not the rule.
+        let v = hasher.leaf(b"hello");
+        assert_eq!(nary_mr(&hasher, &[&v, &v]), v);
+        assert_eq!(nary_mr(&hasher, &[&v, &v, &v]), v);
+
+        // A mix of two distinct non-null values must NOT collapse — it hashes.
+        let w = hasher.leaf(b"world");
+        let expected = hasher.node(&[&v, &w]);
+        assert_eq!(nary_mr(&hasher, &[&v, &w]), expected);
+        assert_ne!(nary_mr(&hasher, &[&v, &w]), v);
+
+        // The null collapse is exactly the same rule at value = null().
+        let null = hasher.null();
+        assert_eq!(nary_mr(&hasher, &[&null, &null]), null);
+    }
+
+    #[test]
+    fn null_is_distinct_from_empty_data_leaf() {
+        // Hard constraint: null() = H(b"null") MUST stay distinct from a genuine
+        // empty-data leaf leaf(b"") = H(b""), so the null subset of collapses is
+        // unambiguous. The preimages differ (4 bytes vs 0), so the digests differ.
+        let hasher = Sha256Hasher;
+        assert_ne!(hasher.null(), hasher.leaf(b""));
+        // And a two-empty-leaf node collapses to the empty-leaf value (general
+        // collapse), which is itself distinct from null() — collapse never
+        // conflates an empty-data run with a null run.
+        let empty_leaf = hasher.leaf(b"");
+        assert_eq!(nary_mr(&hasher, &[&empty_leaf, &empty_leaf]), empty_leaf);
+        assert_ne!(nary_mr(&hasher, &[&empty_leaf, &empty_leaf]), hasher.null());
     }
 
     #[test]

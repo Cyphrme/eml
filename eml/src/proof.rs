@@ -13,11 +13,12 @@
 // the originals live in `pmt`. No parallels: these are the kernel's, not copies.
 use pmt::{ARITY_RANGE, Hasher, fold_frontier, frontier_for_size, nary_mr};
 pub use pmt::{
-    AuditPayload, BindingProof, CouplingProof, InclusionProof, ProofStep, TrustedBindingRoot,
-    VerifierConfig, combined_root, committed_active_algs, committed_active_at, committed_is_live,
-    constant_time_eq, reconstruct_inclusion_root, serialize_timeline, timeline_is_trivial,
-    validate_committed_epochs, verify_inactivity_with_coupling, verify_inclusion,
-    verify_inclusion_path_structure, verify_inclusion_with_coupling,
+    AuditPayload, BindingProof, CouplingProof, InclusionProof, NullRun, ProofStep,
+    TrustedBindingRoot, VerifierConfig, all_null_runs, combined_root, committed_active_algs,
+    committed_active_at, constant_time_eq, null_runs_are_trivial, null_runs_for_alg,
+    reconstruct_inclusion_root, serialize_null_runs, validate_committed_epochs,
+    verify_inactivity_with_coupling, verify_inclusion, verify_inclusion_path_structure,
+    verify_inclusion_with_coupling,
 };
 
 /// Consistency proof: proves tree at `old_size` is a prefix of tree at `new_size`.
@@ -453,6 +454,7 @@ pub fn verify_consistency_with_coupling(
         hasher,
         alg_id,
         old_size,
+        log_arity,
         old_combined_root,
         old_expected_active_algs,
         config,
@@ -461,6 +463,7 @@ pub fn verify_consistency_with_coupling(
         hasher,
         alg_id,
         new_size,
+        log_arity,
         new_combined_root,
         new_expected_active_algs,
         config,

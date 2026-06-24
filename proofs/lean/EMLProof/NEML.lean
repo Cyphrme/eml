@@ -98,31 +98,36 @@ mutual
 end
 
 mutual
-  /-- Recursive evaluation of an N-ary tree under NEML promotion rules.
+  /-- Recursive evaluation of an N-ary tree under NEML canonicalization rules.
       `L` is the digest length of the active hash algorithm (vestigial; see
       `nullDigest`). Arms: leaf hashing; empty node → `emptyHash`; singleton
-      promotion; flat null promotion (all children null, arity ≥ 2); standard
-      node hashing. -/
+      promotion; **general same-value collapse** (all children evaluate to one
+      value, arity ≥ 2 → that value); standard node hashing. The all-null
+      collapse is the dominant instance of the same-value collapse, not a
+      separate rule — `evalAllNull` is its `value = nullDigest` specialization,
+      retained because activity is read against `nullDigest`. -/
   noncomputable def eval (L : Nat) : NaryTree (List UInt8) → Digest
     | NaryTree.leaf data => leafHash data
     | NaryTree.node [] => emptyHash
     | NaryTree.node [c] => eval L c
-    | NaryTree.node children =>
-        if evalAllNull L children then nullDigest L
-        else nodeHash (evalMap L children)
+    | NaryTree.node (a :: b :: rest) =>
+        let ds := evalMap L (a :: b :: rest)
+        if ds.all (· == eval L a) then eval L a
+        else nodeHash ds
   termination_by t => nsize t
   decreasing_by
     all_goals simp [nsize, nlsize]
     all_goals omega
 
-  /-- Whether every child of a node evaluates to the null digest. -/
+  /-- Whether every child of a node evaluates to the null digest — the
+      `value = nullDigest` instance of same-value collapse, kept because
+      activity is read against the null constant. -/
   noncomputable def evalAllNull (L : Nat) : List (NaryTree (List UInt8)) → Bool
     | [] => true
     | c :: cs => (eval L c == nullDigest L) && evalAllNull L cs
   termination_by cs => nlsize cs
   decreasing_by
     all_goals simp [nlsize]
-    all_goals omega
 
   /-- Map `eval` over a child list (structural; equals `List.map (eval L)`). -/
   noncomputable def evalMap (L : Nat) : List (NaryTree (List UInt8)) → List Digest
@@ -170,33 +175,68 @@ theorem eval_singleton_node (L : Nat) (t : NaryTree (List UInt8)) :
     eval L (NaryTree.node [t]) = eval L t := by
   simp [eval]
 
-/-- Flat null promotion equation, arity ≥ 2 (was `axiom eval_flat_null_node`). -/
-theorem eval_flat_null_node (L : Nat) (children : List (NaryTree (List UInt8)))
-    (h_length : children.length ≥ 2)
-    (h_all_null : ∀ t ∈ children, eval L t = nullDigest L) :
-    eval L (NaryTree.node children) = nullDigest L := by
+/-- The same-value collapse guard, reflected: every child of a node (arity ≥ 2)
+    evaluates to the head child's digest. The boolean the `eval` collapse arm
+    branches on. -/
+theorem evalAllEq_iff (L : Nat) (a b : NaryTree (List UInt8))
+    (rest : List (NaryTree (List UInt8))) :
+    ((evalMap L (a :: b :: rest)).all (· == eval L a) = true)
+      ↔ ∀ t ∈ (a :: b :: rest), eval L t = eval L a := by
+  rw [evalMap_eq_map]
+  constructor
+  · intro h t ht
+    have := (List.all_eq_true.mp h) (eval L t) (by
+      rw [List.mem_map]; exact ⟨t, ht, rfl⟩)
+    simpa using this
+  · intro h
+    rw [List.all_eq_true]
+    intro d hd
+    rw [List.mem_map] at hd
+    obtain ⟨t, ht, rfl⟩ := hd
+    simpa using h t ht
+
+/-- **General same-value collapse equation, arity ≥ 2.** A node all of whose
+    children evaluate to one value `v` evaluates to `v`. The all-null collapse
+    (`v = nullDigest`) is the dominant instance. -/
+theorem eval_collapse_node (L : Nat) (children : List (NaryTree (List UInt8)))
+    (h_length : children.length ≥ 2) {v : Digest}
+    (h_all_eq : ∀ t ∈ children, eval L t = v) :
+    eval L (NaryTree.node children) = v := by
   obtain ⟨a, b, rest, rfl⟩ : ∃ a b rest, children = a :: b :: rest := by
     match children, h_length with
     | a :: b :: rest, _ => exact ⟨a, b, rest, rfl⟩
-  have hAll : evalAllNull L (a :: b :: rest) = true :=
-    (evalAllNull_eq_true_iff L _).mpr h_all_null
+  have ha : eval L a = v := h_all_eq a (by simp)
+  have hall : ∀ t ∈ (a :: b :: rest), eval L t = eval L a := by
+    intro t ht; rw [h_all_eq t ht, ha]
+  have hguard : (evalMap L (a :: b :: rest)).all (· == eval L a) = true :=
+    (evalAllEq_iff L a b rest).mpr hall
   simp only [eval]
-  rw [if_pos hAll]
+  rw [if_pos hguard, ha]
 
-/-- Standard node hashing equation, arity ≥ 2 with a non-null child
-    (was `axiom eval_node_hash`). -/
+/-- Flat null promotion equation, arity ≥ 2 (was `axiom eval_flat_null_node`).
+    The `value = nullDigest` instance of the general collapse. -/
+theorem eval_flat_null_node (L : Nat) (children : List (NaryTree (List UInt8)))
+    (h_length : children.length ≥ 2)
+    (h_all_null : ∀ t ∈ children, eval L t = nullDigest L) :
+    eval L (NaryTree.node children) = nullDigest L :=
+  eval_collapse_node L children h_length h_all_null
+
+/-- Standard node hashing equation, arity ≥ 2 with two children of different
+    value (was `axiom eval_node_hash`, generalized: hashing fires whenever the
+    children are *not* all equal, of which "a non-null child amid nulls" is one
+    instance). -/
 theorem eval_node_hash (L : Nat) (children : List (NaryTree (List UInt8)))
     (h_length : children.length ≥ 2)
-    (h_some : ∃ t ∈ children, eval L t ≠ nullDigest L) :
+    (h_some : ∃ t ∈ children, ∃ u ∈ children, eval L t ≠ eval L u) :
     eval L (NaryTree.node children) = nodeHash (children.map (eval L)) := by
   obtain ⟨a, b, rest, rfl⟩ : ∃ a b rest, children = a :: b :: rest := by
     match children, h_length with
     | a :: b :: rest, _ => exact ⟨a, b, rest, rfl⟩
-  have hNot : ¬ evalAllNull L (a :: b :: rest) = true := by
-    rw [evalAllNull_eq_true_iff]
+  have hNot : ¬ ((evalMap L (a :: b :: rest)).all (· == eval L a) = true) := by
+    rw [evalAllEq_iff]
     intro hall
-    obtain ⟨t, ht, htne⟩ := h_some
-    exact htne (hall t ht)
+    obtain ⟨t, ht, u, hu, hne⟩ := h_some
+    exact hne ((hall t ht).trans (hall u hu).symm)
   simp only [eval]
   rw [if_neg hNot, evalMap_eq_map]
 
@@ -221,31 +261,37 @@ theorem eval_flat_null_promotion (L : Nat) (children : List (NaryTree (List UInt
 
 set_option linter.style.longLine false
 
-/-! ## Design A+ — the committed epoch timeline authenticates activity
+/-! ## Design A+ — the committed null-run-extents authenticate activity
 
 This section formalizes the Design A+ soundness content. The combined root is a
 structural **metaroot**: a tree layer whose preimage commits every algorithm's
-root **and** the per-algorithm epoch timeline (the timeline is structure — it
-decides which cells are null projections). Two consequences are modeled:
+root **and** the **null-run-extents** (the activation — they decide which cells
+are null projections, and cover exactly the inactive positions). Two consequences
+are modeled:
 
-* **Activity is read from the authenticated timeline, never from digest
+* **Activity is read from the authenticated null-run-extents, never from digest
   null-ness.** This is what renders the `leaf(b"null") = N₀` collision
   (`null_collision`) inert: the inference "cell = N₀ ⇒ inactive" is unsound
   (`inferredActiveFromNull_unsound`), so activity must come from the committed
-  field.
-* **The metaroot binds the timeline** (`metaroot_binds_timeline`): the two
-  histories the collision would conflate — byte-identical trees but timelines
-  disagreeing on activity at some `(X, p)` — cannot share a combined root unless
-  `H` collides. Inactivity is therefore not forgeable by metadata substitution.
+  runs.
+* **The metaroot binds the activation** (`combinedRoot_binds_timeline`): the two
+  histories the collision would conflate — identical member roots but null
+  structures disagreeing on activity at some `(X, p)` — cannot share a combined
+  root unless `H` collides. Inactivity is therefore not forgeable by metadata
+  substitution.
 
-Plus the verification-time consistency check `inactive ⇒ N₀`
-(`InactiveImpliesNull`) and its anti-repudiation consequence
-(`real_cell_forces_committed_active`).
+The `Timeline` here is the activation the null-run-extents encode; an activity-
+equivalent re-encoding of the same active set is the *same* activation (the
+commitment is canonical over activity, per
+`pmt::null_runs_cover_exactly_the_inactive_positions`). Plus the verification-time
+consistency check `inactive ⇒ N₀` (`InactiveImpliesNull`) and its anti-repudiation
+consequence (`real_cell_forces_committed_active`).
 
-Mirrors `neml/src/proof.rs` (`committed_active_at`, `combined_root_preimage`,
-`validate_committed_epochs`) and `neml/src/tree.rs` (`combined_root_at`,
-`verify_audit_payload`). The metaroot is never signature-dependent; signing is an
-orthogonal, snapshot-level act performed after a snapshot's leaves are verified. -/
+Mirrors `pmt/src/proof.rs` (`committed_active_at`, `serialize_null_runs`,
+`null_runs_for_alg`, `validate_committed_epochs`) and `eml/src/tree.rs`
+(`combined_root_at`, `verify_audit_payload`). The metaroot is never
+signature-dependent; signing is an orthogonal, snapshot-level act performed after
+a snapshot's leaves are verified. -/
 
 /-- An algorithm identifier. -/
 abbrev AlgId := Nat
@@ -378,11 +424,15 @@ theorem uNat_append_injective : ∀ {a b : Nat} {s t : List UInt8},
       obtain ⟨ha, hst⟩ := ih h
       exact ⟨by omega, hst⟩
 
-/-- Injective byte serialization of the committed timeline. The combined-root
-    preimage commits this (`combined_root_preimage` in `proof.rs` uses a concrete
-    fixed-width big-endian framing; here we use any injective serialization, of
-    which that format is one realization). Built as `uNat ∘ encode`, so
-    injectivity is immediate. -/
+/-- Injective byte serialization of the committed **activation** — modeled as the
+    `Timeline`, the activity the null-run-extents encode. The combined-root
+    preimage commits this; the shipped `pmt::serialize_null_runs` is one concrete
+    injective realization (fixed-width big-endian over `(arity, tree_size,
+    per-alg null runs)`). The activation and its null-run-extents are two
+    encodings of one truth — the null runs cover exactly the inactive positions
+    (`pmt::null_runs_cover_exactly_the_inactive_positions`) — so an injective
+    encoding of either is an injective encoding of the activity. Built as
+    `uNat ∘ encode`, so injectivity is immediate. -/
 def encTimeline (tl : Timeline) : List UInt8 := uNat (Encodable.encode tl)
 
 theorem encTimeline_injective : Function.Injective encTimeline :=
@@ -403,9 +453,11 @@ combined_root(H, ar, tl) = naryMr ( (member roots of ar)  ++  [coverage tl]? )
 * **Genesis promotion is native.** One child (single algorithm, trivial timeline)
   ⇒ `naryMr [c] = c`: the combined root *is* the member root because there is one
   child, not by a predicate.
-* **Coverage is a sibling, present only when informative.** A trivial timeline
-  (every algorithm open-from-genesis) contributes no coverage child; a
-  non-trivial one appends `H(encTimeline tl)`.
+* **Coverage is a sibling, present only when informative.** A trivial activation
+  (no algorithm has a null run) contributes no coverage child; a non-trivial one
+  appends `H(encTimeline tl)` — the committed **null-run-extents** (all
+  algorithms', in every binding root: the redundancy physically binds the trees,
+  D12 REVISED). It replaces the old serialized epoch timeline.
 
 The member roots ride the fold as opaque child **digests** — the bytes
 `nary_mr` concatenates raw, with no length prefix (it reuses the kernel's
@@ -423,15 +475,16 @@ and the fold authenticates the *member-root digests* under them. -/
     into the abstract `Digest` type the node hash folds over. -/
 noncomputable def memberDigest (e : AlgId × List UInt8) : Digest := H e.2
 
-/-- Whether the committed timeline is **trivial**: every algorithm is
-    open-from-genesis (`[(0, none)]`, the model image of `[(0, u64::MAX)]`).
-    Mirrors `pmt::timeline_is_trivial`; the trivial case omits the coverage
-    child (informativeness, not registry cardinality). -/
+/-- Whether the committed activation is **trivial**: every algorithm is
+    open-from-genesis (`[(0, none)]`, the model image of `[(0, u64::MAX)]`) — the
+    activity with no null run. Mirrors `pmt::null_runs_are_trivial`; the trivial
+    case omits the coverage child (informativeness, not registry cardinality). -/
 def timelineTrivial (tl : Timeline) : Bool :=
   tl.all (fun p => p.2 == [(0, none)])
 
 /-- The children of the combined-root fold: one digest per member root, followed
-    by the coverage child `H(encTimeline tl)` iff the timeline is non-trivial. -/
+    by the coverage child `H(encTimeline tl)` (the committed null-run-extents)
+    iff the activation is non-trivial. -/
 noncomputable def combinedChildren (ar : List (AlgId × List UInt8)) (tl : Timeline) :
     List Digest :=
   ar.map memberDigest ++ (if timelineTrivial tl then [] else [H (encTimeline tl)])
@@ -482,13 +535,17 @@ theorem combinedChildren_bound {ar₁ ar₂ : List (AlgId × List UInt8)} {tl₁
   · exact Or.inr ⟨_, _, hch, heq⟩
 
 /-- **A+ non-equivocation: a non-trivial combined root binds the committed
-    timeline.** Two histories the leaf/null collision would conflate — identical
-    member roots `ar` (≥ 2), but distinct *non-trivial* timelines — cannot share a
-    combined root unless the node hash or `H` collides. The coverage children
-    `H(encTimeline ·)` differ (`encTimeline` injective, timelines distinct), so
-    equal combined roots force a collision. A trivial timeline contributes no
-    coverage child by design — its activity is the everywhere-active default, so
-    there is nothing to equivocate over. -/
+    null-run-extents.** Two histories the leaf/null collision would conflate —
+    identical member roots `ar` (≥ 2), but distinct *non-trivial* activations
+    (distinct null structures) — cannot share a combined root unless the node
+    hash or `H` collides. The coverage children `H(encTimeline ·)` — the
+    committed null-run-extents — differ (`encTimeline` injective, activations
+    distinct), so equal combined roots force a collision. A trivial activation
+    (no null run) contributes no coverage child by design — its activity is the
+    everywhere-active default, so there is nothing to equivocate over. Because
+    the null runs cover exactly the inactive positions, binding them binds the
+    activity: this is the soundness guard that the verifier reads activity from
+    the *committed* runs, not a separately-trusted timeline. -/
 theorem combinedRoot_binds_timeline
     (ar : List (AlgId × List UInt8)) (tl₁ tl₂ : Timeline)
     (hmulti : ar.length ≥ 2)

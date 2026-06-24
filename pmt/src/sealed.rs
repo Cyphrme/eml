@@ -276,7 +276,10 @@ impl Sealed {
             .iter()
             .filter_map(|(id, _)| {
                 let hasher = hashers.iter().find(|(hid, _)| hid == id).map(|(_, h)| *h)?;
-                Some((*id, combined_root(hasher, &members, &self.alg_epochs)))
+                Some((
+                    *id,
+                    combined_root(hasher, &members, &self.alg_epochs, self.tree_size, self.arity),
+                ))
             })
             .collect()
     }
@@ -297,7 +300,13 @@ impl Sealed {
         // Confirm the algorithm was active at the sealed size before folding.
         self.member_root(alg_id, hasher)?;
         let members = self.member_roots(all_hashers);
-        Some(combined_root(hasher, &members, &self.alg_epochs))
+        Some(combined_root(
+            hasher,
+            &members,
+            &self.alg_epochs,
+            self.tree_size,
+            self.arity,
+        ))
     }
 
     /// **Derived view.** The committed canonicalization run-extents: the

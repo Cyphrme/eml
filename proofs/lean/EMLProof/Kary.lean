@@ -53,12 +53,13 @@ Collision-style escape hatches, matching the corpus convention
 (`HashCollision`, `NodeHashCollision`):
 
 * `NodeHashCollision` — distinct child lists, equal `nodeHash`.
-* `NullAmbiguity L` — some node of ≥ 2 *not-all-null* children hashes to
-  exactly the null constant. With untagged `nodeHash = H(concat)` this is
-  `H(child bytes) = H("null")`, i.e. an `H` collision unless the child
-  bytes literally concatenate to the 4-byte string `"null"` (impossible for
-  real digest widths, but `digestToBytes` is an axiom with no length
-  constraint, so it is surfaced honestly as its own assumption).
+* `CollapseAmbiguity L` — some node of ≥ 2 *not-all-equal* children hashes to
+  a value `v` that an all-equal-to-`v` run collapses to. With untagged
+  `nodeHash = H(concat)` this is `H(child bytes) = v`, i.e. an `H` collision
+  unless the child bytes literally concatenate to the `v`-run preimage
+  (impossible for real digest widths, but `digestToBytes` is an axiom with no
+  length constraint, so it is surfaced honestly as its own assumption). The
+  all-null instance (`v = nullDigest`) is the dominant case in a sparse log.
 
 ## Status
 
@@ -67,7 +68,7 @@ All theorems in this module are proven `sorry`-free: the topology
 (`frontier_append_consistent`), the construction (`kary_bridge`), and the
 verifier (`kary_completeness`, `kary_inclusion_soundness`). The two hash
 assumptions appear only as explicit hypotheses (`¬NodeHashCollision`,
-`¬NullAmbiguity`), never as axioms.
+`¬CollapseAmbiguity`), never as axioms.
 -/
 
 set_option linter.style.emptyLine false
@@ -113,7 +114,7 @@ structural reading of the Rust that a reviewer must confirm; the `#guard`s do
 
 | Lean | Rust | Notes (inspection-only) |
 | --- | --- | --- |
-| `naryMr` | `nary_mr` (`neml/src/mr.rs:11`) | empty→`empty()`, singleton→child unchanged, all-null→`null()`, else `node(children)` |
+| `naryMr` | `nary_mr` (`neml/src/mr.rs:11`) | empty→`empty()`, singleton→child unchanged, all children equal→that value (general collapse; all-null→`null()` the dominant instance), else `node(children)` |
 | `mergeTopD` / `mergeTopDN` / `appendCell` / `buildStackGo` / `buildStackCells` | push-then-merge loop in `append_leaf` / `append_subtree` (`neml/src/tree.rs:925`, merge via `nary_mr` at `:949`) | push the cell, run `reduction_count` merges of the top `k` |
 | `perfectRoot` | the canonical perfect-subtree fold that same loop realizes (no standalone Rust fn) | `kary_bridge` proves the stack machine equals this decomposition |
 | `foldFrontierRoot` / `karyRoot` | `compute_root_from_state` (`neml/src/tree.rs:315`) | merge rightmost `k` while `> k` remain, then one final `nary_mr` |
@@ -670,15 +671,16 @@ end SanityChecks
 /-! ## Layer 2 — construction: stack machine and canonical decomposition -/
 
 open Classical in
-/-- Null-promoting n-ary Merkle root, faithful to `mr.rs::nary_mr`:
-    empty → `emptyHash`; singleton → promoted unchanged; otherwise null if
-    *all* children are null, else `nodeHash`. The verifier's fold and the
-    builder's merge both use this — never plain `nodeHash`. -/
+/-- Same-value-collapsing n-ary Merkle root, faithful to `mr.rs::nary_mr`:
+    empty → `emptyHash`; singleton → promoted unchanged; otherwise the shared
+    value if *all* children are equal (general collapse — the all-null run is its
+    dominant instance), else `nodeHash`. The verifier's fold and the builder's
+    merge both use this — never plain `nodeHash`. -/
 noncomputable def naryMr (L : Nat) (children : List Digest) : Digest :=
   match children with
   | [] => emptyHash
   | [c] => c
-  | cs => if ∀ c ∈ cs, c = nullDigest L then nullDigest L else nodeHash cs
+  | a :: b :: zs => if ∀ c ∈ (a :: b :: zs), c = a then a else nodeHash (a :: b :: zs)
 
 /-- One digest-level merge of the top (rightmost) `k` stack entries. -/
 noncomputable def mergeTopD (L k : Nat) (stack : List Digest) : List Digest :=
@@ -1061,28 +1063,30 @@ def AcceptsKary (L k : Nat) (leaf : Digest) (index treeSize : Nat)
   WellFormedSteps path ∧
   foldNary L leaf path = root
 
-/-- A node of ≥ 2 not-all-null children whose `nodeHash` is exactly the null
-    constant. Untagged `nodeHash = H(concat of digest bytes)` makes this an
-    `H` collision unless the child bytes concatenate to the literal 4-byte
-    `"null"` preimage; `digestToBytes` is an unconstrained axiom, so the
-    case is surfaced as an explicit assumption rather than argued away. -/
-def NullAmbiguity (L : Nat) : Prop :=
-  ∃ cs : List Digest, 2 ≤ cs.length ∧ ¬(∀ c ∈ cs, c = nullDigest L) ∧
-    nodeHash cs = nullDigest L
+/-- A same-value collapse value colliding with a genuine node hash: a not-all-
+    equal list of ≥ 2 children whose `nodeHash` equals some value `v` that an
+    all-equal-to-`v` list collapses to. Untagged `nodeHash = H(concat)` makes
+    this an `H` collision unless the child bytes concatenate to the `v`-run
+    preimage; `digestToBytes` is unconstrained, so it is surfaced as an explicit
+    assumption rather than argued away. The all-null instance (`v = nullDigest`)
+    is the dominant case in a sparse log. -/
+def CollapseAmbiguity (L : Nat) : Prop :=
+  ∃ (cs : List Digest) (v : Digest), 2 ≤ cs.length ∧ ¬(∀ c ∈ cs, c = v) ∧
+    nodeHash cs = v
 
 /-- **Fixed-arity injectivity of `naryMr`.** Same-length child lists of
     length ≥ 2 with equal `naryMr` are equal — or a hash assumption broke.
-    The null-promotion analysis: two all-null lists of equal length are
-    *elementwise* equal (this is why same-length matters: all-null lists of
-    different lengths collide under `naryMr` by design, which is exactly
-    what the skeleton's arity pinning excludes); mixed null/non-null is
-    `NullAmbiguity`; both non-null reduces to `NodeHashCollision`.
-    *Strategy:* case on the two `if`s; the all-null/all-null case is
-    `List.ext` via length + pointwise `nullDigest`. -/
+    The general-collapse analysis: two all-equal lists of equal length that
+    collapse to the same value are *elementwise* equal to it, hence equal (this
+    is why same-length matters: all-equal lists of different lengths collide by
+    design, which the skeleton's arity pinning excludes); one collapsing and one
+    hashing is `CollapseAmbiguity`; both hashing reduces to `NodeHashCollision`.
+    *Strategy:* case on the two `if`s; the collapse/collapse case is `List.ext`
+    via length + pointwise equality to the shared (equal) value. -/
 theorem naryMr_inj_of_length (L : Nat) (xs ys : List Digest)
     (hlen : xs.length = ys.length) (h2 : 2 ≤ xs.length)
     (heq : naryMr L xs = naryMr L ys)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     xs = ys := by
   have hys2 : 2 ≤ ys.length := hlen ▸ h2
   -- Length ≥ 2 forces both lists into the catch-all arm of `naryMr`.
@@ -1097,18 +1101,29 @@ theorem naryMr_inj_of_length (L : Nat) (xs ys : List Digest)
     · simp only [List.length_cons, List.length_nil] at hys2; omega
     · exact ⟨c, d, yr, rfl⟩
   simp only [naryMr] at heq
-  by_cases hxn : ∀ z ∈ a :: b :: xr, z = nullDigest L
-  · by_cases hyn : ∀ z ∈ c :: d :: yr, z = nullDigest L
-    · -- Both all-null and same length ⇒ elementwise equal.
+  by_cases hxn : ∀ z ∈ a :: b :: xr, z = a
+  · by_cases hyn : ∀ z ∈ c :: d :: yr, z = c
+    · -- Both collapse: `naryMr = a` and `= c`, so `a = c`; both lists are all-`a`
+      -- of the same length ⇒ elementwise equal.
+      rw [if_pos hxn, if_pos hyn] at heq
       apply List.ext_getElem hlen
       intro i h1 h2'
-      rw [hxn _ (List.getElem_mem h1), hyn _ (List.getElem_mem h2')]
-    · -- `xs` all-null, `ys` not ⇒ `nodeHash ys = nullDigest L`: NullAmbiguity.
+      rw [hxn _ (List.getElem_mem h1), hyn _ (List.getElem_mem h2'), heq]
+    · -- `xs` collapses to `a`, `ys` hashes ⇒ `nodeHash ys = a`: CollapseAmbiguity
+      -- with value `a`. `ys` is not all-`a`: were it, its head `c = a`, so its own
+      -- collapse guard (`∀ z = c`) would hold, contradicting `hyn`.
       rw [if_pos hxn, if_neg hyn] at heq
-      exact absurd ⟨c :: d :: yr, hys2, hyn, heq.symm⟩ hN
-  · by_cases hyn : ∀ z ∈ c :: d :: yr, z = nullDigest L
-    · rw [if_neg hxn, if_pos hyn] at heq
-      exact absurd ⟨a :: b :: xr, h2, hxn, heq⟩ hN
+      have hya : ¬ ∀ z ∈ c :: d :: yr, z = a := by
+        intro hall
+        exact hyn (fun z hz => by rw [hall z hz, hall c (by simp)])
+      exact absurd ⟨c :: d :: yr, a, hys2, hya, heq.symm⟩ hN
+  · by_cases hyn : ∀ z ∈ c :: d :: yr, z = c
+    · -- symmetric: `ys` collapses to `c`, `xs` hashes ⇒ `nodeHash xs = c`.
+      rw [if_neg hxn, if_pos hyn] at heq
+      have hxc : ¬ ∀ z ∈ a :: b :: xr, z = c := by
+        intro hall
+        exact hxn (fun z hz => by rw [hall z hz, hall a (by simp)])
+      exact absurd ⟨a :: b :: xr, c, h2, hxc, heq⟩ hN
     · rw [if_neg hxn, if_neg hyn] at heq
       by_contra hne
       exact hH ⟨a :: b :: xr, c :: d :: yr, hne, heq⟩
@@ -1130,7 +1145,7 @@ private theorem foldNary_append_last (L : Nat) (a : Digest)
   simp only [foldNary, List.foldl_append, List.foldl_cons, List.foldl_nil]
 
 private theorem foldNary_unique_aux (L : Nat)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     ∀ (n : Nat) (a b : Digest) (p q : List ProofStep),
       p.length = n → q.length = n →
       p.map stepShape = q.map stepShape →
@@ -1203,7 +1218,7 @@ theorem foldNary_unique_of_shape (L : Nat) (a b : Digest)
     (hshape : p.map stepShape = q.map stepShape)
     (hwfp : WellFormedSteps p) (hwfq : WellFormedSteps q)
     (heq : foldNary L a p = foldNary L b q)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     a = b ∧ p = q := by
   have hlenpq : p.length = q.length := by
     have := congrArg List.length hshape
@@ -1698,7 +1713,7 @@ theorem kary_inclusion_soundness (L k : Nat) (cells : List Digest)
     (leaf root : Digest) (index : Nat) (path : List ProofStep)
     (hacc : AcceptsKary L k leaf index cells.length root path)
     (hroot : root = karyRoot L k cells)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     ∃ (d : Nat) (skel : List (Nat × Nat)),
       inclusionSkeleton k cells.length index = some skel ∧
       d + skel.length = path.length ∧

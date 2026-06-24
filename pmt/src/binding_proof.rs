@@ -10,13 +10,18 @@
 //! Each algorithm `i` has its own binding root `BR_i`, the top-level node of
 //! that algorithm's tree: the canonicalization fold ([`crate::combined_root`])
 //! over the shared member roots as children, under **that algorithm's own hash**
-//! `H_i`, with the committed epoch timeline entering as a coverage sibling iff
-//! it is non-trivial:
+//! `H_i`, with **all algorithms' null-run-extents** entering as a coverage
+//! sibling iff the activation is non-trivial:
 //!
 //! ```text
-//! BR_i = combined_root(H_i, member_roots, alg_epochs)
-//!      = nary_mr(H_i, [MR₀, MR₁, …]  ‖  [H_i(serialize(timeline))]?)
+//! BR_i = combined_root(H_i, member_roots, alg_epochs, tree_size, arity)
+//!      = nary_mr(H_i, [MR₀, MR₁, …]  ‖  [H_i(serialize_null_runs(…))]?)
 //! ```
+//!
+//! Committing all algorithms' null runs in every `BR_i` is what physically binds
+//! the trees (D12 REVISED): any single trusted `BR_i` pins the whole multi-tree
+//! activation. The activity an inactivity/coupling proof reads is grounded in
+//! these committed runs (the runs cover exactly the inactive positions).
 //!
 //! The member roots `MR₀, MR₁, …` enter the fold as **opaque digests** — plain
 //! bytes that `H_i` hashes without interpretation. No algorithm's hash is ever
@@ -131,7 +136,7 @@ impl BindingProof {
     /// root whose algorithm has no member root in the proof. These reject
     /// ill-formed inputs before any hashing.
     #[must_use]
-    pub fn verify(&self, trusted: &[TrustedBindingRoot<'_>], tree_size: u64) -> bool {
+    pub fn verify(&self, trusted: &[TrustedBindingRoot<'_>], tree_size: u64, arity: u64) -> bool {
         // An empty trusted set binds nothing; reject rather than vacuously
         // accept.
         if trusted.is_empty() {
@@ -161,12 +166,14 @@ impl BindingProof {
 
         // Each algorithm independently recomputes its own binding root as the
         // canonicalization fold over the shared member-root children (plus the
-        // coverage child iff the timeline is non-trivial), under its own hash.
-        // No algorithm's hash ever touches another's binding root: no security
-        // mixing. Genesis promotion is native to the fold, so a promoted binding
-        // root reconstructs with no special branch (the omission bug dissolves).
+        // coverage child committing all algorithms' null runs iff the activation
+        // is non-trivial), under its own hash. No algorithm's hash ever touches
+        // another's binding root: no security mixing. Genesis promotion is native
+        // to the fold, so a promoted binding root reconstructs with no special
+        // branch (the omission bug dissolves).
         trusted.iter().all(|t| {
-            let computed = combined_root(t.hasher, &self.member_roots, &self.alg_epochs);
+            let computed =
+                combined_root(t.hasher, &self.member_roots, &self.alg_epochs, tree_size, arity);
             constant_time_eq(&computed, t.root)
         })
     }
@@ -267,8 +274,8 @@ mod tests {
         let h_b = PrefixedSha256Hasher;
         // Each binding root is the canonicalization fold over the member-root
         // children under its own hash (trivial timeline ⇒ no coverage child).
-        let br_a = combined_root(&h_a, &member_roots, &alg_epochs);
-        let br_b = combined_root(&h_b, &member_roots, &alg_epochs);
+        let br_a = combined_root(&h_a, &member_roots, &alg_epochs, tree_size, 2);
+        let br_b = combined_root(&h_b, &member_roots, &alg_epochs, tree_size, 2);
 
         (proof, h_a, h_b, br_a, br_b, tree_size)
     }
@@ -288,7 +295,7 @@ mod tests {
                 root: &br_b,
             },
         ];
-        assert!(proof.verify(&trusted, sz));
+        assert!(proof.verify(&trusted, sz, 2));
     }
 
     #[test]
@@ -300,7 +307,7 @@ mod tests {
             hasher: &h_a,
             root: &br_a,
         }];
-        assert!(proof.verify(&trusted, sz));
+        assert!(proof.verify(&trusted, sz, 2));
     }
 
     #[test]
@@ -316,13 +323,13 @@ mod tests {
         let h_a = Sha256Hasher;
         // The promoted binding root IS the member root.
         let br_a = member_roots[0].1.clone();
-        assert_eq!(br_a, combined_root(&h_a, &member_roots, &alg_epochs));
+        assert_eq!(br_a, combined_root(&h_a, &member_roots, &alg_epochs, 4, 2));
         let trusted = vec![TrustedBindingRoot {
             alg_id: 0,
             hasher: &h_a,
             root: &br_a,
         }];
-        assert!(proof.verify(&trusted, 4));
+        assert!(proof.verify(&trusted, 4, 2));
     }
 
     #[test]
@@ -342,7 +349,7 @@ mod tests {
                 root: &forged,
             },
         ];
-        assert!(!proof.verify(&trusted, sz));
+        assert!(!proof.verify(&trusted, sz, 2));
     }
 
     #[test]
@@ -352,7 +359,7 @@ mod tests {
         let (proof, h_a, h_b, br_a, _br_b, sz) = honest_setup();
         let other_roots = vec![(0u64, vec![0xAA; 32]), (1u64, vec![0xCC; 32])];
         let other_epochs = vec![(0u64, vec![(0u64, MAX)]), (1u64, vec![(0u64, MAX)])];
-        let br_b_other = combined_root(&h_b, &other_roots, &other_epochs);
+        let br_b_other = combined_root(&h_b, &other_roots, &other_epochs, 4, 2);
         let trusted = vec![
             TrustedBindingRoot {
                 alg_id: 0,
@@ -365,7 +372,7 @@ mod tests {
                 root: &br_b_other,
             },
         ];
-        assert!(!proof.verify(&trusted, sz));
+        assert!(!proof.verify(&trusted, sz, 2));
     }
 
     #[test]
@@ -379,13 +386,13 @@ mod tests {
             hasher: &h_b,
             root: &br_a,
         }];
-        assert!(!proof.verify(&trusted, sz));
+        assert!(!proof.verify(&trusted, sz, 2));
     }
 
     #[test]
     fn empty_trusted_set_rejected() {
         let (proof, _h_a, _h_b, _br_a, _br_b, sz) = honest_setup();
-        assert!(!proof.verify(&[], sz));
+        assert!(!proof.verify(&[], sz, 2));
     }
 
     #[test]
@@ -395,13 +402,13 @@ mod tests {
         let bad_epochs = vec![(0u64, vec![(0u64, 5u64), (4u64, MAX)])];
         let proof = BindingProof::produce(member_roots.clone(), bad_epochs.clone());
         let h_a = Sha256Hasher;
-        let br_a = combined_root(&h_a, &member_roots, &bad_epochs);
+        let br_a = combined_root(&h_a, &member_roots, &bad_epochs, 10, 2);
         let trusted = vec![TrustedBindingRoot {
             alg_id: 0,
             hasher: &h_a,
             root: &br_a,
         }];
-        assert!(!proof.verify(&trusted, 10));
+        assert!(!proof.verify(&trusted, 10, 2));
     }
 
     #[test]
@@ -411,13 +418,13 @@ mod tests {
         let alg_epochs = vec![(0u64, vec![(0u64, MAX)]), (1u64, vec![(0u64, MAX)])];
         let proof = BindingProof::produce(member_roots.clone(), alg_epochs.clone());
         let h_a = Sha256Hasher;
-        let br_a = combined_root(&h_a, &member_roots, &alg_epochs);
+        let br_a = combined_root(&h_a, &member_roots, &alg_epochs, 4, 2);
         let trusted = vec![TrustedBindingRoot {
             alg_id: 0,
             hasher: &h_a,
             root: &br_a,
         }];
-        assert!(!proof.verify(&trusted, 4));
+        assert!(!proof.verify(&trusted, 4, 2));
     }
 
     #[test]
@@ -429,7 +436,7 @@ mod tests {
             hasher: &h_a,
             root: &br_a,
         }];
-        assert!(!proof.verify(&trusted, sz));
+        assert!(!proof.verify(&trusted, sz, 2));
     }
 
     #[test]
@@ -451,9 +458,9 @@ mod tests {
                 root: &br_b,
             },
         ];
-        assert!(proof.verify(&trusted, sz));
+        assert!(proof.verify(&trusted, sz, 2));
         // Flip one byte of a member digest: the recomputed roots no longer match.
         proof.member_roots[0].1[0] ^= 0x01;
-        assert!(!proof.verify(&trusted, sz));
+        assert!(!proof.verify(&trusted, sz, 2));
     }
 }

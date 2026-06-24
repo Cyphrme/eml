@@ -137,43 +137,149 @@ pub fn verify_inclusion(
 // from a digest equaling the null constant — which renders the
 // `leaf(b"null") == null()` collision inert without forbidding any payload.
 
-/// Whether a committed epoch timeline is **trivial**: every algorithm is
-/// open-from-genesis (`[(0, u64::MAX)]`).
+/// One null collapse run of a single algorithm: the algorithm projects to the
+/// null constant across the aligned k-ary block `[left, left + k^height)`.
 ///
-/// A trivial timeline carries no information beyond the member roots, so the
-/// combined-root fold omits its coverage child. This is informativeness — not
-/// registry cardinality: a single algorithm whose epoch differs from
-/// `[(0, MAX)]` (a pre-activation prefix, a deactivation) is non-trivial.
-#[must_use]
-pub fn timeline_is_trivial(alg_epochs: &[(u64, Vec<(u64, u64)>)]) -> bool {
-    alg_epochs
-        .iter()
-        .all(|(_, epochs)| epochs.as_slice() == [(0u64, u64::MAX)])
+/// This is the **null subset** of the general collapse run-extents — the only
+/// per-algorithm-divergent collapse, hence the minimal committed activation
+/// information (D12 REVISED / SAD §3.1). Non-null equal-value runs are mirrored
+/// across every algorithm's tree and recovered from the shared data, so they are
+/// never tracked here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NullRun {
+    /// First leaf index of the null block.
+    pub left: u64,
+    /// Height of the aligned k-ary null block; it spans `arity^height` leaves.
+    /// `height == 0` is a single inactive leaf.
+    pub height: u32,
 }
 
-/// Canonical serialization of a committed epoch timeline — the preimage of the
-/// combined root's coverage child.
+/// Decompose algorithm `eps`'s **inactive** positions in `[0, tree_size)` into
+/// the canonical null collapse runs: the maximal aligned `k`-ary blocks the
+/// tree folds to null, greatest-block-first within each contiguous inactive
+/// span (the same greedy decomposition [`crate::topology::frontier_for_size`]
+/// applies to the whole tree, here applied to each inactive gap).
 ///
-/// Layout (all integers `u64` big-endian; fixed-width counts make the encoding
-/// unambiguous to parse and therefore injective):
+/// This is the committed activation in geometric form. It is a *canonical
+/// function of the active intervals* `eps` and `(tree_size, arity)`: the union
+/// of the returned block spans is exactly the inactive position set, so the
+/// active set — and therefore `eps` in canonical form — is recoverable as the
+/// complement (`null_runs_active_set` is the inverse). Committing these runs
+/// commits the identical activity the epoch intervals carry.
+#[must_use]
+pub fn null_runs_for_alg(eps: &[(u64, u64)], tree_size: u64, arity: u64) -> Vec<NullRun> {
+    // Collect the maximal contiguous inactive intervals (the complement of the
+    // active epochs within [0, tree_size)).
+    let active_at = |i: u64| eps.iter().any(|&(s, e)| s <= i && i < e);
+    let mut runs = Vec::new();
+    let mut i = 0u64;
+    while i < tree_size {
+        if active_at(i) {
+            i += 1;
+            continue;
+        }
+        // [i, j) is a maximal inactive gap.
+        let mut j = i;
+        while j < tree_size && !active_at(j) {
+            j += 1;
+        }
+        // Greedy aligned-block decomposition of [i, j): at each position emit
+        // the largest aligned k-ary block that fits and stays inside the gap.
+        let mut left = i;
+        while left < j {
+            let mut height = 0u32;
+            // Grow the block while it stays aligned at `left` and within `[i, j)`.
+            loop {
+                let next_h = height + 1;
+                let span = match arity.checked_pow(next_h) {
+                    Some(s) => s,
+                    None => break,
+                };
+                // Aligned at `left` (left % span == 0) and fits within the gap.
+                if left % span == 0 && left + span <= j {
+                    height = next_h;
+                } else {
+                    break;
+                }
+            }
+            runs.push(NullRun { left, height });
+            left += arity.pow(height);
+        }
+        i = j;
+    }
+    runs
+}
+
+/// All algorithms' null collapse runs at `(tree_size, arity)`, derived from the
+/// committed epoch intervals: `(alg_id, runs)` for every registered algorithm,
+/// sorted by algorithm ID, omitting algorithms with no null run (fully active
+/// over `[0, tree_size)`). This is the activation committed in **every** binding
+/// root; the redundancy physically binds the trees (D12).
+#[must_use]
+pub fn all_null_runs(
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+    tree_size: u64,
+    arity: u64,
+) -> Vec<(u64, Vec<NullRun>)> {
+    let mut out: Vec<(u64, Vec<NullRun>)> = alg_epochs
+        .iter()
+        .filter_map(|(id, eps)| {
+            let runs = null_runs_for_alg(eps, tree_size, arity);
+            if runs.is_empty() {
+                None
+            } else {
+                Some((*id, runs))
+            }
+        })
+        .collect();
+    out.sort_unstable_by_key(|&(id, _)| id);
+    out
+}
+
+/// Whether the committed activation is **trivial**: no algorithm has any null
+/// run over `[0, tree_size)` (every registered algorithm is fully active). A
+/// trivial activation carries no information beyond the member roots, so the
+/// binding-root fold omits its coverage child — absence of the child *is* the
+/// trivial encoding.
+#[must_use]
+pub fn null_runs_are_trivial(
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+    tree_size: u64,
+    arity: u64,
+) -> bool {
+    all_null_runs(alg_epochs, tree_size, arity).is_empty()
+}
+
+/// Canonical serialization of all algorithms' null runs — the preimage of the
+/// binding root's coverage child. Replaces [`serialize_timeline`] as the
+/// committed activation.
+///
+/// Layout (all integers big-endian; fixed-width counts make it unambiguous to
+/// parse, hence injective):
 ///
 /// ```text
-/// n_algs ‖ [ id ‖ n_epochs ‖ (start ‖ end)* ]*
+/// arity ‖ tree_size ‖ n_algs ‖ [ id ‖ n_runs ‖ (left ‖ height)* ]*
 /// ```
 ///
-/// `alg_epochs` lists the committed epoch timeline of every registered
-/// algorithm (active and frozen). An epoch open at the committed size is encoded
-/// with `end == u64::MAX`.
+/// `arity` and `tree_size` are bound so the geometric runs cannot be reinterpreted
+/// under a different spine; `(left : u64, height : u32)` per run.
 #[must_use]
-pub fn serialize_timeline(alg_epochs: &[(u64, Vec<(u64, u64)>)]) -> Vec<u8> {
+pub fn serialize_null_runs(
+    alg_epochs: &[(u64, Vec<(u64, u64)>)],
+    tree_size: u64,
+    arity: u64,
+) -> Vec<u8> {
+    let all = all_null_runs(alg_epochs, tree_size, arity);
     let mut buf = Vec::new();
-    buf.extend_from_slice(&(alg_epochs.len() as u64).to_be_bytes());
-    for (id, epochs) in alg_epochs {
+    buf.extend_from_slice(&arity.to_be_bytes());
+    buf.extend_from_slice(&tree_size.to_be_bytes());
+    buf.extend_from_slice(&(all.len() as u64).to_be_bytes());
+    for (id, runs) in &all {
         buf.extend_from_slice(&id.to_be_bytes());
-        buf.extend_from_slice(&(epochs.len() as u64).to_be_bytes());
-        for &(start, end) in epochs {
-            buf.extend_from_slice(&start.to_be_bytes());
-            buf.extend_from_slice(&end.to_be_bytes());
+        buf.extend_from_slice(&(runs.len() as u64).to_be_bytes());
+        for r in runs {
+            buf.extend_from_slice(&r.left.to_be_bytes());
+            buf.extend_from_slice(&r.height.to_be_bytes());
         }
     }
     buf
@@ -184,16 +290,28 @@ pub fn serialize_timeline(alg_epochs: &[(u64, Vec<(u64, u64)>)]) -> Vec<u8> {
 ///
 /// The children are the member roots in `member_roots` order (the caller pins
 /// canonical sort by algorithm ID), followed by a single **coverage child**
-/// `H(serialize_timeline(alg_epochs))` **iff** the timeline is non-trivial
-/// ([`timeline_is_trivial`]). They form the children of one [`nary_mr`] node, so
-/// collapse + promotion apply exactly as they do everywhere else:
+/// `H(serialize_null_runs(alg_epochs, tree_size, arity))` committing **all
+/// algorithms' null-run-extents**, present **iff** the activation is non-trivial
+/// ([`null_runs_are_trivial`] — some algorithm has a null run). They form the
+/// children of one [`nary_mr`] node, so collapse + promotion apply exactly as
+/// they do everywhere else:
 ///
-/// - one child (single algorithm, trivial timeline) ⇒ the combined root **is** the member root
+/// - one child (single algorithm, fully active) ⇒ the combined root **is** the member root
 ///   (genesis promotion, native — no predicate);
 /// - many children ⇒ `nary_mr(H, children)`.
 ///
+/// The coverage child is the **activation commitment** (D12 REVISED): the
+/// null-valued run-extents are the only per-tree-divergent collapse, so they are
+/// the minimal information needed to reconstruct the multi-tree structure, and
+/// **every** binding root commits **every** algorithm's null runs — that
+/// redundancy is what physically binds the trees. It replaces the old
+/// `alg_epochs` timeline serialization; the activity an inactivity/coupling proof
+/// reads is grounded in these committed runs (the runs cover exactly the inactive
+/// positions, so the active set is their complement — see
+/// `null_runs_cover_exactly_the_inactive_positions`).
+///
 /// `member_roots` carries the *raw* per-algorithm roots as opaque digests; `H`
-/// is only ever applied to those digests (and the timeline serialization), never
+/// is only ever applied to those digests (and the null-run serialization), never
 /// to another algorithm's security material — so each algorithm's combined root
 /// rests solely on its own hash (D9, no security mixing).
 #[must_use]
@@ -201,10 +319,12 @@ pub fn combined_root(
     hasher: &dyn Hasher,
     member_roots: &[(u64, Vec<u8>)],
     alg_epochs: &[(u64, Vec<(u64, u64)>)],
+    tree_size: u64,
+    arity: u64,
 ) -> Vec<u8> {
     let mut children: Vec<Vec<u8>> = member_roots.iter().map(|(_, r)| r.clone()).collect();
-    if !timeline_is_trivial(alg_epochs) {
-        children.push(hasher.hash(&serialize_timeline(alg_epochs)));
+    if !null_runs_are_trivial(alg_epochs, tree_size, arity) {
+        children.push(hasher.hash(&serialize_null_runs(alg_epochs, tree_size, arity)));
     }
     let refs: Vec<&[u8]> = children.iter().map(|c| c.as_slice()).collect();
     nary_mr(hasher, &refs)
@@ -259,26 +379,6 @@ pub fn committed_active_at(
             .1
             .iter()
             .any(|&(start, end)| start <= index && index < end),
-    )
-}
-
-/// Whether `alg_id` is live (final epoch still open) at the snapshot this
-/// timeline was committed at. Returns `None` if the algorithm has no
-/// committed timeline.
-///
-/// This answers the frontier-freshness query "is this key live right now?",
-/// which is not derivable from the tree alone: a deactivation at the idle log
-/// tip leaves no later positions to witness it.
-#[must_use]
-pub fn committed_is_live(alg_epochs: &[(u64, Vec<(u64, u64)>)], alg_id: u64) -> Option<bool> {
-    let idx = alg_epochs
-        .binary_search_by_key(&alg_id, |&(id, _)| id)
-        .ok()?;
-    Some(
-        alg_epochs[idx]
-            .1
-            .last()
-            .is_some_and(|&(_, end)| end == u64::MAX),
     )
 }
 
@@ -352,12 +452,16 @@ impl CouplingProof {
         &self,
         hasher: &dyn Hasher,
         tree_size: u64,
+        arity: u64,
         expected_combined_root: &[u8],
         expected_active_algs: &[u64],
         config: VerifierConfig,
     ) -> bool {
         // Nothing is committed at size zero.
         if tree_size == 0 {
+            return false;
+        }
+        if !ARITY_RANGE.contains(&arity) {
             return false;
         }
 
@@ -419,22 +523,28 @@ impl CouplingProof {
         }
 
         // Reconstruct the combined root as the canonicalization fold over the
-        // member-root children (plus the coverage child iff the timeline is
-        // non-trivial). Genesis promotion is native: a single member root under
-        // a trivial timeline folds to itself, so the promoted form needs no
-        // special case here.
-        let computed = combined_root(hasher, &self.active_roots, &self.alg_epochs);
+        // member-root children (plus the coverage child iff the activation is
+        // non-trivial). The coverage child commits all algorithms' null runs,
+        // derived from `alg_epochs` at `(tree_size, arity)`; if the presented
+        // epochs imply different null runs than the committed structure, the
+        // recomputed root will not match — so the activity the proof reads is
+        // grounded in the committed runs. Genesis promotion is native: a single
+        // member root under a trivial activation folds to itself.
+        let computed =
+            combined_root(hasher, &self.active_roots, &self.alg_epochs, tree_size, arity);
         constant_time_eq(&computed, expected_combined_root)
     }
 
     /// Verify the coupling proof against a binding root for a given target algorithm.
     /// Returns the verified raw root hash for the target algorithm if successful.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &self,
         hasher: &dyn Hasher,
         target_alg_id: u64,
         tree_size: u64,
+        arity: u64,
         combined_root: &[u8],
         expected_active_algs: &[u64],
         config: VerifierConfig,
@@ -442,6 +552,7 @@ impl CouplingProof {
         if !self.authenticate(
             hasher,
             tree_size,
+            arity,
             combined_root,
             expected_active_algs,
             config,
@@ -588,6 +699,7 @@ pub fn verify_inclusion_with_coupling(
         hasher,
         alg_id,
         tree_size,
+        log_arity,
         combined_root,
         expected_active_algs,
         config,
@@ -596,11 +708,14 @@ pub fn verify_inclusion_with_coupling(
         None => return false,
     };
 
-    // One-directional inactive⇒N₀ check: if the committed timeline marks
+    // One-directional inactive⇒N₀ check: if the committed activation marks
     // this position INACTIVE for alg_id, the leaf hash must equal the null
     // constant.  Active positions are unconstrained — a legitimate payload
     // `b"null"` hashes to null() but is never forbidden.  `None` (algorithm
-    // not in the timeline at all) is rejected as an ill-formed proof.
+    // not in the timeline at all) is rejected as an ill-formed proof. The
+    // activity is sound because `coupling.verify` above pinned `alg_epochs` to
+    // the committed null runs (equal-cover): a mismatched timeline would have
+    // failed the binding-root recompute.
     match committed_active_at(&coupling.alg_epochs, alg_id, index) {
         Some(false) => {
             if !constant_time_eq(leaf_hash, &hasher.null()) {
@@ -648,6 +763,7 @@ pub fn verify_inactivity_with_coupling(
     if !coupling.authenticate(
         hasher,
         tree_size,
+        log_arity,
         combined_root,
         expected_active_algs,
         config,
@@ -655,7 +771,8 @@ pub fn verify_inactivity_with_coupling(
         return false;
     }
 
-    // Position must be committed-inactive for this algorithm.
+    // Position must be committed-inactive for this algorithm. Sound because the
+    // authenticate above pinned `alg_epochs` to the committed null runs.
     match committed_active_at(&coupling.alg_epochs, alg_id, index) {
         Some(false) => {},
         _ => return false,
@@ -740,24 +857,24 @@ mod tests {
     }
 
     #[test]
-    fn timeline_trivial_is_informativeness_not_cardinality() {
-        // A single open-from-genesis algorithm is trivial.
-        assert!(timeline_is_trivial(&[(0, vec![(0, MAX)])]));
-        // Many open-from-genesis algorithms are still trivial — informativeness,
-        // not registry cardinality.
-        assert!(timeline_is_trivial(&[
-            (0, vec![(0, MAX)]),
-            (1, vec![(0, MAX)]),
-            (5, vec![(0, MAX)]),
-        ]));
-        // A single algorithm with a pre-activation prefix is non-trivial.
-        assert!(!timeline_is_trivial(&[(0, vec![(2, MAX)])]));
-        // A deactivation is non-trivial.
-        assert!(!timeline_is_trivial(&[(0, vec![(0, 5)])]));
-        // A gap-and-resume is non-trivial.
-        assert!(!timeline_is_trivial(&[(0, vec![(0, 3), (5, MAX)])]));
-        // Empty registry: vacuously trivial (no informative entry).
-        assert!(timeline_is_trivial(&[]));
+    fn activation_trivial_is_informativeness_not_cardinality() {
+        // No null run anywhere ⇒ trivial activation (no coverage child).
+        assert!(null_runs_are_trivial(&[(0, vec![(0, MAX)])], 8, 2));
+        // Many fully-active algorithms are still trivial — informativeness, not
+        // registry cardinality.
+        assert!(null_runs_are_trivial(
+            &[(0, vec![(0, MAX)]), (1, vec![(0, MAX)]), (5, vec![(0, MAX)])],
+            8,
+            2
+        ));
+        // A pre-activation prefix leaves null positions ⇒ non-trivial.
+        assert!(!null_runs_are_trivial(&[(0, vec![(2, MAX)])], 8, 2));
+        // A deactivation leaves null positions ⇒ non-trivial.
+        assert!(!null_runs_are_trivial(&[(0, vec![(0, 5)])], 8, 2));
+        // A gap-and-resume leaves a null run ⇒ non-trivial.
+        assert!(!null_runs_are_trivial(&[(0, vec![(0, 3), (5, MAX)])], 8, 2));
+        // Empty registry: vacuously trivial.
+        assert!(null_runs_are_trivial(&[], 8, 2));
     }
 
     #[test]
@@ -765,21 +882,21 @@ mod tests {
         let mr0 = vec![0xAA; 32];
         let mr1 = vec![0xBB; 32];
         let members = vec![(0u64, mr0.clone()), (1u64, mr1.clone())];
-        // Trivial timeline: no coverage child, so the combined root is exactly
-        // nary_mr over the two member roots — never a bespoke preimage hash.
+        // Fully-active activation: no coverage child, so the combined root is
+        // exactly nary_mr over the two member roots — never a bespoke preimage.
         let trivial = vec![(0u64, vec![(0u64, MAX)]), (1, vec![(0, MAX)])];
-        let got = combined_root(&H, &members, &trivial);
+        let got = combined_root(&H, &members, &trivial, 4, 2);
         let expected = nary_mr(&H, &[mr0.as_slice(), mr1.as_slice()]);
         assert_eq!(got, expected);
     }
 
     #[test]
     fn combined_root_singleton_promotes_with_no_predicate() {
-        // One member root, trivial timeline ⇒ nary_mr's len==1 arm promotes:
-        // the combined root IS the member root, structurally (no special case).
+        // One member root, fully active ⇒ nary_mr's len==1 arm promotes: the
+        // combined root IS the member root, structurally (no special case).
         let mr0 = vec![0xCD; 32];
         let members = vec![(0u64, mr0.clone())];
-        let got = combined_root(&H, &members, &[(0, vec![(0, MAX)])]);
+        let got = combined_root(&H, &members, &[(0, vec![(0, MAX)])], 4, 2);
         assert_eq!(got, mr0);
     }
 
@@ -787,28 +904,31 @@ mod tests {
     fn combined_root_appends_coverage_child_iff_non_trivial() {
         let mr0 = vec![0x11; 32];
         let members = vec![(0u64, mr0.clone())];
-        // Non-trivial timeline (a deactivation): a coverage child joins the fold,
-        // so the combined root is now a genuine two-child node, NOT the bare
-        // member root.
+        // A deactivation leaves null positions [5, 8): a coverage child
+        // committing the null runs joins the fold, so the combined root is now a
+        // genuine two-child node, NOT the bare member root.
         let non_trivial = vec![(0u64, vec![(0u64, 5u64)])];
-        let got = combined_root(&H, &members, &non_trivial);
-        let coverage = H.hash(&serialize_timeline(&non_trivial));
+        let got = combined_root(&H, &members, &non_trivial, 8, 2);
+        let coverage = H.hash(&serialize_null_runs(&non_trivial, 8, 2));
         let expected = nary_mr(&H, &[mr0.as_slice(), coverage.as_slice()]);
         assert_eq!(got, expected);
-        // And it differs from the trivial (coverage-absent) encoding.
+        // And it differs from the fully-active (coverage-absent) encoding.
         assert_ne!(got, mr0);
+        // Fully active over the same size yields no coverage child (back to the
+        // bare promoted member root).
+        let active = combined_root(&H, &members, &[(0, vec![(0, MAX)])], 8, 2);
+        assert_eq!(active, mr0);
     }
 
     #[test]
-    fn serialize_timeline_is_injective_over_boundaries() {
-        // Shifting a boundary or splitting an interval changes the serialization.
-        let a = serialize_timeline(&[(0, vec![(0, MAX)])]);
-        let b = serialize_timeline(&[(0, vec![(1, MAX)])]);
-        let c = serialize_timeline(&[(0, vec![(0, 5)])]);
-        let d = serialize_timeline(&[(0, vec![(0, 5), (7, MAX)])]);
+    fn serialize_null_runs_is_injective_over_activation() {
+        // Different null-run structures serialize differently; equal structures
+        // serialize equally. The runs are derived from the epochs at (size, k).
+        let a = serialize_null_runs(&[(0, vec![(0, MAX)])], 8, 2); // fully active
+        let b = serialize_null_runs(&[(0, vec![(0, 4)])], 8, 2); // null [4,8)
+        let c = serialize_null_runs(&[(0, vec![(0, 6)])], 8, 2); // null [6,8)
         assert_ne!(a, b);
-        assert_ne!(a, c);
-        assert_ne!(c, d);
+        assert_ne!(b, c);
     }
 
     #[test]
@@ -865,15 +985,76 @@ mod tests {
         assert_eq!(committed_active_at(&timeline, 1, 9), Some(true));
         assert_eq!(committed_active_at(&timeline, 2, 0), None);
 
-        assert_eq!(committed_is_live(&timeline, 0), Some(true));
-        assert_eq!(committed_is_live(&timeline, 1), Some(false));
-        assert_eq!(committed_is_live(&timeline, 2), None);
-
         // Alg 1's epoch closes exactly at 10, so it still covers position 9.
         assert_eq!(committed_active_algs(&timeline, 10), vec![0, 1]);
         // Position 4 falls in alg 0's gap [3, 5).
         assert_eq!(committed_active_algs(&timeline, 5), vec![1]);
         assert_eq!(committed_active_algs(&timeline, 2), vec![0, 1]);
         assert!(committed_active_algs(&timeline, 0).is_empty());
+    }
+
+    /// The soundness guard (architect): the committed null runs ARE the activity
+    /// source. Their span-union must equal the inactive position set exactly, so
+    /// the active set — hence the epochs in canonical form — is recoverable as
+    /// the complement. Committing the null runs commits the identical activity
+    /// the intervals carry. Checked exhaustively over many timelines and arities.
+    #[test]
+    fn null_runs_cover_exactly_the_inactive_positions() {
+        let active_at = |eps: &[(u64, u64)], i: u64| eps.iter().any(|&(s, e)| s <= i && i < e);
+        let cases: Vec<Vec<(u64, u64)>> = vec![
+            vec![(0, MAX)],            // fully active
+            vec![(0, 0)],              // fully inactive (genesis frozen)
+            vec![(3, MAX)],            // pre-activation prefix
+            vec![(0, 5)],              // deactivated at 5
+            vec![(0, 3), (5, MAX)],    // gap-and-resume
+            vec![(0, 1), (2, 3), (4, 5)], // alternating
+            vec![(2, 4), (7, 9)],      // two interior active runs
+        ];
+        for eps in &cases {
+            for &tree_size in &[0u64, 1, 2, 3, 4, 7, 8, 9, 16, 27] {
+                for &k in &[2u64, 3, 4] {
+                    let runs = null_runs_for_alg(eps, tree_size, k);
+                    // Reconstruct the inactive set from the runs and compare to
+                    // the epochs' inactive set, position by position.
+                    let mut covered = vec![false; tree_size as usize];
+                    for r in &runs {
+                        let span = k.pow(r.height);
+                        // Every run must be aligned and within range.
+                        assert_eq!(r.left % span, 0, "run not aligned: {r:?} k={k}");
+                        assert!(r.left + span <= tree_size, "run overruns size: {r:?}");
+                        for p in r.left..r.left + span {
+                            assert!(!covered[p as usize], "runs overlap at {p}");
+                            covered[p as usize] = true;
+                        }
+                    }
+                    for i in 0..tree_size {
+                        let active = active_at(eps, i);
+                        assert_eq!(
+                            covered[i as usize], !active,
+                            "position {i} (eps={eps:?} size={tree_size} k={k}): \
+                             null-run cover {} disagrees with inactive {}",
+                            covered[i as usize], !active
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn null_runs_serialization_binds_arity_and_size() {
+        // The serialized activation pins arity and tree_size, so the same runs
+        // cannot be reinterpreted under a different spine.
+        let eps = vec![(0u64, vec![(0u64, 4u64)])]; // inactive [4, size)
+        let a = serialize_null_runs(&eps, 8, 2);
+        let b = serialize_null_runs(&eps, 8, 4);
+        let c = serialize_null_runs(&eps, 16, 2);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        // Trivial activation (fully active) serializes with zero algorithms and
+        // is reported trivial.
+        let triv = vec![(0u64, vec![(0u64, MAX)])];
+        assert!(null_runs_are_trivial(&triv, 8, 2));
+        assert!(!null_runs_are_trivial(&eps, 8, 2));
     }
 }

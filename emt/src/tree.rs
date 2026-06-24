@@ -226,18 +226,25 @@ impl Emt {
         // Empty tree: no member root for any algorithm, hence no combined root.
         self.states.get(&alg_id)?.root.as_ref()?;
         // The member roots are the fold's children, in algorithm-ID order
-        // (BTreeMap iterates sorted). A trivial timeline carries no coverage
-        // child, so the registered algorithms are the only children.
+        // (BTreeMap iterates sorted). A mutable tree is dense and active from
+        // genesis, so no algorithm has a null run: the activation is trivial and
+        // no coverage child joins the fold, whatever the size or arity.
         let member_roots: Vec<(u64, Vec<u8>)> = self
             .states
             .iter()
             .filter_map(|(&id, s)| s.root.clone().map(|r| (id, r)))
             .collect();
-        let trivial: Vec<(u64, Vec<(u64, u64)>)> = member_roots
+        let active: Vec<(u64, Vec<(u64, u64)>)> = member_roots
             .iter()
             .map(|&(id, _)| (id, vec![(0u64, u64::MAX)]))
             .collect();
-        Some(pmt::combined_root(hasher, &member_roots, &trivial))
+        Some(pmt::combined_root(
+            hasher,
+            &member_roots,
+            &active,
+            self.len(),
+            self.config.arity,
+        ))
     }
 
     // --- proofs --------------------------------------------------------------
