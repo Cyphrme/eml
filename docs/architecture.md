@@ -511,12 +511,3 @@ The named theorems, by layer:
   prefix root, and lifts to the data-level append-only relation
   `oldCells <+: newCells`. EMT has no consistency theorem because it has no
   consistency proof.
-
-### Differential testing against a frozen baseline
-
-Beyond the proofs, a differential harness (`difftest/`) pins the append-only
-log's output to a frozen reference implementation (`neml_baseline`): for every
-sampled history, the current log's roots and proofs must equal the baseline's,
-compared structurally through the types' derived equality. Any divergence means
-a change altered an observable output of the log — which is exactly what the
-harness exists to catch.
