@@ -1,21 +1,21 @@
 //! `seal` — freezing an append-only log into the one kernel currency
 //! [`pmt::Sealed`].
 //!
-//! There is exactly one commitment currency. A mutable [`emt::Emt`] and this
-//! append-only log both seal into [`pmt::Sealed`]; the kernel computes the
-//! resumable frontier for the mutable tree at seal, so every `Sealed` uniformly
-//! carries a frontier whatever sealed it. An append-only log already holds its
-//! frontier natively, so its seal simply freezes the active algorithms' frontier
-//! peaks at the sealed size.
+//! There is exactly one commitment currency. A mutable `Emt` (from the `emt`
+//! crate) and this append-only log both seal into [`pmt::Sealed`]; the kernel
+//! computes the resumable frontier for the mutable tree at seal, so every
+//! `Sealed` uniformly carries a frontier whatever sealed it. An append-only log
+//! already holds its frontier natively, so its seal simply freezes the active
+//! algorithms' frontier peaks at the sealed size.
 //!
 //! The seal is one-way: it consumes the log and there is no path back to one
 //! (C-SEAL-ONEWAY). The way *forward* from a `Sealed` is the orthogonal
 //! operation set keyed by what each needs:
 //!
-//! - **verify** — the proofs ([`crate::snapshot_proof`], binding/leaf/ consistency) check against
+//! - **verify** — the proofs ([`crate::snapshot_proof`], binding/leaf/consistency) check against
 //!   the `Sealed`'s derived roots; needs nothing but the `Sealed`;
-//! - **[`resume`](crate::resume)** — needs only the frontier (which the `Sealed` *is*); reopens an
-//!   append-only log onto the committed frontier;
+//! - **resume** ([`NaryMerkleLog::resume`]) — needs only the frontier (which the `Sealed` *is*);
+//!   reopens an append-only log onto the committed frontier;
 //! - **[`fill`](crate::fill)** — needs the real leaf data; rebuilds a full, readable tree and
 //!   verifies it against the committed binding root.
 //!
