@@ -100,15 +100,17 @@ fn reduction_count(n: u64, k: u64) -> u64 {
     count
 }
 
-// Custom nary_mr helper matching definition
+// Custom nary_mr helper — the independent reference model of the production
+// fold. Collapse is the GENERAL same-value fold (all children equal → that
+// value; the all-null run is its dominant instance), matching `pmt::nary_mr`.
 fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
     match children.len() {
         0 => hasher.empty(),
         1 => children[0].to_vec(),
         _ => {
-            let null_const = hasher.null();
-            if children.iter().all(|&c| c == null_const) {
-                null_const
+            let first = children[0];
+            if children.iter().all(|&c| c == first) {
+                first.to_vec()
             } else {
                 hasher.node(children)
             }
@@ -846,7 +848,8 @@ proptest! {
             // roots. The timeline is trivial here (every algorithm open from
             // genesis), so there is no coverage child: a single algorithm
             // promotes to its raw root, many fold under nary_mr — no predicate.
-            let combined_root = cyphr_log::combined_root(&hasher, &active_roots, &alg_epochs);
+            let combined_root =
+                cyphr_log::combined_root(&hasher, &active_roots, &alg_epochs, tree_size, 2);
 
             let config = cyphr_log::VerifierConfig::default();
 
@@ -855,6 +858,7 @@ proptest! {
                 &hasher,
                 target_alg_id,
                 tree_size,
+                2,
                 &combined_root,
                 active_algs,
                 config,
@@ -875,6 +879,7 @@ proptest! {
                             &hasher,
                             target_alg_id,
                             tree_size,
+                            2,
                             &combined_root,
                             active_algs,
                             config
@@ -893,6 +898,7 @@ proptest! {
                             &hasher,
                             target_alg_id,
                             tree_size,
+                            2,
                             &bad_combined,
                             active_algs,
                             config
@@ -906,37 +912,47 @@ proptest! {
             bad_algs.push(999);
             prop_assert!(
                 proof
-                    .verify(&hasher, target_alg_id, tree_size, &combined_root, &bad_algs, config)
+                    .verify(&hasher, target_alg_id, tree_size, 2, &combined_root, &bad_algs, config)
                     .is_none()
             );
 
             // 5. Reject mismatching target alg id (not in active set)
             prop_assert!(
                 proof
-                    .verify(&hasher, 999, tree_size, &combined_root, active_algs, config)
+                    .verify(&hasher, 999, tree_size, 2, &combined_root, active_algs, config)
                     .is_none()
             );
 
-            // 6. Reject substituted epoch metadata: the timeline is inside
-            // the preimage, so shifting a boundary breaks the binding.
-            let mut substituted_epochs = alg_epochs.clone();
-            substituted_epochs[target_idx].1 = vec![(0, 1), (1, u64::MAX)];
-            let substituted_proof = cyphr_log::CouplingProof {
-                active_roots: active_roots.clone(),
-                alg_epochs: substituted_epochs,
-            };
-            prop_assert!(
-                substituted_proof
-                    .verify(
-                        &hasher,
-                        target_alg_id,
-                        tree_size,
-                        &combined_root,
-                        active_algs,
-                        config
-                    )
-                    .is_none()
-            );
+            // 6. Reject a substituted activation that changes the null structure:
+            // the committed null-run-extents are inside the preimage, so a
+            // pre-activation prefix (position 0 now null) breaks the binding —
+            // even though the tip stays active, so the claimed active set is
+            // unchanged. An activity-*equivalent* re-encoding of the same active
+            // set would correctly still verify (the commitment is canonical over
+            // activity, not over the interval representation); only a genuine
+            // change in which positions are null is rejected. Needs tree_size >= 2
+            // so a non-tip position can flip.
+            if tree_size >= 2 {
+                let mut substituted_epochs = alg_epochs.clone();
+                substituted_epochs[target_idx].1 = vec![(1, u64::MAX)];
+                let substituted_proof = cyphr_log::CouplingProof {
+                    active_roots: active_roots.clone(),
+                    alg_epochs: substituted_epochs,
+                };
+                prop_assert!(
+                    substituted_proof
+                        .verify(
+                            &hasher,
+                            target_alg_id,
+                            tree_size,
+                            2,
+                            &combined_root,
+                            active_algs,
+                            config
+                        )
+                        .is_none()
+                );
+            }
         }
     }
 }

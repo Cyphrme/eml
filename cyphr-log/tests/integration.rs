@@ -1558,6 +1558,8 @@ fn test_combined_root_single_alg_commits_epochs() {
             &Sha256Hasher,
             &[(0, raw_root_at_1)],
             &[(0, vec![(0u64, u64::MAX)]), (1, vec![(1u64, u64::MAX)])],
+            1,
+            2,
         );
         assert_eq!(comb_root_at_1, expected);
     });
@@ -1587,6 +1589,8 @@ fn test_combined_root_multi_alg() {
             &Sha256Hasher,
             &[(0, root_0), (1, root_1)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(0, u64::MAX)])],
+            1,
+            2,
         );
 
         let comb_root = log.combined_root_for(0).await.unwrap();
@@ -1621,6 +1625,8 @@ fn test_combined_root_historical_and_epochs() {
             &Sha256Hasher,
             &[(0, raw_0_at_1)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, u64::MAX)])],
+            1,
+            2,
         );
         assert_eq!(comb_1, expected_1);
 
@@ -1635,6 +1641,8 @@ fn test_combined_root_historical_and_epochs() {
                 (1, log.root_for_at(1, 2).await.unwrap()),
             ],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, 2)])],
+            2,
+            2,
         );
         assert_eq!(comb_2, expected_2);
 
@@ -1647,6 +1655,8 @@ fn test_combined_root_historical_and_epochs() {
             &Sha256Hasher,
             &[(0, raw_0_at_3)],
             &[(0, vec![(0, u64::MAX)]), (1, vec![(1, 2)])],
+            3,
+            2,
         );
         assert_eq!(comb_3, expected_3);
     });
@@ -1667,12 +1677,12 @@ fn test_coupling_proof_verify_validation() {
 
     // Correct combined root: the canonicalization fold over the member roots
     // (trivial timeline ⇒ no coverage child, just nary_mr over the two roots).
-    let combined_root = cyphr_log::combined_root(&hasher, &proof.active_roots, &proof.alg_epochs);
+    let combined_root = cyphr_log::combined_root(&hasher, &proof.active_roots, &proof.alg_epochs, tree_size, 2);
 
     let config = cyphr_log::VerifierConfig::default();
 
     // 1. Success case
-    let target = proof.verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config);
+    let target = proof.verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 1], config);
     assert_eq!(target.unwrap(), raw_root_0);
 
     // 2. Reject because of maximum active algorithms limit
@@ -1684,6 +1694,7 @@ fn test_coupling_proof_verify_validation() {
         &hasher,
         0,
         tree_size,
+        2,
         &combined_root,
         &[0, 1],
         strict_config,
@@ -1697,7 +1708,7 @@ fn test_coupling_proof_verify_validation() {
     };
     assert!(
         unsorted_proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1708,7 +1719,7 @@ fn test_coupling_proof_verify_validation() {
     };
     assert!(
         duplicate_proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1722,7 +1733,7 @@ fn test_coupling_proof_verify_validation() {
     };
     assert!(
         tampered_proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1731,7 +1742,7 @@ fn test_coupling_proof_verify_validation() {
     bad_combined[0] ^= 0xFF;
     assert!(
         proof
-            .verify(&hasher, 0, tree_size, &bad_combined, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &bad_combined, &[0, 1], config)
             .is_none()
     );
 
@@ -1739,19 +1750,19 @@ fn test_coupling_proof_verify_validation() {
     // Expected algorithms has different IDs
     assert!(
         proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 2], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 2], config)
             .is_none()
     );
     // Expected algorithms is shorter (missing expected alg 1)
     assert!(
         proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0], config)
             .is_none()
     );
     // Expected algorithms is longer (extra expected alg)
     assert!(
         proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1, 2], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 1, 2], config)
             .is_none()
     );
 
@@ -1759,21 +1770,21 @@ fn test_coupling_proof_verify_validation() {
     // Requesting target_alg_id = 2, which is not in active_roots
     assert!(
         proof
-            .verify(&hasher, 2, tree_size, &combined_root, &[0, 1], config)
+            .verify(&hasher, 2, tree_size, 2, &combined_root, &[0, 1], config)
             .is_none()
     );
 
     // 8. UNSORTED EXPECTED ACTIVE ALGORITHMS
     assert!(
         proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[1, 0], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[1, 0], config)
             .is_none()
     );
 
     // 9. DUPLICATE EXPECTED ACTIVE ALGORITHMS
     assert!(
         proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 0], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 0], config)
             .is_none()
     );
 
@@ -1784,12 +1795,12 @@ fn test_coupling_proof_verify_validation() {
     };
     assert!(
         empty_proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 1], config)
             .is_none()
     );
     assert!(
         proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[], config)
             .is_none()
     );
 
@@ -1803,7 +1814,7 @@ fn test_coupling_proof_verify_validation() {
     };
     assert!(
         substituted_epochs_proof
-            .verify(&hasher, 0, tree_size, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &combined_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1818,10 +1829,12 @@ fn test_coupling_proof_verify_validation() {
         &hasher,
         &inconsistent_proof.active_roots,
         &inconsistent_proof.alg_epochs,
+        tree_size,
+        2,
     );
     assert!(
         inconsistent_proof
-            .verify(&hasher, 0, tree_size, &inconsistent_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &inconsistent_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1834,17 +1847,19 @@ fn test_coupling_proof_verify_validation() {
         &hasher,
         &ill_formed_proof.active_roots,
         &ill_formed_proof.alg_epochs,
+        tree_size,
+        2,
     );
     assert!(
         ill_formed_proof
-            .verify(&hasher, 0, tree_size, &ill_formed_root, &[0, 1], config)
+            .verify(&hasher, 0, tree_size, 2, &ill_formed_root, &[0, 1], config)
             .is_none()
     );
 
     // 14. SIZE-ZERO REJECTION (nothing is committed at size zero)
     assert!(
         proof
-            .verify(&hasher, 0, 0, &combined_root, &[0, 1], config)
+            .verify(&hasher, 0, 0, 2, &combined_root, &[0, 1], config)
             .is_none()
     );
 
@@ -1856,9 +1871,9 @@ fn test_coupling_proof_verify_validation() {
         alg_epochs: epochs.clone(),
     };
     let var_combined =
-        cyphr_log::combined_root(&hasher, &var_proof.active_roots, &var_proof.alg_epochs);
+        cyphr_log::combined_root(&hasher, &var_proof.active_roots, &var_proof.alg_epochs, tree_size, 2);
 
-    let target_var = var_proof.verify(&hasher, 0, tree_size, &var_combined, &[0, 1], config);
+    let target_var = var_proof.verify(&hasher, 0, tree_size, 2, &var_combined, &[0, 1], config);
     assert_eq!(target_var.unwrap(), var_root_0);
 
     // 16. EMPTY ROOTS HANDLING
@@ -1870,10 +1885,12 @@ fn test_coupling_proof_verify_validation() {
         &hasher,
         &empty_root_proof.active_roots,
         &empty_root_proof.alg_epochs,
+        tree_size,
+        2,
     );
 
     let target_empty =
-        empty_root_proof.verify(&hasher, 0, tree_size, &empty_combined, &[0, 1], config);
+        empty_root_proof.verify(&hasher, 0, tree_size, 2, &empty_combined, &[0, 1], config);
     assert_eq!(target_empty.unwrap(), Vec::<u8>::new());
 }
 
@@ -2500,7 +2517,7 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
         alg_epochs: vec![(0, vec![(0, u64::MAX)])],
     };
     let combined_root =
-        cyphr_log::combined_root(&hasher, &coupling.active_roots, &coupling.alg_epochs);
+        cyphr_log::combined_root(&hasher, &coupling.active_roots, &coupling.alg_epochs, 2, 2);
 
     let is_valid = cyphr_log::verify_inclusion_with_coupling(
         &hasher,
@@ -3357,10 +3374,14 @@ fn test_null_payload_stays_legal() {
     });
 }
 
-/// Deactivating the sole algorithm at the tip must change the combined root
-/// even though the raw tree is unchanged — the epoch timeline encodes the
-/// deactivation and switches the metaroot from the promoted form to the
-/// hashed form.
+/// Deactivating the sole algorithm *at the tip* leaves no null position — the
+/// last appended leaf is still covered by the deactivated epoch `[(0, size))` —
+/// so the committed null structure, and hence the binding root, is identical to
+/// the live log's. There is no tip-liveness bit: the binding root commits the
+/// *current* null-run structure, and "deactivated vs paused-but-live" is a
+/// statement about future appends (a future append yields a new binding root),
+/// not the committed state (D12 REVISED; `committed_is_live` removed). The
+/// liveness distinction the old timeline commitment drew is gone by design.
 #[test]
 fn test_frontier_freshness() {
     smol::block_on(async {
@@ -3388,14 +3409,11 @@ fn test_frontier_freshness() {
             cr_live, raw_live,
             "live sole-alg CR is promoted to raw root"
         );
-        assert_ne!(cr_dead, raw_dead, "deactivated sole-alg CR must be hashed");
-        assert_ne!(cr_live, cr_dead, "combined roots must differ");
-
-        // committed_is_live distinguishes them.
-        let epochs_live = log_live.committed_epochs_at(1);
-        let epochs_dead = log_dead.committed_epochs_at(1);
-        assert_eq!(cyphr_log::committed_is_live(&epochs_live, 0), Some(true));
-        assert_eq!(cyphr_log::committed_is_live(&epochs_dead, 0), Some(false));
+        // No null position at size 1 (position 0 covered by [0, 1)), so the
+        // deactivated log commits no null run: its CR is the SAME promoted root.
+        // The tip-liveness distinction is gone by design.
+        assert_eq!(cr_dead, raw_dead, "tip-deactivated sole-alg CR stays promoted");
+        assert_eq!(cr_live, cr_dead, "no null gap ⇒ binding roots coincide");
 
         // Two-algorithm variant: identical leaves, second alg deactivated in one.
         let mut log_a = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
@@ -3423,12 +3441,11 @@ fn test_frontier_freshness() {
 
         let cr_a = log_a.combined_root_at(0, 1).await.unwrap();
         let cr_b = log_b.combined_root_at(0, 1).await.unwrap();
-        assert_ne!(cr_a, cr_b, "combined roots must differ after deactivation");
-
-        let ep_a = log_a.committed_epochs_at(1);
-        let ep_b = log_b.committed_epochs_at(1);
-        assert_eq!(cyphr_log::committed_is_live(&ep_a, 1), Some(true));
-        assert_eq!(cyphr_log::committed_is_live(&ep_b, 1), Some(false));
+        // Alg 1 deactivated at the tip still covers position 0, so neither log
+        // has a null run: both binding roots commit the same null-free structure
+        // and coincide. (A *future* append would create alg 1's null gap and
+        // diverge the roots — that is where the distinction lives now.)
+        assert_eq!(cr_a, cr_b, "tip-deactivation leaves no null run ⇒ CRs coincide");
     });
 }
 
@@ -3478,7 +3495,7 @@ fn test_genesis_promotion_boundary() {
         };
         let config = cyphr_log::VerifierConfig::default();
         assert!(
-            !promoted_coupling.authenticate(&Sha256Hasher, 1, &cr_at_1_after, &[0], config,),
+            !promoted_coupling.authenticate(&Sha256Hasher, 1, 2, &cr_at_1_after, &[0], config),
             "promoted proof against hashed CR must fail"
         );
 
@@ -3491,7 +3508,7 @@ fn test_genesis_promotion_boundary() {
         };
         // cr_at_1_genesis is the promoted form (= raw root).
         assert!(
-            !hashed_coupling.authenticate(&Sha256Hasher, 1, &cr_at_1_genesis, &[0], config,),
+            !hashed_coupling.authenticate(&Sha256Hasher, 1, 2, &cr_at_1_genesis, &[0], config),
             "hashed proof against promoted CR must fail"
         );
 

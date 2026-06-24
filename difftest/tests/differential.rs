@@ -334,7 +334,7 @@ proptest! {
                             .map(|&aid| (aid, cur.root_for(aid).expect("active alg has a root")))
                             .collect();
                         let h = alg_hasher_cur(id);
-                        let expected = cyphr_log::combined_root(h.as_ref(), &members, &epochs);
+                        let expected = cyphr_log::combined_root(h.as_ref(), &members, &epochs, size, 2);
                         prop_assert_eq!(c, &expected,
                             "multi-alg combined_root_for({}) is not the fold at size={}", id, size);
                     }
