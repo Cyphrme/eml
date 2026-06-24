@@ -2294,27 +2294,6 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         }
 
-        // Helper helper to fold a frontier to its root.
-        fn fold_frontier(hasher: &dyn Hasher, frontier: &[Vec<u8>], k: usize) -> Vec<u8> {
-            if frontier.is_empty() {
-                return hasher.empty();
-            }
-            if frontier.len() == 1 {
-                return frontier[0].clone();
-            }
-            let mut current = frontier.to_vec();
-            while current.len() > k {
-                let split_idx = current.len() - k;
-                let right_elements = &current[split_idx..];
-                let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-                let merged = nary_mr(hasher, &refs);
-                current.truncate(split_idx);
-                current.push(merged);
-            }
-            let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-            nary_mr(hasher, &refs)
-        }
-
         // Reconstruct frontier stacks at checkpoint size and verify starting boundaries
         let mut alg_frontiers = std::collections::HashMap::new();
         for (&alg_id, state) in &self.algs {
@@ -2348,7 +2327,14 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
 
             if start > 0 {
-                let folded = fold_frontier(state.hasher.as_ref(), &frontier, k);
+                let folded = if frontier.is_empty() {
+                    state.hasher.empty()
+                } else {
+                    fold_frontier(frontier.clone(), k, |chunk| {
+                        let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+                        nary_mr(state.hasher.as_ref(), &refs)
+                    })
+                };
                 let mut expected_root = None;
                 for &(tid, ref r) in trusted_roots {
                     if tid == alg_id {
@@ -2478,7 +2464,14 @@ impl<S: Storage> NaryMerkleLog<S> {
         // Verify final recomputed roots match the current logger roots
         for (&alg_id, state) in &self.algs {
             let (frontier, ..) = &alg_frontiers[&alg_id];
-            let folded = fold_frontier(state.hasher.as_ref(), frontier, self.config.arity as usize);
+            let folded = if frontier.is_empty() {
+                state.hasher.empty()
+            } else {
+                fold_frontier(frontier.clone(), self.config.arity as usize, |chunk| {
+                    let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+                    nary_mr(state.hasher.as_ref(), &refs)
+                })
+            };
             let final_root = self.root_for_at(alg_id, end).await?;
             if !crate::proof::constant_time_eq(&folded, &final_root) {
                 return Ok(false); // Final root mismatch!
