@@ -127,6 +127,24 @@ fn leaf_strategy() -> impl Strategy<Value = Vec<u8>> {
     ]
 }
 
+// MATCHING-SHAPE SCOPING (Anchor 1). General same-value collapse — the new
+// canonical spec — INTENTIONALLY diverges from the frozen, null-only `neml`
+// baseline on aligned same-value-*non-null* sibling runs: two byte-equal
+// non-null leaves landing in the same k-group fold to that value on the current
+// side (collapse) but hash to a node on the baseline. The frozen baseline is the
+// deployed null-only reality and is the *wrong* oracle for that case, so the
+// differential is a matching-shape sanity check: it must not generate the
+// intended-divergence inputs. Tagging each leaf with its append index makes
+// every leaf payload distinct, so no same-value run (null or non-null) ever
+// forms from the data — distinct data and null runs (from algorithm
+// inactivity, not payloads) still exercise the byte-identity the baseline does
+// share. This scopes the *inputs*; it never touches the recompute.
+fn distinct_leaf(append_index: u64, data: &[u8]) -> Vec<u8> {
+    let mut tagged = append_index.to_be_bytes().to_vec();
+    tagged.extend_from_slice(data);
+    tagged
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 1024, ..ProptestConfig::default() })]
 
@@ -141,6 +159,14 @@ proptest! {
         old_seed in any::<u64>(),
         new_seed in any::<u64>(),
     ) {
+        // Matching-shape scoping: distinct leaf payloads so the data forms no
+        // same-value sibling run (the intended general-collapse divergence from
+        // the null-only baseline). See `distinct_leaf`.
+        let leaves: Vec<Vec<u8>> = leaves
+            .iter()
+            .enumerate()
+            .map(|(i, d)| distinct_leaf(i as u64, d))
+            .collect();
         let cur = build_cur(k, &leaves);
         let base = build_base(k, &leaves);
         let size = leaves.len() as u64;
@@ -262,12 +288,18 @@ proptest! {
             // alg 0 is registered by `new`; track every algorithm we touch so we
             // can sweep their binding roots afterward.
             let mut seen_algs: Vec<u64> = vec![0];
+            // Running append index so each appended leaf payload is distinct —
+            // matching-shape scoping (see `distinct_leaf`): the data forms no
+            // same-value sibling run, the intended general-collapse divergence.
+            let mut append_index: u64 = 0;
 
             for op in &ops {
                 match op {
                     Op::Append(data) => {
-                        cur.append_leaf(data).await.unwrap();
-                        base.append_leaf(data).await.unwrap();
+                        let data = distinct_leaf(append_index, data);
+                        append_index += 1;
+                        cur.append_leaf(&data).await.unwrap();
+                        base.append_leaf(&data).await.unwrap();
                     }
                     Op::AddAlg(id) => {
                         // Both sides must take the same branch: only add if absent
