@@ -1,8 +1,8 @@
 import EMLProof.Foundations
-import EMLProof.NEML
+import EMLProof.Epoch
 
 /-!
-# Binding-proof soundness (PMT, over `Foundations`)
+# Binding-proof soundness (epoch combinator, over `Foundations`)
 
 The **binding proof** is the cross-algorithm peer of inclusion / consistency /
 leaf / snapshot proofs (`pmt/src/binding_proof.rs`). It proves that a set of
