@@ -128,7 +128,6 @@ mutual
   termination_by cs => nlsize cs
   decreasing_by
     all_goals simp [nlsize]
-    all_goals omega
 
   /-- Map `eval` over a child list (structural; equals `List.map (eval L)`). -/
   noncomputable def evalMap (L : Nat) : List (NaryTree (List UInt8)) → List Digest
