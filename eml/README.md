@@ -1,6 +1,6 @@
-# eml-log — Epoch Merkle Log (append-only)
+# eml — Epoch Merkle Log (append-only)
 
-The `eml-log` crate is the **append-only engineering library** at Layer 2 of the
+The `eml` crate is the **append-only engineering library** at Layer 2 of the
 three-layer architecture: PMT (kernel) → EML/EMT (engineering libraries) →
 instantiations. It is built directly on the `pmt` kernel. A concrete
 instantiation (for example a binary log at `k = 2`) is a thin layer on top.
@@ -32,7 +32,7 @@ The library is parameterized essentially by the spine arity `k` alone
 └───────────────────────────┬──────────────────────────────────────────┘
                              │
   ┌──────────────────────────▼──────────────────┐
-  │ Layer 2 — eml-log (this crate, append-only)  │   emt (mutable peer)
+  │ Layer 2 — eml (this crate, append-only)      │   emt (mutable peer)
   │   frontier-stack carry · append_leaf/subtree  │   …
   │   consistency proofs · snapshot proof         │
   │   filling (data-required rebuild + verify)    │
@@ -109,15 +109,17 @@ proof-composition seam.
 
 **Canonicalization.** Every fold applies two always-on primitives from the
 kernel: **promotion** (a lone child is lifted without hashing) and **collapse**
-(all-null children fold to the null constant). These together ensure canonical
-proof encoding: a zero-sibling step is rejected, so a fixed
-`(leaf_hash, index, tree_size, root)` admits at most one accepting path.
+(children of the same value fold to that value; the current realization collapses
+all-null children to the null constant — the only per-algorithm-divergent case).
+These together ensure canonical proof encoding: a zero-sibling step is rejected,
+so a fixed `(leaf_hash, index, tree_size, root)` admits at most one accepting
+path.
 
 **Epochs and the committed timeline.** The timeline of every registered
-algorithm — when it was active and when it was frozen — is committed into the
-combined root via `serialize_timeline`. A verifier reads activity from the
-committed timeline, never by inspecting whether a digest equals the null
-constant.
+algorithm — when it was active and when it was frozen — drives the null-run
+geometry committed into the combined root (via `serialize_null_runs`). A verifier
+reads activity from the committed null-run-extents, never by inspecting whether
+a digest equals the null constant.
 
 ## Minimal usage example
 

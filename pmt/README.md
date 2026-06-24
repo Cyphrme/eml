@@ -3,7 +3,7 @@
 The `pmt` crate is the **Layer 1 kernel** of the three-layer architecture:
 PMT (kernel) → EML/EMT (engineering libraries) → instantiations. It is the
 abstract core shared by every tree built above it. The engineering libraries
-(`eml-log`, `emt`) depend on it; it depends on nothing.
+(`eml`, `emt`) depend on it; it depends on nothing.
 
 ## What it is
 
@@ -19,12 +19,12 @@ baked in. No domain-separation prefix is imposed. No application type appears.
 │ Layer 1 — PMT  (this crate)                                           │
 │   proof spine · canonicalization · Hasher seam                        │
 │   inclusion · leaf proof · binding proof · combined root · coupling   │
-│   embedding · Sealed currency · opaque metadata channel               │
+│   Sealed currency · opaque metadata channel                           │
 │   depends on nothing                                                  │
 └───────────────────────────┬──────────────────────────────────────────┘
                              │
               ┌──────────────┴──────────────────┐
-              │ eml-log (append-only)             │   emt (mutable)
+              │ eml (append-only)                 │   emt (mutable)
               │ …                                 │   …
 ```
 
@@ -33,8 +33,12 @@ baked in. No domain-separation prefix is imposed. No application type appears.
 ### The Hasher seam
 
 [`Hasher`] is the single trait every tree implementation plugs a hash algorithm
-into. Implement four methods (`leaf`, `node`, `empty`, `hash`) and the kernel
-builds any tree shape over it.
+into. Implement five required methods (`leaf`, `node`, `empty`, `hash`,
+`clone_box`) and the kernel builds any tree shape over it. A sixth method,
+`digest_len`, has a default derived from `empty()` and may be overridden for
+efficiency. The fixed-width contract — every digest the hasher produces must be
+the same constant byte length — is load-bearing for binding-root soundness (the
+unprefixed node-hash concatenation is injective only over equal-width children).
 
 ### Proof spine (`topology`)
 
@@ -47,9 +51,10 @@ generation and verification to prevent topology drift.
 ### Canonicalization (`mr`)
 
 [`nary_mr`] applies two always-on primitives over any child sequence:
-**promotion** (a lone child is lifted without hashing) and **collapse** (all-null
-children fold to the null constant). [`evaluate`] recursively evaluates a
-[`Subtree`] to its root digest.
+**promotion** (a lone child is lifted without hashing) and **collapse** (children
+of the same value fold to that value; the current realization is the null-only
+case where all-null children fold to the null constant). [`evaluate`] recursively
+evaluates a [`Subtree`] to its root digest.
 
 ### Inclusion and proofs
 
@@ -72,11 +77,14 @@ run-extents are derived views computed on demand.
 roots. [`CouplingProof`] maps a combined root to the active per-algorithm roots
 and committed timeline; [`VerifierConfig`] bounds the fold for DoS mitigation.
 
-### Embedding
+### Subtree opacity
 
-[`embed`] wraps a child tree's root digest as an opaque kernel leaf; [`extract`]
-reads the bytes back. The embedded leaf is byte-identical to a raw-payload leaf
-— the kernel never branches on a leaf's origin.
+A caller carrying a child tree's root as a leaf places the root bytes directly
+into `Subtree::Leaf(root_bytes)`. The resulting leaf is byte-identical to any
+other raw-payload leaf carrying the same bytes — the kernel never branches on a
+leaf's origin (no `is_embedded` tag exists). This opacity is the security
+guarantee: an auditor cannot tell from an inclusion proof whether the leaf is a
+raw payload or a child-tree root.
 
 ## Minimal usage example
 

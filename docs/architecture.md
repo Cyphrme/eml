@@ -16,7 +16,7 @@ abstract core changes least, the application instantiations most.
 │ Layer 1 — PMT  (Polymorphic Merkle Tree kernel)        crate: pmt      │
 │   proof spine · canonicalization (collapse + promotion) · Hasher seam  │
 │   inclusion · leaf proof · binding proof · combined root · coupling    │
-│   embedding · Sealed currency · opaque metadata channel                │
+│   Sealed currency · opaque metadata channel                            │
 │   depends on nothing                                                   │
 └───────────────────────────────┬────────────────────────────────────────┘
                                  │  abstract core → engineering mechanism
@@ -50,11 +50,16 @@ choices that make that work.
 ### The Hasher seam
 
 A construction reaches its hash through one trait, `Hasher`
-(`pmt/src/hasher.rs`): `leaf`, `node`, `empty`, `null`, and a raw `hash`.
-Prefix domain separation is deliberately **not** a kernel axis — `leaf(d)` is
-`H(d)` with no prefix byte, and an application that wants domain separation
-supplies a prefixing `Hasher` wrapper. This keeps the libraries parameterized
-essentially by the arity `k` alone.
+(`pmt/src/hasher.rs`). Five methods are required: `leaf`, `node`, `empty`,
+`hash`, and `clone_box`. Two have defaults: `null` (derived from `hash`) and
+`digest_len` (derived from `empty`). The **fixed-width contract** — every digest
+a single hasher produces must be the same constant byte length — is
+load-bearing: the unprefixed node-hash concatenation is injective in its child
+boundaries only when all children are the same width, and binding-root soundness
+rests on that injectivity. Prefix domain separation is deliberately **not** a
+kernel axis — `leaf(d)` is `H(d)` with no prefix byte, and an application that
+wants domain separation supplies a prefixing `Hasher` wrapper. This keeps the
+libraries parameterized essentially by the arity `k` alone.
 
 One identity follows directly: because `leaf(d) = H(d)`, a leaf whose payload is
 the four bytes `null` hashes to the same digest as the null constant
@@ -103,11 +108,14 @@ per-construction toggle. It composes exactly two primitives:
   encoding, a promoted node contributes no step (`within_subtree_path` emits a
   step only for multi-child nodes). This is the same path compression a
   PATRICIA / radix trie performs.
-- **collapse** — children of the *same value* fold to that value. The all-null
-  case (`nary_mr` returns the null constant when every child is null) is one
-  instance of this general same-value fold, not a separate operation. This is
-  the node-elimination rule of a reduced ordered binary decision diagram (ROBDD
-  rule R2: eliminate a node whose children are isomorphic).
+- **collapse** — children of the *same value* fold to that value. The current
+  code realizes this as the null-only case (`nary_mr` returns the null constant
+  when every child is the null constant) — the ROBDD R2 instance for null runs.
+  This is the node-elimination rule of a reduced ordered binary decision diagram
+  (ROBDD rule R2: eliminate a node whose children are isomorphic). Null is the
+  only per-algorithm-divergent collapse (redundant-value collapse is
+  algorithm-independent), so null-run-extents are both the minimal and the only
+  instance that must be committed.
 
 Treating these two as a single confluent reduction to a unique canonical form is
 the kernel's structural contribution. ROBDD canonicalization is the rigorous
@@ -140,28 +148,35 @@ The two primitives are asymmetric in what they must commit:
 The committed extent is load-bearing for soundness, not merely for
 decompression: two distinct log entries that happen to be equal are distinct
 events, and the committed multiplicity preserves their distinct positions when a
-tree is unrolled. For null runs the extent is carried by the epoch timeline
-(below); the extent geometry recovers the rest.
+tree is unrolled. Null-run extents carry the activation geometry (below); the
+extent geometry recovers the rest.
 
-### Epoch construction and the committed timeline
+### Epoch construction and the committed activation
 
 Multihash agility needs a data model for *which* algorithms are live over *which*
-positions, because activity cannot be inferred from a digest. The kernel models
-this as a **committed epoch timeline**: per algorithm, a vector of disjoint,
+positions, because activity cannot be inferred from a digest. The kernel tracks
+this as a **committed epoch timeline** per algorithm: a vector of disjoint,
 ordered `(start, end)` intervals, with an open final interval (`end == u64::MAX`)
-for a live algorithm (`pmt/src/proof.rs`). The timeline is the authenticated
-source for "is algorithm X active at position p?" (`committed_active_at`), "is X
-live now?" (`committed_is_live`, a question the tree alone cannot answer because
-a deactivation at the idle tip leaves no later position to witness it), and "what
-is the active set?" (`committed_active_algs`). `validate_committed_epochs`
-enforces strict sort by algorithm ID, ordered non-overlapping intervals, and a
-single trailing open interval.
+for a live algorithm (`pmt/src/proof.rs`). The timeline is the internal source
+for "is algorithm X active at position p?" (`committed_active_at`) and "what is
+the active set?" (`committed_active_algs`). `validate_committed_epochs` enforces
+strict sort by algorithm ID, ordered non-overlapping intervals, and a single
+trailing open interval.
 
-A timeline is **trivial** when every algorithm is open-from-genesis
-(`[(0, u64::MAX)]`) — `timeline_is_trivial`. Triviality is informativeness, not
-registry cardinality: many open-from-genesis algorithms are still trivial, while
-a single algorithm with a pre-activation prefix, a deactivation, or a gap is
-non-trivial.
+A timeline is **trivially covered** when every algorithm is active from genesis
+(`[(0, u64::MAX)]`). Triviality is informativeness, not registry cardinality: many
+open-from-genesis algorithms are still trivial, while a single algorithm with a
+pre-activation prefix, a deactivation, or a gap is non-trivial.
+
+What gets *committed* into each binding root is not the raw epoch timeline but
+its geometric consequence: the **null-run-extents** — the maximal aligned k-ary
+blocks over which each algorithm has no active content. These are the only
+per-algorithm-divergent collapse instances (null is the only value whose run
+geometry differs between algorithms), and they are the minimal information needed
+to reconstruct a verifier's view of the activation. `null_runs_for_alg` derives
+them from the epoch timeline; `all_null_runs` collects them across all algorithms;
+`serialize_null_runs` is the fixed-width, injective serialization committed in
+every binding root.
 
 ### The combined root
 
@@ -172,14 +187,14 @@ per-algorithm **member roots as children** (`combined_root` in
 `pmt/src/proof.rs`):
 
 ```
-combined_root(H, member_roots, alg_epochs)
-  = nary_mr(H,  [MR₀, MR₁, …]  ‖  [H(serialize_timeline(alg_epochs))]?)
+combined_root(H, member_roots, alg_epochs, tree_size, arity)
+  = nary_mr(H,  [MR₀, MR₁, …]  ‖  [H(serialize_null_runs(...))]?)
 ```
 
 A **member root** is one algorithm's own raw root (the fold of its frontier
 peaks under its own hash; `Sealed::member_root`). The member roots enter the
 fold as **opaque digests** — `H` is only ever applied to those digests and to
-the timeline serialization, never to another algorithm's security material — so
+the null-run serialization, never to another algorithm's security material — so
 each algorithm's combined root rests solely on its own hash. This is why no
 algorithm's break can weaken another's, even inside the shared head.
 
@@ -191,42 +206,42 @@ Two facts make this a fold rather than a special-cased commitment:
   predicate, and so no branch to forget. This is what makes a single-algorithm
   tree's root identical to a plain (e.g. RFC-9162) root with no combined-root
   overhead.
-- **Coverage is a sibling, present only when informative.** Because activity is
-  read from the committed timeline, a multi-algorithm structure must commit it.
-  It enters the fold as one extra **coverage child**
-  `H(serialize_timeline(alg_epochs))`, appended **iff the timeline is
-  non-trivial**. A trivial timeline carries no information beyond the member
-  roots, so its child is omitted; the absence of the child *is* the trivial
-  encoding (the same way same-value collapse treats the null case). The timeline
-  serialization is fixed-width and therefore injective over its boundaries
-  (`serialize_timeline`).
+- **Coverage is a sibling, present only when informative.** A multi-algorithm
+  structure with any non-trivial activation must commit the null-run-extents —
+  the per-algorithm-divergent collapse geometry — so a verifier can reconstruct
+  the canonical structure. It enters the fold as one extra **coverage child**
+  `H(serialize_null_runs(alg_epochs, tree_size, arity))`, appended **iff** the
+  null runs are non-trivial (`null_runs_are_trivial`). A trivially covered
+  structure carries no per-algorithm-divergent collapse, so its child is omitted;
+  the absence of the child *is* the trivial encoding. The null-run serialization
+  is fixed-width and therefore injective over its boundaries (`serialize_null_runs`).
 
-So a single algorithm with a trivial timeline yields a combined root equal to
-its member root; many algorithms, or any non-trivial timeline, yield a genuine
-`nary_mr` node. EMT has trivial coverage (its cells are all-covered); EML carries
-the range-timeline as the overlay that records crypto-agility.
+So a single algorithm with no null runs yields a combined root equal to its member
+root; any non-trivial activation yields a genuine `nary_mr` node. EMT has trivial
+coverage (its cells are all-covered); EML carries the epoch timeline whose null
+runs record crypto-agility boundaries.
 
 #### What the combined root commits
 
 It commits the per-algorithm member roots — which intrinsically carry the
 collapse/promotion geometry, by canonical uniqueness — and, when non-trivial,
-the null-coverage timeline through the coverage child. It does **not** mix
-security across algorithms.
+the null-run-extents of all algorithms through the coverage child. It does
+**not** mix security across algorithms.
 
 ### Coupling — opening the combined root
 
 A `CouplingProof` (`pmt/src/proof.rs`) is the single primitive that opens a
 combined root to its children: the per-algorithm raw roots together with the
-committed timeline. Its `authenticate` method revalidates structure (canonical
-ordering, DoS bounds, well-formed epochs, an active set consistent with the
-timeline) and recomputes the combined root via the same `combined_root` fold;
-on success both the roots and the timeline are authenticated by the head. The
-inclusion- and inactivity-with-coupling helpers
-(`verify_inclusion_with_coupling`, `verify_inactivity_with_coupling`) compose
-this opening with an inclusion check, enforcing the one-directional
-`inactive ⇒ null constant` rule: at a position the timeline marks inactive for
-an algorithm, the leaf must be the null constant; active positions are
-unconstrained.
+committed epoch timeline (and, through it, the null-run-extents). Its
+`authenticate` method revalidates structure (canonical ordering, DoS bounds,
+well-formed epochs, an active set consistent with the timeline) and recomputes
+the combined root via the same `combined_root` fold; on success both the roots
+and the timeline are authenticated by the head. The inclusion- and
+inactivity-with-coupling helpers (`verify_inclusion_with_coupling`,
+`verify_inactivity_with_coupling`) compose this opening with an inclusion check,
+enforcing the one-directional `inactive ⇒ null constant` rule: at a position
+the timeline marks inactive for an algorithm, the leaf must be the null constant;
+active positions are unconstrained.
 
 ### The binding proof — cross-algorithm consistency
 
@@ -235,12 +250,13 @@ Where coupling opens *one* combined root, the **binding proof**
 inclusion / consistency / leaf / snapshot proofs. It proves that a set of
 per-algorithm binding roots (each the combined root under its own hash) are
 mutually consistent — that every algorithm committed to the *same* member-root
-tuple and the *same* timeline.
+tuple and the *same* activation geometry.
 
-A `BindingProof` carries only the shared structure (member roots + timeline);
-the binding roots `BR_i` are supplied to `verify` as **trusted inputs**, paired
-with each algorithm's own hash (`TrustedBindingRoot`). For each trusted root the
-verifier recomputes `combined_root(H_i, member_roots, alg_epochs) == BR_i`. If
+A `BindingProof` carries only the shared structure (member roots + epoch
+timeline); the binding roots `BR_i` are supplied to `verify` as **trusted
+inputs**, paired with each algorithm's own hash (`TrustedBindingRoot`). For each
+trusted root the verifier recomputes `combined_root(H_i, member_roots,
+alg_epochs, tree_size, arity) == BR_i`. If
 every algorithm matches, the algorithms are mutually bound (`BR_i ≘ BR_j`).
 Verification reads **digests only** — no leaf payloads, no proof paths.
 
@@ -284,15 +300,16 @@ changes the computed root, so completeness is preserved; in exchange, a fixed
 hash collisions), which closes prepend/insert malleability. This concerns
 zero-*sibling* steps only; null-*valued* siblings from a collapse are unaffected.
 
-### Embedding
+### Subtree opacity
 
-Any tree's root embeds as an **opaque leaf** in any other tree
-(`pmt/src/subtree.rs`): `embed(root)` yields a leaf byte-identical to a
-raw-payload leaf carrying the same bytes, and the kernel never branches on a
-leaf's origin (there is no `is_embedded` tag). Composition is two independent
-inclusion verifications, with no composite proof type. The opacity is a security
-property: an auditor cannot tell whether a leaf is a raw payload or an embedded
-subtree root, so embedded subtrees cannot be fingerprinted.
+Any tree's root can be carried as an **opaque leaf** in any other tree: a caller
+places the root bytes directly into `Subtree::Leaf(root_bytes)`
+(`pmt/src/subtree.rs`), which is byte-identical to any other raw-payload leaf
+carrying the same bytes. The kernel never branches on a leaf's origin — there is
+no `is_embedded` tag. Composition is two independent inclusion verifications,
+with no composite proof type. The opacity is a security property: an auditor
+cannot tell whether a leaf is a raw payload or a child-tree root, so embedded
+subtrees cannot be fingerprinted.
 
 ### The opaque metadata channel
 
@@ -436,13 +453,21 @@ prefix distinguishes inner from leaf hashes, which contradicts general promotion
 prefixed build is a build-time artifact rather than the unprefixed working
 target.
 
+The CT subtree-ban is a **runtime `LogKind` lock** on a generic EML log, not a
+type-level prohibition. `LogKind` is fixed on the first append: a log that
+receives its first append as a flat leaf (`append_leaf`) locks to `LogKind::Flat`
+and rejects any subsequent `append_subtree`, and vice versa. The CT build
+(`ct/src/lib.rs`) creates logs via `append_leaf` only; the contract is enforced
+at runtime, and `append_subtree` remains callable on an empty CT log before the
+first append.
+
 The repository's contribution is **PMT + EML + EMT**; the instantiations are
 consumers and may move out of the repository later.
 
 ## Formal guarantees
 
 The core is formally verified in Lean 4 (`proofs/lean/`; see
-`proofs/lean/README.md` for the reviewer's guide). Three properties bound what
+`proofs/lean/README.md` for the reviewer's guide). Two properties bound what
 the verification rests on:
 
 - **Sorry-free.** Every theorem in the corpus is complete — no `sorry`

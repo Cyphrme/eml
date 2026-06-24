@@ -1,7 +1,7 @@
 [package]
 name          = "pmt"
 version       = "0.1.0"
-description   = "Polymorphic Merkle Tree — the abstract kernel: proof spine, canonicalization, inclusion, embedding, and epoch construction"
+description   = "Polymorphic Merkle Tree — the abstract kernel: proof spine, canonicalization, inclusion, and epoch construction"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
