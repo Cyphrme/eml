@@ -15,7 +15,7 @@ abstract core changes least, the application instantiations most.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Layer 1 — PMT  (Polymorphic Merkle Tree kernel)        crate: pmt      │
 │   proof spine · canonicalization (collapse + promotion) · Hasher seam  │
-│   inclusion · leaf proof · binding proof · combined root · coupling    │
+│   inclusion · leaf proof · binding proof · binding root · coupling     │
 │   Sealed currency · opaque metadata channel                            │
 │   depends on nothing                                                   │
 └───────────────────────────────┬────────────────────────────────────────┘
@@ -178,12 +178,12 @@ them from the epoch timeline; `all_null_runs` collects them across all algorithm
 `serialize_null_runs` is the fixed-width, injective serialization committed in
 every binding root.
 
-### The combined root
+### The binding root
 
-The **combined root** is the live primary root of both trees: the head every
+The **binding root** is the live primary root of both trees: the head every
 per-algorithm root authenticates against. It is *not* a bespoke hash — it is the
 same canonicalization fold (`nary_mr`) applied one level up, over the
-per-algorithm **member roots as children** (`combined_root` in
+per-algorithm **member roots as children** (computed by `combined_root` in
 `pmt/src/proof.rs`):
 
 ```
@@ -195,16 +195,16 @@ A **member root** is one algorithm's own raw root (the fold of its frontier
 peaks under its own hash; `Sealed::member_root`). The member roots enter the
 fold as **opaque digests** — `H` is only ever applied to those digests and to
 the null-run serialization, never to another algorithm's security material — so
-each algorithm's combined root rests solely on its own hash. This is why no
+each algorithm's binding root rests solely on its own hash. This is why no
 algorithm's break can weaken another's, even inside the shared head.
 
 Two facts make this a fold rather than a special-cased commitment:
 
 - **Singleton promotion is native.** A registry of one algorithm folds
-  `nary_mr(H, [MR₀])`, whose one-child arm promotes to `MR₀`. The combined root
+  `nary_mr(H, [MR₀])`, whose one-child arm promotes to `MR₀`. The binding root
   *is* the member root because there is one child — there is no promotion
   predicate, and so no branch to forget. This is what makes a single-algorithm
-  tree's root identical to a plain (e.g. RFC-9162) root with no combined-root
+  tree's root identical to a plain (e.g. RFC-9162) root with no binding-root
   overhead.
 - **Coverage is a sibling, present only when informative.** A multi-algorithm
   structure with any non-trivial activation must commit the null-run-extents —
@@ -216,26 +216,26 @@ Two facts make this a fold rather than a special-cased commitment:
   the absence of the child *is* the trivial encoding. The null-run serialization
   is fixed-width and therefore injective over its boundaries (`serialize_null_runs`).
 
-So a single algorithm with no null runs yields a combined root equal to its member
+So a single algorithm with no null runs yields a binding root equal to its member
 root; any non-trivial activation yields a genuine `nary_mr` node. EMT has trivial
 coverage (its cells are all-covered); EML carries the epoch timeline whose null
 runs record crypto-agility boundaries.
 
-#### What the combined root commits
+#### What the binding root commits
 
 It commits the per-algorithm member roots — which intrinsically carry the
 collapse/promotion geometry, by canonical uniqueness — and, when non-trivial,
 the null-run-extents of all algorithms through the coverage child. It does
 **not** mix security across algorithms.
 
-### Coupling — opening the combined root
+### Coupling — opening the binding root
 
 A `CouplingProof` (`pmt/src/proof.rs`) is the single primitive that opens a
-combined root to its children: the per-algorithm raw roots together with the
+binding root to its children: the per-algorithm raw roots together with the
 committed epoch timeline (and, through it, the null-run-extents). Its
 `authenticate` method revalidates structure (canonical ordering, DoS bounds,
 well-formed epochs, an active set consistent with the timeline) and recomputes
-the combined root via the same `combined_root` fold; on success both the roots
+the binding root via the same `combined_root` fold; on success both the roots
 and the timeline are authenticated by the head. The inclusion- and
 inactivity-with-coupling helpers (`verify_inclusion_with_coupling`,
 `verify_inactivity_with_coupling`) compose this opening with an inclusion check,
@@ -245,11 +245,11 @@ active positions are unconstrained.
 
 ### The binding proof — cross-algorithm consistency
 
-Where coupling opens *one* combined root, the **binding proof**
+Where coupling opens *one* binding root, the **binding proof**
 (`pmt/src/binding_proof.rs`) is the first-class, cross-algorithm peer of the
 inclusion / consistency / leaf / snapshot proofs. It proves that a set of
-per-algorithm binding roots (each the combined root under its own hash) are
-mutually consistent — that every algorithm committed to the *same* member-root
+per-algorithm binding roots (each the binding root computed under its own hash)
+are mutually consistent — that every algorithm committed to the *same* member-root
 tuple and the *same* activation geometry.
 
 A `BindingProof` carries only the shared structure (member roots + epoch
@@ -333,7 +333,7 @@ is what decides which proofs are sound.
 | Regime                | append-only                       | mutable (`set` / `get`)        |
 | Representation        | frontier stack (bounded carry)    | rebuild / path-recompute       |
 | Consistency proofs    | **yes**                           | **no** (unsound under mutation)|
-| Inherits from PMT     | spine, canonicalization, epochs, combined root, coupling, binding proof, inclusion, leaf proof, metadata | same, minus consistency |
+| Inherits from PMT     | spine, canonicalization, epochs, binding root, coupling, binding proof, inclusion, leaf proof, metadata | same, minus consistency |
 | Adds                  | snapshot proof, filling           | retroactive per-node alg add   |
 | Config                | `k`                               | `k`                            |
 
@@ -393,8 +393,8 @@ a parallel committed channel:
 
 - the **member root** is the fold of an algorithm's frontier peaks
   (`Sealed::member_root`);
-- the **binding root** is the combined root over the member roots and timeline
-  (`Sealed::binding_root`), with native singleton promotion;
+- the **binding root** is the `combined_root` fold over the member roots and
+  timeline (`Sealed::binding_root`), with native singleton promotion;
 - the **run-extents** are the `height >= 1` frontier nodes, pure
   `(tree_size, arity)` geometry (`Sealed::run_extents`).
 
@@ -492,8 +492,8 @@ The named theorems, by layer:
   leaf at the claimed log position; `inclusion_proof_unique` (`NEML.lean`):
   non-malleability — at most one accepting canonical path per statement, modulo
   an internal-node hash collision.
-- **Combined root and coupling** — `combinedRoot_binds_timeline`,
-  `coupling_extract_sound` (`NEML.lean`): the combined root is the `nary_mr` fold
+- **Binding root and coupling** — `combinedRoot_binds_timeline`,
+  `coupling_extract_sound` (`NEML.lean`): the binding root is the `nary_mr` fold
   over the member-root child digests plus the coverage child, so a fixed root
   pins the member-digest list (modulo a node-hash collision) and binds the
   timeline; algorithm identities are the verifier's trusted active-set input, not

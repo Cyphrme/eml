@@ -11,7 +11,7 @@ instantiations — described in full in [`docs/architecture.md`](docs/architectu
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Layer 1 — PMT  (Polymorphic Merkle Tree kernel)        crate: pmt    │
 │   proof spine · canonicalization (collapse + promotion) · Hasher seam│
-│   inclusion · leaf proof · binding proof · combined root · coupling  │
+│   inclusion · leaf proof · binding proof · binding root · coupling   │
 │   seal lattice · opaque metadata channel                             │
 │   depends on nothing                                                 │
 └──────────────────────────┬───────────────────────────────────────────┘
@@ -32,7 +32,7 @@ instantiations — described in full in [`docs/architecture.md`](docs/architectu
 ```
 
 **PMT** (`pmt/`) is the abstract core: proof spine, canonicalization,
-multi-algorithm combined root, and the `Sealed` commitment currency. It depends
+multi-algorithm binding root, and the `Sealed` commitment currency. It depends
 on nothing.
 
 **EML** (`eml/`) is the append-only log built on PMT. It owns the frontier
@@ -56,17 +56,17 @@ hashing) and *collapse* (equal-valued siblings fold to one) — form a single
 confluent reduction to a unique canonical form. This pins each layout to exactly
 one root and closes proof malleability.
 
-**Combined root.** One `nary_mr` fold over the per-algorithm member roots (plus
+**Binding root.** One `nary_mr` fold over the per-algorithm member roots (plus
 a timeline coverage child when the epoch schedule is non-trivial). A
 single-algorithm tree with an open-from-genesis schedule folds to a plain root
 with no overhead.
 
 **Seal lattice.** There is exactly one commitment currency: `Sealed`
-(`pmt/src/sealed.rs`). From a seal, four operations are possible:
+(`pmt/src/sealed.rs`). From a seal, three operations are possible:
 *verify* (check proofs against the committed roots), *resume* (reopen an
-append-only log without the historical data), *fill* (rebuild a full tree over
-the real leaf data — data-required, trustless, verifies against the committed
-root), and no `EMT::from_sealed` (mutable revival is deliberately absent).
+append-only log without the historical data), and *fill* (rebuild a full tree
+over the real leaf data — data-required, trustless, verifies against the
+committed root).
 
 **Epoch timeline.** Per algorithm, a committed vector of `(start, end)`
 intervals records when it was active. Activity is read from the timeline, never
@@ -97,8 +97,8 @@ Named theorems:
 | `kary_inclusion_soundness` | `Kary.lean` | An accepting canonical proof commits the leaf at the claimed position |
 | `inclusion_soundness` | `NEML.lean` | Same, lifted to the full NEML model |
 | `inclusion_proof_unique` | `NEML.lean` | At most one accepting canonical path per statement (modulo collision) |
-| `combinedRoot_binds_timeline` | `NEML.lean` | A fixed combined root pins the member-digest list and binds the timeline |
-| `coupling_extract_sound` | `NEML.lean` | Coupling opens the combined root soundly |
+| `combinedRoot_binds_timeline` | `NEML.lean` | A fixed binding root pins the member-digest list and binds the timeline |
+| `coupling_extract_sound` | `NEML.lean` | Coupling opens the binding root soundly |
 | `binding_root_sound` | `BindingProof.lean` | Each algorithm's binding root folds under its own hash |
 | `binding_proof_consistent` | `BindingProof.lean` | Mutually consistent trusted binding roots prove agreement on shared structure |
 | `leaf_proof_sound` | `LeafProof.lean` | A leaf proof soundly binds a leaf hash to its trusted parameters |
