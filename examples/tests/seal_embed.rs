@@ -174,7 +174,7 @@ fn seal_yields_currency_with_derived_binding_root_and_extents() {
 
         // The binding root for algorithm 0 is derived from the frontier on demand.
         let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
-        assert!(sealed.binding_root(0, &H, &hashers).is_some());
+        assert!(sealed.binding_root(0, &H, &hashers).unwrap().is_some());
         // The committed run-extents are the non-promoted frontier nodes (height >= 1).
         assert!(!sealed.run_extents().is_empty());
         // The opaque metadata channel carries the attestation verbatim.

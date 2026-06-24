@@ -175,7 +175,7 @@ mod tests {
                     );
                     assert_eq!(
                         sealed.binding_root(0, &h, &hashers),
-                        Some(live_combined),
+                        Ok(Some(live_combined)),
                         "derived binding root must equal live combined root (n={n}, k={k})"
                     );
                 }
@@ -249,12 +249,12 @@ mod tests {
             let hashers: [(u64, &dyn Hasher); 2] = [(0, &h), (1, &h)];
             // Two active algorithms; the timeline is no longer the promoted
             // registry-singleton, so binding roots take the hashed form.
-            let brs = sealed.binding_roots(&hashers);
+            let brs = sealed.binding_roots(&hashers).unwrap();
             assert_eq!(brs.len(), 2);
-            assert_eq!(sealed.binding_root(0, &h, &hashers), Some(br0));
-            assert_eq!(sealed.binding_root(1, &h, &hashers), Some(br1));
-            // Unknown algorithm: no frontier, no binding root.
-            assert_eq!(sealed.binding_root(9, &h, &hashers), None);
+            assert_eq!(sealed.binding_root(0, &h, &hashers), Ok(Some(br0)));
+            assert_eq!(sealed.binding_root(1, &h, &hashers), Ok(Some(br1)));
+            // Unknown algorithm: no frontier, a well-formed `Ok(None)`.
+            assert_eq!(sealed.binding_root(9, &h, &hashers), Ok(None));
         });
     }
 }
