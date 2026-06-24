@@ -51,9 +51,9 @@ generation and verification to prevent topology drift.
 ### Canonicalization (`mr`)
 
 [`nary_mr`] applies two always-on primitives over any child sequence:
-**promotion** (a lone child is lifted without hashing) and **collapse** (children
-of the same value fold to that value; the current realization is the null-only
-case where all-null children fold to the null constant). [`evaluate`] recursively
+**promotion** (a lone child is lifted without hashing) and **collapse** (any
+equal-sibling run folds to that shared value — general same-value, not null-only;
+the all-null/inactive run is the dominant instance). [`evaluate`] recursively
 evaluates a [`Subtree`] to its root digest.
 
 ### Inclusion and proofs

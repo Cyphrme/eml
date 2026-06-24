@@ -108,14 +108,14 @@ per-construction toggle. It composes exactly two primitives:
   encoding, a promoted node contributes no step (`within_subtree_path` emits a
   step only for multi-child nodes). This is the same path compression a
   PATRICIA / radix trie performs.
-- **collapse** — children of the *same value* fold to that value. The current
-  code realizes this as the null-only case (`nary_mr` returns the null constant
-  when every child is the null constant) — the ROBDD R2 instance for null runs.
-  This is the node-elimination rule of a reduced ordered binary decision diagram
-  (ROBDD rule R2: eliminate a node whose children are isomorphic). Null is the
-  only per-algorithm-divergent collapse (redundant-value collapse is
-  algorithm-independent), so null-run-extents are both the minimal and the only
-  instance that must be committed.
+- **collapse** — children of the *same value* fold to that value
+  (`pmt/src/mr.rs:61-67`): any equal-sibling run collapses to that shared value,
+  not only null runs. This is the node-elimination rule of a reduced ordered
+  binary decision diagram (ROBDD rule R2: eliminate a node whose children are
+  isomorphic). The all-null/inactive run is the dominant instance — it is the
+  only per-algorithm-divergent collapse, because equal-value non-null runs are
+  the same under every algorithm and their geometry needs no separate commitment
+  — but the fold is general same-value.
 
 Treating these two as a single confluent reduction to a unique canonical form is
 the kernel's structural contribution. ROBDD canonicalization is the rigorous

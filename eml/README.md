@@ -109,11 +109,11 @@ proof-composition seam.
 
 **Canonicalization.** Every fold applies two always-on primitives from the
 kernel: **promotion** (a lone child is lifted without hashing) and **collapse**
-(children of the same value fold to that value; the current realization collapses
-all-null children to the null constant — the only per-algorithm-divergent case).
-These together ensure canonical proof encoding: a zero-sibling step is rejected,
-so a fixed `(leaf_hash, index, tree_size, root)` admits at most one accepting
-path.
+(any equal-sibling run folds to that shared value — general same-value; the
+all-null/inactive run is the dominant instance, and the only per-algorithm-
+divergent one). These together ensure canonical proof encoding: a zero-sibling
+step is rejected, so a fixed `(leaf_hash, index, tree_size, root)` admits at
+most one accepting path.
 
 **Epochs and the committed timeline.** The timeline of every registered
 algorithm — when it was active and when it was frozen — drives the null-run
