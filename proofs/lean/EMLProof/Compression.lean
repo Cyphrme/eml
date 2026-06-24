@@ -356,7 +356,7 @@ lemma eval_node_eq_null_implies_all_null (L : Nat)
         have h_children_eq : children = x :: y :: ys := by rw [h_children, h_xs]
         -- Under general collapse, a node evaluating to null is either (a) an
         -- all-equal collapse whose common value is null (⟹ every child null), or
-        -- (b) a genuine `nodeHash` equal to null (NullAmbiguity, ruled out by
+        -- (b) a genuine `nodeHash` equal to null (collapse ambiguity, ruled out by
         -- `node_hash_neq_null`). The hypothesis says the node is null, so we case
         -- on the collapse guard via the `combineC` factoring.
         rw [h_children_eq, evalConstructive_node_combine] at h_eval

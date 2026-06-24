@@ -31,7 +31,7 @@ Anchored at the honest current tree (`newRoot = karyRoot cells`,
 * **Soundness** (`consistency_soundness`): *any* accepting consistency proof
   against the honest current root forces the reconstructed `oldRoot` to equal
   `karyRoot (cells.take oldSize)` — the root of the **unique** size-`oldSize`
-  prefix of the current tree — modulo `NodeHashCollision` / `NullAmbiguity`
+  prefix of the current tree — modulo `NodeHashCollision` / `CollapseAmbiguity`
   (the two explicit hash hypotheses, never axioms). An attacker cannot make
   the verifier accept a *false* history (a forged `oldRoot`) against the true
   current tree.
@@ -1786,7 +1786,7 @@ theorem consistency_completeness (L k : Nat) (hk : 2 ≤ k) (cells : List Digest
     If `verify_consistency` accepts `(start_hash, path, oldRoot)` against the
     honest current root `karyRoot cells` (`newSize = cells.length`), then the
     reconstructed `oldRoot` is forced to be the genuine root of the size-`oldSize`
-    prefix `cells.take oldSize` — modulo `NodeHashCollision` / `NullAmbiguity`.
+    prefix `cells.take oldSize` — modulo `NodeHashCollision` / `CollapseAmbiguity`.
 
     This is the V9 tamper-evidence statement for the consistency verifier: there
     is no `(start_hash, path)` making the verifier accept a `oldRoot` that
@@ -1805,7 +1805,7 @@ theorem consistency_soundness (L k : Nat) (cells : List Digest)
     (oldSize : Nat) (startHash oldRoot : Digest) (path : List ProofStep)
     (hacc : AcceptsConsistency L k oldSize cells.length startHash path oldRoot
       (karyRoot L k cells))
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     oldRoot = karyRoot L k (cells.take oldSize) := by
   obtain ⟨hk, hold, holdnew, hstruct, hwf, hrec⟩ := hacc
   obtain ⟨skel, hcsk, hpsh⟩ := hstruct
@@ -1866,7 +1866,7 @@ private theorem Tiles_covers (k : Nat) :
     covers — or a hash assumption broke. Induction on height, `naryMr_inj_of_length`
     at each level. -/
 private theorem perfectRoot_inj (L k : Nat) (hk : 2 ≤ k)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) (xs ys : List Digest) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) (xs ys : List Digest) :
     ∀ (h left : Nat), perfectRoot L k xs left h = perfectRoot L k ys left h →
       ∀ i, i < k ^ h → xs.getD (left + i) emptyHash = ys.getD (left + i) emptyHash := by
   intro h
@@ -1913,7 +1913,7 @@ private theorem perfectRoot_inj (L k : Nat) (hk : 2 ≤ k)
     and singleton/singleton arms are promotion (no hashing). -/
 private theorem naryMr_inj_eqlen (L : Nat) (xs ys : List Digest)
     (hlen : xs.length = ys.length) (heq : naryMr L xs = naryMr L ys)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) : xs = ys := by
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) : xs = ys := by
   rcases xs with _ | ⟨a, xs'⟩
   · rcases ys with _ | ⟨c, ys'⟩
     · rfl
@@ -1936,7 +1936,7 @@ private theorem naryMr_inj_eqlen (L : Nat) (xs ys : List Digest)
     length-determined, so each `mergeTopD` step stays aligned and inverts via
     `naryMr_inj_of_length`. -/
 private theorem foldFrontierRoot_inj (L k : Nat) (hk : 2 ≤ k)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     ∀ (n : Nat) (xs ys : List Digest), xs.length = n → ys.length = n →
       foldFrontierRoot L k xs = foldFrontierRoot L k ys → xs = ys := by
   intro n
@@ -1991,7 +1991,7 @@ private theorem foldFrontierRoot_inj (L k : Nat) (hk : 2 ≤ k)
     two folds shape-aligned. -/
 theorem karyRoot_inj_of_length (L k : Nat) (hk : 2 ≤ k) (xs ys : List Digest)
     (hlen : xs.length = ys.length) (heq : karyRoot L k xs = karyRoot L k ys)
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     xs = ys := by
   rw [karyRoot, karyRoot, kary_bridge L k hk xs, kary_bridge L k hk ys, ← hlen] at heq
   set F := frontierForSizeT k xs.length with hF
@@ -2019,7 +2019,7 @@ theorem karyRoot_inj_of_length (L k : Nat) (hk : 2 ≤ k) (xs ys : List Digest)
     If `verify_consistency` accepts a proof between the honest root of `oldCells`
     and the honest root of `newCells`, then `oldCells` is a genuine prefix of
     `newCells` — the append-only relation at the cell-sequence level, modulo
-    `NodeHashCollision` / `NullAmbiguity`.
+    `NodeHashCollision` / `CollapseAmbiguity`.
 
     This is the dual of `consistency_soundness`: that theorem fixes the honest
     *new* tree and binds the reconstructed `oldRoot` to the prefix root; this one
@@ -2043,7 +2043,7 @@ theorem consistency_append_only (L k : Nat) (oldCells newCells : List Digest)
     (startHash : Digest) (path : List ProofStep)
     (hacc : AcceptsConsistency L k oldCells.length newCells.length startHash path
       (karyRoot L k oldCells) (karyRoot L k newCells))
-    (hH : ¬NodeHashCollision) (hN : ¬NullAmbiguity L) :
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
     oldCells <+: newCells := by
   have hk : 2 ≤ k := hacc.1
   have hsize : oldCells.length < newCells.length := hacc.2.2.1
