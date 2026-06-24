@@ -24,7 +24,11 @@ cyphr-log = { path = "../cyphr-log" }
 # so the baseline must sit out of tree. Its package keeps the name `neml`
 # (linked here under the `neml_baseline` alias) but carries a distinct
 # `version` in that worktree's manifest so Cargo can tell it apart from the
-# current side in the lockfile. Never committed.
+# current side in the lockfile.
+#
+# One-time setup (run from the repo root after a fresh clone):
+#   bash difftest/setup-baseline.sh
+# See also the "Differential oracle" section in README.md.
 neml_baseline = { path = "../../baseline-N1/neml", package = "neml" }
 # The shared hashers in src/lib.rs drive both trees with byte-identical logic.
 sha2 = "0.10"
