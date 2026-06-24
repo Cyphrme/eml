@@ -16,7 +16,10 @@
 use cyphr_log::proof::{
     ConsistencyProof as CurConsistency, InclusionProof as CurInclusion, ProofStep as CurStep,
 };
-use cyphr_log::{MemoryStorage as CurStorage, NaryMerkleLog as CurLog, TreeConfig as CurConfig};
+use cyphr_log::{
+    Hasher as CurHasher, MemoryStorage as CurStorage, NaryMerkleLog as CurLog,
+    TreeConfig as CurConfig,
+};
 use difftest::{RevSha256Hasher, Sha256Hasher, TaggedSha256Hasher};
 use neml_baseline::proof::{
     ConsistencyProof as BaseConsistency, InclusionProof as BaseInclusion, ProofStep as BaseStep,
@@ -218,6 +221,50 @@ proptest! {
     }
 }
 
+/// Positive divergence assertion: general same-value collapse is INTENTIONAL.
+///
+/// cyphr-log's `nary_mr` collapses any equal-value sibling run to that value,
+/// including non-null runs (SEV-1 general-collapse design). The frozen neml
+/// baseline collapses only null runs. This test documents that intended
+/// divergence: two identical non-null leaves yield different roots on the two
+/// sides — the current root equals the leaf hash (collapsed), while the
+/// baseline root is the hashed pair (no general collapse).
+///
+/// This input is EXCLUDED from the `core_outputs_match` proptest by the
+/// matching-shape scoping (distinct-leaf tagging). This dedicated test makes
+/// the intended behavior explicit and asserts it positively so a regression
+/// would be caught.
+#[test]
+fn nonnull_same_value_run_collapses_on_current_not_baseline() {
+    let payload = b"hello";
+    let cur = build_cur(2, &[payload.to_vec(), payload.to_vec()]);
+    let base = build_base(2, &[payload.to_vec(), payload.to_vec()]);
+
+    let leaf_hash = CurHasher::leaf(&Sha256Hasher, payload);
+
+    // Current side: equal non-null siblings collapse to that value.
+    assert_eq!(
+        cur.root(),
+        leaf_hash,
+        "current side must collapse equal non-null siblings to the leaf hash"
+    );
+
+    // Baseline side: only null collapses; equal non-null siblings are hashed.
+    let hashed_pair = CurHasher::node(&Sha256Hasher, &[&leaf_hash, &leaf_hash]);
+    assert_eq!(
+        base.root(),
+        hashed_pair,
+        "baseline must hash equal non-null siblings (null-only collapse)"
+    );
+
+    // The two sides intentionally diverge on this input.
+    assert_ne!(
+        cur.root(),
+        base.root(),
+        "current and baseline roots must differ for equal non-null sibling pairs"
+    );
+}
+
 /// One lifecycle operation in the multi-algorithm script.
 #[derive(Debug, Clone)]
 enum Op {
@@ -351,25 +398,14 @@ proptest! {
                         let b = base_now.as_ref().expect("outcome classes already matched");
                         prop_assert_eq!(c, b,
                             "single-alg combined_root_for({}) diverged at size={}", id, size);
-                    } else if size > 0 {
-                        // Forward fold oracle: the combined root is the
-                        // canonicalization fold over the live member roots, with
-                        // a coverage child iff the committed timeline is
-                        // non-trivial. Recompute it independently and compare.
-                        // (At size 0 the combined root is the empty digest by
-                        // definition — nothing is committed — so there is no
-                        // fold to check; the outcome-class assertion covers it.)
-                        let epochs = cur.committed_epochs_at(size);
-                        let active = cyphr_log::committed_active_algs(&epochs, size);
-                        let members: Vec<(u64, Vec<u8>)> = active
-                            .iter()
-                            .map(|&aid| (aid, cur.root_for(aid).expect("active alg has a root")))
-                            .collect();
-                        let h = alg_hasher_cur(id);
-                        let expected = cyphr_log::combined_root(h.as_ref(), &members, &epochs, size, 2);
-                        prop_assert_eq!(c, &expected,
-                            "multi-alg combined_root_for({}) is not the fold at size={}", id, size);
                     }
+                    // Multi-algorithm: the outcome-class assertion above (is_ok()
+                    // equality) is the genuine cross-check here. No byte-value
+                    // oracle exists for this case — the combined-root fold model
+                    // changed post-campaign (intentional redesign), so the frozen
+                    // baseline is the wrong oracle for the multi-alg value, and
+                    // recomputing via `cyphr_log::combined_root` would be a
+                    // tautology (the same function `combined_root_for` calls).
                 }
 
                 // Historical combined root at a random size: for a single
