@@ -135,10 +135,11 @@ impl Sealed {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::BadArity`] if `arity` is outside `2..=256`. Returns
+    /// Returns [`Error::BadArity`] if `arity` is outside `2..=256`,
     /// [`Error::MalformedEpochs`] if the committed timeline is ill-formed at
-    /// `tree_size`, or if any algorithm's peak count does not match the
-    /// canonical frontier length for `(tree_size, arity)`.
+    /// `tree_size`, or [`Error::MalformedFrontier`] if any algorithm's peak
+    /// count does not match the canonical frontier length for
+    /// `(tree_size, arity)`.
     pub fn new(
         tree_size: u64,
         arity: u64,
@@ -158,7 +159,7 @@ impl Sealed {
         let expected_peak_count = frontier_for_size(tree_size, arity).len();
         for (_, peaks) in &frontiers {
             if peaks.len() != expected_peak_count {
-                return Err(Error::MalformedEpochs);
+                return Err(Error::MalformedFrontier);
             }
         }
         Ok(Self {
@@ -461,6 +462,9 @@ mod tests {
 
     #[test]
     fn new_rejects_mismatched_peak_count() {
+        // A wrong peak count is a malformed *frontier*, not a malformed epoch
+        // timeline: the variant (and its message) must blame the frontier, so a
+        // caller is pointed at the input that is actually wrong.
         // Size 3, k=2 → frontier = [(0,1),(2,0)] → 2 peaks expected.
         // Supplying 1 peak is malformed.
         assert_eq!(
@@ -470,7 +474,7 @@ mod tests {
                 vec![(0, vec![vec![0xAA; 32]])],
                 vec![(0, vec![(0, u64::MAX)])]
             ),
-            Err(Error::MalformedEpochs)
+            Err(Error::MalformedFrontier)
         );
         // Supplying 3 peaks is also malformed.
         assert_eq!(
@@ -480,7 +484,7 @@ mod tests {
                 vec![(0, vec![vec![0xAA; 32], vec![0xBB; 32], vec![0xCC; 32]])],
                 vec![(0, vec![(0, u64::MAX)])]
             ),
-            Err(Error::MalformedEpochs)
+            Err(Error::MalformedFrontier)
         );
     }
 

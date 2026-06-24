@@ -14,11 +14,15 @@ use std::fmt;
 pub enum Error {
     /// The spine arity is outside the valid range `2..=256`.
     BadArity,
-    /// A frontier was sealed with a malformed committed epoch timeline (not
-    /// well-formed at the sealed tree size; see
-    /// [`crate::proof::validate_committed_epochs`]), or the number of frontier
-    /// peaks supplied does not match the expected count for `(tree_size, arity)`.
+    /// A frontier was sealed with a malformed committed epoch timeline: not
+    /// well-formed at the sealed tree size (see
+    /// [`crate::proof::validate_committed_epochs`]).
     MalformedEpochs,
+    /// A frontier was sealed with a peak count that does not match the canonical
+    /// frontier geometry for `(tree_size, arity)` — a truncated or oversized
+    /// peaks slice. Distinct from [`Self::MalformedEpochs`]: the *frontier* is
+    /// ill-formed, not the epoch timeline, so the two never share a message.
+    MalformedFrontier,
     /// A binding-root fold was requested but no hasher was supplied for an
     /// algorithm that is active at the sealed size. The combined root commits
     /// *every* active algorithm's member root as a child, so a missing hasher
@@ -38,6 +42,13 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "committed epoch timeline is not well-formed at the sealed tree size"
+                )
+            },
+            Self::MalformedFrontier => {
+                write!(
+                    f,
+                    "frontier peak count does not match the canonical geometry for \
+                     the sealed (tree_size, arity)"
                 )
             },
             Self::MissingHasher { alg_id } => {

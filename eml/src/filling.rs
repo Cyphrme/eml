@@ -335,7 +335,7 @@ fn rebuilt_binding_root(
 fn fill_error_from_missing_hasher(e: pmt::Error) -> FillError {
     match e {
         pmt::Error::MissingHasher { alg_id } => FillError::MissingHasher { alg_id },
-        pmt::Error::BadArity | pmt::Error::MalformedEpochs => {
+        pmt::Error::BadArity | pmt::Error::MalformedEpochs | pmt::Error::MalformedFrontier => {
             unreachable!("binding-root fold over a validated Sealed yields only MissingHasher")
         },
     }
