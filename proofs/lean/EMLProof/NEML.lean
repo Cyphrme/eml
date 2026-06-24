@@ -98,24 +98,30 @@ mutual
 end
 
 mutual
-  /-- Recursive evaluation of an N-ary tree under NEML promotion rules.
+  /-- Recursive evaluation of an N-ary tree under NEML canonicalization rules.
       `L` is the digest length of the active hash algorithm (vestigial; see
       `nullDigest`). Arms: leaf hashing; empty node → `emptyHash`; singleton
-      promotion; flat null promotion (all children null, arity ≥ 2); standard
-      node hashing. -/
+      promotion; **general same-value collapse** (all children evaluate to one
+      value, arity ≥ 2 → that value); standard node hashing. The all-null
+      collapse is the dominant instance of the same-value collapse, not a
+      separate rule — `evalAllNull` is its `value = nullDigest` specialization,
+      retained because activity is read against `nullDigest`. -/
   noncomputable def eval (L : Nat) : NaryTree (List UInt8) → Digest
     | NaryTree.leaf data => leafHash data
     | NaryTree.node [] => emptyHash
     | NaryTree.node [c] => eval L c
-    | NaryTree.node children =>
-        if evalAllNull L children then nullDigest L
-        else nodeHash (evalMap L children)
+    | NaryTree.node (a :: b :: rest) =>
+        let ds := evalMap L (a :: b :: rest)
+        if ds.all (· == eval L a) then eval L a
+        else nodeHash ds
   termination_by t => nsize t
   decreasing_by
     all_goals simp [nsize, nlsize]
     all_goals omega
 
-  /-- Whether every child of a node evaluates to the null digest. -/
+  /-- Whether every child of a node evaluates to the null digest — the
+      `value = nullDigest` instance of same-value collapse, kept because
+      activity is read against the null constant. -/
   noncomputable def evalAllNull (L : Nat) : List (NaryTree (List UInt8)) → Bool
     | [] => true
     | c :: cs => (eval L c == nullDigest L) && evalAllNull L cs
@@ -170,33 +176,68 @@ theorem eval_singleton_node (L : Nat) (t : NaryTree (List UInt8)) :
     eval L (NaryTree.node [t]) = eval L t := by
   simp [eval]
 
-/-- Flat null promotion equation, arity ≥ 2 (was `axiom eval_flat_null_node`). -/
-theorem eval_flat_null_node (L : Nat) (children : List (NaryTree (List UInt8)))
-    (h_length : children.length ≥ 2)
-    (h_all_null : ∀ t ∈ children, eval L t = nullDigest L) :
-    eval L (NaryTree.node children) = nullDigest L := by
+/-- The same-value collapse guard, reflected: every child of a node (arity ≥ 2)
+    evaluates to the head child's digest. The boolean the `eval` collapse arm
+    branches on. -/
+theorem evalAllEq_iff (L : Nat) (a b : NaryTree (List UInt8))
+    (rest : List (NaryTree (List UInt8))) :
+    ((evalMap L (a :: b :: rest)).all (· == eval L a) = true)
+      ↔ ∀ t ∈ (a :: b :: rest), eval L t = eval L a := by
+  rw [evalMap_eq_map]
+  constructor
+  · intro h t ht
+    have := (List.all_eq_true.mp h) (eval L t) (by
+      rw [List.mem_map]; exact ⟨t, ht, rfl⟩)
+    simpa using this
+  · intro h
+    rw [List.all_eq_true]
+    intro d hd
+    rw [List.mem_map] at hd
+    obtain ⟨t, ht, rfl⟩ := hd
+    simpa using h t ht
+
+/-- **General same-value collapse equation, arity ≥ 2.** A node all of whose
+    children evaluate to one value `v` evaluates to `v`. The all-null collapse
+    (`v = nullDigest`) is the dominant instance. -/
+theorem eval_collapse_node (L : Nat) (children : List (NaryTree (List UInt8)))
+    (h_length : children.length ≥ 2) {v : Digest}
+    (h_all_eq : ∀ t ∈ children, eval L t = v) :
+    eval L (NaryTree.node children) = v := by
   obtain ⟨a, b, rest, rfl⟩ : ∃ a b rest, children = a :: b :: rest := by
     match children, h_length with
     | a :: b :: rest, _ => exact ⟨a, b, rest, rfl⟩
-  have hAll : evalAllNull L (a :: b :: rest) = true :=
-    (evalAllNull_eq_true_iff L _).mpr h_all_null
+  have ha : eval L a = v := h_all_eq a (by simp)
+  have hall : ∀ t ∈ (a :: b :: rest), eval L t = eval L a := by
+    intro t ht; rw [h_all_eq t ht, ha]
+  have hguard : (evalMap L (a :: b :: rest)).all (· == eval L a) = true :=
+    (evalAllEq_iff L a b rest).mpr hall
   simp only [eval]
-  rw [if_pos hAll]
+  rw [if_pos hguard, ha]
 
-/-- Standard node hashing equation, arity ≥ 2 with a non-null child
-    (was `axiom eval_node_hash`). -/
+/-- Flat null promotion equation, arity ≥ 2 (was `axiom eval_flat_null_node`).
+    The `value = nullDigest` instance of the general collapse. -/
+theorem eval_flat_null_node (L : Nat) (children : List (NaryTree (List UInt8)))
+    (h_length : children.length ≥ 2)
+    (h_all_null : ∀ t ∈ children, eval L t = nullDigest L) :
+    eval L (NaryTree.node children) = nullDigest L :=
+  eval_collapse_node L children h_length h_all_null
+
+/-- Standard node hashing equation, arity ≥ 2 with two children of different
+    value (was `axiom eval_node_hash`, generalized: hashing fires whenever the
+    children are *not* all equal, of which "a non-null child amid nulls" is one
+    instance). -/
 theorem eval_node_hash (L : Nat) (children : List (NaryTree (List UInt8)))
     (h_length : children.length ≥ 2)
-    (h_some : ∃ t ∈ children, eval L t ≠ nullDigest L) :
+    (h_some : ∃ t ∈ children, ∃ u ∈ children, eval L t ≠ eval L u) :
     eval L (NaryTree.node children) = nodeHash (children.map (eval L)) := by
   obtain ⟨a, b, rest, rfl⟩ : ∃ a b rest, children = a :: b :: rest := by
     match children, h_length with
     | a :: b :: rest, _ => exact ⟨a, b, rest, rfl⟩
-  have hNot : ¬ evalAllNull L (a :: b :: rest) = true := by
-    rw [evalAllNull_eq_true_iff]
+  have hNot : ¬ ((evalMap L (a :: b :: rest)).all (· == eval L a) = true) := by
+    rw [evalAllEq_iff]
     intro hall
-    obtain ⟨t, ht, htne⟩ := h_some
-    exact htne (hall t ht)
+    obtain ⟨t, ht, u, hu, hne⟩ := h_some
+    exact hne ((hall t ht).trans (hall u hu).symm)
   simp only [eval]
   rw [if_neg hNot, evalMap_eq_map]
 
