@@ -147,11 +147,15 @@ locations in the source files:
     `real_cell_forces_committed_active`, `committed_inactive_is_null` — activity is read from
     the committed timeline, which enters the combined-root fold as a coverage child, not from
     digest null-ness.
-  - Combined-root fold (post-N29): `combinedChildren_bound`, `coupling_extract_sound`,
-    `binding_root_sound`, `binding_proof_consistent`, `binding_proof_forgery_rejected` — the
-    combined root is the `nary_mr` fold over the member-root child digests (plus the coverage
-    child), so a fixed root pins the member-digest list modulo a node-hash collision; algorithm
-    identities are the verifier's trusted active-set input, not recovered from the root.
+  - Combined-root fold (post-N29, raw-concat per D9): `combinedChildren_bound`,
+    `coupling_extract_sound`, `binding_root_sound`, `binding_proof_consistent`,
+    `binding_proof_forgery_rejected` — the combined root is the `nary_mr` fold over the
+    member-root **bytes** fed raw (no per-member re-hash; `pmt::combined_root` → `pmt::nary_mr`),
+    plus the coverage child. So a fixed root pins the raw member-byte list modulo a byte-hash
+    collision — *under the fixed-width contract* (`EqWidth`, the `Hasher` digest-width
+    hypothesis, N32) that makes the unprefixed concat parseable (`flatten_inj_of_eqWidth`);
+    algorithm identities are the verifier's trusted active-set input, not recovered from the
+    root.
   - Canonical inclusion: `not_canonical_of_promoted`, `inclusion_soundness`, and
     `inclusion_proof_unique` (non-malleability) — all fully proved. Uniqueness holds modulo
     `NodeHashCollision` and takes the proof-shape pinning (`hlen`/`hpos`) as premises,

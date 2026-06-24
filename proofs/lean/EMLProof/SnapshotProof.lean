@@ -207,9 +207,10 @@ instead the algorithm's **binding root** `BRᵢ = combinedRootWith Hᵢ ar tl`
 (`BindingProof`), which over ≥ 2 members is a node hash, not the bare member
 root. The two soundness tiers the Rust `SnapshotProof::verify` chains are:
 
-1. **Binding tier** — the presented member-root tuple folds, under `Hᵢ`, to the
-   trusted `BRᵢ`, recovering the committed member-root digest list
-   (`BindingProof.binding_root_sound`, modulo an `Hᵢ` node-hash collision).
+1. **Binding tier** — the presented member-root tuple folds, under `Hᵢ` over the
+   **raw** member-root bytes, to the trusted `BRᵢ`, recovering the committed
+   member-root byte list (`BindingProof.binding_root_sound`, modulo an `Hᵢ`
+   byte-hash collision, under the fixed-width contract).
 2. **Base tier** — every claimed leaf proof verifies against *that algorithm's
    member root* `MRᵢ` (here `karyRoot L k cells`), pinning the leaves to the
    committed cells (`snapshot_proof_sound`, modulo `NodeHashCollision` /
@@ -234,48 +235,53 @@ the bound member root being the very `MRᵢ` the leaves verify against. -/
     (karyRoot L k cells)`; and whose base-tier leaf proofs form a valid (flat)
     snapshot against that `MRᵢ` (`hbase`):
 
-    * **(binding tier)** the presented member-root digest list equals the
-      committed one, so in particular the presented structure carries algorithm
-      `alg`'s digest of `MRᵢ` — `alg.hash (digestToBytes (karyRoot L k cells)) ∈
-      ar'.map (memberDigestWith alg.hash)` — the member root the leaves verify
-      against is the one cross-bound; and
+    * **(binding tier)** the presented member-root byte list equals the
+      committed one (under `alg`'s fixed-width contract, `hw'`/`hw_i`), so in
+      particular the presented structure carries the *raw* member root `MRᵢ` —
+      `digestToBytes (karyRoot L k cells) ∈ ar'.map (memberDigestWith alg.hash)`,
+      `memberDigestWith` being the raw member bytes (D9, no per-member re-hash) —
+      the member root the leaves verify against is the one cross-bound; and
     * **(base tier)** every claimed leaf is the committed level-0 cell,
 
-    unless `alg`'s own node hash collides, or a tree-level hash assumption
+    unless `alg`'s own byte-hash collides, or a tree-level hash assumption
     (`NodeHashCollision` / `CollapseAmbiguity`) broke. No new machinery: the
     binding tier is `BindingProof.binding_root_sound`, the base tier is
     `snapshot_proof_sound`, conjoined over one snapshot via the `hbridge` link. -/
-theorem snapshot_proof_multialg_sound (L k : Nat)
+theorem snapshot_proof_multialg_sound {w : Nat} (L k : Nat)
     (alg : BindingProof.Algorithm) (cells : List Digest)
     (ar_i ar' : List (NEML.AlgId × List UInt8)) (tl_i tl' : NEML.Timeline)
     (e_i : NEML.AlgId × List UInt8) (claims : List SnapshotClaim)
     (hmulti_i : ar_i.length ≥ 2) (hmulti' : ar'.length ≥ 2)
     (hlen : ar'.length = ar_i.length)
+    (hw' : NEML.EqWidth w (NEML.combinedChildrenWith alg.hash ar' tl'))
+    (hw_i : NEML.EqWidth w (NEML.combinedChildrenWith alg.hash ar_i tl_i))
+    (hclen : (NEML.combinedChildrenWith alg.hash ar' tl').length
+      = (NEML.combinedChildrenWith alg.hash ar_i tl_i).length)
     (hcommit : BindingProof.bindingRoot alg ar_i tl_i = alg.root)
     (haccept : BindingProof.Verifies alg ar' tl')
     (hbridge_mem : e_i ∈ ar_i) (hbridge : e_i.2 = digestToBytes (karyRoot L k cells))
     (hbase : SnapshotValid L k cells (karyRoot L k cells) claims)
     (hHnode : ¬ NEML.NodeHashCollisionFor alg.hash)
     (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
-    (alg.hash (digestToBytes (karyRoot L k cells))
+    (digestToBytes (karyRoot L k cells)
         ∈ ar'.map (NEML.memberDigestWith alg.hash))
       ∧ (∀ c ∈ claims,
           c.leaf = cells.getD c.index emptyHash ∨ NodeHashCollision ∨ CollapseAmbiguity L) := by
   refine ⟨?_, ?_⟩
-  · -- Binding tier: the presented and committed member-digest lists agree
+  · -- Binding tier: the presented and committed member-byte lists agree
     -- (discharging the `Hᵢ`-collision disjunct with `hHnode`); `MRᵢ`'s committed
-    -- digest is therefore present among the presented ones.
+    -- raw member root is therefore present among the presented ones.
     have hagree : ar'.map (NEML.memberDigestWith alg.hash)
         = ar_i.map (NEML.memberDigestWith alg.hash) := by
       rcases BindingProof.binding_root_sound alg ar_i ar' tl_i tl'
-          hmulti_i hmulti' hlen hcommit haccept with hagree | hcol
+          hmulti_i hmulti' hlen hw' hw_i hclen hcommit haccept with hagree | hcol
       · exact hagree
       · exact absurd hcol hHnode
-    -- `MRᵢ`'s digest is committed (via `e_i`), hence — by agreement — presented.
+    -- `MRᵢ`'s raw root is committed (via `e_i`), hence — by agreement — presented.
     have hmem_i : NEML.memberDigestWith alg.hash e_i ∈ ar_i.map (NEML.memberDigestWith alg.hash) :=
       List.mem_map.mpr ⟨e_i, hbridge_mem, rfl⟩
     have hbridge_dig : NEML.memberDigestWith alg.hash e_i
-        = alg.hash (digestToBytes (karyRoot L k cells)) := by
+        = digestToBytes (karyRoot L k cells) := by
       simp only [NEML.memberDigestWith, hbridge]
     rw [hagree]
     rw [hbridge_dig] at hmem_i
