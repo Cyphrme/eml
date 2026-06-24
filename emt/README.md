@@ -2,7 +2,7 @@
 
 The `emt` crate is the **mutable engineering library** at Layer 2 of the
 three-layer architecture: PMT (kernel) → EML/EMT (engineering libraries) →
-instantiations. It is the mutable peer of the append-only `eml-log` library.
+instantiations. It is the mutable peer of the append-only `eml` library.
 Both depend on the `pmt` kernel and neither depends on the other; the one
 currency they exchange is the kernel's [`pmt::Sealed`].
 
@@ -32,7 +32,7 @@ What EMT adds over the kernel:
 └───────────────────────────┬──────────────────────────────────────────┘
                              │
               ┌──────────────┴──────────────────┐
-              │ eml-log (append-only)             │   ┌── emt (this crate, mutable)
+              │ eml (append-only)             │   ┌── emt (this crate, mutable)
               │ …                                 │   │   set/get · path-recompute
               └──────────────────────────────────┘   │   multi-hash · seal
                                                       └──────────────────────────

@@ -2,7 +2,7 @@
 //!
 //! EML (Epoch Merkle Log) is the append-only engineering construction layered
 //! over the Polymorphic Merkle Tree kernel. The kernel surface (the `Hasher`
-//! seam, the proof spine, canonicalization, inclusion, embedding, [`Sealed`],
+//! seam, the proof spine, canonicalization, inclusion, [`Sealed`],
 //! and epoch construction) lives in [`pmt`] and is re-exported here so consumers
 //! reach the whole library through `eml::*`. This crate owns the
 //! append-only mechanism (the frontier carry, the log builder, storage) and the

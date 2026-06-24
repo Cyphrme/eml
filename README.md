@@ -114,7 +114,7 @@ frozen reference implementation (`neml_baseline`). For matching-shape inputs
 proofs must equal the baseline's structurally. Any divergence on matching-shape
 inputs means a change altered an observable log output.
 
-The frozen baseline is the pre-campaign neml source (git ref `4827561`),
+The frozen baseline is the original neml source (git ref `4827561`),
 materialized as a git worktree at `.scratch/worktrees/baseline-N1`. Because
 Cargo requires path dependencies outside the workspace root, this worktree must
 be created once after a fresh clone before running `cargo test --workspace`:
@@ -143,7 +143,8 @@ Fuzz targets (nightly Rust):
 ```sh
 cargo +nightly fuzz run <target>
 # targets: verify_inclusion, verify_consistency, rehydrate_proof,
-#          proof_mutation, state_machine
+#          proof_mutation, state_machine,
+#          cyphr_malt_verify_inclusion, cyphr_malt_verify_consistency
 ```
 
 ## License

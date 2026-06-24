@@ -251,8 +251,7 @@ pub fn null_runs_are_trivial(
 }
 
 /// Canonical serialization of all algorithms' null runs — the preimage of the
-/// binding root's coverage child. Replaces [`serialize_timeline`] as the
-/// committed activation.
+/// binding root's coverage child; the committed activation form.
 ///
 /// Layout (all integers big-endian; fixed-width counts make it unambiguous to
 /// parse, hence injective):
