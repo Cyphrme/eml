@@ -223,10 +223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "neml"
-version = "0.1.0"
-
-[[package]]
 name = "derive_arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -249,14 +245,16 @@ dependencies = [
 
 [[package]]
 name = "eml"
-version = "0.10.0"
+version = "0.1.0"
+dependencies = [
+ "pmt",
+]
 
 [[package]]
 name = "eml-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
- "neml",
  "eml",
  "libfuzzer-sys",
  "sha2",
@@ -413,6 +411,10 @@ dependencies = [
  "fastrand",
  "futures-io",
 ]
+
+[[package]]
+name = "pmt"
+version = "0.1.0"
 
 [[package]]
 name = "polling"

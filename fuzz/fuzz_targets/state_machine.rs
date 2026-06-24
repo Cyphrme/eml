@@ -5,15 +5,19 @@ use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use eml::{Hasher, Log, MemoryStorage, Storage};
+use eml::{AlgorithmMetas, Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+
+// ---------------------------------------------------------------------------
+// Faulty storage wrapper
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
-enum FuzzStorageErrorEnum {
-    Inner(eml::MemoryStorageError),
+enum FuzzStorageError {
+    Inner(<MemoryStorage as Storage>::Error),
     Injected(String),
 }
 
-impl std::fmt::Display for FuzzStorageErrorEnum {
+impl std::fmt::Display for FuzzStorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Inner(e) => write!(f, "inner storage error: {}", e),
@@ -22,7 +26,7 @@ impl std::fmt::Display for FuzzStorageErrorEnum {
     }
 }
 
-impl std::error::Error for FuzzStorageErrorEnum {}
+impl std::error::Error for FuzzStorageError {}
 
 struct FaultyStorage {
     inner: MemoryStorage,
@@ -45,45 +49,43 @@ impl FaultyStorage {
 }
 
 impl Storage for FaultyStorage {
-    type Error = FuzzStorageErrorEnum;
+    type Error = FuzzStorageError;
 
     async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        let should_fail = self.should_fail();
-        if should_fail {
-            return Err(FuzzStorageErrorEnum::Injected("store_leaf failed".to_string()));
+        if self.should_fail() {
+            return Err(FuzzStorageError::Injected("store_leaf failed".to_string()));
         }
-        self.inner.store_leaf(index, data).await.map_err(FuzzStorageErrorEnum::Inner)
+        self.inner.store_leaf(index, data).await.map_err(FuzzStorageError::Inner)
     }
 
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
-        self.inner.get_leaf(index).await.map_err(FuzzStorageErrorEnum::Inner)
+        self.inner.get_leaf(index).await.map_err(FuzzStorageError::Inner)
     }
 
-    async fn len(&self) -> u64 {
-        self.inner.len().await
+    async fn len(&self) -> Result<u64, Self::Error> {
+        self.inner.len().await.map_err(FuzzStorageError::Inner)
     }
 
     async fn store_node(
         &mut self,
         alg_id: u64,
         left: u64,
-        height: usize,
+        height: u32,
         hash: &[u8],
     ) -> Result<(), Self::Error> {
-        let should_fail = self.should_fail();
-        if should_fail {
-            return Err(FuzzStorageErrorEnum::Injected("store_node failed".to_string()));
+        if self.should_fail() {
+            return Err(FuzzStorageError::Injected("store_node failed".to_string()));
         }
-        self.inner.store_node(alg_id, left, height, hash).await.map_err(FuzzStorageErrorEnum::Inner)
+        self.inner.store_node(alg_id, left, height, hash).await.map_err(FuzzStorageError::Inner)
     }
 
     async fn get_node(
         &self,
         alg_id: u64,
         left: u64,
-        height: usize,
+        height: u32,
     ) -> Result<Option<Vec<u8>>, Self::Error> {
-        self.inner.get_node(alg_id, left, height).await.map_err(FuzzStorageErrorEnum::Inner)
+        self.inner.get_node(alg_id, left, height).await.map_err(FuzzStorageError::Inner)
     }
 
     async fn store_algorithm_meta(
@@ -91,61 +93,46 @@ impl Storage for FaultyStorage {
         alg_id: u64,
         epochs: &[(u64, u64)],
     ) -> Result<(), Self::Error> {
-        let should_fail = self.should_fail();
-        if should_fail {
-            return Err(FuzzStorageErrorEnum::Injected("store_algorithm_meta failed".to_string()));
+        if self.should_fail() {
+            return Err(FuzzStorageError::Injected("store_algorithm_meta failed".to_string()));
         }
-        self.inner.store_algorithm_meta(alg_id, epochs).await.map_err(FuzzStorageErrorEnum::Inner)
+        self.inner.store_algorithm_meta(alg_id, epochs).await.map_err(FuzzStorageError::Inner)
     }
 
-    async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
-        self.inner.load_algorithm_metas().await.map_err(FuzzStorageErrorEnum::Inner)
+    async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
+        self.inner.load_algorithm_metas().await.map_err(FuzzStorageError::Inner)
+    }
+
+    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+        self.inner.load_log_meta().await.map_err(FuzzStorageError::Inner)
+    }
+
+    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
+        self.inner.load_checkpoint_roots().await.map_err(FuzzStorageError::Inner)
     }
 
     async fn write_batch(
         &mut self,
         leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, usize, &[u8])],
+        nodes: &[(u64, u64, u32, &[u8])],
+        algorithm_metas: &[(u64, &[(u64, u64)])],
+        log_meta: Option<(u64, u8)>,
+        checkpoint_roots: &[(u64, &[u8])],
     ) -> Result<(), Self::Error> {
-        let should_fail = self.should_fail();
-        if should_fail {
-            return Err(FuzzStorageErrorEnum::Injected("write_batch failed".to_string()));
+        // Top-level fault injection: fail the whole batch before any write.
+        if self.should_fail() {
+            return Err(FuzzStorageError::Injected("write_batch failed".to_string()));
         }
-        let backup_leaves = self.inner.leaves.clone();
-        let backup_nodes = self.inner.nodes.clone();
-        let backup_algorithm_metas = self.inner.algorithm_metas.clone();
-
-        for &(index, data) in leaves {
-            if self.should_fail() {
-                self.inner.leaves = backup_leaves;
-                self.inner.nodes = backup_nodes;
-                self.inner.algorithm_metas = backup_algorithm_metas;
-                return Err(FuzzStorageErrorEnum::Injected("write_batch leaf failed".to_string()));
-            }
-            if let Err(e) = self.inner.store_leaf(index, data).await {
-                self.inner.leaves = backup_leaves;
-                self.inner.nodes = backup_nodes;
-                self.inner.algorithm_metas = backup_algorithm_metas;
-                return Err(FuzzStorageErrorEnum::Inner(e));
-            }
-        }
-        for &(alg_id, left, height, hash) in nodes {
-            if self.should_fail() {
-                self.inner.leaves = backup_leaves;
-                self.inner.nodes = backup_nodes;
-                self.inner.algorithm_metas = backup_algorithm_metas;
-                return Err(FuzzStorageErrorEnum::Injected("write_batch node failed".to_string()));
-            }
-            if let Err(e) = self.inner.store_node(alg_id, left, height, hash).await {
-                self.inner.leaves = backup_leaves;
-                self.inner.nodes = backup_nodes;
-                self.inner.algorithm_metas = backup_algorithm_metas;
-                return Err(FuzzStorageErrorEnum::Inner(e));
-            }
-        }
-        Ok(())
+        self.inner
+            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Hashers
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 struct HasherA;
@@ -156,18 +143,16 @@ impl Hasher for HasherA {
         h.update(data);
         h.finalize().to_vec()
     }
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01, 0x0A]);
-        h.update(left);
-        h.update(right);
+        for c in children {
+            h.update(c);
+        }
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> {
         Sha256::digest([0x0A]).to_vec()
-    }
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02, 0x0A]).to_vec()
     }
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -186,18 +171,16 @@ impl Hasher for HasherB {
         h.update(data);
         h.finalize().to_vec()
     }
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01, 0x0B]);
-        h.update(left);
-        h.update(right);
+        for c in children {
+            h.update(c);
+        }
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> {
         Sha256::digest([0x0B]).to_vec()
-    }
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02, 0x0B]).to_vec()
     }
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -216,18 +199,16 @@ impl Hasher for HasherC {
         h.update(data);
         h.finalize().to_vec()
     }
-    fn node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+    fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01, 0x0C]);
-        h.update(left);
-        h.update(right);
+        for c in children {
+            h.update(c);
+        }
         h.finalize().to_vec()
     }
     fn empty(&self) -> Vec<u8> {
         Sha256::digest([0x0C]).to_vec()
-    }
-    fn null(&self) -> Vec<u8> {
-        Sha256::digest([0x02, 0x0C]).to_vec()
     }
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
@@ -246,10 +227,15 @@ fn get_hasher(alg_id: u64) -> Box<dyn Hasher> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reference root computation
+// ---------------------------------------------------------------------------
+
 fn largest_pow2_lt(n: u64) -> u64 {
     1u64 << (63 - (n - 1).leading_zeros())
 }
 
+/// RFC-9162 MTH over pre-hashed leaves (each entry is already leaf-hashed).
 fn mth(hasher: &dyn Hasher, leaves: &[Vec<u8>]) -> Vec<u8> {
     match leaves.len() {
         0 => hasher.empty(),
@@ -258,10 +244,14 @@ fn mth(hasher: &dyn Hasher, leaves: &[Vec<u8>]) -> Vec<u8> {
             let k = largest_pow2_lt(n as u64) as usize;
             let left = mth(hasher, &leaves[..k]);
             let right = mth(hasher, &leaves[k..]);
-            hasher.node(&left, &right)
+            hasher.node(&[&left, &right])
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fuzz commands
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Arbitrary)]
 enum FuzzCommand {
@@ -290,14 +280,27 @@ fuzz_target!(|input: FuzzInput| {
             inject_faults: inject_faults.clone(),
         };
 
-        let mut log = Log::new(storage);
-        let mut reference_leaves = Vec::new();
+        // NaryMerkleLog::new registers algorithm 0 (HasherA) automatically.
+        let mut log = match NaryMerkleLog::new(
+            storage,
+            get_hasher(0),
+            TreeConfig::default(),
+        )
+        .await
+        {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+
+        let mut reference_leaves: Vec<Vec<u8>> = Vec::new();
+        // Track registered alg ids (alg 0 is always registered by new()).
         let mut registered_algs = std::collections::BTreeSet::new();
+        registered_algs.insert(0u64);
 
         for command in input.commands {
             let res = match &command {
                 FuzzCommand::Append { data } => {
-                    let res = log.append(data).await;
+                    let res = log.append_leaf(data).await;
                     if res.is_ok() {
                         reference_leaves.push(data.clone());
                     }
@@ -328,34 +331,49 @@ fuzz_target!(|input: FuzzInput| {
             if let Err(eml::Error::Storage(_)) = res {
                 // Write failure! Verify that the log is consistent.
                 inject_faults.store(false, Ordering::SeqCst);
-                let len = log.size().await;
+                let len = log.size();
                 assert_eq!(len, reference_leaves.len() as u64);
                 inject_faults.store(true, Ordering::SeqCst);
             }
 
             // Verify invariants on the current state.
-            let global_size = log.size().await;
+            let global_size = log.size();
             assert_eq!(global_size, reference_leaves.len() as u64);
 
+            // Use committed_epochs_at to get per-alg epoch info.
+            let epochs_at = log.committed_epochs_at(global_size);
+
             for &alg_id in &registered_algs {
-                let has_active = log.is_active(alg_id).unwrap();
-                let ts = log.tree_size(alg_id).await.unwrap();
+                // Determine whether alg is active (last epoch is open).
+                let epochs: Option<&Vec<(u64, u64)>> = epochs_at
+                    .iter()
+                    .find(|(id, _)| *id == alg_id)
+                    .map(|(_, e)| e);
 
-                if has_active {
-                    assert_eq!(ts, global_size);
+                let Some(alg_epochs) = epochs else { continue };
+
+                let is_active = alg_epochs
+                    .last()
+                    .is_some_and(|&(_, end)| end == u64::MAX);
+
+                let ts: u64 = if is_active {
+                    global_size
                 } else {
-                    assert!(ts <= global_size);
-                }
+                    alg_epochs.last().map_or(0, |&(_, end)| end)
+                };
 
-                let root = log.root(alg_id).unwrap();
-                let epochs = log.epochs(alg_id).unwrap();
+                // root_for gives the raw member root for an alg.
+                let root = match log.root_for(alg_id) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
 
-                // Construct projection.
+                // Construct the reference projection.
                 let hasher = get_hasher(alg_id);
                 let mut projected = Vec::with_capacity(ts as usize);
                 for i in 0..ts {
-                    let active = epochs.iter().any(|&(start, end)| {
-                        start <= i && end.is_none_or(|e| i < e)
+                    let active = alg_epochs.iter().any(|&(start, end)| {
+                        start <= i && (end == u64::MAX || i < end)
                     });
                     let h = if active {
                         hasher.leaf(&reference_leaves[i as usize])
