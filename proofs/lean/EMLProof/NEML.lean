@@ -717,6 +717,18 @@ theorem combinedChildrenWith_bound (Hi : List UInt8 → Digest)
   · exact Or.inl hch
   · exact Or.inr ⟨_, _, hch, heq⟩
 
+/-- **The singleton (promoted) binding root is the member digest itself.** One
+    member root under a trivial activation contributes exactly one fold child (no
+    coverage child), so `naryMrWith` promotes — the binding root *is* that member
+    digest, with no hashing. This is genesis promotion at the binding-root level
+    (`pmt::combined_root`, `nary_mr` `len == 1`): a one-algorithm `BRᵢ` equals the
+    member root under `Hᵢ`, needing no node hash and hence no collision lever. -/
+theorem combinedRootWith_singleton (Hi : List UInt8 → Digest)
+    (e : AlgId × List UInt8) (tl : Timeline) (htriv : timelineTrivial tl = true) :
+    combinedRootWith Hi [e] tl = memberDigestWith Hi e := by
+  simp only [combinedRootWith, combinedChildrenWith, List.map_cons, List.map_nil,
+    htriv, if_true, List.append_nil, naryMrWith]
+
 /-- Inserts an element at a given position in a list. -/
 def insertAt {α : Type} (n : Nat) (x : α) : List α → List α
   | [] => [x]

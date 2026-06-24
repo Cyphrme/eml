@@ -1,4 +1,5 @@
 import EMLProof.LeafProof
+import EMLProof.BindingProof
 
 /-!
 # Snapshot-proof soundness (EML, over `Foundations`)
@@ -105,6 +106,51 @@ theorem snapshot_proof_sound (L k : Nat) (cells : List Digest)
   exact leaf_proof_flat_sound L k cells c.leaf root c.index c.path
     (hvalid.claimsVerify c hc) hvalid.headBinds (hvalid.flatShape c hc) hH hN
 
+/-- **A valid snapshot proof over a general (non-flat) live tree.** Identical to
+    [`SnapshotValid`] but **without** the `flatShape` field: the trusted head is
+    still the genuine root over `cells`, and every claim's base-case leaf proof
+    verifies against it, but the tree need not be flat — a claimed leaf may sit
+    *below* its level-0 cell, reached by some within-cell prefix. This is the
+    general live-tree shape; `SnapshotValid` is its flat specialization
+    (`flatShape` forcing within-cell depth `d = 0`). -/
+structure SnapshotValidGeneral (L k : Nat) (cells : List Digest)
+    (root : Digest) (claims : List SnapshotClaim) : Prop where
+  /-- Binding tier: the trusted head is the genuine root over the cells. -/
+  headBinds : root = karyRoot L k cells
+  /-- Base tier: every claimed leaf proof verifies against that head. -/
+  claimsVerify : ∀ c ∈ claims, ClaimVerifies L k cells root c
+
+/-- **Snapshot-proof soundness on a general live tree (depth-existential).**
+
+    Drops the flat-tree restriction of `snapshot_proof_sound`. For a valid
+    *general* snapshot proof, every claimed leaf `(leaf, index, path)` *hashes up
+    to* the committed level-0 cell at `index` after some within-cell prefix of `d`
+    steps — `foldNary L leaf (path.take d) = cells.getD index emptyHash` — unless a
+    standing hash assumption broke. The depth `d` is existential by design:
+    implicit promotion makes a promoted digest equal its parent slot, so the proof
+    binds the log *position*, never the within-cell depth (Cyphr SPEC §2.2.12). The
+    proof composes the general base case `leaf_proof_sound` (N13) over each claim.
+
+    This is the most a snapshot proof can bind on a general tree: the *equality*
+    form `leaf = cells.getD index` (hence forged-leaf rejection by `leaf ≠ cell`)
+    is recoverable only when the tree is flat (`d = 0`, the leaf *is* the cell) —
+    that specialization is `snapshot_proof_sound` / `..._forged_leaf_rejected`,
+    which carry the `flatShape` hypothesis exactly to pin `d = 0`. On a general
+    tree a genuine leaf below its cell legitimately differs from the cell, so the
+    equality form does not hold and is *not* a provable gap but a structural
+    consequence of within-cell promotion. -/
+theorem snapshot_proof_sound_general (L k : Nat) (cells : List Digest)
+    (root : Digest) (claims : List SnapshotClaim)
+    (hvalid : SnapshotValidGeneral L k cells root claims)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+    ∀ c ∈ claims, ∃ d,
+      foldNary L c.leaf (c.path.take d) = cells.getD c.index emptyHash := by
+  intro c hc
+  obtain ⟨d, _skel, _hskel, _hsum, hfold⟩ :=
+    leaf_proof_sound L k cells c.leaf root c.index c.path
+      (hvalid.claimsVerify c hc) hvalid.headBinds hH hN
+  exact ⟨d, hfold⟩
+
 /-- **Forged-leaf rejection (aggregate).** The contrapositive of
     `snapshot_proof_sound` at a single claim: under the standing hash
     assumptions, a claim whose `leaf` differs from the genuine committed cell at
@@ -151,5 +197,90 @@ theorem snapshot_proof_complete (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     simp only [List.mem_map] at hc
     obtain ⟨i, hi, rfl⟩ := hc
     exact hflat i hi skel hskel
+
+/-! ## End-to-end multi-algorithm snapshot soundness
+
+`snapshot_proof_sound` proves the **single-member promoted-head** case: the
+trusted head *is* the genuine member root `karyRoot L k cells` (genesis
+promotion, `BR = MR`). A genuine multi-algorithm snapshot's trusted head is
+instead the algorithm's **binding root** `BRᵢ = combinedRootWith Hᵢ ar tl`
+(`BindingProof`), which over ≥ 2 members is a node hash, not the bare member
+root. The two soundness tiers the Rust `SnapshotProof::verify` chains are:
+
+1. **Binding tier** — the presented member-root tuple folds, under `Hᵢ`, to the
+   trusted `BRᵢ`, recovering the committed member-root digest list
+   (`BindingProof.binding_root_sound`, modulo an `Hᵢ` node-hash collision).
+2. **Base tier** — every claimed leaf proof verifies against *that algorithm's
+   member root* `MRᵢ` (here `karyRoot L k cells`), pinning the leaves to the
+   committed cells (`snapshot_proof_sound`, modulo `NodeHashCollision` /
+   `CollapseAmbiguity`).
+
+The theorem below composes both into one end-to-end guarantee over a single
+snapshot, closing the gap that the multi-alg binding tier was proven only *in
+isolation*. The **bridge** between the tiers is the hypothesis `hbridge`: the
+member root the binding tier authenticates for the snapshot's algorithm is the
+*bytes of* `MRᵢ = karyRoot L k cells` (`digestToBytes`) — exactly the head the
+base-tier leaf proofs verify against. With that link the two independently-proven
+tiers conjoin: an accepting multi-alg snapshot proof binds **both** the
+cross-algorithm member-root agreement **and** the per-leaf cell membership, with
+the bound member root being the very `MRᵢ` the leaves verify against. -/
+
+/-- **End-to-end multi-algorithm snapshot soundness.** For a snapshot whose
+    trusted head is algorithm `alg`'s **binding root** over a presented ≥ 2-member
+    structure `(ar', tl')` (`haccept`), with `alg` genuinely committing `(ar_i,
+    tl_i)` of the same length (`hcommit`, `hlen`); whose committed structure
+    carries `MRᵢ = karyRoot L k cells` as one member root via the head/base bridge
+    `hbridge : alg's committed entry e_i ∈ ar_i` with `e_i.2 = digestToBytes
+    (karyRoot L k cells)`; and whose base-tier leaf proofs form a valid (flat)
+    snapshot against that `MRᵢ` (`hbase`):
+
+    * **(binding tier)** the presented member-root digest list equals the
+      committed one, so in particular the presented structure carries algorithm
+      `alg`'s digest of `MRᵢ` — `alg.hash (digestToBytes (karyRoot L k cells)) ∈
+      ar'.map (memberDigestWith alg.hash)` — the member root the leaves verify
+      against is the one cross-bound; and
+    * **(base tier)** every claimed leaf is the committed level-0 cell,
+
+    unless `alg`'s own node hash collides, or a tree-level hash assumption
+    (`NodeHashCollision` / `CollapseAmbiguity`) broke. No new machinery: the
+    binding tier is `BindingProof.binding_root_sound`, the base tier is
+    `snapshot_proof_sound`, conjoined over one snapshot via the `hbridge` link. -/
+theorem snapshot_proof_multialg_sound (L k : Nat)
+    (alg : BindingProof.Algorithm) (cells : List Digest)
+    (ar_i ar' : List (NEML.AlgId × List UInt8)) (tl_i tl' : NEML.Timeline)
+    (e_i : NEML.AlgId × List UInt8) (claims : List SnapshotClaim)
+    (hmulti_i : ar_i.length ≥ 2) (hmulti' : ar'.length ≥ 2)
+    (hlen : ar'.length = ar_i.length)
+    (hcommit : BindingProof.bindingRoot alg ar_i tl_i = alg.root)
+    (haccept : BindingProof.Verifies alg ar' tl')
+    (hbridge_mem : e_i ∈ ar_i) (hbridge : e_i.2 = digestToBytes (karyRoot L k cells))
+    (hbase : SnapshotValid L k cells (karyRoot L k cells) claims)
+    (hHnode : ¬ NEML.NodeHashCollisionFor alg.hash)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+    (alg.hash (digestToBytes (karyRoot L k cells))
+        ∈ ar'.map (NEML.memberDigestWith alg.hash))
+      ∧ (∀ c ∈ claims,
+          c.leaf = cells.getD c.index emptyHash ∨ NodeHashCollision ∨ CollapseAmbiguity L) := by
+  refine ⟨?_, ?_⟩
+  · -- Binding tier: the presented and committed member-digest lists agree
+    -- (discharging the `Hᵢ`-collision disjunct with `hHnode`); `MRᵢ`'s committed
+    -- digest is therefore present among the presented ones.
+    have hagree : ar'.map (NEML.memberDigestWith alg.hash)
+        = ar_i.map (NEML.memberDigestWith alg.hash) := by
+      rcases BindingProof.binding_root_sound alg ar_i ar' tl_i tl'
+          hmulti_i hmulti' hlen hcommit haccept with hagree | hcol
+      · exact hagree
+      · exact absurd hcol hHnode
+    -- `MRᵢ`'s digest is committed (via `e_i`), hence — by agreement — presented.
+    have hmem_i : NEML.memberDigestWith alg.hash e_i ∈ ar_i.map (NEML.memberDigestWith alg.hash) :=
+      List.mem_map.mpr ⟨e_i, hbridge_mem, rfl⟩
+    have hbridge_dig : NEML.memberDigestWith alg.hash e_i
+        = alg.hash (digestToBytes (karyRoot L k cells)) := by
+      simp only [NEML.memberDigestWith, hbridge]
+    rw [hagree]
+    rw [hbridge_dig] at hmem_i
+    exact hmem_i
+  · -- Base tier: the leaf proofs against `MRᵢ = karyRoot L k cells`.
+    exact snapshot_proof_sound L k cells (karyRoot L k cells) claims hbase hH hN
 
 end NEML
