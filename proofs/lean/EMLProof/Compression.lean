@@ -33,15 +33,31 @@ mutual
     | NaryTree.leaf (some data) => leafHash data
     | NaryTree.node [] => emptyHash
     | NaryTree.node [c] => evalConstructive L c
-    | NaryTree.node children =>
-        if evalConstructiveAllNull L children then
-          nullDigest L
+    | NaryTree.node (a :: b :: rest) =>
+        -- General same-value collapse: a node all of whose children evaluate to
+        -- one value folds to that value; the all-null run is its dominant
+        -- instance. `evalConstructiveAllNull` is the `value = nullDigest`
+        -- specialization (activity is read against the null constant).
+        if evalConstructiveAllEq L (a :: b :: rest) (evalConstructive L a) then
+          evalConstructive L a
         else
-          nodeHash (evalConstructiveMap L children)
+          nodeHash (evalConstructiveMap L (a :: b :: rest))
   termination_by t => treeSize t
   decreasing_by
     all_goals
       simp [treeSize, listSize]
+      try omega
+
+  /-- Whether every child of a node evaluates to the given value `v` — the guard
+      of the general same-value collapse. -/
+  noncomputable def evalConstructiveAllEq (L : Nat) :
+      List (NaryTree (Option (List UInt8))) → Digest → Bool
+    | [], _ => true
+    | c :: cs, v => (evalConstructive L c == v) && evalConstructiveAllEq L cs v
+  termination_by children => listSize children
+  decreasing_by
+    all_goals
+      simp [listSize]
       try omega
 
   noncomputable def evalConstructiveAllNull (L : Nat) :
@@ -64,6 +80,90 @@ mutual
       simp [listSize]
       try omega
 end
+
+/-- The all-null guard is the `value = nullDigest` instance of the all-equal
+    guard: every child null ⟺ every child equals `nullDigest`. -/
+theorem evalConstructiveAllNull_eq_allEq (L : Nat)
+    (children : List (NaryTree (Option (List UInt8)))) :
+    evalConstructiveAllNull L children
+      = evalConstructiveAllEq L children (nullDigest L) := by
+  induction children with
+  | nil => simp only [evalConstructiveAllNull, evalConstructiveAllEq]
+  | cons c cs ih => simp only [evalConstructiveAllNull, evalConstructiveAllEq, ih]
+
+/-- **All-null collapse equation** (the dominant instance of same-value collapse).
+    A node of arity ≥ 2 whose every child evaluates to the null digest evaluates
+    to the null digest. -/
+theorem evalConstructive_null_collapse (L : Nat) (a b : NaryTree (Option (List UInt8)))
+    (rest : List (NaryTree (Option (List UInt8))))
+    (h_all : evalConstructiveAllNull L (a :: b :: rest) = true) :
+    evalConstructive L (NaryTree.node (a :: b :: rest)) = nullDigest L := by
+  have ha : evalConstructive L a = nullDigest L := by
+    rw [evalConstructiveAllNull] at h_all
+    exact (beq_iff_eq.mp (Bool.and_elim_left h_all))
+  have hguard : evalConstructiveAllEq L (a :: b :: rest) (evalConstructive L a) = true := by
+    rw [ha, ← evalConstructiveAllNull_eq_allEq]; exact h_all
+  simp only [evalConstructive]
+  rw [if_pos hguard, ha]
+
+/-- **Node hashing equation.** A node of arity ≥ 2 that is not an all-equal
+    collapse (some child differs from the head) hashes its children. -/
+theorem evalConstructive_node_hash (L : Nat) (a b : NaryTree (Option (List UInt8)))
+    (rest : List (NaryTree (Option (List UInt8))))
+    (h_not : evalConstructiveAllEq L (a :: b :: rest) (evalConstructive L a) = false) :
+    evalConstructive L (NaryTree.node (a :: b :: rest))
+      = nodeHash (evalConstructiveMap L (a :: b :: rest)) := by
+  simp only [evalConstructive]
+  rw [if_neg (by rw [h_not]; simp)]
+
+/-- `evalConstructiveMap` agrees with `List.map (evalConstructive L)`. -/
+theorem evalConstructiveMap_eq_map (L : Nat)
+    (children : List (NaryTree (Option (List UInt8)))) :
+    evalConstructiveMap L children = children.map (evalConstructive L) := by
+  induction children with
+  | nil => simp [evalConstructiveMap]
+  | cons c cs ih => simp [evalConstructiveMap, ih]
+
+/-- The digest-list image of `evalConstructiveAllEq`: a node's children all
+    evaluate to `v` ⟺ the digest list is all-`v`. -/
+theorem evalConstructiveAllEq_map (L : Nat)
+    (children : List (NaryTree (Option (List UInt8)))) (v : Digest) :
+    evalConstructiveAllEq L children v
+      = (children.map (evalConstructive L)).all (· == v) := by
+  induction children with
+  | nil => simp [evalConstructiveAllEq]
+  | cons c cs ih => simp only [evalConstructiveAllEq, List.map_cons, List.all_cons, ih]
+
+/-- The node-combining function on digest lists, mirroring the `evalConstructive`
+    node arms exactly (including the general same-value collapse). -/
+noncomputable def combineC : List Digest → Digest
+  | [] => emptyHash
+  | [d] => d
+  | a :: b :: zs => if (a :: b :: zs).all (· == a) then a else nodeHash (a :: b :: zs)
+
+/-- **`evalConstructive` factors through `combineC`.** A node's digest depends on
+    its children only through their evaluated digests. This is what makes the
+    compression-preserves-eval and decompression proofs recurse on the child
+    digest list rather than the tree structure. -/
+theorem evalConstructive_node_combine (L : Nat)
+    (children : List (NaryTree (Option (List UInt8)))) :
+    evalConstructive L (NaryTree.node children)
+      = combineC (children.map (evalConstructive L)) := by
+  match children with
+  | [] => simp only [evalConstructive, combineC, List.map_nil]
+  | [c] => simp only [evalConstructive, combineC, List.map_cons, List.map_nil]
+  | a :: b :: rest =>
+    have hmap : (a :: b :: rest).map (evalConstructive L)
+        = evalConstructive L a :: evalConstructive L b
+            :: rest.map (evalConstructive L) := by simp
+    by_cases hcol : evalConstructiveAllEq L (a :: b :: rest) (evalConstructive L a) = true
+    · rw [evalConstructive, if_pos hcol, hmap]
+      rw [combineC, if_pos]
+      · rw [← hmap, ← evalConstructiveAllEq_map]; exact hcol
+    · simp only [Bool.not_eq_true] at hcol
+      rw [evalConstructive_node_hash L a b rest hcol, evalConstructiveMap_eq_map, hmap]
+      rw [combineC, if_neg]
+      rw [← hmap, ← evalConstructiveAllEq_map, hcol]; simp
 
 noncomputable def compress (L : Nat) (t : NaryTree (Option (List UInt8))) :
     NaryTree (Option (List UInt8)) :=
@@ -101,40 +201,6 @@ theorem NaryTree.ind {α : Type} {P : NaryTree α → Prop}
         omega
   exact h_wf (treeSize t + 1) t (by omega)
 
-/-- Helper lemma: all children in a list evaluate to nullDigest L under compress L
-    iff they do originally. -/
-lemma all_compress (L : Nat) (children : List (NaryTree (Option (List UInt8))))
-    (ih : ∀ c ∈ children, evalConstructive L (compress L c) = evalConstructive L c) :
-    evalConstructiveAllNull L (children.map (compress L)) =
-    evalConstructiveAllNull L children := by
-  induction children with
-  | nil => rfl
-  | cons c cs ih_cs =>
-    simp only [List.map_cons, evalConstructiveAllNull]
-    have h_c_in : c ∈ c :: cs := by simp
-    have h_eval := ih c h_c_in
-    have ih' : ∀ x ∈ cs, evalConstructive L (compress L x) = evalConstructive L x := by
-      intro x hx
-      exact ih x (List.mem_cons_of_mem c hx)
-    rw [h_eval, ih_cs ih']
-
-/-- Helper lemma: map of evalConstructive over children.map (compress L)
-    is same as over children. -/
-lemma map_eval_compress (L : Nat) (children : List (NaryTree (Option (List UInt8))))
-    (ih : ∀ c ∈ children, evalConstructive L (compress L c) = evalConstructive L c) :
-    evalConstructiveMap L (children.map (compress L)) =
-    evalConstructiveMap L children := by
-  induction children with
-  | nil => rfl
-  | cons c cs ih_cs =>
-    simp only [List.map_cons, evalConstructiveMap]
-    have h_c_in : c ∈ c :: cs := by simp
-    have h_eval := ih c h_c_in
-    have ih' : ∀ x ∈ cs, evalConstructive L (compress L x) = evalConstructive L x := by
-      intro x hx
-      exact ih x (List.mem_cons_of_mem c hx)
-    rw [h_eval, ih_cs ih']
-
 /-- Theorem: A compressed tree always evaluates to the exact same digest as the original tree. -/
 theorem eval_compress (L : Nat) (t : NaryTree (Option (List UInt8))) :
     evalConstructive L (compress L t) = evalConstructive L t := by
@@ -154,27 +220,16 @@ theorem eval_compress (L : Nat) (t : NaryTree (Option (List UInt8))) :
       rw [beq_iff_eq] at h_eval
       simp only [evalConstructive]
       exact h_eval.symm
-    · rename_i h_eval
-      cases h_children : children with
-      | nil => rfl
-      | cons x xs =>
-        cases h_xs : xs with
-        | nil =>
-          have h_x_in : x ∈ children := by rw [h_children]; simp
-          simp only [List.map_cons, List.map_nil, evalConstructive]
-          exact ih x h_x_in
-        | cons y ys =>
-          have h_children_eq : children = x :: y :: ys := by rw [h_children, h_xs]
-          have h_all_eq : evalConstructiveAllNull L (children.map (compress L)) =
-            evalConstructiveAllNull L children := all_compress L children ih
-          have h_map_eq : evalConstructiveMap L (children.map (compress L)) =
-            evalConstructiveMap L children := map_eval_compress L children ih
-          rw [h_children_eq] at h_all_eq
-          rw [h_children_eq] at h_map_eq
-          simp only [List.map_cons] at h_all_eq
-          simp only [List.map_cons] at h_map_eq
-          simp only [List.map_cons, evalConstructive]
-          rw [h_all_eq, h_map_eq]
+    · -- The else-branch: compress recurses on children. `evalConstructive`
+      -- factors through `combineC` of the child digests, and compressing the
+      -- children preserves that digest list (per-child IH), so the node digest
+      -- is unchanged — no case split on the (now general) collapse guard needed.
+      rename_i h_eval
+      rw [evalConstructive_node_combine, evalConstructive_node_combine, List.map_map]
+      congr 1
+      apply List.map_congr_left
+      intro c hc
+      simpa using ih c hc
 
 /-- Predicate enforcing that a tree is a perfect k-ary tree of height h. -/
 def IsPerfectKary (k : Nat) : Nat → NaryTree (Option (List UInt8)) → Prop
@@ -219,15 +274,26 @@ theorem eval_perfect_null (L : Nat) (k : Nat) (h : Nat) (_hk : k ≥ 1) :
       | zero =>
         simp only [expand, List.replicate_succ, List.replicate_zero, evalConstructive, ih]
       | succ k'' =>
-        -- k >= 2
+        -- k >= 2: expand produces a node of `k''+2` null children — the all-null
+        -- collapse (the dominant instance of same-value collapse) yields null.
         have h_all : evalConstructiveAllNull L
           (List.replicate (k'' + 2) (expand (k'' + 2) h' (NaryTree.leaf none))) = true := by
           exact all_replicate L (k'' + 2) (expand (k'' + 2) h' (NaryTree.leaf none)) ih
         simp only [expand]
-        simp only [List.replicate_succ, evalConstructive]
-        rw [← List.replicate_succ, ← List.replicate_succ]
-        rw [h_all]
-        rfl
+        -- Expose the `a :: b :: rest` shape of the replicate (length ≥ 2).
+        rw [show List.replicate (k'' + 2) (expand (k'' + 2) h' (NaryTree.leaf none))
+              = expand (k'' + 2) h' (NaryTree.leaf none)
+                :: expand (k'' + 2) h' (NaryTree.leaf none)
+                :: List.replicate k'' (expand (k'' + 2) h' (NaryTree.leaf none)) from by
+          rw [show k'' + 2 = (k'' + 1) + 1 from rfl, List.replicate_succ,
+            show k'' + 1 = k'' + 1 from rfl, List.replicate_succ]]
+        apply evalConstructive_null_collapse
+        rw [show expand (k'' + 2) h' (NaryTree.leaf none)
+              :: expand (k'' + 2) h' (NaryTree.leaf none)
+              :: List.replicate k'' (expand (k'' + 2) h' (NaryTree.leaf none))
+            = List.replicate (k'' + 2) (expand (k'' + 2) h' (NaryTree.leaf none)) from by
+          rw [show k'' + 2 = (k'' + 1) + 1 from rfl, List.replicate_succ, List.replicate_succ]]
+        exact h_all
 
 lemma all_null_eq_true_iff (L : Nat) (children : List (NaryTree (Option (List UInt8)))) :
     evalConstructiveAllNull L children = true ↔
@@ -288,25 +354,41 @@ lemma eval_node_eq_null_implies_all_null (L : Nat)
       have h_all : evalConstructiveAllNull L children = true := by
         by_contra h_not_all
         have h_children_eq : children = x :: y :: ys := by rw [h_children, h_xs]
-        have h_all_false : evalConstructiveAllNull L (x :: y :: ys) = false := by
-          have h_eq : evalConstructiveAllNull L (x :: y :: ys) =
-            evalConstructiveAllNull L children := by rw [h_children_eq]
-          rw [h_eq]
-          cases h_eval_all : evalConstructiveAllNull L children with
-          | false => rfl
-          | true => exact False.elim (h_not_all h_eval_all)
-        rw [h_children_eq] at h_eval
-        simp only [evalConstructive] at h_eval
-        rw [h_all_false] at h_eval
-        rw [if_neg Bool.false_ne_true] at h_eval
-        have h_map_len : (evalConstructiveMap L children).length ≥ 2 := by
-          rw [map_length]; exact h_len
-        have h_neq := node_hash_neq_null (evalConstructiveMap L children) h_map_len
-        rw [h_children_eq] at h_neq
-        simp only [evalConstructiveMap] at h_neq
-        simp only [evalConstructiveMap] at h_eval
-        rw [h_eval] at h_neq
-        contradiction
+        -- Under general collapse, a node evaluating to null is either (a) an
+        -- all-equal collapse whose common value is null (⟹ every child null), or
+        -- (b) a genuine `nodeHash` equal to null (NullAmbiguity, ruled out by
+        -- `node_hash_neq_null`). The hypothesis says the node is null, so we case
+        -- on the collapse guard via the `combineC` factoring.
+        rw [h_children_eq, evalConstructive_node_combine] at h_eval
+        have hmap : (x :: y :: ys).map (evalConstructive L)
+            = evalConstructive L x :: evalConstructive L y :: ys.map (evalConstructive L) := by
+          simp
+        rw [hmap] at h_eval
+        by_cases hcol : (evalConstructive L x :: evalConstructive L y
+            :: ys.map (evalConstructive L)).all (· == evalConstructive L x) = true
+        · -- collapse fired: combineC = evalConstructive x = null, so every child
+          -- evaluates to null, contradicting `h_not_all`.
+          rw [combineC, if_pos hcol] at h_eval
+          apply h_not_all
+          rw [h_children_eq]
+          have hxnull : evalConstructive L x = nullDigest L := h_eval
+          have hall_eq : ∀ d ∈ (evalConstructive L x :: evalConstructive L y
+              :: ys.map (evalConstructive L)), d = evalConstructive L x := by
+            intro d hd
+            have := List.all_eq_true.mp hcol d hd
+            simpa using this
+          rw [all_null_eq_true_iff]
+          intro c hc
+          have hcd : evalConstructive L c ∈ (x :: y :: ys).map (evalConstructive L) :=
+            List.mem_map.mpr ⟨c, hc, rfl⟩
+          rw [hmap] at hcd
+          rw [hall_eq (evalConstructive L c) hcd, hxnull]
+        · -- not a collapse: it hashes; node_hash_neq_null contradicts null.
+          simp only [Bool.not_eq_true] at hcol
+          rw [combineC, if_neg (by rw [hcol]; simp)] at h_eval
+          have h_map_len : (evalConstructive L x :: evalConstructive L y
+              :: ys.map (evalConstructive L)).length ≥ 2 := by simp
+          exact node_hash_neq_null _ h_map_len h_eval
       have h_children_eq : children = x :: y :: ys := by rw [h_children, h_xs]
       have h_all_prop := h_all
       rw [h_children_eq] at h_all_prop
