@@ -63,6 +63,12 @@ impl<H: Hasher> PrefixedHasher<H> {
 }
 
 impl<H: Hasher + Clone + 'static> Hasher for PrefixedHasher<H> {
+    // Every output is `inner.hash(prefix ‖ …)`, so the width is the inner
+    // hasher's width — the prefix changes the preimage, never the digest length.
+    fn digest_len(&self) -> usize {
+        self.inner.digest_len()
+    }
+
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(1 + data.len());
         buf.push(0x00);

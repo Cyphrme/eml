@@ -813,8 +813,13 @@ proptest! {
         // active algs: sorted list of unique u64 (up to 8 elements)
         active_algs in proptest::collection::vec(0..100u64, 1..=8)
             .prop_map(|mut v| { v.sort_unstable(); v.dedup(); v }),
-        // roots: matching list of byte vectors (length 0..64)
-        roots in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..64), 1..=8),
+        // roots: matching list of fixed-width (32-byte) member roots. The
+        // `Hasher` fixed-width contract requires every member root folded into a
+        // combined root to share a width (the unprefixed concatenation is
+        // otherwise ambiguous), so the generator fixes the width rather than
+        // ranging 0..64; the coupling-proof properties under test are
+        // width-independent.
+        roots in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 32..=32), 1..=8),
         // target alg index selector
         target_idx in any::<usize>(),
     ) {
