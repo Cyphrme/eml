@@ -53,7 +53,7 @@ Collision-style escape hatches, matching the corpus convention
 (`HashCollision`, `NodeHashCollision`):
 
 * `NodeHashCollision` — distinct child lists, equal `nodeHash`.
-* `CollapseAmbiguity L` — some node of ≥ 2 *not-all-equal* children hashes to
+* `CollapseAmbiguity` — some node of ≥ 2 *not-all-equal* children hashes to
   a value `v` that an all-equal-to-`v` run collapses to. With untagged
   `nodeHash = H(concat)` this is `H(child bytes) = v`, i.e. an `H` collision
   unless the child bytes literally concatenate to the `v`-run preimage
@@ -676,56 +676,56 @@ open Classical in
     value if *all* children are equal (general collapse — the all-null run is its
     dominant instance), else `nodeHash`. The verifier's fold and the builder's
     merge both use this — never plain `nodeHash`. -/
-noncomputable def naryMr (L : Nat) (children : List Digest) : Digest :=
+noncomputable def naryMr (children : List Digest) : Digest :=
   match children with
   | [] => emptyHash
   | [c] => c
   | a :: b :: zs => if ∀ c ∈ (a :: b :: zs), c = a then a else nodeHash (a :: b :: zs)
 
 /-- One digest-level merge of the top (rightmost) `k` stack entries. -/
-noncomputable def mergeTopD (L k : Nat) (stack : List Digest) : List Digest :=
+noncomputable def mergeTopD (k : Nat) (stack : List Digest) : List Digest :=
   if stack.length < k then stack
-  else stack.take (stack.length - k) ++ [naryMr L (stack.drop (stack.length - k))]
+  else stack.take (stack.length - k) ++ [naryMr (stack.drop (stack.length - k))]
 
-theorem mergeTopD_length_lt (L k : Nat) (stack : List Digest)
+theorem mergeTopD_length_lt (k : Nat) (stack : List Digest)
     (hk : 2 ≤ k) (hlen : k < stack.length) :
-    (mergeTopD L k stack).length < stack.length := by
+    (mergeTopD k stack).length < stack.length := by
   unfold mergeTopD
   rw [if_neg (by omega)]
   simp [List.length_take]
   omega
 
 /-- Iterated digest-level merge. -/
-noncomputable def mergeTopDN (L k : Nat) : Nat → List Digest → List Digest
+noncomputable def mergeTopDN (k : Nat) : Nat → List Digest → List Digest
   | 0, s => s
-  | c + 1, s => mergeTopDN L k c (mergeTopD L k s)
+  | c + 1, s => mergeTopDN k c (mergeTopD k s)
 
 /-- One append at index `idx`: push the cell, run the carry schedule.
     Faithful to the merge loop of `append_leaf`/`append_subtree`
     (`neml/src/tree.rs`), which merges via `nary_mr`. -/
-noncomputable def appendCell (L k : Nat) (stack : List Digest) (cell : Digest)
+noncomputable def appendCell (k : Nat) (stack : List Digest) (cell : Digest)
     (idx : Nat) : List Digest :=
-  mergeTopDN L k (reductionCount k idx) (stack ++ [cell])
+  mergeTopDN k (reductionCount k idx) (stack ++ [cell])
 
-noncomputable def buildStackGo (L k : Nat) (stack : List Digest) (idx : Nat) :
+noncomputable def buildStackGo (k : Nat) (stack : List Digest) (idx : Nat) :
     List Digest → List Digest
   | [] => stack
-  | c :: cs => buildStackGo L k (appendCell L k stack c idx) (idx + 1) cs
+  | c :: cs => buildStackGo k (appendCell k stack c idx) (idx + 1) cs
 
 /-- The frontier stack after appending all level-0 `cells` in order. -/
-noncomputable def buildStackCells (L k : Nat) (cells : List Digest) : List Digest :=
-  buildStackGo L k [] 0 cells
+noncomputable def buildStackCells (k : Nat) (cells : List Digest) : List Digest :=
+  buildStackGo k [] 0 cells
 
 /-- Canonical root of the perfect k-ary subtree of height `h` over
     `cells[left, left + k^h)`: children leftmost-first, folded with the
     same null-promoting `naryMr` the builder uses. Out-of-range cells
     default to `emptyHash` (irrelevant under the tiling hypothesis). -/
-noncomputable def perfectRoot (L k : Nat) (cells : List Digest) (left : Nat) :
+noncomputable def perfectRoot (k : Nat) (cells : List Digest) (left : Nat) :
     Nat → Digest
   | 0 => cells.getD left emptyHash
   | h + 1 =>
-      naryMr L ((List.range k).map fun j =>
-        perfectRoot L k cells (left + j * k ^ h) h)
+      naryMr ((List.range k).map fun j =>
+        perfectRoot k cells (left + j * k ^ h) h)
 
 /-! Bridge support: the build distributes over a final cell, `perfectRoot`
     only reads in-range cells, and frontier spans stay within bounds. -/
@@ -763,24 +763,24 @@ theorem Tiles_entry_bound (k : Nat) :
     · exact ih (start + k ^ ph) stop htrest lh hmem'
 
 /-- Processing one more cell at the end is one more `appendCell`. -/
-private theorem buildStackGo_snoc (L k : Nat) :
+private theorem buildStackGo_snoc (k : Nat) :
     ∀ (cs : List Digest) (stack : List Digest) (idx : Nat) (c : Digest),
-      buildStackGo L k stack idx (cs ++ [c]) =
-        appendCell L k (buildStackGo L k stack idx cs) c (idx + cs.length) := by
+      buildStackGo k stack idx (cs ++ [c]) =
+        appendCell k (buildStackGo k stack idx cs) c (idx + cs.length) := by
   intro cs
   induction cs with
   | nil => intro stack idx c; simp [buildStackGo]
   | cons d ds ih =>
     intro stack idx c
     simp only [List.cons_append, buildStackGo]
-    rw [ih (appendCell L k stack d idx) (idx + 1) c, List.length_cons,
+    rw [ih (appendCell k stack d idx) (idx + 1) c, List.length_cons,
       show idx + 1 + ds.length = idx + (ds.length + 1) by omega]
 
 /-- `perfectRoot` only reads cells within the subtree span, so appending more
     cells beyond it leaves the root unchanged. -/
-theorem perfectRoot_stable (L k : Nat) (cells extra : List Digest) :
+theorem perfectRoot_stable (k : Nat) (cells extra : List Digest) :
     ∀ (h left : Nat), left + k ^ h ≤ cells.length →
-      perfectRoot L k cells left h = perfectRoot L k (cells ++ extra) left h := by
+      perfectRoot k cells left h = perfectRoot k (cells ++ extra) left h := by
   intro h
   induction h with
   | zero =>
@@ -813,16 +813,16 @@ def IsBlockTop (k : Nat) (coords : List (Nat × Nat)) : Prop :=
     form a valid block, one digest merge equals the coordinate merge under the
     `perfectRoot` map — because the block's `naryMr` is exactly `perfectRoot`
     of the parent (definitional unfold of `perfectRoot (h+1)`). -/
-private theorem mergeTopD_sim (L k : Nat) (hk : 1 ≤ k) (cells : List Digest)
+private theorem mergeTopD_sim (k : Nat) (hk : 1 ≤ k) (cells : List Digest)
     (coords : List (Nat × Nat)) (hblock : IsBlockTop k coords) :
-    mergeTopD L k (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)) =
-      (mergeTopCoords k coords).map (fun lh => perfectRoot L k cells lh.1 lh.2) := by
+    mergeTopD k (coords.map (fun lh => perfectRoot k cells lh.1 lh.2)) =
+      (mergeTopCoords k coords).map (fun lh => perfectRoot k cells lh.1 lh.2) := by
   obtain ⟨hlen, l, h, hdrop⟩ := hblock
-  have hnary : naryMr L ((coords.drop (coords.length - k)).map
-      (fun lh => perfectRoot L k cells lh.1 lh.2)) = perfectRoot L k cells l (h + 1) := by
+  have hnary : naryMr ((coords.drop (coords.length - k)).map
+      (fun lh => perfectRoot k cells lh.1 lh.2)) = perfectRoot k cells l (h + 1) := by
     rw [hdrop, List.map_map]
     conv_rhs => rw [perfectRoot]
-    apply congrArg (naryMr L)
+    apply congrArg (naryMr)
     apply List.map_congr_left
     intro i _
     simp [Function.comp]
@@ -831,14 +831,14 @@ private theorem mergeTopD_sim (L k : Nat) (hk : 1 ≤ k) (cells : List Digest)
     have hr : (List.range k).head? = some 0 := by
       rw [show k = (k - 1) + 1 by omega, List.range_succ_eq_map]; rfl
     rw [hr]; simp
-  have hLHS : mergeTopD L k (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)) =
-      (coords.take (coords.length - k)).map (fun lh => perfectRoot L k cells lh.1 lh.2) ++
-        [perfectRoot L k cells l (h + 1)] := by
+  have hLHS : mergeTopD k (coords.map (fun lh => perfectRoot k cells lh.1 lh.2)) =
+      (coords.take (coords.length - k)).map (fun lh => perfectRoot k cells lh.1 lh.2) ++
+        [perfectRoot k cells l (h + 1)] := by
     unfold mergeTopD
     rw [List.length_map, if_neg (by omega), ← List.map_take, ← List.map_drop, hnary]
-  have hRHS : (mergeTopCoords k coords).map (fun lh => perfectRoot L k cells lh.1 lh.2) =
-      (coords.take (coords.length - k)).map (fun lh => perfectRoot L k cells lh.1 lh.2) ++
-        [perfectRoot L k cells l (h + 1)] := by
+  have hRHS : (mergeTopCoords k coords).map (fun lh => perfectRoot k cells lh.1 lh.2) =
+      (coords.take (coords.length - k)).map (fun lh => perfectRoot k cells lh.1 lh.2) ++
+        [perfectRoot k cells l (h + 1)] := by
     unfold mergeTopCoords
     rw [if_neg (by omega), hhead]
     simp
@@ -846,11 +846,11 @@ private theorem mergeTopD_sim (L k : Nat) (hk : 1 ≤ k) (cells : List Digest)
 
 /-- **Chained simulation.** If every intermediate state has a valid trailing
     block, the iterated digest merge tracks the iterated coordinate merge. -/
-private theorem simChain (L k : Nat) (hk : 1 ≤ k) (cells : List Digest) :
+private theorem simChain (k : Nat) (hk : 1 ≤ k) (cells : List Digest) :
     ∀ (c : Nat) (coords : List (Nat × Nat)),
       (∀ j < c, IsBlockTop k (mergeTopCoordsN k j coords)) →
-      mergeTopDN L k c (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)) =
-        (mergeTopCoordsN k c coords).map (fun lh => perfectRoot L k cells lh.1 lh.2) := by
+      mergeTopDN k c (coords.map (fun lh => perfectRoot k cells lh.1 lh.2)) =
+        (mergeTopCoordsN k c coords).map (fun lh => perfectRoot k cells lh.1 lh.2) := by
   intro c
   induction c with
   | zero => intro coords _; rfl
@@ -858,9 +858,9 @@ private theorem simChain (L k : Nat) (hk : 1 ≤ k) (cells : List Digest) :
     intro coords hvalid
     have hval' : ∀ j < c, IsBlockTop k (mergeTopCoordsN k j (mergeTopCoords k coords)) :=
       fun j hj => hvalid (j + 1) (by omega)
-    show mergeTopDN L k c (mergeTopD L k (coords.map (fun lh => perfectRoot L k cells lh.1 lh.2)))
-       = (mergeTopCoordsN k (c + 1) coords).map (fun lh => perfectRoot L k cells lh.1 lh.2)
-    rw [mergeTopD_sim L k hk cells coords (hvalid 0 (by omega)),
+    show mergeTopDN k c (mergeTopD k (coords.map (fun lh => perfectRoot k cells lh.1 lh.2)))
+       = (mergeTopCoordsN k (c + 1) coords).map (fun lh => perfectRoot k cells lh.1 lh.2)
+    rw [mergeTopD_sim k hk cells coords (hvalid 0 (by omega)),
       ih (mergeTopCoords k coords) hval']
     rfl
 
@@ -966,10 +966,10 @@ private theorem validCarry (k : Nat) (hk : 2 ≤ k) :
     is `perfectRoot` of the parent — definitional unfold of
     `perfectRoot (h+1)`). Template: `buildStack_invariant` in
     `Bridge.lean`. -/
-theorem kary_bridge (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
-    buildStackCells L k cells =
+theorem kary_bridge (k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
+    buildStackCells k cells =
       (frontierForSizeT k cells.length).map
-        (fun lh => perfectRoot L k cells lh.1 lh.2) := by
+        (fun lh => perfectRoot k cells lh.1 lh.2) := by
   induction cells using List.reverseRecOn with
   | nil =>
     rw [buildStackCells, frontierForSizeT, frontierGo]
@@ -977,28 +977,28 @@ theorem kary_bridge (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
   | append_singleton cs c ih =>
     have hlenc : (cs ++ [c]).length = cs.length + 1 := by simp
     rw [buildStackCells, buildStackGo_snoc, Nat.zero_add,
-      show buildStackGo L k [] 0 cs = buildStackCells L k cs from rfl, ih, appendCell]
+      show buildStackGo k [] 0 cs = buildStackCells k cs from rfl, ih, appendCell]
     have hstab :
-        (frontierForSizeT k cs.length).map (fun lh : Nat × Nat => perfectRoot L k cs lh.1 lh.2)
+        (frontierForSizeT k cs.length).map (fun lh : Nat × Nat => perfectRoot k cs lh.1 lh.2)
         = (frontierForSizeT k cs.length).map
-            (fun lh : Nat × Nat => perfectRoot L k (cs ++ [c]) lh.1 lh.2) := by
+            (fun lh : Nat × Nat => perfectRoot k (cs ++ [c]) lh.1 lh.2) := by
       apply List.map_congr_left
       intro lh hlh
-      exact perfectRoot_stable L k cs [c] lh.2 lh.1
+      exact perfectRoot_stable k cs [c] lh.2 lh.1
         (Tiles_entry_bound k (frontierForSizeT k cs.length) 0 cs.length
           (frontier_tiles k cs.length hk) lh hlh)
-    have hc : perfectRoot L k (cs ++ [c]) cs.length 0 = c := by
+    have hc : perfectRoot k (cs ++ [c]) cs.length 0 = c := by
       show (cs ++ [c]).getD cs.length emptyHash = c
       rw [List.getD_eq_getElem?_getD, List.getElem?_append_right (by omega),
         show cs.length - cs.length = 0 from by omega]
       rfl
     have hmerge :
-        (frontierForSizeT k cs.length).map (fun lh : Nat × Nat => perfectRoot L k cs lh.1 lh.2) ++ [c]
+        (frontierForSizeT k cs.length).map (fun lh : Nat × Nat => perfectRoot k cs lh.1 lh.2) ++ [c]
         = (frontierForSizeT k cs.length ++ [(cs.length, 0)]).map
-            (fun lh : Nat × Nat => perfectRoot L k (cs ++ [c]) lh.1 lh.2) := by
+            (fun lh : Nat × Nat => perfectRoot k (cs ++ [c]) lh.1 lh.2) := by
       rw [hstab, List.map_append, List.map_cons, List.map_nil, hc]
     rw [hmerge,
-      simChain L k (by omega) (cs ++ [c]) (reductionCount k cs.length)
+      simChain k (by omega) (cs ++ [c]) (reductionCount k cs.length)
         (frontierForSizeT k cs.length ++ [(cs.length, 0)]) (validCarry k hk cs.length),
       ← frontier_append_consistent k cs.length hk, hlenc]
 
@@ -1007,18 +1007,18 @@ theorem kary_bridge (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
     empty → `emptyHash` and singleton-promotion cases). Mirrors
     `compute_root_from_state` (`neml/src/tree.rs`) and the fold described in
     `topology.rs` module docs. -/
-noncomputable def foldFrontierRoot (L k : Nat) (stack : List Digest) : Digest :=
-  if h : k < 2 ∨ stack.length ≤ k then naryMr L stack
-  else foldFrontierRoot L k (mergeTopD L k stack)
+noncomputable def foldFrontierRoot (k : Nat) (stack : List Digest) : Digest :=
+  if h : k < 2 ∨ stack.length ≤ k then naryMr stack
+  else foldFrontierRoot k (mergeTopD k stack)
 termination_by stack.length
 decreasing_by
   push_neg at h
-  exact mergeTopD_length_lt L k stack (by omega) h.2
+  exact mergeTopD_length_lt k stack (by omega) h.2
 
 /-- The per-algorithm raw root over level-0 `cells` (flat: leaf hashes;
     subtree kind: stored subtree roots). -/
-noncomputable def karyRoot (L k : Nat) (cells : List Digest) : Digest :=
-  foldFrontierRoot L k (buildStackCells L k cells)
+noncomputable def karyRoot (k : Nat) (cells : List Digest) : Digest :=
+  foldFrontierRoot k (buildStackCells k cells)
 
 /-! ## Layer 3 — the verifier model and its theorems -/
 
@@ -1046,22 +1046,22 @@ def WellFormedSteps (path : List ProofStep) : Prop :=
     singleton-promotion arm of `naryMr` is dead — but the *null*-promotion
     arm is live, which `foldCanonical`/`applyStep` (plain `nodeHash`) gets
     wrong. -/
-noncomputable def applyStepN (L : Nat) (cur : Digest) (s : ProofStep) : Digest :=
-  naryMr L (insertAt s.position cur s.siblings)
+noncomputable def applyStepN (cur : Digest) (s : ProofStep) : Digest :=
+  naryMr (insertAt s.position cur s.siblings)
 
 /-- The verifier's root reconstruction (`reconstruct_inclusion_root` fold). -/
-noncomputable def foldNary (L : Nat) (leaf : Digest) (path : List ProofStep) : Digest :=
-  path.foldl (applyStepN L) leaf
+noncomputable def foldNary (leaf : Digest) (path : List ProofStep) : Digest :=
+  path.foldl (applyStepN) leaf
 
 /-- The accept relation of `verify_inclusion`, minus DoS bounds:
     range guards, skeleton pinning, canonical well-formedness, and the
     fold reaching `root`. -/
-def AcceptsKary (L k : Nat) (leaf : Digest) (index treeSize : Nat)
+def AcceptsKary (k : Nat) (leaf : Digest) (index treeSize : Nat)
     (root : Digest) (path : List ProofStep) : Prop :=
   2 ≤ k ∧ 0 < treeSize ∧ index < treeSize ∧
   StructureOK k index treeSize path ∧
   WellFormedSteps path ∧
-  foldNary L leaf path = root
+  foldNary leaf path = root
 
 /-- A same-value collapse value colliding with a genuine node hash: a not-all-
     equal list of ≥ 2 children whose `nodeHash` equals some value `v` that an
@@ -1070,7 +1070,7 @@ def AcceptsKary (L k : Nat) (leaf : Digest) (index treeSize : Nat)
     preimage; `digestToBytes` is unconstrained, so it is surfaced as an explicit
     assumption rather than argued away. The all-null instance (`v = nullDigest`)
     is the dominant case in a sparse log. -/
-def CollapseAmbiguity (L : Nat) : Prop :=
+def CollapseAmbiguity : Prop :=
   ∃ (cs : List Digest) (v : Digest), 2 ≤ cs.length ∧ ¬(∀ c ∈ cs, c = v) ∧
     nodeHash cs = v
 
@@ -1083,10 +1083,10 @@ def CollapseAmbiguity (L : Nat) : Prop :=
     hashing is `CollapseAmbiguity`; both hashing reduces to `NodeHashCollision`.
     *Strategy:* case on the two `if`s; the collapse/collapse case is `List.ext`
     via length + pointwise equality to the shared (equal) value. -/
-theorem naryMr_inj_of_length (L : Nat) (xs ys : List Digest)
+theorem naryMr_inj_of_length (xs ys : List Digest)
     (hlen : xs.length = ys.length) (h2 : 2 ≤ xs.length)
-    (heq : naryMr L xs = naryMr L ys)
-    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+    (heq : naryMr xs = naryMr ys)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     xs = ys := by
   have hys2 : 2 ≤ ys.length := hlen ▸ h2
   -- Length ≥ 2 forces both lists into the catch-all arm of `naryMr`.
@@ -1139,18 +1139,18 @@ private theorem insertAt_length {α : Type} (n : Nat) (x : α) (l : List α) :
     | succ m => simp [insertAt, ih]
 
 /-- Fold-append: the running digest after the prefix, then one step. -/
-private theorem foldNary_append_last (L : Nat) (a : Digest)
+private theorem foldNary_append_last (a : Digest)
     (p' : List ProofStep) (s : ProofStep) :
-    foldNary L a (p' ++ [s]) = applyStepN L (foldNary L a p') s := by
+    foldNary a (p' ++ [s]) = applyStepN (foldNary a p') s := by
   simp only [foldNary, List.foldl_append, List.foldl_cons, List.foldl_nil]
 
-private theorem foldNary_unique_aux (L : Nat)
-    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+private theorem foldNary_unique_aux 
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     ∀ (n : Nat) (a b : Digest) (p q : List ProofStep),
       p.length = n → q.length = n →
       p.map stepShape = q.map stepShape →
       WellFormedSteps p → WellFormedSteps q →
-      foldNary L a p = foldNary L b q →
+      foldNary a p = foldNary b q →
       a = b ∧ p = q := by
   intro n
   induction n with
@@ -1182,19 +1182,19 @@ private theorem foldNary_unique_aux (L : Nat)
     -- Peel the last fold step and invert it.
     rw [foldNary_append_last, foldNary_append_last] at heq
     simp only [applyStepN] at heq
-    have hxs2 : 2 ≤ (insertAt s₁.position (foldNary L a p') s₁.siblings).length := by
+    have hxs2 : 2 ≤ (insertAt s₁.position (foldNary a p') s₁.siblings).length := by
       rw [insertAt_length]
       have hne : s₁.siblings.length ≠ 0 := fun h0 =>
         hwf_s1.1 (List.eq_nil_of_length_eq_zero h0)
       omega
     have hxylen :
-        (insertAt s₁.position (foldNary L a p') s₁.siblings).length =
-          (insertAt s₂.position (foldNary L b q') s₂.siblings).length := by
+        (insertAt s₁.position (foldNary a p') s₁.siblings).length =
+          (insertAt s₂.position (foldNary b q') s₂.siblings).length := by
       rw [insertAt_length, insertAt_length, hsiblen]
-    have hnode := naryMr_inj_of_length L _ _ hxylen hxs2 heq hH hN
+    have hnode := naryMr_inj_of_length _ _ hxylen hxs2 heq hH hN
     rw [hpos] at hnode
     obtain ⟨hfold, hsib⟩ :=
-      insertAt_injective s₂.position (foldNary L a p') (foldNary L b q')
+      insertAt_injective s₂.position (foldNary a p') (foldNary b q')
         s₁.siblings s₂.siblings hnode
     obtain ⟨hab, hpq⟩ := ih a b p' q' hp'_len hq'_len hshape' hwfp' hwfq' hfold
     refine ⟨hab, ?_⟩
@@ -1213,17 +1213,17 @@ private theorem foldNary_unique_aux (L : Nat)
     the template; each step applies `naryMr_inj_of_length`, with
     `insertAt` preserving the pinned length
     (`(insertAt p c s).length = s.length + 1 ≥ 2` from `WellFormedSteps`). -/
-theorem foldNary_unique_of_shape (L : Nat) (a b : Digest)
+theorem foldNary_unique_of_shape (a b : Digest)
     (p q : List ProofStep)
     (hshape : p.map stepShape = q.map stepShape)
     (hwfp : WellFormedSteps p) (hwfq : WellFormedSteps q)
-    (heq : foldNary L a p = foldNary L b q)
-    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+    (heq : foldNary a p = foldNary b q)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     a = b ∧ p = q := by
   have hlenpq : p.length = q.length := by
     have := congrArg List.length hshape
     simpa using this
-  exact foldNary_unique_aux L hH hN p.length a b p q rfl hlenpq.symm
+  exact foldNary_unique_aux hH hN p.length a b p q rfl hlenpq.symm
     hshape hwfp hwfq heq
 
 /-! ### The honest prover -/
@@ -1232,18 +1232,18 @@ theorem foldNary_unique_of_shape (L : Nat) (a b : Digest)
     subtree at `(left, h)`: at level `j` the path node sits at digit
     `(offset / k^j) % k` among the `k` children of the level-`j+1` block;
     siblings are the other `k - 1` perfect roots, in child order. -/
-noncomputable def honestDigitPath (L k : Nat) (cells : List Digest)
+noncomputable def honestDigitPath (k : Nat) (cells : List Digest)
     (left offset h : Nat) : List ProofStep :=
   (List.range h).map fun j =>
     { position := offset / k ^ j % k,
       siblings := ((List.range k).filter (fun i => i != offset / k ^ j % k)).map
-        fun i => perfectRoot L k cells (left + (offset / k ^ (j + 1) * k + i) * k ^ j) j }
+        fun i => perfectRoot k cells (left + (offset / k ^ (j + 1) * k + i) * k ^ j) j }
 
 /-- Honest grouping path: replay the frontier fold, emitting a step (with
     the other merge participants as siblings, path node erased) whenever the
     tracked slot is inside the merged window. Same recursion as
     `groupingSteps`, carrying digests. -/
-noncomputable def honestGroupPath (L k : Nat) (stack : List Digest)
+noncomputable def honestGroupPath (k : Nat) (stack : List Digest)
     (fIdx : Nat) : List ProofStep :=
   if h : k < 2 ∨ stack.length ≤ k then
     if 1 < stack.length then
@@ -1254,24 +1254,24 @@ noncomputable def honestGroupPath (L k : Nat) (stack : List Digest)
       { position := fIdx - (stack.length - k),
         siblings := (stack.drop (stack.length - k)).eraseIdx
           (fIdx - (stack.length - k)) } ::
-        honestGroupPath L k (mergeTopD L k stack) (stack.length - k)
+        honestGroupPath k (mergeTopD k stack) (stack.length - k)
     else
-      honestGroupPath L k (mergeTopD L k stack) fIdx
+      honestGroupPath k (mergeTopD k stack) fIdx
 termination_by stack.length
 decreasing_by
-  all_goals (push_neg at h; exact mergeTopD_length_lt L k stack (by omega) h.2)
+  all_goals (push_neg at h; exact mergeTopD_length_lt k stack (by omega) h.2)
 
 /-- The honest inclusion path for log position `index`: digit steps inside
     its frontier subtree, then grouping steps to the spine root. Mirrors
     proof generation (which derives the same skeleton from
     `inclusion_skeleton`). -/
-noncomputable def honestInclusionPath (L k : Nat) (cells : List Digest)
+noncomputable def honestInclusionPath (k : Nat) (cells : List Digest)
     (index : Nat) : List ProofStep :=
   match findFrontier k index (frontierForSizeT k cells.length) 0 with
   | none => []
   | some (fIdx, l, h) =>
-      honestDigitPath L k cells l (index - l) h ++
-        honestGroupPath L k (buildStackCells L k cells) fIdx
+      honestDigitPath k cells l (index - l) h ++
+        honestGroupPath k (buildStackCells k cells) fIdx
 
 /-! Honest-prover shape support. -/
 
@@ -1319,18 +1319,18 @@ theorem digitSteps_eq_map (k : Nat) :
       rw [Nat.div_div_eq_div_mul, ← pow_succ']
 
 /-- Exact length after a merge (when the stack is long enough). -/
-private theorem mergeTopD_length (L k : Nat) (stack : List Digest) (h : ¬ stack.length < k) :
-    (mergeTopD L k stack).length = stack.length - k + 1 := by
+private theorem mergeTopD_length (k : Nat) (stack : List Digest) (h : ¬ stack.length < k) :
+    (mergeTopD k stack).length = stack.length - k + 1 := by
   unfold mergeTopD
   rw [if_neg h]
   simp only [List.length_append, List.length_take, List.length_cons, List.length_nil]
   omega
 
 /-- The honest grouping path realizes the mapped grouping skeleton. -/
-private theorem honestGroupPath_shape (L k : Nat) (hk : 2 ≤ k) :
+private theorem honestGroupPath_shape (k : Nat) (hk : 2 ≤ k) :
     ∀ (n : Nat) (stack : List Digest) (fIdx : Nat),
       stack.length = n → fIdx < stack.length →
-      (honestGroupPath L k stack fIdx).map stepShape
+      (honestGroupPath k stack fIdx).map stepShape
         = (groupingSteps k stack.length fIdx).map (fun pc => (pc.1, pc.2 - 1)) := by
   intro n
   induction n using Nat.strong_induction_on with
@@ -1345,8 +1345,8 @@ private theorem honestGroupPath_shape (L k : Nat) (hk : 2 ≤ k) :
     · rw [honestGroupPath, dif_neg hbase, groupingSteps, dif_neg hbase]
       push_neg at hbase
       obtain ⟨_, hgt⟩ := hbase
-      have hml : (mergeTopD L k stack).length = stack.length - k + 1 :=
-        mergeTopD_length L k stack (by omega)
+      have hml : (mergeTopD k stack).length = stack.length - k + 1 :=
+        mergeTopD_length k stack (by omega)
       by_cases hge : fIdx ≥ stack.length - k
       · rw [if_pos hge, if_pos hge, List.map_cons, List.map_cons]
         refine List.cons_eq_cons.mpr ⟨?_, ?_⟩
@@ -1355,10 +1355,10 @@ private theorem honestGroupPath_shape (L k : Nat) (hk : 2 ≤ k) :
             rw [List.length_drop]; omega
           rw [List.length_eraseIdx_of_lt (by rw [hdl]; omega), hdl]
         · rw [← hml]
-          exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack)
+          exact ih (mergeTopD k stack).length (by omega) (mergeTopD k stack)
             (stack.length - k) rfl (by omega)
       · rw [if_neg hge, if_neg hge, ← hml]
-        exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack)
+        exact ih (mergeTopD k stack).length (by omega) (mergeTopD k stack)
           fIdx rfl (by omega)
 
 /-- A tiled coordinate covering `index` is found by `findFrontier`. -/
@@ -1384,27 +1384,27 @@ theorem findFrontier_cover (k index : Nat) :
 /-- The honest path realizes the skeleton exactly (no prefix: `d = 0` at the
     cell level) and is well-formed. Well-formedness is derived from the shape
     via `skeleton_no_promoted` rather than re-proven. -/
-theorem honest_path_shape (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+theorem honest_path_shape (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (index : Nat) (hidx : index < cells.length) :
     (∃ skel, inclusionSkeleton k cells.length index = some skel ∧
-      (honestInclusionPath L k cells index).map stepShape = skel) ∧
-    WellFormedSteps (honestInclusionPath L k cells index) := by
+      (honestInclusionPath k cells index).map stepShape = skel) ∧
+    WellFormedSteps (honestInclusionPath k cells index) := by
   set fr := frontierForSizeT k cells.length with hfr
   obtain ⟨fIdx, l, h, hff⟩ := findFrontier_cover k index fr 0 cells.length 0
     (by rw [hfr]; exact frontier_tiles k cells.length hk) (by omega) hidx
-  have hbuild : (buildStackCells L k cells).length = fr.length := by
-    rw [hfr, kary_bridge L k hk cells, List.length_map]
+  have hbuild : (buildStackCells k cells).length = fr.length := by
+    rw [hfr, kary_bridge k hk cells, List.length_map]
   have hfidxlt : fIdx < fr.length := by
     simpa using findFrontier_slot_lt k index fr 0 fIdx l h hff
   have hskel : inclusionSkeleton k cells.length index =
       some (digitSteps k (index - l) h ++
         (groupingSteps k fr.length fIdx).map (fun pc => (pc.1, pc.2 - 1))) := by
     rw [inclusionSkeleton, if_neg (by omega), ← hfr, hff]
-  have hpath : honestInclusionPath L k cells index =
-      honestDigitPath L k cells l (index - l) h ++
-        honestGroupPath L k (buildStackCells L k cells) fIdx := by
+  have hpath : honestInclusionPath k cells index =
+      honestDigitPath k cells l (index - l) h ++
+        honestGroupPath k (buildStackCells k cells) fIdx := by
     rw [honestInclusionPath, ← hfr, hff]
-  have hshape : (honestInclusionPath L k cells index).map stepShape =
+  have hshape : (honestInclusionPath k cells index).map stepShape =
       digitSteps k (index - l) h ++
         (groupingSteps k fr.length fIdx).map (fun pc => (pc.1, pc.2 - 1)) := by
     rw [hpath, List.map_append]
@@ -1414,8 +1414,8 @@ theorem honest_path_shape (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
       intro j _
       simp only [Function.comp, stepShape, List.length_map]
       rw [filter_ne_range_length k ((index - l) / k ^ j % k) (Nat.mod_lt _ (by omega))]
-    · rw [honestGroupPath_shape L k hk (buildStackCells L k cells).length
-            (buildStackCells L k cells) fIdx rfl (by rw [hbuild]; exact hfidxlt), hbuild]
+    · rw [honestGroupPath_shape k hk (buildStackCells k cells).length
+            (buildStackCells k cells) fIdx rfl (by rw [hbuild]; exact hfidxlt), hbuild]
   refine ⟨⟨_, hskel, hshape⟩, ?_⟩
   intro s hs
   have hmem : stepShape s ∈ digitSteps k (index - l) h ++
@@ -1489,11 +1489,11 @@ private theorem insertAt_filter_range {α} [Inhabited α] (φ : Nat → α) (k p
 /-- The digit path folds the leaf up to its frontier-subtree root. Stated
     generally over `offset` (the conclusion rounds `offset` down to a multiple
     of `k^h`); the in-range use has `offset < k^h`, giving `perfectRoot left h`. -/
-theorem digitFold (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) :
+theorem digitFold (k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) :
     ∀ (h offset : Nat),
-      foldNary L (cells.getD (left + offset) emptyHash)
-        (honestDigitPath L k cells left offset h)
-        = perfectRoot L k cells (left + offset / k ^ h * k ^ h) h := by
+      foldNary (cells.getD (left + offset) emptyHash)
+        (honestDigitPath k cells left offset h)
+        = perfectRoot k cells (left + offset / k ^ h * k ^ h) h := by
   intro h
   induction h with
   | zero =>
@@ -1501,20 +1501,20 @@ theorem digitFold (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) 
     simp [honestDigitPath, foldNary, perfectRoot]
   | succ n ih =>
     intro offset
-    have hsplit : honestDigitPath L k cells left offset (n + 1)
-        = honestDigitPath L k cells left offset n ++
+    have hsplit : honestDigitPath k cells left offset (n + 1)
+        = honestDigitPath k cells left offset n ++
           [{ position := offset / k ^ n % k,
              siblings := ((List.range k).filter (fun i => i != offset / k ^ n % k)).map
-               fun i => perfectRoot L k cells (left + (offset / k ^ (n + 1) * k + i) * k ^ n) n }] := by
+               fun i => perfectRoot k cells (left + (offset / k ^ (n + 1) * k + i) * k ^ n) n }] := by
       rw [honestDigitPath, honestDigitPath, List.range_succ, List.map_append, List.map_cons,
         List.map_nil]
     rw [hsplit, foldNary_append_last, ih]
     simp only [applyStepN]
-    set φ := fun i => perfectRoot L k cells (left + offset / k ^ (n + 1) * k ^ (n + 1) + i * k ^ n) n
+    set φ := fun i => perfectRoot k cells (left + offset / k ^ (n + 1) * k ^ (n + 1) + i * k ^ n) n
       with hφ
     have hp : offset / k ^ n % k < k := Nat.mod_lt _ (by omega)
     have hsib : ((List.range k).filter (fun i => i != offset / k ^ n % k)).map
-                  (fun i => perfectRoot L k cells (left + (offset / k ^ (n + 1) * k + i) * k ^ n) n)
+                  (fun i => perfectRoot k cells (left + (offset / k ^ (n + 1) * k + i) * k ^ n) n)
               = ((List.range k).filter (fun i => i != offset / k ^ n % k)).map φ := by
       apply List.map_congr_left
       intro i _
@@ -1522,7 +1522,7 @@ theorem digitFold (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) 
       congr 1
       rw [show k ^ (n + 1) = k ^ n * k from pow_succ k n]
       ring
-    have hcur : perfectRoot L k cells (left + offset / k ^ n * k ^ n) n
+    have hcur : perfectRoot k cells (left + offset / k ^ n * k ^ n) n
               = φ (offset / k ^ n % k) := by
       have hpow : k ^ (n + 1) = k ^ n * k := pow_succ k n
       have hdd : offset / k ^ (n + 1) = offset / k ^ n / k := by rw [hpow, Nat.div_div_eq_div_mul]
@@ -1537,11 +1537,11 @@ theorem digitFold (L k : Nat) (hk : 2 ≤ k) (cells : List Digest) (left : Nat) 
 
 /-- The honest grouping path folds the tracked entry through the frontier
     merges to the spine root. -/
-private theorem honestGroupPath_folds (L k : Nat) (hk : 2 ≤ k) :
+private theorem honestGroupPath_folds (k : Nat) (hk : 2 ≤ k) :
     ∀ (n : Nat) (stack : List Digest) (fIdx : Nat),
       stack.length = n → fIdx < stack.length →
-      foldNary L (stack.getD fIdx emptyHash) (honestGroupPath L k stack fIdx)
-        = foldFrontierRoot L k stack := by
+      foldNary (stack.getD fIdx emptyHash) (honestGroupPath k stack fIdx)
+        = foldFrontierRoot k stack := by
   intro n
   induction n using Nat.strong_induction_on with
   | _ n ih =>
@@ -1560,8 +1560,8 @@ private theorem honestGroupPath_folds (L k : Nat) (hk : 2 ≤ k) :
     · rw [honestGroupPath, dif_neg hbase, foldFrontierRoot, dif_neg hbase]
       push_neg at hbase
       obtain ⟨_, hgt⟩ := hbase
-      have hml : (mergeTopD L k stack).length = stack.length - k + 1 :=
-        mergeTopD_length L k stack (by omega)
+      have hml : (mergeTopD k stack).length = stack.length - k + 1 :=
+        mergeTopD_length k stack (by omega)
       have hdroplen : (stack.drop (stack.length - k)).length = k := by
         rw [List.length_drop]; omega
       by_cases hge : fIdx ≥ stack.length - k
@@ -1572,25 +1572,25 @@ private theorem honestGroupPath_folds (L k : Nat) (hk : 2 ≤ k) :
             show (stack.length - k) + (fIdx - (stack.length - k)) = fIdx from by omega]
         rw [hstart, insertAt_eraseIdx emptyHash (stack.drop (stack.length - k))
             (fIdx - (stack.length - k)) (by rw [hdroplen]; omega)]
-        have hmerged : naryMr L (stack.drop (stack.length - k))
-            = (mergeTopD L k stack).getD (stack.length - k) emptyHash := by
+        have hmerged : naryMr (stack.drop (stack.length - k))
+            = (mergeTopD k stack).getD (stack.length - k) emptyHash := by
           rw [List.getD_eq_getElem?_getD, mergeTopD, if_neg (by omega),
             List.getElem?_append_right (by rw [List.length_take]; omega),
             List.length_take, Nat.min_eq_left (by omega)]
           simp
         rw [hmerged]
-        exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack)
+        exact ih (mergeTopD k stack).length (by omega) (mergeTopD k stack)
           (stack.length - k) rfl (by omega)
       · rw [if_neg hge]
         have htk : fIdx < stack.length - k := by omega
         have htl : fIdx < (stack.take (stack.length - k)).length := by
           rw [List.length_take, Nat.min_eq_left (by omega)]; exact htk
-        have hstart : stack.getD fIdx emptyHash = (mergeTopD L k stack).getD fIdx emptyHash := by
+        have hstart : stack.getD fIdx emptyHash = (mergeTopD k stack).getD fIdx emptyHash := by
           rw [mergeTopD, if_neg (by omega), List.getD_eq_getElem?_getD,
             List.getD_eq_getElem?_getD, List.getElem?_append_left htl,
             List.getElem?_take_of_lt htk]
         rw [hstart]
-        exact ih (mergeTopD L k stack).length (by omega) (mergeTopD L k stack) fIdx rfl (by omega)
+        exact ih (mergeTopD k stack).length (by omega) (mergeTopD k stack) fIdx rfl (by omega)
 
 /-- `findFrontier` returns a slot at or beyond the starting counter. -/
 private theorem findFrontier_slot_ge (k index : Nat) :
@@ -1639,50 +1639,50 @@ theorem findFrontier_spec (k index : Nat) :
     half folds that root through the frontier merges to the spine root
     (`honestGroupPath_folds`), with `kary_bridge` pinning the stack entries to
     the perfect roots. -/
-theorem honest_path_folds (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+theorem honest_path_folds (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (index : Nat) (hidx : index < cells.length) :
-    foldNary L (cells.getD index emptyHash)
-      (honestInclusionPath L k cells index) = karyRoot L k cells := by
+    foldNary (cells.getD index emptyHash)
+      (honestInclusionPath k cells index) = karyRoot k cells := by
   set fr := frontierForSizeT k cells.length with hfr
   obtain ⟨fIdx, l, h, hff⟩ := findFrontier_cover k index fr 0 cells.length 0
     (by rw [hfr]; exact frontier_tiles k cells.length hk) (by omega) hidx
   have hcover := (findFrontier_spec k index fr 0 fIdx l h hff).2
   have hfe : fr[fIdx]? = some (l, h) := by
     have := (findFrontier_spec k index fr 0 fIdx l h hff).1; simpa using this
-  have hbuild : buildStackCells L k cells = fr.map (fun lh => perfectRoot L k cells lh.1 lh.2) := by
-    rw [hfr]; exact kary_bridge L k hk cells
+  have hbuild : buildStackCells k cells = fr.map (fun lh => perfectRoot k cells lh.1 lh.2) := by
+    rw [hfr]; exact kary_bridge k hk cells
   have hfidxlt : fIdx < fr.length := by
     simpa using findFrontier_slot_lt k index fr 0 fIdx l h hff
-  have hpath : honestInclusionPath L k cells index =
-      honestDigitPath L k cells l (index - l) h ++
-        honestGroupPath L k (buildStackCells L k cells) fIdx := by
+  have hpath : honestInclusionPath k cells index =
+      honestDigitPath k cells l (index - l) h ++
+        honestGroupPath k (buildStackCells k cells) fIdx := by
     rw [honestInclusionPath, ← hfr, hff]
   rw [hpath, foldNary, List.foldl_append, ← foldNary, ← foldNary]
   have hleaf : cells.getD index emptyHash = cells.getD (l + (index - l)) emptyHash := by
     congr 1; omega
-  rw [hleaf, digitFold L k hk cells l h (index - l),
+  rw [hleaf, digitFold k hk cells l h (index - l),
     show (index - l) / k ^ h = 0 from Nat.div_eq_of_lt (by omega), Nat.zero_mul, Nat.add_zero]
-  have hentry : (buildStackCells L k cells).getD fIdx emptyHash = perfectRoot L k cells l h := by
+  have hentry : (buildStackCells k cells).getD fIdx emptyHash = perfectRoot k cells l h := by
     rw [hbuild, List.getD_eq_getElem?_getD, List.getElem?_map, hfe]; rfl
   rw [← hentry, karyRoot,
-    honestGroupPath_folds L k hk (buildStackCells L k cells).length
-      (buildStackCells L k cells) fIdx rfl (by rw [hbuild, List.length_map]; exact hfidxlt)]
+    honestGroupPath_folds k hk (buildStackCells k cells).length
+      (buildStackCells k cells) fIdx rfl (by rw [hbuild, List.length_map]; exact hfidxlt)]
 
 /-- **Completeness: honest proofs verify** — previously claimed nowhere.
     Also the non-vacuity witness: `AcceptsKary` is satisfiable for every
     in-range `(index, cells)`, so the soundness theorem below quantifies
     over a provably non-empty accept set.
     *Strategy:* assemble `honest_path_shape` + `honest_path_folds`. -/
-theorem kary_completeness (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+theorem kary_completeness (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (index : Nat) (hidx : index < cells.length) :
-    AcceptsKary L k (cells.getD index emptyHash) index cells.length
-      (karyRoot L k cells) (honestInclusionPath L k cells index) := by
-  obtain ⟨⟨skel, hskel, hmap⟩, hwf⟩ := honest_path_shape L k hk cells index hidx
-  have hlen : skel.length = (honestInclusionPath L k cells index).length := by
+    AcceptsKary k (cells.getD index emptyHash) index cells.length
+      (karyRoot k cells) (honestInclusionPath k cells index) := by
+  obtain ⟨⟨skel, hskel, hmap⟩, hwf⟩ := honest_path_shape k hk cells index hidx
+  have hlen : skel.length = (honestInclusionPath k cells index).length := by
     rw [← hmap, List.length_map]
   refine ⟨hk, by omega, hidx, ⟨skel, hskel, by omega, ?_⟩, hwf,
-    honest_path_folds L k hk cells index hidx⟩
-  rw [show (honestInclusionPath L k cells index).length - skel.length = 0 from by omega,
+    honest_path_folds k hk cells index hidx⟩
+  rw [show (honestInclusionPath k cells index).length - skel.length = 0 from by omega,
     List.drop_zero, hmap]
 
 /-- **Verifier soundness (existential in depth): accept ⇒ committed at
@@ -1705,39 +1705,39 @@ theorem kary_completeness (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     at `d := path.length - skel.length`. The suffix shape-matches `skel`
     (from `StructureOK`); the honest path shape-matches `skel` with no
     prefix (`honest_path_shape`). Both fold to `root` — the suffix from
-    `foldNary L leaf (take d)` (fold-append decomposition,
+    `foldNary leaf (take d)` (fold-append decomposition,
     `List.foldl_append`), the honest path from the cell
     (`honest_path_folds`). Apply `foldNary_unique_of_shape` to the pair;
     its starting-digest conclusion is exactly the binding. -/
-theorem kary_inclusion_soundness (L k : Nat) (cells : List Digest)
+theorem kary_inclusion_soundness (k : Nat) (cells : List Digest)
     (leaf root : Digest) (index : Nat) (path : List ProofStep)
-    (hacc : AcceptsKary L k leaf index cells.length root path)
-    (hroot : root = karyRoot L k cells)
-    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+    (hacc : AcceptsKary k leaf index cells.length root path)
+    (hroot : root = karyRoot k cells)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     ∃ (d : Nat) (skel : List (Nat × Nat)),
       inclusionSkeleton k cells.length index = some skel ∧
       d + skel.length = path.length ∧
-      foldNary L leaf (path.take d) = cells.getD index emptyHash := by
+      foldNary leaf (path.take d) = cells.getD index emptyHash := by
   obtain ⟨hk, _htree, hidx, ⟨skel, hskel, hsklen, hsuffix⟩, hwf, hfold⟩ := hacc
-  obtain ⟨⟨skel', hskel', hhmap⟩, hhwf⟩ := honest_path_shape L k hk cells index hidx
-  have hhfold := honest_path_folds L k hk cells index hidx
+  obtain ⟨⟨skel', hskel', hhmap⟩, hhwf⟩ := honest_path_shape k hk cells index hidx
+  have hhfold := honest_path_folds k hk cells index hidx
   have hskeleq : skel' = skel := Option.some_injective _ (hskel'.symm.trans hskel)
   refine ⟨path.length - skel.length, skel, hskel, by omega, ?_⟩
   set d := path.length - skel.length with hd
   have hshape : (path.drop d).map stepShape =
-      (honestInclusionPath L k cells index).map stepShape := by
+      (honestInclusionPath k cells index).map stepShape := by
     rw [hsuffix, hhmap, hskeleq]
   have hwfdrop : WellFormedSteps (path.drop d) :=
     fun s hs => hwf s (List.mem_of_mem_drop hs)
-  have hcompose : foldNary L (foldNary L leaf (path.take d)) (path.drop d)
-      = foldNary L leaf path := by
+  have hcompose : foldNary (foldNary leaf (path.take d)) (path.drop d)
+      = foldNary leaf path := by
     conv_rhs => rw [← List.take_append_drop d path]
     simp only [foldNary, List.foldl_append]
-  have hfeq : foldNary L (foldNary L leaf (path.take d)) (path.drop d)
-      = foldNary L (cells.getD index emptyHash) (honestInclusionPath L k cells index) := by
+  have hfeq : foldNary (foldNary leaf (path.take d)) (path.drop d)
+      = foldNary (cells.getD index emptyHash) (honestInclusionPath k cells index) := by
     rw [hcompose, hfold, hroot, hhfold]
-  obtain ⟨hab, _⟩ := foldNary_unique_of_shape L (foldNary L leaf (path.take d))
-    (cells.getD index emptyHash) (path.drop d) (honestInclusionPath L k cells index)
+  obtain ⟨hab, _⟩ := foldNary_unique_of_shape (foldNary leaf (path.take d))
+    (cells.getD index emptyHash) (path.drop d) (honestInclusionPath k cells index)
     hshape hwfdrop hhwf hfeq hH hN
   exact hab
 

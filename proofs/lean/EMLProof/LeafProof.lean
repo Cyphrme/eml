@@ -23,8 +23,8 @@ axioms. `#print axioms` on the theorems below therefore reports a subset of
 
 A live tree is modeled by its level-0 cell digests `cells`; the genuine leaf at
 log position `index` is `cells.getD index emptyHash`, and the genuine root is
-`karyRoot L k cells`. A **leaf proof for `leaf` at `index`** is a `LeafProof`
-whose verify relation is `AcceptsKary L k leaf index cells.length root path`.
+`karyRoot k cells`. A **leaf proof for `leaf` at `index`** is a `LeafProof`
+whose verify relation is `AcceptsKary k leaf index cells.length root path`.
 
 * **Legitimate ⇒ accepted** (`leaf_proof_complete`): the genuine cell's honest
   proof verifies against the genuine root — the base-case completeness the
@@ -46,20 +46,20 @@ namespace NEML
     because `LeafProof::verify` delegates to `verify_inclusion`. `leaf` is the
     proven leaf hash, `(index, treeSize, k)` the trusted positional parameters,
     `root` the authenticated root, `path` the inclusion path. -/
-def LeafVerifies (L k : Nat) (leaf : Digest) (index treeSize : Nat)
+def LeafVerifies (k : Nat) (leaf : Digest) (index treeSize : Nat)
     (root : Digest) (path : List ProofStep) : Prop :=
-  AcceptsKary L k leaf index treeSize root path
+  AcceptsKary k leaf index treeSize root path
 
 /-- **Leaf-proof completeness — a legitimate leaf verifies.** The genuine cell
     at log position `index`, with the honest inclusion path over `cells`,
-    verifies against the genuine root `karyRoot L k cells`. This is the base
+    verifies against the genuine root `karyRoot k cells`. This is the base
     case the snapshot proof composes; it is also the non-vacuity witness for
     `LeafVerifies` (the accept set is provably inhabited). -/
-theorem leaf_proof_complete (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+theorem leaf_proof_complete (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (index : Nat) (hidx : index < cells.length) :
-    LeafVerifies L k (cells.getD index emptyHash) index cells.length
-      (karyRoot L k cells) (honestInclusionPath L k cells index) :=
-  kary_completeness L k hk cells index hidx
+    LeafVerifies k (cells.getD index emptyHash) index cells.length
+      (karyRoot k cells) (honestInclusionPath k cells index) :=
+  kary_completeness k hk cells index hidx
 
 /-- **Leaf-proof soundness (existential in depth) — accept binds the committed
     cell.** If a leaf proof for `leaf` at `index` verifies against the genuine
@@ -68,16 +68,16 @@ theorem leaf_proof_complete (L k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     assumption breaks. Depth is existential by design (implicit promotion makes
     it unbindable); the forged-leaf rejection on flat trees follows below where
     `d = 0`. -/
-theorem leaf_proof_sound (L k : Nat) (cells : List Digest)
+theorem leaf_proof_sound (k : Nat) (cells : List Digest)
     (leaf root : Digest) (index : Nat) (path : List ProofStep)
-    (hver : LeafVerifies L k leaf index cells.length root path)
-    (hroot : root = karyRoot L k cells)
-    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
+    (hver : LeafVerifies k leaf index cells.length root path)
+    (hroot : root = karyRoot k cells)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     ∃ (d : Nat) (skel : List (Nat × Nat)),
       inclusionSkeleton k cells.length index = some skel ∧
       d + skel.length = path.length ∧
-      foldNary L leaf (path.take d) = cells.getD index emptyHash :=
-  kary_inclusion_soundness L k cells leaf root index path hver hroot hH hN
+      foldNary leaf (path.take d) = cells.getD index emptyHash :=
+  kary_inclusion_soundness k cells leaf root index path hver hroot hH hN
 
 /-- **Leaf-proof soundness on a flat live tree — accept forces leaf equality.**
     On a flat tree the leaf *is* the level-0 cell, so the honest proof carries no
@@ -86,16 +86,16 @@ theorem leaf_proof_sound (L k : Nat) (cells : List Digest)
     proof accepts *and* the honest proof for `index` has full skeleton length
     (the flat-tree shape, `d = 0`), then `leaf = cells.getD index emptyHash` or a
     hash assumption broke. -/
-theorem leaf_proof_flat_sound (L k : Nat) (cells : List Digest)
+theorem leaf_proof_flat_sound (k : Nat) (cells : List Digest)
     (leaf root : Digest) (index : Nat) (path : List ProofStep)
-    (hver : LeafVerifies L k leaf index cells.length root path)
-    (hroot : root = karyRoot L k cells)
+    (hver : LeafVerifies k leaf index cells.length root path)
+    (hroot : root = karyRoot k cells)
     (hflat : ∀ skel, inclusionSkeleton k cells.length index = some skel →
       skel.length = path.length)
-    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L) :
-    leaf = cells.getD index emptyHash ∨ NodeHashCollision ∨ CollapseAmbiguity L := by
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
+    leaf = cells.getD index emptyHash ∨ NodeHashCollision ∨ CollapseAmbiguity := by
   obtain ⟨d, skel, hskel, hsum, hfold⟩ :=
-    leaf_proof_sound L k cells leaf root index path hver hroot hH hN
+    leaf_proof_sound k cells leaf root index path hver hroot hH hN
   -- The flat-tree shape forces `d = 0`: the skeleton already spans the path.
   have hflatlen := hflat skel hskel
   have hd0 : d = 0 := by omega
@@ -111,16 +111,16 @@ theorem leaf_proof_flat_sound (L k : Nat) (cells : List Digest)
     accepting leaf proof against the genuine root. This is the soundness half the
     API's `forged_leaf_is_rejected` / `proof_does_not_transfer_across_positions`
     spec tests witness operationally. -/
-theorem leaf_proof_forged_rejected (L k : Nat) (cells : List Digest)
+theorem leaf_proof_forged_rejected (k : Nat) (cells : List Digest)
     (leaf root : Digest) (index : Nat) (path : List ProofStep)
-    (hroot : root = karyRoot L k cells)
+    (hroot : root = karyRoot k cells)
     (hflat : ∀ skel, inclusionSkeleton k cells.length index = some skel →
       skel.length = path.length)
-    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity L)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity)
     (hforged : leaf ≠ cells.getD index emptyHash) :
-    ¬ LeafVerifies L k leaf index cells.length root path := by
+    ¬ LeafVerifies k leaf index cells.length root path := by
   intro hver
-  rcases leaf_proof_flat_sound L k cells leaf root index path hver hroot hflat hH hN with
+  rcases leaf_proof_flat_sound k cells leaf root index path hver hroot hflat hH hN with
     heq | hcol
   · exact hforged heq
   · rcases hcol with hc | hc
