@@ -28,16 +28,16 @@
 //! Subtree appends are not allowed in the CT build.  The log is created
 //! with [`new`], which fixes `LogKind::Flat`.
 
-pub use eml_log::*;
+pub use eml::*;
 
 /// CT build arity: binary (`k = 2`).
-pub const LOG_ARITY: usize = 2;
+pub const LOG_ARITY: u64 = 2;
 
 /// CT build configuration: arity `k = 2`.
 #[must_use]
 pub fn config() -> TreeConfig {
     TreeConfig {
-        log_arity: LOG_ARITY,
+        arity: LOG_ARITY,
     }
 }
 
@@ -371,6 +371,6 @@ mod tests {
 
     #[test]
     fn preset_is_binary() {
-        assert_eq!(config().log_arity, 2);
+        assert_eq!(config().arity, 2);
     }
 }

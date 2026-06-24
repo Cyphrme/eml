@@ -12,7 +12,7 @@ name = "cyphr_log"
 
 [dependencies]
 # The general append-only library; this crate is its k=2, no-prefix instantiation.
-eml-log = { path = "../eml" }
+eml = { path = "../eml" }
 
 [dev-dependencies]
 sha2 = "0.10"

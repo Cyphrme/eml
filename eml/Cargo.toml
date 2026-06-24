@@ -1,14 +1,11 @@
 [package]
-name          = "eml-log"
+name          = "eml"
 version       = "0.1.0"
 description   = "EML — the append-only engineering library over the PMT kernel"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
-
-[lib]
-name = "eml_log"
 
 [dependencies]
 # The kernel; EML is the append-only engineering library over it.

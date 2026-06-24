@@ -323,7 +323,7 @@ dependencies = [
 name = "ct-build"
 version = "0.1.0"
 dependencies = [
- "eml-log",
+ "eml",
  "sha2",
  "smol",
 ]
@@ -335,7 +335,7 @@ dependencies = [
  "big_o",
  "bigoish",
  "cpu-time",
- "eml-log",
+ "eml",
  "proptest",
  "sha2",
  "smol",
@@ -395,19 +395,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eml-examples"
-version = "0.0.0"
-dependencies = [
- "cyphr-log",
- "eml-log",
- "emt",
- "pmt",
- "sha2",
- "smol",
-]
-
-[[package]]
-name = "eml-log"
+name = "eml"
 version = "0.1.0"
 dependencies = [
  "big_o",
@@ -415,6 +403,18 @@ dependencies = [
  "cpu-time",
  "pmt",
  "proptest",
+ "sha2",
+ "smol",
+]
+
+[[package]]
+name = "eml-examples"
+version = "0.0.0"
+dependencies = [
+ "cyphr-log",
+ "eml",
+ "emt",
+ "pmt",
  "sha2",
  "smol",
 ]
@@ -792,7 +792,7 @@ version = "0.1.0-baseline"
 name = "neml-storage-fjall"
 version = "0.1.0"
 dependencies = [
- "eml-log",
+ "eml",
  "fjall",
  "proptest",
  "sha2",

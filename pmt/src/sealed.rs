@@ -1,7 +1,7 @@
 //! `Sealed` — the one kernel commitment currency.
 //!
 //! Every freeze of a tree — mutable ([`emt`](../../emt/index.html)) or
-//! append-only ([`eml`](../../eml_log/index.html)) — produces a `Sealed`. There
+//! append-only ([`eml`](../../eml/index.html)) — produces a `Sealed`. There
 //! is exactly one commitment type, and it carries the **resumable frontier**:
 //! per active algorithm, the digests of the perfect k-ary subtrees that
 //! [`frontier_for_size`](crate::topology::frontier_for_size) names at the sealed

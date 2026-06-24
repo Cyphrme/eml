@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use eml_log::Storage;
+use eml::Storage;
 use neml_storage_fjall::FjallStorage;
 use proptest::prelude::*;
 use tempfile::tempdir;

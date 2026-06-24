@@ -45,7 +45,7 @@ The library is parameterized essentially by the spine arity `k` alone
 
 ## Public surface
 
-The kernel surface is re-exported through `eml_log::*` so consumers need not
+The kernel surface is re-exported through `eml::*` so consumers need not
 also name the `pmt` crate directly.
 
 ### Building and appending
@@ -122,7 +122,7 @@ constant.
 ## Minimal usage example
 
 ```rust
-use eml_log::{NaryMerkleLog, Subtree, TreeConfig, Hasher, MemoryStorage};
+use eml::{NaryMerkleLog, Subtree, TreeConfig, Hasher, MemoryStorage};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
@@ -142,7 +142,7 @@ impl Hasher for Sha256Hasher {
 
 fn main() {
     smol::block_on(async {
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),

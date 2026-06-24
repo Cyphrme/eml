@@ -1,4 +1,4 @@
-use eml_log::{Hasher, NaryMerkleLog, Storage, TreeConfig};
+use eml::{Hasher, NaryMerkleLog, Storage, TreeConfig};
 use neml_storage_fjall::FjallStorage;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -76,7 +76,7 @@ fn test_fjall_log_integration_and_recovery() {
         let root1;
         {
             let storage = FjallStorage::open(dir.path()).unwrap();
-            let config = TreeConfig { log_arity: 2 };
+            let config = TreeConfig { arity: 2 };
             let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();

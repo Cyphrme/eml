@@ -63,7 +63,7 @@ fn seal_root_equals_native_append_root() {
 
     // Build the append-only log over the same payloads in the same order.
     let log_root = smol::block_on(async {
-        let mut log = cyphr_log::new(eml_log::MemoryStorage::new(), Box::new(H))
+        let mut log = cyphr_log::new(eml::MemoryStorage::new(), Box::new(H))
             .await
             .unwrap();
         for p in payloads {
@@ -97,7 +97,7 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
 
     smol::block_on(async {
         // Build the append-only log.
-        let mut log = cyphr_log::new(eml_log::MemoryStorage::new(), Box::new(H))
+        let mut log = cyphr_log::new(eml::MemoryStorage::new(), Box::new(H))
             .await
             .unwrap();
         for p in log_payloads {
@@ -158,10 +158,10 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
 #[test]
 fn seal_yields_currency_with_derived_binding_root_and_extents() {
     smol::block_on(async {
-        let mut log = eml_log::NaryMerkleLog::new(
-            eml_log::MemoryStorage::new(),
+        let mut log = eml::NaryMerkleLog::new(
+            eml::MemoryStorage::new(),
             Box::new(H),
-            eml_log::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -199,10 +199,10 @@ fn seal_yields_currency_with_derived_binding_root_and_extents() {
 #[test]
 fn snapshot_proof_verifies_leaf_against_snapshot() {
     smol::block_on(async {
-        let mut log = eml_log::NaryMerkleLog::new(
-            eml_log::MemoryStorage::new(),
+        let mut log = eml::NaryMerkleLog::new(
+            eml::MemoryStorage::new(),
             Box::new(H),
-            eml_log::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -223,10 +223,10 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
         let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
 
         // Assemble the snapshot proof over the single claimed leaf.
-        let proof = eml_log::SnapshotProof::produce(
+        let proof = eml::SnapshotProof::produce(
             &sealed,
             &hashers,
-            vec![eml_log::ClaimedLeaf::new(0, leaf_proof)],
+            vec![eml::ClaimedLeaf::new(0, leaf_proof)],
         );
 
         let trusted = [pmt::TrustedBindingRoot {
@@ -261,9 +261,9 @@ fn seal_emt_then_resume_eml_appends_forward() {
         let sealed_member = sealed.member_root(0, &H).unwrap();
 
         // Resume an append-only log onto the EMT-origin frontier.
-        let mut log = eml_log::NaryMerkleLog::resume(
+        let mut log = eml::NaryMerkleLog::resume(
             &sealed,
-            eml_log::MemoryStorage::new(),
+            eml::MemoryStorage::new(),
             vec![(0, Box::new(H))],
         )
         .await
@@ -303,10 +303,10 @@ fn seal_eml_then_fill_emt_verifies_against_binding_root() {
         let data: Vec<Vec<u8>> = (0..6u64)
             .map(|i| format!("leaf-{i}").into_bytes())
             .collect();
-        let mut log = eml_log::NaryMerkleLog::new(
-            eml_log::MemoryStorage::new(),
+        let mut log = eml::NaryMerkleLog::new(
+            eml::MemoryStorage::new(),
             Box::new(H),
-            eml_log::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -319,7 +319,7 @@ fn seal_eml_then_fill_emt_verifies_against_binding_root() {
         // verified against the committed one (rejection on mismatch is internal).
         let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
         let filled =
-            eml_log::fill(&sealed, 0, &H, &data, eml_log::FillKind::Emt, &hashers).unwrap();
+            eml::fill(&sealed, 0, &H, &data, eml::FillKind::Emt, &hashers).unwrap();
         assert_eq!(filled.tree_size(), 6);
         // The verified member root equals the sealed member root.
         assert_eq!(filled.root(), sealed.member_root(0, &H).unwrap().as_slice());
@@ -338,10 +338,10 @@ fn seal_eml_then_fill_emt_verifies_against_binding_root() {
 fn trustless_fill_verify_without_a_signature() {
     smol::block_on(async {
         let data: Vec<Vec<u8>> = (0..7u64).map(|i| format!("e-{i}").into_bytes()).collect();
-        let mut log = eml_log::NaryMerkleLog::new(
-            eml_log::MemoryStorage::new(),
+        let mut log = eml::NaryMerkleLog::new(
+            eml::MemoryStorage::new(),
             Box::new(H),
-            eml_log::TreeConfig { log_arity: 2 },
+            eml::TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -352,15 +352,15 @@ fn trustless_fill_verify_without_a_signature() {
         let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
 
         // Genuine data verifies — the commitment is confirmed from data alone.
-        assert!(eml_log::fill(&sealed, 0, &H, &data, eml_log::FillKind::Eml, &hashers).is_ok());
+        assert!(eml::fill(&sealed, 0, &H, &data, eml::FillKind::Eml, &hashers).is_ok());
 
         // Forged data cannot reproduce the committed layout — rejected, no
         // signature needed to detect the tampering.
         let mut forged = data.clone();
         forged[2] = b"tampered".to_vec();
         assert_eq!(
-            eml_log::fill(&sealed, 0, &H, &forged, eml_log::FillKind::Eml, &hashers),
-            Err(eml_log::FillError::BindingRootMismatch { alg_id: 0 })
+            eml::fill(&sealed, 0, &H, &forged, eml::FillKind::Eml, &hashers),
+            Err(eml::FillError::BindingRootMismatch { alg_id: 0 })
         );
     });
 }

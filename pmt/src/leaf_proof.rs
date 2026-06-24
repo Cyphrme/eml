@@ -15,7 +15,7 @@
 //!
 //! # Trust contract (security-critical)
 //!
-//! A `LeafProof` carries `index`, `tree_size`, and `log_arity` — these are
+//! A `LeafProof` carries `index`, `tree_size`, and `arity` — these are
 //! **trusted positional parameters**, inherited verbatim from the inclusion
 //! contract ([`verify_inclusion`](crate::proof::verify_inclusion)). They pin the
 //! topology the verifier reconstructs and MUST come from an authenticated source
@@ -33,7 +33,7 @@ use crate::proof::{ProofStep, verify_inclusion};
 ///
 /// The path and positional fields are exactly the inclusion contract; bundling
 /// them is what makes the proof self-describing — `verify` needs only the hasher
-/// and the trusted root, not a re-supply of `(index, tree_size, log_arity)`.
+/// and the trusted root, not a re-supply of `(index, tree_size, arity)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeafProof {
     /// The proven leaf's digest at `index`.
@@ -43,7 +43,7 @@ pub struct LeafProof {
     /// Trusted size of the tree the proof is rooted in.
     pub tree_size: u64,
     /// Trusted fixed arity of the proof spine (`2..=256`).
-    pub log_arity: u64,
+    pub arity: u64,
     /// Path steps from the leaf to the root, over the shared positional
     /// topology — the same shape [`verify_inclusion`] reconstructs against.
     pub path: Vec<ProofStep>,
@@ -61,14 +61,14 @@ impl LeafProof {
         leaf_hash: Vec<u8>,
         index: u64,
         tree_size: u64,
-        log_arity: u64,
+        arity: u64,
         path: Vec<ProofStep>,
     ) -> Self {
         Self {
             leaf_hash,
             index,
             tree_size,
-            log_arity,
+            arity,
             path,
         }
     }
@@ -77,7 +77,7 @@ impl LeafProof {
     /// legitimate leaf at `index` in the size-`tree_size` tree rooted at `root`?
     ///
     /// Soundness rests entirely on the topology the verifier reconstructs from
-    /// the trusted `(index, tree_size, log_arity)`; the proof supplies only
+    /// the trusted `(index, tree_size, arity)`; the proof supplies only
     /// sibling digests. See the module-level trust contract — `root` and the
     /// positional fields MUST be authenticated.
     #[must_use]
@@ -87,7 +87,7 @@ impl LeafProof {
             &self.leaf_hash,
             self.index,
             self.tree_size,
-            self.log_arity,
+            self.arity,
             &self.path,
             root,
         )
@@ -242,7 +242,7 @@ mod tests {
             &proof.leaf_hash,
             proof.index,
             proof.tree_size,
-            proof.log_arity,
+            proof.arity,
             &proof.path,
             &root,
         );

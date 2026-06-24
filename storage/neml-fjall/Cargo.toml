@@ -10,7 +10,7 @@ license-file  = "../../LICENSE"
 doctest = false
 
 [dependencies]
-eml-log = { version = "0.1.0", path = "../../eml" }
+eml = { version = "0.1.0", path = "../../eml" }
 fjall      = "3"
 thiserror  = "2"
 

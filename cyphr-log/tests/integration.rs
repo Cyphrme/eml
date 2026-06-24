@@ -35,7 +35,7 @@ fn test_vector_1_single_leaf() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -56,7 +56,7 @@ fn test_vector_2_two_leaves_k2() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -81,7 +81,7 @@ fn test_vector_3_three_leaves_k2() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -128,7 +128,7 @@ fn test_vector_6_subtree_append_k2() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -170,7 +170,7 @@ fn test_vector_8_three_leaves_k3_ternary() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 3 };
+        let config = TreeConfig { arity: 3 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -216,7 +216,7 @@ fn test_binary_compatibility_random_sizes() {
     smol::block_on(async {
         for size in 1..=16 {
             let storage = MemoryStorage::new();
-            let config = TreeConfig { log_arity: 2 };
+            let config = TreeConfig { arity: 2 };
             let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();
@@ -239,7 +239,7 @@ fn test_inclusion_and_consistency_proofs_simple() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -267,7 +267,7 @@ fn test_inclusion_and_consistency_proofs_simple() {
             let mut temp_log = NaryMerkleLog::new(
                 MemoryStorage::new(),
                 Box::new(Sha256Hasher),
-                TreeConfig { log_arity: 2 },
+                TreeConfig { arity: 2 },
             )
             .await
             .unwrap();
@@ -294,7 +294,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
         for k in 2..=4 {
             for size in 1..=15 {
                 let storage = MemoryStorage::new();
-                let config = TreeConfig { log_arity: k };
+                let config = TreeConfig { arity: k as u64 };
                 let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                     .await
                     .unwrap();
@@ -333,7 +333,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                         let mut temp_log = NaryMerkleLog::new(
                             MemoryStorage::new(),
                             Box::new(Sha256Hasher),
-                            TreeConfig { log_arity: k },
+                            TreeConfig { arity: k as u64 },
                         )
                         .await
                         .unwrap();
@@ -369,7 +369,7 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
 fn test_inclusion_proofs_subtree_log_mode() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -423,7 +423,7 @@ fn test_epoch_from_storage_single_algorithm() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -449,7 +449,7 @@ fn test_epoch_from_storage_single_algorithm() {
 fn test_epoch_from_storage_multi_algorithm_frozen_active() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 3 };
+        let config = TreeConfig { arity: 3 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -487,7 +487,7 @@ fn test_epoch_from_storage_multi_algorithm_frozen_active() {
 fn test_epoch_from_storage_resume_after_gap() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -530,7 +530,7 @@ fn test_epoch_from_storage_continued_appends() {
         let mut original = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),
-            TreeConfig { log_arity: 2 },
+            TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -547,7 +547,7 @@ fn test_epoch_from_storage_continued_appends() {
         let mut reference = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),
-            TreeConfig { log_arity: 2 },
+            TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -574,7 +574,7 @@ fn test_epoch_errors() {
         let mut log = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),
-            TreeConfig { log_arity: 2 },
+            TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -614,7 +614,7 @@ fn test_epoch_errors() {
 fn test_epoch_subtree_mode() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -651,7 +651,7 @@ fn test_epoch_subtree_mode() {
 fn test_epoch_proofs() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -698,7 +698,7 @@ fn test_epoch_proofs() {
 fn test_resume_persists_mixed_nodes_malt() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -784,7 +784,7 @@ fn test_resume_persists_mixed_nodes_malt() {
 fn test_promotion_proofs_malt() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 3 };
+        let config = TreeConfig { arity: 3 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -831,7 +831,7 @@ fn test_subtree_consistency_proofs() {
         for k in 2..=4 {
             for size in 2..=15 {
                 let storage = MemoryStorage::new();
-                let config = TreeConfig { log_arity: k };
+                let config = TreeConfig { arity: k as u64 };
                 let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                     .await
                     .unwrap();
@@ -864,7 +864,7 @@ fn test_subtree_consistency_proofs() {
                         let mut temp_log = NaryMerkleLog::new(
                             MemoryStorage::new(),
                             Box::new(Sha256Hasher),
-                            TreeConfig { log_arity: k },
+                            TreeConfig { arity: k as u64 },
                         )
                         .await
                         .unwrap();
@@ -914,7 +914,7 @@ fn test_deep_subtree_inclusion_proofs() {
         for depth in 1..=5 {
             let storage = MemoryStorage::new();
             let mut log =
-                NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 })
+                NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
                     .await
                     .unwrap();
 
@@ -967,7 +967,7 @@ fn test_deep_subtree_inclusion_proofs() {
 
         let storage = MemoryStorage::new();
         let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 3 })
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 3 })
                 .await
                 .unwrap();
         log.append_subtree(&subtree).await.unwrap();
@@ -1013,7 +1013,7 @@ fn test_subtree_appends_k3_k4() {
         {
             let storage = MemoryStorage::new();
             let mut log =
-                NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 3 })
+                NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 3 })
                     .await
                     .unwrap();
 
@@ -1046,7 +1046,7 @@ fn test_subtree_appends_k3_k4() {
         {
             let storage = MemoryStorage::new();
             let mut log =
-                NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 4 })
+                NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 4 })
                     .await
                     .unwrap();
 
@@ -1077,7 +1077,7 @@ fn test_subtree_appends_k3_k4() {
 fn test_epoch_resume_subtree_gaps() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -1126,7 +1126,7 @@ fn test_epoch_resume_subtree_gaps() {
 fn test_multi_algorithm_subtree_proofs() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -1188,7 +1188,7 @@ fn test_multi_algorithm_subtree_proofs() {
             let mut temp_log = NaryMerkleLog::new(
                 MemoryStorage::new(),
                 Box::new(Sha256Hasher),
-                TreeConfig { log_arity: 2 },
+                TreeConfig { arity: 2 },
             )
             .await
             .unwrap();
@@ -1214,7 +1214,7 @@ fn test_multi_algorithm_subtree_proofs() {
 fn test_proof_error_edge_cases() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
             .await
             .unwrap();
@@ -1312,7 +1312,7 @@ fn test_power_of_k_boundaries() {
         // k=3: sizes 3, 9, 27
         {
             let storage = MemoryStorage::new();
-            let config = TreeConfig { log_arity: 3 };
+            let config = TreeConfig { arity: 3 };
             let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();
@@ -1330,7 +1330,7 @@ fn test_power_of_k_boundaries() {
                     let mut temp_log = NaryMerkleLog::new(
                         MemoryStorage::new(),
                         Box::new(Sha256Hasher),
-                        TreeConfig { log_arity: 3 },
+                        TreeConfig { arity: 3 },
                     )
                     .await
                     .unwrap();
@@ -1362,7 +1362,7 @@ fn test_power_of_k_boundaries() {
                 let mut temp_log = NaryMerkleLog::new(
                     MemoryStorage::new(),
                     Box::new(Sha256Hasher),
-                    TreeConfig { log_arity: 3 },
+                    TreeConfig { arity: 3 },
                 )
                 .await
                 .unwrap();
@@ -1378,7 +1378,7 @@ fn test_power_of_k_boundaries() {
                 let mut temp_log = NaryMerkleLog::new(
                     MemoryStorage::new(),
                     Box::new(Sha256Hasher),
-                    TreeConfig { log_arity: 3 },
+                    TreeConfig { arity: 3 },
                 )
                 .await
                 .unwrap();
@@ -1418,7 +1418,7 @@ fn test_power_of_k_boundaries() {
         // k=4: sizes 4, 16, 64
         {
             let storage = MemoryStorage::new();
-            let config = TreeConfig { log_arity: 4 };
+            let config = TreeConfig { arity: 4 };
             let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), config)
                 .await
                 .unwrap();
@@ -1436,7 +1436,7 @@ fn test_power_of_k_boundaries() {
                     let mut temp_log = NaryMerkleLog::new(
                         MemoryStorage::new(),
                         Box::new(Sha256Hasher),
-                        TreeConfig { log_arity: 4 },
+                        TreeConfig { arity: 4 },
                     )
                     .await
                     .unwrap();
@@ -1468,7 +1468,7 @@ fn test_power_of_k_boundaries() {
                 let mut temp_log = NaryMerkleLog::new(
                     MemoryStorage::new(),
                     Box::new(Sha256Hasher),
-                    TreeConfig { log_arity: 4 },
+                    TreeConfig { arity: 4 },
                 )
                 .await
                 .unwrap();
@@ -1484,7 +1484,7 @@ fn test_power_of_k_boundaries() {
                 let mut temp_log = NaryMerkleLog::new(
                     MemoryStorage::new(),
                     Box::new(Sha256Hasher),
-                    TreeConfig { log_arity: 4 },
+                    TreeConfig { arity: 4 },
                 )
                 .await
                 .unwrap();
@@ -1528,7 +1528,7 @@ fn test_combined_root_single_alg_commits_epochs() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -1570,7 +1570,7 @@ fn test_combined_root_multi_alg() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -1603,7 +1603,7 @@ fn test_combined_root_historical_and_epochs() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -1897,7 +1897,7 @@ fn test_verify_inclusion_with_coupling() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -1935,7 +1935,7 @@ fn test_verify_non_divergence() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -1988,7 +1988,7 @@ fn test_late_activated_alg_checkpoint() {
             let start_pre = m / 2; // checkpoint strictly before activation
             let start_post = m + m / 2; // checkpoint strictly after activation
 
-            let config = TreeConfig { log_arity: k };
+            let config = TreeConfig { arity: k as u64 };
 
             // ── Build log ──────────────────────────────────────────────────
             let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
@@ -2058,7 +2058,7 @@ fn test_combined_root_size_0() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -2074,7 +2074,7 @@ fn test_verify_consistency_with_coupling() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -2290,7 +2290,7 @@ fn test_tree_new_error_propagation() {
     let res = smol::block_on(cyphr_log::NaryMerkleLog::new(
         storage.clone(),
         Box::new(Sha256Hasher),
-        cyphr_log::TreeConfig { log_arity: 1 },
+        cyphr_log::TreeConfig { arity: 1 },
     ));
     assert!(res.is_err());
 
@@ -2298,7 +2298,7 @@ fn test_tree_new_error_propagation() {
     let res = smol::block_on(cyphr_log::NaryMerkleLog::new(
         storage,
         Box::new(Sha256Hasher),
-        cyphr_log::TreeConfig { log_arity: 257 },
+        cyphr_log::TreeConfig { arity: 257 },
     ));
     assert!(res.is_err());
 }
@@ -2452,7 +2452,7 @@ fn test_from_storage_initialization_errors() {
         let res = cyphr_log::NaryMerkleLog::from_storage_with_config(
             storage_corrupt,
             vec![(0, Box::new(Sha256Hasher))],
-            TreeConfig { log_arity: 1 },
+            TreeConfig { arity: 1 },
         )
         .await;
         assert!(matches!(
@@ -2501,8 +2501,8 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
     let root = cyphr_log::mr::nary_mr(&hasher, &[&leaf_a, &leaf_b]);
 
     // This proof asserts leaf_a is at index 1 (which is false, it's at index 0)
-    // By setting log_arity: 0, verify_inclusion_path_structure is bypassed,
-    // but the verifier should reject it because log_arity < 2 is invalid!
+    // By setting arity: 0, verify_inclusion_path_structure is bypassed,
+    // but the verifier should reject it because arity < 2 is invalid!
     let spoofed_proof = cyphr_log::InclusionProof {
         path: vec![cyphr_log::ProofStep {
             siblings: vec![leaf_b.clone()],
@@ -2592,7 +2592,7 @@ fn test_determine_global_size_probing_out_of_sync() {
         let reconstructed = NaryMerkleLog::from_storage_with_config(
             storage.clone(),
             hashers,
-            TreeConfig { log_arity: 2 },
+            TreeConfig { arity: 2 },
         )
         .await;
 
@@ -2742,7 +2742,7 @@ fn test_boundary_sizes_and_high_arities() {
     smol::block_on(async {
         for &k in &[3u64, 5, 128, 256] {
             let config = TreeConfig {
-                log_arity: k as usize,
+                arity: k,
             };
 
             // Boundary sizes around K^1 and K^2
@@ -2839,7 +2839,7 @@ fn test_proof_malleability_path_extension() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -2883,7 +2883,7 @@ fn test_proof_malleability_position_spoofing() {
     smol::block_on(async {
         let hasher = Sha256Hasher;
         let storage = MemoryStorage::new();
-        let config = TreeConfig { log_arity: 2 };
+        let config = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher), config)
             .await
             .unwrap();
@@ -2942,7 +2942,7 @@ fn test_inclusion_truncated_skeleton_rejected() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
         let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 })
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
                 .await
                 .unwrap();
         for d in [b"a".as_ref(), b"b", b"c", b"d"] {
@@ -2979,7 +2979,7 @@ fn test_partial_rightmost_node_sibling_count() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
         let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 3 })
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 3 })
                 .await
                 .unwrap();
         for d in [b"a".as_ref(), b"b", b"c", b"d"] {
@@ -3029,7 +3029,7 @@ fn test_skeleton_position_spoof_rejected() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
         let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 })
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
                 .await
                 .unwrap();
         for d in [b"a".as_ref(), b"b", b"c", b"d"] {
@@ -3065,7 +3065,7 @@ fn test_canonical_encoding_promotion_chain() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
         let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { log_arity: 2 })
+            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
                 .await
                 .unwrap();
         // "x" sits under a two-level unary chain that contributes no proof steps.
@@ -3123,7 +3123,7 @@ fn test_reduction_count_overflow() {
 
 #[test]
 fn test_reconstruct_index_oom_dos() {
-    // Large log_arity must be rejected without OOMing or panicking
+    // Large arity must be rejected without OOMing or panicking
     let large_k = 1u64 << 32;
     let res = cyphr_log::reconstruct_consistency_roots(&Sha256Hasher, 1, 2, large_k, &[0; 32], &[]);
     assert_eq!(res, None);
@@ -3140,7 +3140,7 @@ fn test_reconstruct_index_oom_dos() {
 fn test_two_histories_equivocation() {
     smol::block_on(async {
         let log_id = [0u8; 32];
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
 
         // History 1: X=1 added before any appends (active from pos 0).
         // Append b"null" at pos 0 → leaf("null") == null() for X.
@@ -3185,7 +3185,7 @@ fn test_two_histories_equivocation() {
 fn test_attestation_rejects_contradiction() {
     smol::block_on(async {
         let log_id = [1u8; 32];
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
 
         // Honest log: X=1 active from pos 0, one real (non-"null") leaf.
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
@@ -3239,7 +3239,7 @@ fn test_attestation_rejects_contradiction() {
 #[test]
 fn test_substituted_metadata_fails_proofs() {
     smol::block_on(async {
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
 
         // Log: Y=0 active from 0; X=1 added at size 1 (inactive at pos 0).
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
@@ -3332,7 +3332,7 @@ fn test_substituted_metadata_fails_proofs() {
 #[test]
 fn test_null_payload_stays_legal() {
     smol::block_on(async {
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
             .await
             .unwrap();
@@ -3383,7 +3383,7 @@ fn test_null_payload_stays_legal() {
 #[test]
 fn test_frontier_freshness() {
     smol::block_on(async {
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
 
         // Sole-algorithm variant: identical leaf, deactivated vs live.
         let mut log_live = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
@@ -3456,7 +3456,7 @@ fn test_frontier_freshness() {
 #[test]
 fn test_genesis_promotion_boundary() {
     smol::block_on(async {
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
 
         // Genesis state: CR is promoted to the raw root.
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
@@ -3527,7 +3527,7 @@ fn test_genesis_promotion_boundary() {
 #[test]
 fn test_inactivity_proofs() {
     smol::block_on(async {
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
         let config = cyphr_log::VerifierConfig::default();
 
         // Build a log with X=1 that has a gap: active at [1,2), inactive
@@ -3651,7 +3651,7 @@ fn test_inactivity_proofs() {
 fn test_epoch_evolution() {
     smol::block_on(async {
         let log_id = [2u8; 32];
-        let cfg = TreeConfig { log_arity: 2 };
+        let cfg = TreeConfig { arity: 2 };
 
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), cfg)
             .await
@@ -3730,7 +3730,7 @@ fn test_from_storage_deterministic_repeated() {
         let mut log = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),
-            TreeConfig { log_arity: 2 },
+            TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -3885,7 +3885,7 @@ fn test_cross_replica_identical_recovery() {
         let mut log_a = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),
-            TreeConfig { log_arity: 2 },
+            TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
@@ -3939,7 +3939,7 @@ fn test_legacy_probe_gap_correctness() {
         let mut log = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(Sha256Hasher),
-            TreeConfig { log_arity: 2 },
+            TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
