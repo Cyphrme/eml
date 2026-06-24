@@ -358,8 +358,8 @@ impl<S: Storage> NaryMerkleLog<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnknownAlgorithm`] if an algorithm in the frontier has
-    /// no hasher in `hashers`, [`Error::CorruptedMetadata`] on an invalid arity,
+    /// Returns [`crate::Error::UnknownAlgorithm`] if an algorithm in the frontier has
+    /// no hasher in `hashers`, [`crate::Error::CorruptedMetadata`] on an invalid arity,
     /// or a storage error if the seeded frontier cannot be persisted.
     pub async fn resume(
         sealed: &pmt::Sealed,

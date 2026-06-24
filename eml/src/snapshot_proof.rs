@@ -152,7 +152,7 @@ impl SnapshotProof {
     ///
     /// 1. **Binding tier (aggregate).** For every trusted head, recompute the head over the proof's
     ///    shared member roots and committed timeline and require it equal `BR_i` (promotion-aware;
-    ///    see [`Self::recompute_head`]). One head recomputation binds all the member roots at once.
+    ///    One head recomputation binds all the member roots at once.
     /// 2. **Base tier (leaf proofs).** Every claimed leaf proof must verify against *its
     ///    algorithm's member root* under that algorithm's hash. The member root is exactly the root
     ///    the binding tier just bound to a trusted head, so an accepted leaf chains leaf → member

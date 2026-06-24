@@ -4,7 +4,7 @@
 //! ([`topology`]), **canonicalization** (collapse + promotion, in [`mr`]), the
 //! [`Hasher`] seam, **inclusion** proof/verify, **embedding** (an opaque
 //! child-tree root as a leaf), the [`Sealed`] carrier, the **metadata
-//! channel** ([`metadata`]), and the **combined root** — the canonicalization
+//! channel** ([`Meta`]), and the **combined root** — the canonicalization
 //! fold over the per-algorithm member roots (the [`proof::combined_root`]
 //! primitive, shared by both trees) and its coupling. It depends on nothing;
 //! the engineering libraries (append-only / mutable) depend on it.
