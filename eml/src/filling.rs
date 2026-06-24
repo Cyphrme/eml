@@ -296,7 +296,13 @@ fn rebuilt_binding_root(
             *mr = member_root.to_vec();
         }
     }
-    combined_root(hasher, &members, sealed.alg_epochs())
+    combined_root(
+        hasher,
+        &members,
+        sealed.alg_epochs(),
+        sealed.tree_size(),
+        sealed.arity(),
+    )
 }
 
 /// Reconstruct the committed frontier partition of `[0, tree_size)`: the

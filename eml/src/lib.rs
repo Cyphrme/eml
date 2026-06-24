@@ -30,12 +30,13 @@ pub use pmt::subtree::{self, Subtree};
 pub use pmt::topology::{self, SkeletonStep, frontier_for_size, inclusion_skeleton};
 pub use pmt::{LeafProof, RunExtent, Sealed, null_digest};
 pub use proof::{
-    AuditPayload, BindingProof, ConsistencyProof, CouplingProof, InclusionProof, ProofStep,
-    TrustedBindingRoot, VerifierConfig, combined_root, committed_active_algs, committed_active_at,
-    committed_is_live, reconstruct_consistency_roots, reconstruct_inclusion_root,
-    serialize_timeline, timeline_is_trivial, validate_committed_epochs, verify_consistency,
-    verify_consistency_with_coupling, verify_epoch_evolution, verify_inactivity_with_coupling,
-    verify_inclusion, verify_inclusion_with_coupling,
+    AuditPayload, BindingProof, ConsistencyProof, CouplingProof, InclusionProof, NullRun,
+    ProofStep, TrustedBindingRoot, VerifierConfig, all_null_runs, combined_root,
+    committed_active_algs, committed_active_at, null_runs_are_trivial, null_runs_for_alg,
+    reconstruct_consistency_roots, reconstruct_inclusion_root, serialize_null_runs,
+    validate_committed_epochs, verify_consistency, verify_consistency_with_coupling,
+    verify_epoch_evolution, verify_inactivity_with_coupling, verify_inclusion,
+    verify_inclusion_with_coupling,
 };
 pub use schedule::reduction_count;
 pub use snapshot_proof::{ClaimedLeaf, SnapshotProof};

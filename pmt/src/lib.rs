@@ -27,11 +27,11 @@ pub use leaf_proof::LeafProof;
 pub use metadata::Meta;
 pub use mr::{count_leaves, evaluate, nary_mr, within_subtree_path};
 pub use proof::{
-    AuditPayload, CouplingProof, InclusionProof, ProofStep, VerifierConfig, combined_root,
-    committed_active_algs, committed_active_at, committed_is_live, constant_time_eq,
-    reconstruct_inclusion_root, serialize_timeline, timeline_is_trivial, validate_committed_epochs,
-    verify_inactivity_with_coupling, verify_inclusion, verify_inclusion_path_structure,
-    verify_inclusion_with_coupling,
+    AuditPayload, CouplingProof, InclusionProof, NullRun, ProofStep, VerifierConfig,
+    all_null_runs, combined_root, committed_active_algs, committed_active_at, constant_time_eq,
+    null_runs_are_trivial, null_runs_for_alg, reconstruct_inclusion_root, serialize_null_runs,
+    validate_committed_epochs, verify_inactivity_with_coupling, verify_inclusion,
+    verify_inclusion_path_structure, verify_inclusion_with_coupling,
 };
 pub use sealed::{RunExtent, Sealed};
 pub use subtree::{Subtree, embed, extract};

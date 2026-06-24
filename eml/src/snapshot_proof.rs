@@ -89,8 +89,11 @@ pub struct SnapshotProof {
     /// preimage.
     alg_epochs: Vec<(u64, Vec<(u64, u64)>)>,
     /// The size the snapshot was sealed at; the topology the leaf proofs and the
-    /// timeline are reconstructed against.
+    /// null runs are reconstructed against.
     tree_size: u64,
+    /// The spine arity `k` the snapshot was sealed under; fixes the null-run
+    /// geometry the head's coverage child commits.
+    arity: u64,
     /// The claimed leaves, each a base-case leaf proof against an algorithm's
     /// member root.
     claims: Vec<ClaimedLeaf>,
@@ -118,6 +121,7 @@ impl SnapshotProof {
             member_roots: sealed.member_roots(hashers),
             alg_epochs: sealed.alg_epochs().to_vec(),
             tree_size: sealed.tree_size(),
+            arity: sealed.arity(),
             claims,
         }
     }
@@ -133,14 +137,21 @@ impl SnapshotProof {
 
     /// Recompute the head an algorithm's member roots bind to: the
     /// canonicalization fold ([`pmt::combined_root`]) over the member roots as
-    /// children, plus a coverage child iff the timeline is non-trivial, under
-    /// that algorithm's hash — exactly the head the log seals under
+    /// children, plus a coverage child committing all algorithms' null runs iff
+    /// the activation is non-trivial, under that algorithm's hash — exactly the
+    /// head the log seals under
     /// ([`NaryMerkleLog::combined_root_at`](crate::tree::NaryMerkleLog::combined_root_at)).
-    /// Genesis promotion is native: a single member root under a trivial
-    /// timeline folds to itself, no special case. The returned bytes are
-    /// compared, in constant time, against the trusted head.
+    /// Genesis promotion is native: a single member root with no null run folds
+    /// to itself, no special case. The returned bytes are compared, in constant
+    /// time, against the trusted head.
     fn recompute_head(&self, hasher: &dyn Hasher) -> Vec<u8> {
-        combined_root(hasher, &self.member_roots, &self.alg_epochs)
+        combined_root(
+            hasher,
+            &self.member_roots,
+            &self.alg_epochs,
+            self.tree_size,
+            self.arity,
+        )
     }
 
     /// Verify the snapshot proof against the snapshot's **trusted binding roots**.

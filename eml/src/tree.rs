@@ -1442,6 +1442,8 @@ impl<S: Storage> NaryMerkleLog<S> {
             state.hasher.as_ref(),
             &member_roots,
             &alg_epochs,
+            self.count,
+            self.config.log_arity as u64,
         ))
     }
 
@@ -2066,7 +2068,8 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // Recompute each algorithm's combined root via the canonicalization
         // fold over the recomputed member roots (promotion native; coverage
-        // child iff the timeline is non-trivial) and compare to the payload.
+        // child committing all algorithms' null runs iff the activation is
+        // non-trivial) and compare to the payload.
         for (i, &id) in payload.active_algs.iter().enumerate() {
             let state = self
                 .algs
@@ -2077,6 +2080,8 @@ impl<S: Storage> NaryMerkleLog<S> {
                 state.hasher.as_ref(),
                 &recomputed_roots,
                 &payload.alg_epochs,
+                payload.tree_size,
+                k as u64,
             );
 
             if !crate::proof::constant_time_eq(&computed_cr, &payload.combined_roots[i].1) {
@@ -2104,25 +2109,23 @@ impl<S: Storage> NaryMerkleLog<S> {
     ///
     /// The combined root is the canonicalization fold ([`pmt::combined_root`])
     /// over the per-algorithm member roots as children, under the target
-    /// algorithm's own hash. The committed epoch timeline of every registered
-    /// algorithm enters the fold as a single coverage child — but only when it
-    /// is non-trivial — because the timeline decides which cells are null
-    /// projections. Binding the timeline makes activity/inactivity claims
-    /// non-equivocable: without it, an active position whose payload hashes to
-    /// the null constant and a genuinely inactive position would be
-    /// byte-identical under the root, so inactivity would be forgeable by
-    /// metadata substitution.
+    /// algorithm's own hash. **All algorithms' null-run-extents** enter the fold
+    /// as a single coverage child — but only when the activation is non-trivial
+    /// (some algorithm has a null run) — because the null runs are the only
+    /// per-tree-divergent collapse and so the minimal committed activation.
+    /// Binding them makes activity/inactivity claims non-equivocable: without
+    /// it, an active position whose payload hashes to the null constant and a
+    /// genuinely inactive position would be byte-identical under the root, so
+    /// inactivity would be forgeable. The null runs cover exactly the inactive
+    /// positions, so a verifier reads activity from the committed runs.
     ///
-    /// **Genesis promotion is native.** A single member root under a trivial
-    /// timeline (`[(0, u64::MAX)]` for every algorithm) folds to itself
-    /// (`nary_mr` `len == 1`): the combined root *is* the raw member root for
-    /// the structural reason that there is one child, with no special case. A
-    /// lifecycle event — a second registration, a tip deactivation, a
-    /// deactivate/resume — makes the timeline non-trivial, so a coverage child
-    /// joins the fold and the combined root becomes a genuine multi-child node.
-    /// Triviality is informativeness, not registry cardinality: a sole-active
-    /// algorithm with a pre-activation null prefix is non-trivial, which is
-    /// precisely the case the timeline commitment exists to bind.
+    /// **Genesis promotion is native.** A single member root with no null run
+    /// folds to itself (`nary_mr` `len == 1`): the combined root *is* the raw
+    /// member root for the structural reason that there is one child, with no
+    /// special case. A lifecycle event that leaves null positions — a
+    /// pre-activation prefix, a tip deactivation, a deactivate/resume — makes the
+    /// activation non-trivial, so a coverage child joins the fold and the
+    /// combined root becomes a genuine multi-child node.
     pub async fn combined_root_at(&self, alg_id: u64, size: u64) -> Result<Vec<u8>, S::Error> {
         let state = self
             .algs
@@ -2154,11 +2157,15 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         let alg_epochs = self.committed_epochs_at(size);
 
-        // 3. Fold under the target algorithm's hasher. Promotion is native.
+        // 3. Fold under the target algorithm's hasher. Promotion is native. The
+        //    coverage child commits all algorithms' null runs, derived from the
+        //    committed epochs at this size and arity.
         Ok(pmt::combined_root(
             state.hasher.as_ref(),
             &member_roots,
             &alg_epochs,
+            size,
+            self.config.log_arity as u64,
         ))
     }
 
