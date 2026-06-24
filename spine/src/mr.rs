@@ -6,9 +6,9 @@
 //!
 //! - **promotion** — a lone (single) child is lifted in place of the wrapping hashed node.
 //!   Structurally deterministic: a verifier re-derives it.
-//! - **collapse** — children of the *same value* fold to that value. The all-null
-//!   case is *one instance* of general same-value collapse, not a separate
-//!   operation; an all-null run is just the dominant instance in a sparse log.
+//! - **collapse** — children of the *same value* fold to that value. The all-null case is *one
+//!   instance* of general same-value collapse, not a separate operation; an all-null run is just
+//!   the dominant instance in a sparse log.
 //!
 //! The literal `nary_mr` symbol predates this vocabulary and is kept verbatim;
 //! the two primitives are named in this prose, not split in the code here.
@@ -54,8 +54,8 @@ pub fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
             // agree on a width.
             debug_assert!(
                 children.windows(2).all(|w| w[0].len() == w[1].len()),
-                "node() children must share a digest width (got widths {:?}); \
-                 the unprefixed concatenation is otherwise not uniquely parseable",
+                "node() children must share a digest width (got widths {:?}); the unprefixed \
+                 concatenation is otherwise not uniquely parseable",
                 children.iter().map(|c| c.len()).collect::<Vec<_>>()
             );
             // Collapse: if every child is the same value, the parent is that
