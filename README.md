@@ -101,6 +101,23 @@ Named theorems:
 | `consistency_soundness` | `KaryConsistency.lean` | An accepting consistency proof forces the reconstructed old root to the genuine prefix root |
 | `consistency_append_only` | `KaryConsistency.lean` | Lifts consistency soundness to the data-level append-only relation |
 
+### Differential oracle
+
+A differential harness (`difftest/`) pins the append-only log's output to a
+frozen reference implementation (`neml_baseline`). For matching-shape inputs
+(distinct leaf payloads, no same-value sibling run) the current log's roots and
+proofs must equal the baseline's structurally. Any divergence on matching-shape
+inputs means a change altered an observable log output.
+
+The frozen baseline is the original neml source (git ref `4827561`),
+materialized as a git worktree at `.scratch/worktrees/baseline-N1`. Because
+Cargo requires path dependencies outside the workspace root, this worktree must
+be created once after a fresh clone before running `cargo test --workspace`:
+
+```sh
+bash difftest/setup-baseline.sh
+```
+
 ## Building and testing
 
 Rust workspace:

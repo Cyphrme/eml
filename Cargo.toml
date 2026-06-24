@@ -4,6 +4,7 @@ members = [
     "pmt",
     "eml",
     "cyphr-log",
+    "difftest",
     "emt",
     "cyphr-tree",
     "storage/neml-fjall",
