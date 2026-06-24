@@ -1,6 +1,6 @@
 //! `cyphr_log` — Cyphr's append-only log.
 //!
-//! The [EML library](eml_log) instantiated for Cyphr: arity `k = 2`, no prefix
+//! The [EML library](eml) instantiated for Cyphr: arity `k = 2`, no prefix
 //! (the caller's [`Hasher`] is used directly, with no domain-separation
 //! wrapper). It is the behavioral successor of the historical `neml` crate and
 //! reproduces its outputs byte-for-byte.
@@ -11,7 +11,7 @@
 //! while the re-exported [`NaryMerkleLog`] still accepts any [`TreeConfig`] for
 //! callers that need a different arity.
 
-pub use eml_log::*;
+pub use eml::*;
 
 /// Cyphr's log arity: binary (`k = 2`).
 pub const LOG_ARITY: usize = 2;
@@ -57,7 +57,7 @@ pub async fn from_storage<S: Storage>(
 
 #[cfg(test)]
 mod tests {
-    use eml_log::MemoryStorage;
+    use eml::MemoryStorage;
     use sha2::{Digest, Sha256};
 
     use super::*;

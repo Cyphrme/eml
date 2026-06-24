@@ -1,4 +1,4 @@
-use eml_log::{Hasher, NaryMerkleLog, Storage, TreeConfig};
+use eml::{Hasher, NaryMerkleLog, Storage, TreeConfig};
 use neml_storage_fjall::FjallStorage;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;

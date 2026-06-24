@@ -393,7 +393,7 @@ impl Emt {
     /// Reviving arbitrary mutation over the committed positions would also
     /// *un-seal the committed past* — the one-way guarantee the seal exists to
     /// make. The way to a readable, mutable-or-append tree over the committed
-    /// data is [`fill`](../../eml_log/fn.fill.html) (data-required), which
+    /// data is [`fill`](../../eml/fn.fill.html) (data-required), which
     /// rebuilds and verifies against the committed binding root; the discarded
     /// frontier is simply unused when the fill target is an EMT.
     ///

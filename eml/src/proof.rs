@@ -3,13 +3,13 @@
 //!
 //! Inclusion, the binding root, coupling, and the canonical-encoding security
 //! boundary live in the [`pmt`] kernel and are re-exported here so consumers
-//! reach the whole proof surface through `eml_log::proof::*`. This module owns
+//! reach the whole proof surface through `eml::proof::*`. This module owns
 //! only what is
 //! append-only-specific: the [`ConsistencyProof`] (the tree at `old_size` is a
 //! prefix of the tree at `new_size`) and the temporal analog of consistency
 //! over the committed epoch timeline ([`verify_epoch_evolution`]).
 
-// Re-export the kernel proof surface so `eml_log::proof::*` reaches it while
+// Re-export the kernel proof surface so `eml::proof::*` reaches it while
 // the originals live in `pmt`. No parallels: these are the kernel's, not copies.
 use pmt::{ARITY_RANGE, Hasher, fold_frontier, frontier_for_size, nary_mr};
 pub use pmt::{
