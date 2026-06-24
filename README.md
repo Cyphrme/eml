@@ -1,11 +1,11 @@
 # Polymorphic Merkle Trees
 
-A formally verified construction for cryptographic Merkle trees that share one
-topology across many hash algorithms simultaneously. The repository is cut into
-three layers — a kernel, two engineering libraries, and application
-instantiations — described in full in [`docs/architecture.md`](docs/architecture.md).
+A formally verified library for cryptographic Merkle trees that share one
+topology across many hash algorithms simultaneously. The deliverable is two
+engineering library crates — **EML** and **EMT** — built on a shared kernel,
+**PMT**. The full design is in [`docs/architecture.md`](docs/architecture.md).
 
-## The three layers
+## The library
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -23,12 +23,7 @@ instantiations — described in full in [`docs/architecture.md`](docs/architectu
 │  frontier-stack carry        │    │  set / get; no consistency  │
 │  consistency proofs          │    │  retroactive per-node alg   │
 │  snapshot proof · filling    │    │  add at O(log n)            │
-└──────────┬──────────────────┘    └────────────┬────────────────┘
-           │                                    │
-  ┌────────┴────────┐                  ┌────────┴───────┐
-  │ cyphr-log (k=2)  │                  │ cyphr-tree(k=2)│
-  └─────────────────┘                  └────────────────┘
-    Layer 3 — application instantiations (consumers; may leave the repo)
+└─────────────────────────────┘    └────────────────────────────┘
 ```
 
 **PMT** (`pmt/`) is the abstract core: proof spine, canonicalization,
