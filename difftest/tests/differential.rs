@@ -154,6 +154,15 @@ proptest! {
     /// *bytes* differ even though both still exist for the same `(old, new)`. Only
     /// that byte-comparison is dropped (the outcome-class match is kept); N54's
     /// Lean corpus + N55's durability property test are its conformance oracle.
+    ///
+    /// IGNORED: the whole `difftest` crate is transition scaffolding against the
+    /// frozen `neml_baseline` and **retires in N53**. The preservation it would
+    /// witness (root + inclusion byte-identical to neml) is not an ongoing
+    /// contract — the baseline is being removed — so this is not run as a live
+    /// guard; the Lean corpus (N54) + durability property test (N55) are the
+    /// post-migration conformance oracle.
+    #[ignore = "difftest is transition scaffolding vs the frozen neml baseline; \
+                retires with the crate in N53 (N54/N55 are the new oracle)"]
     #[test]
     fn core_outputs_match(
         k in 2usize..=8,
@@ -329,7 +338,13 @@ proptest! {
     /// because at k=2 the MMR backward-bag of the frontier peaks is the same tree
     /// as the baseline's rebalanced fold (`cml`'s `bag_peaks_equals_hand_fold_binary`),
     /// and the multi-algorithm binding fold over member roots is opaque (D9),
-    /// untouched. This test remains a live preservation guard.
+    /// untouched.
+    ///
+    /// IGNORED: like `core_outputs_match`, the whole `difftest` crate is
+    /// transition scaffolding against the frozen `neml_baseline` and retires in
+    /// N53; it is not run as a live guard.
+    #[ignore = "difftest is transition scaffolding vs the frozen neml baseline; \
+                retires with the crate in N53 (N54/N55 are the new oracle)"]
     #[test]
     fn combined_root_matches(
         ops in prop::collection::vec(op_strategy(), 1..40),
