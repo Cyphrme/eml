@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "spine",
-    "epoch",
+    "polydigest",
     "cml",
     "eml",
     "difftest",

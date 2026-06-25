@@ -5,8 +5,8 @@
 
 use std::path::Path;
 
-use epoch::{AlgorithmMetas, Storage};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
+use polydigest::{AlgorithmMetas, Storage};
 
 /// Reserved 9-byte key for log metadata in the `neml_metadata` keyspace.
 ///

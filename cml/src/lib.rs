@@ -15,7 +15,7 @@
 //! the combinator's facet, not CML's.
 //!
 //! The structural commitment a CML seal produces is the general [`spine::Seal`]
-//! (re-exported here); the epoch facet over it is `epoch::BoundSnapshot`.
+//! (re-exported here); the epoch facet over it is `polydigest::BoundSnapshot`.
 
 pub mod consistency;
 pub mod engine;

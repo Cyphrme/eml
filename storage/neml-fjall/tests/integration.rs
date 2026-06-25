@@ -1,5 +1,5 @@
-use epoch::{Hasher, NaryMerkleLog, Storage, TreeConfig};
 use neml_storage_fjall::FjallStorage;
+use polydigest::{Hasher, NaryMerkleLog, Storage, TreeConfig};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 

@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use epoch::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use polydigest::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
@@ -195,7 +195,7 @@ impl Storage for CountingStorage {
         self.inner.store_algorithm_meta(alg_id, epochs).await
     }
 
-    async fn load_algorithm_metas(&self) -> Result<epoch::AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<polydigest::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().await
     }
 

@@ -10,8 +10,8 @@ license-file  = "../../LICENSE"
 doctest = false
 
 [dependencies]
-# The Storage trait is the epoch combinator's; this backend implements it.
-epoch = { version = "0.1.0", path = "../../epoch" }
+# The Storage trait is the polydigest combinator's; this backend implements it.
+polydigest = { version = "0.1.0", path = "../../polydigest" }
 fjall      = "3"
 thiserror  = "2"
 

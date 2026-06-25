@@ -1,4 +1,4 @@
-//! `epoch` — the epoch combinator.
+//! `polydigest` — the polydigest combinator.
 //!
 //! Lifts the structural Merkle Spine ([`spine`]) across **N algorithms over one
 //! shared data substrate** by driving **N** single-algorithm CML ([`cml`])
@@ -19,8 +19,8 @@
 //! no epoch field (D13). The [`fill`] operation and the [`SnapshotProof`] are the
 //! trustless verification and aggregate-proof surfaces over a `Sealed`.
 //!
-//! The append-only driver above is `epoch(cml)`; its mutable peer is
-//! [`EpochTree`] (`epoch(cmt)`), the same combinator lifting a [`cmt::Cmt`]: the
+//! The append-only driver above is `polydigest(cml)`; its mutable peer is
+//! [`EpochTree`] (`polydigest(cmt)`), the same combinator lifting a [`cmt::Cmt`]: the
 //! binding/combined root over the per-algorithm member roots and the combined
 //! [`Sealed`] currency, with the mutable tree's trivial active-from-genesis
 //! timeline.
@@ -42,7 +42,7 @@ mod sealed;
 pub(crate) mod error;
 
 pub use binding_proof::{BindingProof, TrustedBindingRoot};
-// The single-algorithm engine surface re-exported through epoch for the
+// The single-algorithm engine surface re-exported through polydigest for the
 // `eml` facade: the log kind, the consistency proof surface, and the spine
 // primitives a consumer reaches via the combinator.
 pub use cml::LogKind;
@@ -69,7 +69,7 @@ pub use snapshot_proof::{ClaimedLeaf, SnapshotProof};
 pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use tree::{NaryMerkleLog, TreeConfig};
 
-/// The full proof surface a consumer reaches through `epoch::proof::*` (and so
+/// The full proof surface a consumer reaches through `polydigest::proof::*` (and so
 /// `eml::proof::*`): the CML engine's append-only consistency + inclusion/
 /// leaf proofs, plus the combinator's binding/coupling/audit proofs and the
 /// epoch-coupled evolution checks. The originals live in [`cml`] and the

@@ -1881,7 +1881,7 @@ fn test_coupling_proof_verify_validation() {
     // beside a 32-byte one) and an *empty* root into `combined_root` and asserted
     // the verifier accepted them. That asserted design-forbidden behavior: the
     // combined root concatenates member roots **raw, with no length prefix**
-    // (`epoch::combined_root`), so distinct member-root lists of unequal widths can
+    // (`polydigest::combined_root`), so distinct member-root lists of unequal widths can
     // share a node preimage — an ambiguity that voids binding-root soundness. The
     // `Hasher` fixed-width contract now makes this explicit, and `nary_mr`
     // `debug_assert`s that a node's children share a width; the inclusion verifier

@@ -28,7 +28,7 @@ CML is **epoch-free and multi-algorithm-free**: it reads one algorithm's view ov
 duplicating leaf data. The activation timeline, the null-run-extents, the binding
 root, and coupling are the combinator's facet, not CML's. The structural commitment
 a CML seal produces is the general `spine::Seal`; the epoch facet over it is
-`epoch::BoundSnapshot`.
+`polydigest::BoundSnapshot`.
 
 ## Place in the layered model
 

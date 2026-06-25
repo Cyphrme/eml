@@ -8,13 +8,13 @@
 //! over the member roots. These tests pin that fold and the combined-currency
 //! seal of `epoch(cmt)`.
 
-use epoch::{CmtConfig, EpochTree, Hasher};
+use polydigest::{CmtConfig, EpochTree, Hasher};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy)]
 struct Sha256Hasher;
 
-impl epoch::Hasher for Sha256Hasher {
+impl polydigest::Hasher for Sha256Hasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
@@ -35,7 +35,7 @@ impl epoch::Hasher for Sha256Hasher {
         Sha256::digest(data).to_vec()
     }
 
-    fn clone_box(&self) -> Box<dyn epoch::Hasher> {
+    fn clone_box(&self) -> Box<dyn polydigest::Hasher> {
         Box::new(*self)
     }
 }
@@ -45,7 +45,7 @@ impl epoch::Hasher for Sha256Hasher {
 #[derive(Debug, Clone, Copy)]
 struct DoubleSha;
 
-impl epoch::Hasher for DoubleSha {
+impl polydigest::Hasher for DoubleSha {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(Sha256::digest(data)).to_vec()
     }
@@ -66,7 +66,7 @@ impl epoch::Hasher for DoubleSha {
         Sha256::digest(Sha256::digest(data)).to_vec()
     }
 
-    fn clone_box(&self) -> Box<dyn epoch::Hasher> {
+    fn clone_box(&self) -> Box<dyn polydigest::Hasher> {
         Box::new(*self)
     }
 }
@@ -173,7 +173,7 @@ fn seal_yields_combined_currency_with_derived_roots() {
     // The sealed member root (fold of the frontier peaks) equals the live root.
     assert_eq!(sealed.member_root(ALG0, &Sha256Hasher), Some(live_member));
     // The binding root for the lone algorithm is derived on demand.
-    let hashers: [(u64, &dyn epoch::Hasher); 1] = [(ALG0, &Sha256Hasher)];
+    let hashers: [(u64, &dyn polydigest::Hasher); 1] = [(ALG0, &Sha256Hasher)];
     assert!(
         sealed
             .binding_root(ALG0, &Sha256Hasher, &hashers)

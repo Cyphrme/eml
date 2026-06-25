@@ -4,7 +4,7 @@
 //! resume boundary. These exercise the `NaryMerkleLog` driver over the CML
 //! engine end to end.
 
-use epoch::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use polydigest::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
@@ -148,11 +148,11 @@ fn resume_from_eml_origin_reproduces_root_and_appends() {
                 );
 
                 resumed
-                    .append_subtree(&epoch::Subtree::Leaf(b"fwd-0".to_vec()))
+                    .append_subtree(&polydigest::Subtree::Leaf(b"fwd-0".to_vec()))
                     .await
                     .unwrap();
                 resumed
-                    .append_subtree(&epoch::Subtree::Leaf(b"fwd-1".to_vec()))
+                    .append_subtree(&polydigest::Subtree::Leaf(b"fwd-1".to_vec()))
                     .await
                     .unwrap();
                 assert_eq!(resumed.count(), n + 2);
@@ -167,7 +167,7 @@ fn resume_from_eml_origin_reproduces_root_and_appends() {
                 let new_root = resumed.root_for_at(0, n + 2).await.unwrap();
                 let proof = proof.unwrap();
                 assert!(
-                    epoch::verify_consistency(
+                    polydigest::verify_consistency(
                         &h,
                         n,
                         n + 2,
@@ -193,6 +193,6 @@ fn resume_rejects_missing_hasher() {
         let err = NaryMerkleLog::resume(&sealed, MemoryStorage::new(), vec![])
             .await
             .unwrap_err();
-        assert_eq!(err, epoch::LogError::UnknownAlgorithm(0));
+        assert_eq!(err, polydigest::LogError::UnknownAlgorithm(0));
     });
 }
