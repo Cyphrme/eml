@@ -8,12 +8,12 @@ for the **consistency** verifier — the property that makes the log
 tamper-evident: an accepted consistency proof between two roots witnesses a
 genuine append-only prefix relation between the two trees.
 
-The Rust subject is `neml/src/proof.rs`:
+The Rust subject is `cml/src/consistency.rs`:
 
-* `verify_consistency` (`proof.rs:97`) =
+* `verify_consistency` (`consistency.rs:97`) =
   `reconstruct_consistency_roots(..).is_some_and(|(c_old, c_new)|
    c_old == old_root && c_new == new_root)` — the dual-root accept relation.
-* `reconstruct_consistency_roots` (`proof.rs:593`) recomputes **both** the
+* `reconstruct_consistency_roots` (`consistency.rs:593`) recomputes **both** the
   old-size and new-size roots from a single shared `path` anchored at
   `start_hash`, using the same frontier topology as inclusion.
 
@@ -72,7 +72,7 @@ map that `reconstruct_consistency_roots` builds (`consistencyMap`): the
 boundary coordinate maps to `start_hash`, and every bisection/merge step
 records its siblings at their coordinates. The old root is the
 `foldFrontierRoot` over the old frontier's coordinates read back from that map
-(`proof.rs:842`).
+(`consistency.rs:842`).
 -/
 
 set_option linter.style.emptyLine false
@@ -272,7 +272,7 @@ private theorem digitSteps_drop (k : Nat) :
 /-! ## The coordinate→digest map of `reconstruct_consistency_roots` -/
 
 /-- A coordinate `(left, height)` → digest map, as `reconstruct_consistency_roots`
-    builds it (`proof.rs:652`, a `HashMap<(u64, u32), Vec<u8>>`). -/
+    builds it (`consistency.rs:652`, a `HashMap<(u64, u32), Vec<u8>>`). -/
 abbrev CMap := (Nat × Nat) → Option Digest
 
 /-- The empty map. -/
@@ -282,7 +282,7 @@ def cmEmpty : CMap := fun _ => none
 def cmInsert (m : CMap) (c : Nat × Nat) (d : Digest) : CMap :=
   fun c' => if c' = c then some d else m c'
 
-/-- Record one bisection step's siblings (`proof.rs:683-698`). The path node
+/-- Record one bisection step's siblings (`consistency.rs:683-698`). The path node
     sits at `(curLeft, ch)`; its parent at `(curLeft - position·k^ch, ch+1)`.
     Sibling `j` (`0 ≤ j < k-1`) is the child at horizontal offset
     `j·k^ch` (left of the path node) or `(j+1)·k^ch` (right of it), recorded at
@@ -295,7 +295,7 @@ noncomputable def recordBisectSibs (k : Nat) (m : CMap) (curLeft ch : Nat) (s : 
       let cLeft := if j < s.position then parentLeft + j * cap else parentLeft + j * cap + cap
       cmInsert mm (cLeft, ch) (s.siblings.getD j emptyHash)) m
 
-/-- The bisection phase (`proof.rs:661-708`): trace `start_hash`'s coordinate up
+/-- The bisection phase (`consistency.rs:661-708`): trace `start_hash`'s coordinate up
     `bisection_steps` levels, recording each step's siblings. Tracks only the
     coordinate (`curLeft, ch`) — the running digest is recovered separately by
     `foldNary`; sibling *coordinates* need no digest state. -/
@@ -304,7 +304,7 @@ noncomputable def cmBisect (k : Nat) : List ProofStep → Nat → Nat → CMap �
   | s :: rest, curLeft, ch, m =>
       cmBisect k rest (curLeft - s.position * k ^ ch) (ch + 1) (recordBisectSibs k m curLeft ch s)
 
-/-- Record one merge step's siblings (`proof.rs:754-772` and `815-826`): a
+/-- Record one merge step's siblings (`consistency.rs:754-772` and `815-826`): a
     window `nodes` of frontier coordinates with the target at local index `pos`;
     the other `nodes.length - 1` entries are recorded from `s.siblings`
     (sibling index shifted past the target, mirroring
@@ -336,7 +336,7 @@ theorem mergeTopCoords_length_lt (k : Nat) (coords : List (Nat × Nat))
       simp only [List.length_append, List.length_take, List.length_cons, List.length_nil]
       omega
 
-/-- The dynamic-merge phase (`proof.rs:710-836`): fold the new frontier by
+/-- The dynamic-merge phase (`consistency.rs:710-836`): fold the new frontier by
     repeatedly merging the rightmost `k`, recording the siblings of every merge
     the target participates in (window merges consume a path step; coordinate
     merges that skip the target do not), then the final root merge. Records
@@ -401,7 +401,7 @@ private theorem getD_take_lt {α} (l : List α) (d : α) (n i : Nat) (h : i < n)
   rw [List.getD_eq_getElem?_getD, List.getElem?_take_of_lt h, List.getD_eq_getElem?_getD]
 
 /-- The full coordinate→digest map after a consistency reconstruction: the
-    boundary coordinate seeded with `start_hash` (`proof.rs:654`), then the
+    boundary coordinate seeded with `start_hash` (`consistency.rs:654`), then the
     bisection and merge phases. -/
 noncomputable def consistencyMap (k oldSize newSize : Nat) (startHash : Digest)
     (path : List ProofStep) : CMap :=
@@ -418,17 +418,17 @@ noncomputable def consistencyMap (k oldSize newSize : Nat) (startHash : Digest)
 
 /-! ## The verifier model -/
 
-/-- The list of old-frontier digests read back from the map (`proof.rs:842-847`):
+/-- The list of old-frontier digests read back from the map (`consistency.rs:842-847`):
     `None` if any old-frontier coordinate is absent (the algorithm aborts). -/
 noncomputable def consistencyOldHashes (k oldSize newSize : Nat) (startHash : Digest)
     (path : List ProofStep) : Option (List Digest) :=
   (frontierForSizeT k oldSize).mapM (consistencyMap k oldSize newSize startHash path)
 
-/-- `reconstruct_consistency_roots` (`proof.rs:593`), modeled functionally:
+/-- `reconstruct_consistency_roots` (`consistency.rs:593`), modeled functionally:
     the old root is the `foldFrontierRoot` over the old frontier's digests read
-    from the map (`proof.rs:849-867`); the new root is the running boundary
+    from the map (`consistency.rs:849-867`); the new root is the running boundary
     digest folded through the whole path (`foldNary start_hash path`), which is
-    exactly the merge phase's `computed_new_root` (`proof.rs:870`). Returns
+    exactly the merge phase's `computed_new_root` (`consistency.rs:870`). Returns
     `none` exactly when the map read-back fails. -/
 noncomputable def reconstructConsistencyRoots (k oldSize newSize : Nat)
     (startHash : Digest) (path : List ProofStep) : Option (Digest × Digest) :=
@@ -439,8 +439,8 @@ noncomputable def reconstructConsistencyRoots (k oldSize newSize : Nat)
 /-- The consistency-proof skeleton pinned by `reconstruct_consistency_roots`'s
     structural guards: `sh - bh` bisection steps (each `k - 1` siblings, position
     the base-`k` digit of the boundary subtree's offset in its new slot,
-    `proof.rs:667-675`) then the grouping steps from that slot to the spine root
-    (`proof.rs:739-836`). The boundary subtree root is a pure log-topology node,
+    `consistency.rs:667-675`) then the grouping steps from that slot to the spine root
+    (`consistency.rs:739-836`). The boundary subtree root is a pure log-topology node,
     so — unlike inclusion — there is **no** unconstrained within-subtree prefix:
     the whole path is shape-pinned. -/
 def consistencySkeleton (k oldSize newSize : Nat) : Option (List (Nat × Nat)) :=
@@ -457,7 +457,7 @@ def consistencySkeleton (k oldSize newSize : Nat) : Option (List (Nat × Nat)) :
               (fun pc => (pc.1, pc.2 - 1)))
         else none
 
-/-- `verify_consistency`'s structural acceptance (`proof.rs:647-840`): the path's
+/-- `verify_consistency`'s structural acceptance (`consistency.rs:647-840`): the path's
     per-step shape matches the consistency skeleton exactly (full match — no free
     prefix). The k-ary analog of `StructureOK`, minus the existential depth. -/
 def StructureConsistencyOK (k oldSize newSize : Nat) (path : List ProofStep) : Prop :=
@@ -465,9 +465,9 @@ def StructureConsistencyOK (k oldSize newSize : Nat) (path : List ProofStep) : P
 
 /-- The accept relation of `verify_consistency`, minus DoS bounds: size guards,
     skeleton pinning, canonical well-formedness (zero-sibling steps rejected,
-    insert position in range — `proof.rs:617-625,667-670`), and the dual-root
+    insert position in range — `consistency.rs:617-625,667-670`), and the dual-root
     match `reconstruct_consistency_roots(..) == some (oldRoot, newRoot)`
-    (`proof.rs:107`). -/
+    (`consistency.rs:107`). -/
 def AcceptsConsistency (k oldSize newSize : Nat) (startHash : Digest)
     (path : List ProofStep) (oldRoot newRoot : Digest) : Prop :=
   2 ≤ k ∧ 0 < oldSize ∧ oldSize < newSize ∧

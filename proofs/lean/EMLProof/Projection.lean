@@ -29,8 +29,8 @@ The previous "Temporal Binding" and "Algorithm Isolation" theorems were removed:
 they were vacuous (an axiom echo, and two independent copies of Projection
 Equivalence). Their intended security content — that inactivity is authenticated,
 and that per-algorithm commitments do not interfere — is formalized properly in
-`NEML.lean`'s committed-epoch (Design A+) layer, where activity is read from an
-authenticated timeline bound into the combined-root metaroot.
+`Polydigest.lean`'s committed-epoch (Design A+) layer, where activity is read from
+an authenticated timeline bound into the combined-root metaroot.
 -/
 
 set_option linter.style.emptyLine false
@@ -114,7 +114,7 @@ theorem projection_equivalence (epochs : List Epoch) (payloads : List Digest) :
 -- construction and is information-theoretically false for a compressing hash),
 -- and `algorithm_isolation` was two independent copies of `projection_equivalence`
 -- with nothing modeling distinct algorithms or non-interference. The genuine
--- replacements live in `NEML.lean` (Design A+): inactivity is authenticated by
+-- replacements live in `Polydigest.lean` (Design A+): inactivity is authenticated by
 -- the committed epoch timeline bound into the combined-root metaroot, and the
 -- metaroot binding is the real cross-algorithm non-interference statement.
 -- Deleting `temporal_binding` left `domain_separation`, the tagged `leafHash`,

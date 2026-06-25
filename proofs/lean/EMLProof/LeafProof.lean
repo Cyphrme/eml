@@ -5,7 +5,7 @@ import EMLProof.Kary
 
 The **leaf proof** is the peer of the inclusion proof: a self-contained
 "is this a legitimate leaf?" witness over a live tree. In the shipped Rust
-(`pmt/src/leaf_proof.rs`) `LeafProof::verify` *is* `verify_inclusion` — the
+(`spine/src/leaf_proof.rs`) `LeafProof::verify` *is* `verify_inclusion` — the
 proof bundles the leaf hash with its trusted positional parameters
 `(index, tree_size, log_arity)` and the path, and verification reconstructs the
 spine topology exactly as inclusion does. So its verify relation is modeled here

@@ -1,30 +1,30 @@
 import EMLProof.Foundations
-import EMLProof.NEML
+import EMLProof.Spine
 import Mathlib.Tactic
 import Mathlib.Logic.Encodable.Basic
 import Mathlib.Logic.Equiv.List
 
 /-!
-# Epoch combinator — committed activity, the combined root, and coupling soundness
+# Polydigest combinator — committed activity, the combined root, and coupling soundness
 
-The **epoch combinator** layer of the proof corpus. Where `EMLProof.NEML` holds
-the structural Merkle Spine (the canonicalizing evaluator, the eval equations, and
-the canonical inclusion proofs), this module holds everything the combinator adds
-*on top* of that spine: the committed activation timeline (Design A+), the
-**combined root** as the raw-concat canonicalization fold over the per-algorithm
-member roots, the per-algorithm **binding root** (no security mixing, D9), and the
-coupling-verifier soundness theorem.
+The **polydigest combinator** layer of the proof corpus. Where `EMLProof.Spine`
+holds the structural Merkle Spine (the canonicalizing evaluator, the eval
+equations, and the canonical inclusion proofs), this module holds everything the
+combinator adds *on top* of that spine: the committed activation timeline (Design
+A+), the **combined root** as the raw-concat canonicalization fold over the
+per-algorithm member roots, the per-algorithm **binding root** (no security mixing,
+D9), and the coupling-verifier soundness theorem.
 
-The dependency arrow runs **epoch → spine only**: every definition here consumes
-the spine's roots as **opaque digest bytes** and never touches `eval` /
+The dependency arrow runs **polydigest → spine only**: every definition here
+consumes the spine's roots as **opaque digest bytes** and never touches `eval` /
 `canonical_unique`. The spine modules import nothing from here. This is the second
 half of the central uniqueness guarantee:
 
 * **structural injectivity** — distinct canonical structures ⇒ distinct roots —
   is the spine's `canonical_unique` (`EMLProof.Canonical`), and stands alone for a
-  single-algorithm consumer with no notion of an epoch;
+  single-algorithm consumer with no notion of an activation epoch;
 * **timeline binding** — distinct committed activations ⇒ distinct binding roots —
-  is `combinedRoot_binds_timeline` here, the epoch-layer half.
+  is `combinedRoot_binds_timeline` here, the combinator-layer half.
 
 The two are distinct-but-composing guarantees, kept physically separate (the
 structural half carries no epoch hypothesis; this half consumes only opaque
@@ -63,12 +63,12 @@ are modeled:
 The `Timeline` here is the activation the null-run-extents encode; an activity-
 equivalent re-encoding of the same active set is the *same* activation (the
 commitment is canonical over activity, per
-`pmt::null_runs_cover_exactly_the_inactive_positions`). Plus the verification-time
+`polydigest::null_runs_cover_exactly_the_inactive_positions`). Plus the verification-time
 consistency check `inactive ⇒ N₀` (`InactiveImpliesNull`) and its anti-repudiation
 consequence (`real_cell_forces_committed_active`).
 
-Mirrors `pmt/src/proof.rs` (`committed_active_at`, `serialize_null_runs`,
-`null_runs_for_alg`, `validate_committed_epochs`) and `eml/src/tree.rs`
+Mirrors `polydigest/src/root.rs` (`committed_active_at`, `serialize_null_runs`,
+`null_runs_for_alg`, `validate_committed_epochs`) and `polydigest/src/tree.rs`
 (`combined_root_at`, `verify_audit_payload`). The metaroot is never
 signature-dependent; signing is an orthogonal, snapshot-level act performed after
 a snapshot's leaves are verified. -/
@@ -203,11 +203,11 @@ theorem uNat_append_injective : ∀ {a b : Nat} {s t : List UInt8},
 
 /-- Injective byte serialization of the committed **activation** — modeled as the
     `Timeline`, the activity the null-run-extents encode. The combined-root
-    preimage commits this; the shipped `pmt::serialize_null_runs` is one concrete
+    preimage commits this; the shipped `polydigest::serialize_null_runs` is one concrete
     injective realization (fixed-width big-endian over `(arity, tree_size,
     per-alg null runs)`). The activation and its null-run-extents are two
     encodings of one truth — the null runs cover exactly the inactive positions
-    (`pmt::null_runs_cover_exactly_the_inactive_positions`) — so an injective
+    (`polydigest::null_runs_cover_exactly_the_inactive_positions`) — so an injective
     encoding of either is an injective encoding of the activity. Built as
     `uNat ∘ encode`, so injectivity is immediate. -/
 def encTimeline (tl : Timeline) : List UInt8 := uNat (Encodable.encode tl)
@@ -266,7 +266,7 @@ The combined root is no longer a bespoke `H(metaPreimage)` byte-concat. It is th
 **canonicalization fold** ([`naryMr`] — collapse + promotion) over the
 per-algorithm member roots as children, one level up, with the committed
 timeline entering as a single **coverage child** iff it is non-trivial — exactly
-`pmt::combined_root`:
+`polydigest::combined_root`:
 
 ```text
 combined_root(H, ar, tl) = nary_mr ( (member roots of ar)  ++  [coverage tl]? )
@@ -274,7 +274,7 @@ combined_root(H, ar, tl) = nary_mr ( (member roots of ar)  ++  [coverage tl]? )
 
 The children are fed **raw** to `nary_mr`: the member roots are opaque digest
 *bytes* (`Vec<u8>`) and `nary_mr` concatenates them with **no length prefix**
-before hashing (`pmt/src/proof.rs::combined_root` → `pmt/src/mr.rs::nary_mr`).
+before hashing (`polydigest/src/root.rs::combined_root` → `spine/src/mr.rs::nary_mr`).
 Earlier the Lean model **re-hashed** each member root (`memberDigest e := H e.2`),
 making the concatenation trivially injective — but that proved a *different*
 construction than the code. This model is faithful: children are the raw member
@@ -308,7 +308,7 @@ def memberDigest (e : AlgId × List UInt8) : List UInt8 := e.2
 
 /-- Whether the committed activation is **trivial**: every algorithm is
     open-from-genesis (`[(0, none)]`, the model image of `[(0, u64::MAX)]`) — the
-    activity with no null run. Mirrors `pmt::null_runs_are_trivial`; the trivial
+    activity with no null run. Mirrors `polydigest::null_runs_are_trivial`; the trivial
     case omits the coverage child (informativeness, not registry cardinality). -/
 def timelineTrivial (tl : Timeline) : Bool :=
   tl.all (fun p => p.2 == [(0, none)])
@@ -344,7 +344,7 @@ noncomputable def combinedChildren (ar : List (AlgId × List UInt8)) (tl : Timel
 
 /-- The combined-root node hash over **raw** children: `nary_mr`'s genuine-node
     arm — concatenate the child bytes (no length prefix) and byte-hash. The bytes
-    of `H(c₀ ‖ … ‖ cₘ)`, matching `pmt::nary_mr`'s `hasher.hash(&concat)`. -/
+    of `H(c₀ ‖ … ‖ cₘ)`, matching `spine::nary_mr`'s `hasher.hash(&concat)`. -/
 noncomputable def combNodeHash (children : List (List UInt8)) : List UInt8 :=
   hashBytes children.flatten
 
@@ -360,7 +360,7 @@ noncomputable def combFold (children : List (List UInt8)) : List UInt8 :=
 
 /-- The combined root: the raw-concat canonicalization fold over the member-root
     children (plus a coverage child iff the timeline is non-trivial). Mirrors
-    `pmt::combined_root`. -/
+    `polydigest::combined_root`. -/
 noncomputable def combinedRoot (ar : List (AlgId × List UInt8)) (tl : Timeline) : List UInt8 :=
   combFold (combinedChildren ar tl)
 
@@ -542,7 +542,7 @@ noncomputable def hashBytesWith (Hi : List UInt8 → Digest) (x : List UInt8) : 
 
 /-- Node hash under an arbitrary algorithm hash `Hᵢ`, **raw-concat**:
     `digestToBytes (Hᵢ (c₁ ‖ … ‖ cₘ))` over the raw child bytes — `nary_mr`'s
-    genuine-node arm at `Hᵢ` (`pmt::nary_mr`'s `hasher.hash(&concat)`). -/
+    genuine-node arm at `Hᵢ` (`spine::nary_mr`'s `hasher.hash(&concat)`). -/
 noncomputable def nodeHashWith (Hi : List UInt8 → Digest) (children : List (List UInt8)) :
     List UInt8 := hashBytesWith Hi children.flatten
 
@@ -581,7 +581,7 @@ noncomputable def naryMrWith (Hi : List UInt8 → Digest) (children : List (List
 
 /-- Algorithm `i`'s binding root: the raw-concat canonicalization fold over the
     member-root children under its own hash `Hᵢ` (coverage child iff non-trivial).
-    Mirrors `pmt::combined_root` instantiated at `Hᵢ`. -/
+    Mirrors `polydigest::combined_root` instantiated at `Hᵢ`. -/
 noncomputable def combinedRootWith (Hi : List UInt8 → Digest)
     (ar : List (AlgId × List UInt8)) (tl : Timeline) : List UInt8 :=
   naryMrWith Hi (combinedChildrenWith Hi ar tl)
@@ -631,7 +631,7 @@ theorem combinedChildrenWith_bound (Hi : List UInt8 → Digest) {w : Nat}
     member root under a trivial activation contributes exactly one fold child (no
     coverage child), so `naryMrWith` promotes — the binding root *is* that member
     root's **raw bytes**, with no hashing. Genesis promotion at the binding-root
-    level (`pmt::combined_root`, `nary_mr` `len == 1`): a one-algorithm `BRᵢ`
+    level (`polydigest::combined_root`, `nary_mr` `len == 1`): a one-algorithm `BRᵢ`
     equals the raw member root, needing no node hash and hence no collision
     lever. -/
 theorem combinedRootWith_singleton (Hi : List UInt8 → Digest)

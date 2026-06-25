@@ -1,4 +1,4 @@
-import EMLProof.NEML
+import EMLProof.Spine
 import Mathlib.Data.Nat.Log
 
 /-!
@@ -12,9 +12,9 @@ input path.
 Three layers, mirroring the shipped Rust:
 
 1. **Topology** (`frontierForSizeT`, `reductionCount`, `inclusionSkeleton`):
-   total transcriptions of `neml/src/topology.rs`. The legacy `partial def`
+   total transcriptions of `spine/src/topology.rs`. The legacy `partial def`
    models earlier in the corpus (`frontierForSize`, `buildTree`,
-   `reconstructIndexFromPath` in `NEML.lean`) are opaque to the kernel and
+   `reconstructIndexFromPath` in `Spine.lean`) are opaque to the kernel and
    admit no theorems; these replace them as proof subjects. Deviation from
    Rust: the `k ≤ 256`, `path.len() ≤ 256` and digest-length DoS bounds are
    dropped — they bound resource use, not the security argument.
@@ -32,7 +32,7 @@ Three layers, mirroring the shipped Rust:
 3. **Verifier** (`AcceptsKary`, `kary_inclusion_soundness`,
    `kary_completeness`): a faithful model of
    `reconstruct_inclusion_root`/`verify_inclusion_path_structure`
-   (`neml/src/proof.rs`): the trailing steps are pinned field-by-field
+   (`spine/src/proof.rs`): the trailing steps are pinned field-by-field
    against `inclusionSkeleton`; zero-sibling (promoted) steps are rejected;
    the fold is the null-promoting `naryMr`, NOT plain `nodeHash` — the
    existing `foldCanonical` model elides null promotion, which is exactly
@@ -97,13 +97,13 @@ disagreement on any of them fails a build on both sides.
 
 | Lean | Rust | Pinning |
 | --- | --- | --- |
-| `frontierForSizeT` / `frontierGo` | `frontier_for_size` (`neml/src/topology.rs:20`) | pinned — 3 guard vectors |
-| `reductionCount` / `reductionCountGo` | `reduction_count` (`neml/src/schedule.rs:11`) | pinned — 2 guard vectors |
-| `inclusionSkeleton` | `inclusion_skeleton` (`neml/src/topology.rs:66`) | pinned — 6 guard vectors |
-| `findFrontier` | subtree-locate loop in `inclusion_skeleton` (`neml/src/topology.rs:77`) | pinned transitively |
-| `digitSteps` | base-k offset-digit loop in `inclusion_skeleton` (`neml/src/topology.rs:92`) | pinned transitively |
-| `groupingSteps` | `grouping_steps` (`neml/src/topology.rs:118`) | pinned transitively |
-| `stepShape` | `SkeletonStep {position, sibling_count}` (`neml/src/topology.rs:46`); compared in `verify_inclusion_path_structure` (`neml/src/proof.rs:507`) | pinned — guard pairs *are* `(position, siblingCount)` |
+| `frontierForSizeT` / `frontierGo` | `frontier_for_size` (`spine/src/topology.rs:20`) | pinned — 3 guard vectors |
+| `reductionCount` / `reductionCountGo` | `reduction_count` (`cml/src/schedule.rs:11`) | pinned — 2 guard vectors |
+| `inclusionSkeleton` | `inclusion_skeleton` (`spine/src/topology.rs:66`) | pinned — 6 guard vectors |
+| `findFrontier` | subtree-locate loop in `inclusion_skeleton` (`spine/src/topology.rs:77`) | pinned transitively |
+| `digitSteps` | base-k offset-digit loop in `inclusion_skeleton` (`spine/src/topology.rs:92`) | pinned transitively |
+| `groupingSteps` | `grouping_steps` (`spine/src/topology.rs:118`) | pinned transitively |
+| `stepShape` | `SkeletonStep {position, sibling_count}` (`spine/src/topology.rs:46`); compared in `verify_inclusion_path_structure` (`spine/src/proof.rs:507`) | pinned — guard pairs *are* `(position, siblingCount)` |
 
 ### Layers 2–3 — noncomputable fold / accept (inspection-only)
 
@@ -114,14 +114,14 @@ structural reading of the Rust that a reviewer must confirm; the `#guard`s do
 
 | Lean | Rust | Notes (inspection-only) |
 | --- | --- | --- |
-| `naryMr` | `nary_mr` (`neml/src/mr.rs:11`) | empty→`empty()`, singleton→child unchanged, all children equal→that value (general collapse; all-null→`null()` the dominant instance), else `node(children)` |
-| `mergeTopD` / `mergeTopDN` / `appendCell` / `buildStackGo` / `buildStackCells` | push-then-merge loop in `append_leaf` / `append_subtree` (`neml/src/tree.rs:925`, merge via `nary_mr` at `:949`) | push the cell, run `reduction_count` merges of the top `k` |
+| `naryMr` | `nary_mr` (`spine/src/mr.rs:11`) | empty→`empty()`, singleton→child unchanged, all children equal→that value (general collapse; all-null→`null()` the dominant instance), else `node(children)` |
+| `mergeTopD` / `mergeTopDN` / `appendCell` / `buildStackGo` / `buildStackCells` | push-then-merge loop in `append_leaf` / `append_subtree` (`cmt/src/tree.rs:925`, merge via `nary_mr` at `:949`) | push the cell, run `reduction_count` merges of the top `k` |
 | `perfectRoot` | the canonical perfect-subtree fold that same loop realizes (no standalone Rust fn) | `kary_bridge` proves the stack machine equals this decomposition |
-| `foldFrontierRoot` / `karyRoot` | `compute_root_from_state` (`neml/src/tree.rs:315`) | merge rightmost `k` while `> k` remain, then one final `nary_mr` |
-| `StructureOK` | `verify_inclusion_path_structure` (`neml/src/proof.rs:489`) | skeleton exists, `path.len ≥ skel.len`, trailing `skel.len` steps match shape (the skeleton it pins against is itself guard-pinned; this relation is not) |
-| `WellFormedSteps` | per-step guards in `reconstruct_inclusion_root` (`neml/src/proof.rs:561` zero-sibling reject, `:569` position bound) | canonical encoding |
-| `applyStepN` / `foldNary` | reconstruction fold in `reconstruct_inclusion_root` (`neml/src/proof.rs:550`; child-list build `:574`, `nary_mr` at `:585`) | `insertAt` ⟷ inserting `current` at `position` among siblings |
-| `AcceptsKary` | `verify_inclusion` (`neml/src/proof.rs:77`) → `reconstruct_inclusion_root` | the model drops only the DoS bounds (digest length, `path.len ≤ 256`, `siblings.len ≤ 256`), which bound resource use, not soundness |
+| `foldFrontierRoot` / `karyRoot` | `compute_root_from_state` (`cmt/src/tree.rs:315`) | merge rightmost `k` while `> k` remain, then one final `nary_mr` |
+| `StructureOK` | `verify_inclusion_path_structure` (`spine/src/proof.rs:489`) | skeleton exists, `path.len ≥ skel.len`, trailing `skel.len` steps match shape (the skeleton it pins against is itself guard-pinned; this relation is not) |
+| `WellFormedSteps` | per-step guards in `reconstruct_inclusion_root` (`spine/src/proof.rs:561` zero-sibling reject, `:569` position bound) | canonical encoding |
+| `applyStepN` / `foldNary` | reconstruction fold in `reconstruct_inclusion_root` (`spine/src/proof.rs:550`; child-list build `:574`, `nary_mr` at `:585`) | `insertAt` ⟷ inserting `current` at `position` among siblings |
+| `AcceptsKary` | `verify_inclusion` (`spine/src/proof.rs:77`) → `reconstruct_inclusion_root` | the model drops only the DoS bounds (digest length, `path.len ≤ 256`, `siblings.len ≤ 256`), which bound resource use, not soundness |
 
 **Residual risk this note does not close.** The Layer 2–3 rows above are
 verified by human reading alone. Nothing mechanical forces `naryMr`,
@@ -134,7 +134,7 @@ makes this irreducible here; only a computable hash instantiation plus
 differential execution against the Rust could pin it. Treat these rows as a
 documented, standing assumption, not a discharged one.
 
-## Layer 1 — topology (total transcription of `neml/src/topology.rs`) -/
+## Layer 1 — topology (total transcription of `spine/src/topology.rs`) -/
 
 /-- Greedy frontier decomposition from `left` over `n` remaining leaves:
     repeatedly strip the largest perfect k-ary subtree (`cap = k ^ log_k n`).
@@ -156,7 +156,7 @@ decreasing_by
 def frontierForSizeT (k n : Nat) : List (Nat × Nat) := frontierGo k 0 n
 
 /-- Carry count of the append at 0-based index `n`: the multiplicity of `k`
-    in `n + 1`. Mirrors `reduction_count` (`neml/src/schedule.rs`):
+    in `n + 1`. Mirrors `reduction_count` (`cml/src/schedule.rs`):
     after pushing leaf `n`, the builder merges the top `k` stack entries
     this many times. -/
 def reductionCountGo (k m : Nat) : Nat :=
@@ -651,7 +651,7 @@ theorem skeleton_no_promoted (k treeSize index : Nat) (skel : List (Nat × Nat))
 /-! Executable sanity pins against `topology.rs` test vectors: definitional
     drift between this model and the Rust source breaks the build here, not
     silently in a proof. Each `#guard` below has a value-for-value twin in
-    `neml/src/topology.rs::tests::lean_guard_parity`, so drift on *either* side
+    `spine/src/topology.rs::tests::lean_guard_parity`, so drift on *either* side
     fails a build. Adding a `#guard` here obliges adding its Rust twin there. -/
 section SanityChecks
 set_option linter.hashCommand false
@@ -702,7 +702,7 @@ noncomputable def mergeTopDN (k : Nat) : Nat → List Digest → List Digest
 
 /-- One append at index `idx`: push the cell, run the carry schedule.
     Faithful to the merge loop of `append_leaf`/`append_subtree`
-    (`neml/src/tree.rs`), which merges via `nary_mr`. -/
+    (`cmt/src/tree.rs`), which merges via `nary_mr`. -/
 noncomputable def appendCell (k : Nat) (stack : List Digest) (cell : Digest)
     (idx : Nat) : List Digest :=
   mergeTopDN k (reductionCount k idx) (stack ++ [cell])
@@ -1005,7 +1005,7 @@ theorem kary_bridge (k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
 /-- Fold the frontier stack to the spine root: merge the rightmost `k` while
     more than `k` remain, then one final `naryMr` (which also covers the
     empty → `emptyHash` and singleton-promotion cases). Mirrors
-    `compute_root_from_state` (`neml/src/tree.rs`) and the fold described in
+    `compute_root_from_state` (`cmt/src/tree.rs`) and the fold described in
     `topology.rs` module docs. -/
 noncomputable def foldFrontierRoot (k : Nat) (stack : List Digest) : Digest :=
   if h : k < 2 ∨ stack.length ≤ k then naryMr stack
@@ -1208,7 +1208,7 @@ private theorem foldNary_unique_aux
 /-- **Shape-pinned fold uniqueness — the soundness engine.** Two well-formed
     paths of identical shape folding to the same digest coincide entirely,
     including their starting digests. The k-ary, null-promoting analog of
-    `foldCanonical_unique_of_len` (NEML.lean), whose induction structure
+    `foldCanonical_unique_of_len` (Spine.lean), whose induction structure
     (back-decomposition of both paths, `insertAt_injective` per step) is
     the template; each step applies `naryMr_inj_of_length`, with
     `insertAt` preserving the pinned length
