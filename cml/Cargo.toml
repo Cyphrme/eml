@@ -15,3 +15,5 @@ spine = { path = "../spine" }
 [dev-dependencies]
 sha2 = "0.10"
 smol = "2.0"
+proptest = "1"
+spine = { path = "../spine" }
