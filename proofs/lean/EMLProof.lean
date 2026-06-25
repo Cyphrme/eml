@@ -6,6 +6,7 @@ import EMLProof.Spine
 import EMLProof.Canonical
 import EMLProof.Compression
 import EMLProof.Kary
+import EMLProof.Durability
 import EMLProof.LeafProof
 
 -- Polydigest combinator (over the spine).
