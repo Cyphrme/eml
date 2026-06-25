@@ -352,17 +352,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "difftest"
-version = "0.0.0"
-dependencies = [
- "eml",
- "neml",
- "proptest",
- "sha2",
- "smol",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -778,10 +767,6 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
-
-[[package]]
-name = "neml"
-version = "0.1.0"
 
 [[package]]
 name = "num-complex"

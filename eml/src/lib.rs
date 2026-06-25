@@ -3,8 +3,11 @@
 //! The EML library — the [`polydigest`] combinator over the [`cml`](polydigest) single-
 //! algorithm engine — instantiated at arity `k = 2`, no prefix (the caller's
 //! [`Hasher`] is used directly, with no domain-separation wrapper). It is the
-//! behavioral successor of the frozen pre-campaign baseline and reproduces its
-//! outputs byte-for-byte (pinned by the `difftest` oracle).
+//! behavioral successor of the frozen pre-campaign baseline: its **root and
+//! inclusion proofs are byte-identical** to that baseline (the peak-bag is the
+//! same canonical fold), while the **consistency proof** is upgraded to the MMR
+//! prefix-form for durable witnesses. Conformance is anchored by the Lean corpus
+//! and the durability property tests, not a byte-equality oracle.
 //!
 //! The full EML surface is re-exported, so a consumer reaches the library
 //! through `eml::*`. The instantiation's only opinion is the arity: the

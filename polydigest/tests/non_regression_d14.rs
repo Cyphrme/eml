@@ -4,8 +4,10 @@
 //! cost or complexity increase.
 //!
 //! These checks inspect the combinator's storage directly. The behavioral half
-//! of D14 (byte-identity with the historical `neml`) is the `difftest` oracle;
-//! this file is the structural half the IBC names: shared-substrate + atomic-append.
+//! of D14 (root + inclusion byte-identity with the pre-MMR fold; the consistency
+//! proof is upgraded to the MMR prefix-form) is anchored by the Lean corpus and
+//! the durability property tests; this file is the structural half the IBC
+//! names: shared-substrate + atomic-append.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
