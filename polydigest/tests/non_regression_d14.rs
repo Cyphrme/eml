@@ -1,4 +1,4 @@
-//! D14 non-regression: the decomposition into `epoch(cml × N)` must keep **one
+//! D14 non-regression: the decomposition into `polydigest(cml × N)` must keep **one
 //! shared data substrate** with a **per-algorithm frontier only**, and the
 //! multi-tree append must stay **atomic** — no data duplication, no per-algorithm
 //! cost or complexity increase.
@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use epoch::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use polydigest::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
@@ -83,7 +83,7 @@ impl Hasher for PrefixedSha256Hasher {
 // With N algorithms active over `n` flat appends, the raw leaf payloads must be
 // stored EXACTLY ONCE — `n` entries total, never `N × n`. The per-algorithm
 // state is the node digests (alg-keyed) and the frontier, never a second copy of
-// the leaf data. This is the trap the IBC names: `epoch` driving N independent
+// the leaf data. This is the trap the IBC names: `polydigest` driving N independent
 // logs would give N× data.
 #[test]
 fn leaf_data_is_stored_once_not_per_algorithm() {
@@ -195,7 +195,7 @@ impl Storage for CountingStorage {
         self.inner.store_algorithm_meta(alg_id, epochs).await
     }
 
-    async fn load_algorithm_metas(&self) -> Result<epoch::AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<polydigest::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().await
     }
 

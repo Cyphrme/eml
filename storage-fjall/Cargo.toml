@@ -1,17 +1,17 @@
 [package]
-name          = "neml-storage-fjall"
+name          = "storage-fjall"
 version       = "0.1.0"
 description   = "Fjall-backed storage backend for the EML append-only library"
 edition       = "2024"
 rust-version  = "1.85"
-license-file  = "../../LICENSE"
+license-file  = "../LICENSE"
 
 [lib]
 doctest = false
 
 [dependencies]
-# The Storage trait is the epoch combinator's; this backend implements it.
-epoch = { version = "0.1.0", path = "../../epoch" }
+# The Storage trait is the polydigest combinator's; this backend implements it.
+polydigest = { version = "0.1.0", path = "../polydigest" }
 fjall      = "3"
 thiserror  = "2"
 

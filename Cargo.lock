@@ -389,7 +389,7 @@ dependencies = [
  "big_o",
  "bigoish",
  "cpu-time",
- "epoch",
+ "polydigest",
  "proptest",
  "sha2",
  "smol",
@@ -400,7 +400,7 @@ name = "eml-examples"
 version = "0.0.0"
 dependencies = [
  "eml",
- "epoch",
+ "polydigest",
  "sha2",
  "smol",
  "spine",
@@ -410,7 +410,7 @@ dependencies = [
 name = "emt"
 version = "0.1.0"
 dependencies = [
- "epoch",
+ "polydigest",
  "sha2",
 ]
 
@@ -424,17 +424,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "epoch"
-version = "0.1.0"
-dependencies = [
- "cml",
- "cmt",
- "sha2",
- "smol",
- "spine",
 ]
 
 [[package]]
@@ -795,19 +784,6 @@ name = "neml"
 version = "0.1.0"
 
 [[package]]
-name = "neml-storage-fjall"
-version = "0.1.0"
-dependencies = [
- "epoch",
- "fjall",
- "proptest",
- "sha2",
- "smol",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -924,6 +900,17 @@ dependencies = [
  "pin-project-lite",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "polydigest"
+version = "0.1.0"
+dependencies = [
+ "cml",
+ "cmt",
+ "sha2",
+ "smol",
+ "spine",
 ]
 
 [[package]]
@@ -1272,6 +1259,19 @@ name = "spine"
 version = "0.1.0"
 dependencies = [
  "sha2",
+]
+
+[[package]]
+name = "storage-fjall"
+version = "0.1.0"
+dependencies = [
+ "fjall",
+ "polydigest",
+ "proptest",
+ "sha2",
+ "smol",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

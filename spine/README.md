@@ -8,7 +8,7 @@ payoff. It is **epoch-free** and depends on nothing.
 
 The Spine is a plain canonical Merkle structure — a generic, infinitely reusable
 core with no notion of algorithms, activation, or epochs. Everything concrete is
-added above it: the single-algorithm libraries (`cml` / `cmt`) and then the `epoch`
+added above it: the single-algorithm libraries (`cml` / `cmt`) and then the `polydigest`
 combinator that lifts them across N algorithms.
 
 What the Spine provides:
@@ -28,7 +28,7 @@ What the Spine provides:
 - **Inclusion proof** and the self-contained **leaf proof**, both over the shared
   positional topology, verified here (`verify_inclusion`).
 - **The general structural `Seal`** — the resumable frontier (peaks) plus an opaque
-  metadata channel. A one-way general lattice with **no epoch field**; the `epoch`
+  metadata channel. A one-way general lattice with **no epoch field**; the `polydigest`
   combinator wraps it to add the binding root.
 - **An opaque metadata channel** (`Meta`) — round-trip fidelity only; never read,
   validated, or signed by the library.
@@ -36,7 +36,7 @@ What the Spine provides:
 ## What it deliberately omits
 
 Activation, the committed epoch timeline, the null-run-extents, the binding root,
-and coupling are **not** here. They are the `epoch` combinator's facet (Tier L3),
+and coupling are **not** here. They are the `polydigest` combinator's facet (Tier L3),
 which lifts this structural engine across N algorithms over one shared data
 substrate. The spine names no epoch concept.
 
@@ -48,7 +48,7 @@ spine  ◄── the structural core (this crate)
   ├── cml   (append-only, single-algorithm)
   └── cmt   (mutable, single-algorithm)
         │
-      epoch (the combinator: epoch(cml) / epoch(cmt))
+      polydigest (the combinator: polydigest(cml) / polydigest(cmt))
         │
       EML / EMT / ETL  (k=2 instantiations)
 ```
@@ -56,6 +56,6 @@ spine  ◄── the structural core (this crate)
 ## Further reading
 
 - `cml` / `cmt` — the single-algorithm canonical libraries over this core.
-- `epoch` — the combinator that adds the multi-algorithm dimension.
+- `polydigest` — the combinator that adds the multi-algorithm dimension.
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.
 - `proofs/lean/` — the machine-checked structural theorems.

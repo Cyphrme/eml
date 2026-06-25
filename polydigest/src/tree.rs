@@ -1,7 +1,7 @@
 //! The combinator driver: the multi-algorithm append-only log over one shared
 //! data substrate.
 //!
-//! [`NaryMerkleLog`] is the **epoch combinator's** runnable driver. It owns the
+//! [`NaryMerkleLog`] is the **polydigest combinator's** runnable driver. It owns the
 //! one shared store and, per algorithm, a single [`cml::AlgView`] frontier; it
 //! drives **N** single-algorithm CML engines over that **one** substrate (D14 —
 //! leaf data lives once, each algorithm is a frontier/hash view). The structural
@@ -38,7 +38,7 @@ impl Default for TreeConfig {
     }
 }
 
-/// An n-ary Merkle Append-Only Log — the epoch combinator's driver over one
+/// An n-ary Merkle Append-Only Log — the polydigest combinator's driver over one
 /// shared data substrate.
 ///
 /// Owns the one storage backend and, per algorithm, a single [`AlgView`]

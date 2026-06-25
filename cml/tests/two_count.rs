@@ -120,7 +120,7 @@ fn member_root_of_distinct_values_hashes_not_collapses() {
 /// **The null collapse is the same rule at `value = null()`.** An all-null run
 /// reduces to null in the member root — null is one collapsing *value*, carrying
 /// no special status at the CML (structural) layer. The *count* of nulls (the
-/// logical null-run-extent) is the `epoch` combinator's concern; CML records
+/// logical null-run-extent) is the `polydigest` combinator's concern; CML records
 /// none of it.
 #[test]
 fn member_root_of_null_run_is_null_no_count_tracked() {

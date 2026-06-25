@@ -261,7 +261,7 @@ dependencies = [
 name = "eml"
 version = "0.1.0"
 dependencies = [
- "epoch",
+ "polydigest",
 ]
 
 [[package]]
@@ -273,15 +273,6 @@ dependencies = [
  "libfuzzer-sys",
  "sha2",
  "smol",
-]
-
-[[package]]
-name = "epoch"
-version = "0.1.0"
-dependencies = [
- "cml",
- "cmt",
- "spine",
 ]
 
 [[package]]
@@ -447,6 +438,15 @@ dependencies = [
  "pin-project-lite",
  "rustix",
  "windows-sys",
+]
+
+[[package]]
+name = "polydigest"
+version = "0.1.0"
+dependencies = [
+ "cml",
+ "cmt",
+ "spine",
 ]
 
 [[package]]

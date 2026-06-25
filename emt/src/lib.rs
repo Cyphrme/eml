@@ -1,7 +1,7 @@
-//! `emt` — the Epoch Merkle Tree (`epoch(cmt)`) instantiated at **k=2, no prefix**.
+//! `emt` — the Epoch Merkle Tree (`polydigest(cmt)`) instantiated at **k=2, no prefix**.
 //!
 //! This is the L4 instantiation: it fixes the proof-spine arity to 2 and pairs
-//! the EMT — the [`epoch`] combinator over the mutable [`cmt`](https://docs.rs/cmt)
+//! the EMT — the [`polydigest`] combinator over the mutable [`cmt`](https://docs.rs/cmt)
 //! tree — with a concrete unprefixed SHA-256 hasher, so an application gets a
 //! ready mutable tree in a few lines. Paired with the append-only `eml` log it
 //! composes a single principal tree (a mutable outer tree with an embedded
@@ -20,8 +20,8 @@
 //! # let _ = root;
 //! ```
 
-use epoch::{CmtConfig, EpochTree, Hasher};
-pub use epoch::{CmtError as Error, CmtResult as Result, ProofStep, Sealed};
+use polydigest::{CmtConfig, EpochTree, Hasher};
+pub use polydigest::{CmtError as Error, CmtResult as Result, ProofStep, Sealed};
 use sha2::{Digest, Sha256};
 
 /// The fixed proof-spine arity of the EMT.
@@ -64,8 +64,8 @@ impl Hasher for Sha256Hasher {
 
 /// A mutable tree at k=2 over unprefixed SHA-256.
 ///
-/// A thin ergonomic wrapper over [`epoch::EpochTree`]: one fixed algorithm, one fixed
-/// arity. For multi-algorithm trees or a different hash, drive [`epoch::EpochTree`]
+/// A thin ergonomic wrapper over [`polydigest::EpochTree`]: one fixed algorithm, one fixed
+/// arity. For multi-algorithm trees or a different hash, drive [`polydigest::EpochTree`]
 /// directly.
 #[derive(Debug)]
 pub struct Emt {
@@ -83,8 +83,8 @@ impl Emt {
         Self { inner }
     }
 
-    /// Set the payload of cell `index`; see [`epoch::EpochTree::set`] for the dense-index
-    /// contract. (Metadata is left empty; drive [`epoch::EpochTree`] directly to carry
+    /// Set the payload of cell `index`; see [`polydigest::EpochTree::set`] for the dense-index
+    /// contract. (Metadata is left empty; drive [`polydigest::EpochTree`] directly to carry
     /// the opaque metadata channel.)
     pub fn set(&mut self, index: u64, payload: Vec<u8>) -> Result<()> {
         self.inner.set(index, payload, Vec::new())
@@ -115,7 +115,7 @@ impl Emt {
     }
 
     /// An inclusion proof for cell `index`: the leaf digest and proof path,
-    /// verifiable with [`epoch::verify_inclusion`] against `(index, len, 2, root)`.
+    /// verifiable with [`polydigest::verify_inclusion`] against `(index, len, 2, root)`.
     #[must_use]
     pub fn inclusion_proof(&self, index: u64) -> Option<(Vec<u8>, Vec<ProofStep>)> {
         self.inner.inclusion_proof(ALG, index)
@@ -149,7 +149,7 @@ mod tests {
         let root = tree.root().unwrap();
         let (leaf, path) = tree.inclusion_proof(1).unwrap();
         let h = Sha256Hasher;
-        assert!(epoch::verify_inclusion(
+        assert!(polydigest::verify_inclusion(
             &h, &leaf, 1, 3, ARITY, &path, &root
         ));
         assert_eq!(leaf, Sha256::digest(b"second").to_vec());

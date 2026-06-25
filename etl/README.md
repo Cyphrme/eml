@@ -1,7 +1,7 @@
 # etl — Epoch Transparency Log
 
-**Tier L4 — an instantiation.** ETL is a Certificate Transparency build: the `epoch`
-combinator over the single-algorithm `cml` engine — `epoch(cml)` — instantiated at
+**Tier L4 — an instantiation.** ETL is a Certificate Transparency build: the `polydigest`
+combinator over the single-algorithm `cml` engine — `polydigest(cml)` — instantiated at
 arity **`k = 2`**, with **subtrees banned** (flat-leaf only) and a **prefixed
 `Hasher`**. It gives RFC 9162 root equality while keeping crypto-agility.
 
@@ -39,18 +39,18 @@ added and will produce a per-algorithm binding root.
 ## Place in the layered model
 
 ```
-spine → cml → epoch → ETL  (this crate: epoch(cml) @ k=2, subtrees banned, prefixed)
+spine → cml → polydigest → ETL  (this crate: polydigest(cml) @ k=2, subtrees banned, prefixed)
 ```
 
 Compare the sibling instantiations:
 
-- **EML** (`eml`) — the general-purpose append-only log, `epoch(cml)` @ `k = 2`, no
+- **EML** (`eml`) — the general-purpose append-only log, `polydigest(cml)` @ `k = 2`, no
   prefix, subtrees allowed.
-- **EMT** (`emt`) — the mutable peer, `epoch(cmt)` @ `k = 2`.
+- **EMT** (`emt`) — the mutable peer, `polydigest(cmt)` @ `k = 2`.
 
 ## Further reading
 
-- `epoch` — the combinator ETL instantiates.
+- `polydigest` — the combinator ETL instantiates.
 - `eml` — the general-purpose instantiation ETL specializes (the unprefixed shape).
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.
 - [RFC 9162](https://datatracker.ietf.org/doc/html/rfc9162) — Certificate

@@ -6,7 +6,7 @@
 //! member-root fold, inclusion/consistency proof generation, and the historical
 //! root reconstructions. Every operation that touches stored bytes reads them
 //! through a borrowed [`NodeReader`]; the engine never owns the store, so the
-//! `epoch` combinator can drive **N** views over **one** shared substrate
+//! `polydigest` combinator can drive **N** views over **one** shared substrate
 //! without duplicating leaf data (D14). The engine names no epoch concept: a
 //! view's epoch intervals are read locally only to project a coordinate's
 //! null/active value, never to bind a cross-tree timeline.
@@ -20,7 +20,7 @@ use crate::schedule::reduction_count;
 /// A borrowed read substrate the single-algorithm engine folds over.
 ///
 /// The engine reads stored node digests and (for flat logs) raw leaf payloads
-/// through this trait; it never writes and never owns the store. The `epoch`
+/// through this trait; it never writes and never owns the store. The `polydigest`
 /// combinator implements it over its one shared storage so N algorithm views
 /// share a single data substrate (D14). The `alg_id` selects which algorithm's
 /// node namespace the read targets — leaf payloads are algorithm-agnostic and

@@ -7,7 +7,7 @@
 //! channel** ([`Meta`]). It depends on nothing.
 //!
 //! Activation, the committed epoch timeline, the null-run-extents, the binding
-//! root, and coupling are **not** here — they are the `epoch` combinator's
+//! root, and coupling are **not** here — they are the `polydigest` combinator's
 //! facet, which lifts this structural engine across N algorithms over one
 //! shared data substrate. The spine names no epoch concept.
 

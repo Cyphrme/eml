@@ -5,7 +5,7 @@
 //! *constructs* a checked value — sealing a frontier — and the input can be
 //! structurally ill-formed. This enum stays deliberately small: the
 //! algorithm-lifecycle errors (a malformed committed epoch timeline) belong to
-//! the `epoch` combinator above the spine, not here.
+//! the `polydigest` combinator above the spine, not here.
 
 use std::fmt;
 

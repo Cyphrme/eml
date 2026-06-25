@@ -1,18 +1,18 @@
-# epoch — the combinator
+# polydigest — the combinator
 
-**Tier L3 — the combinator over a shared data substrate.** `epoch` lifts a
+**Tier L3 — the combinator over a shared data substrate.** `polydigest` lifts a
 single-algorithm `cml` log or `cmt` tree across **N algorithms over one shared data
 substrate**. It depends on `cml` and `cmt` (which depend on `spine`); the
 instantiations `eml` / `emt` / `etl` depend on it.
 
 ## Role
 
-`epoch` is **not** a composition of independent logs — that would duplicate the data
+`polydigest` is **not** a composition of independent logs — that would duplicate the data
 and raise per-algorithm cost. It is a combinator over **one** substrate: the leaf
 entries live once, and each algorithm is a frontier / hash-view over them, so its
 only per-algorithm cost is its own hashing. The append-only driver
 (`NaryMerkleLog`) holds the shared store plus, per algorithm, a `{hasher, frontier}`
-view; its mutable peer is `EpochTree` (`epoch(cmt)`), the same combinator lifting a
+view; its mutable peer is `EpochTree` (`polydigest(cmt)`), the same combinator lifting a
 `cmt::Cmt`.
 
 It adds the three concepts the structural core (`spine`) deliberately omits:
@@ -51,7 +51,7 @@ spine — the structural core
   │
   ├── cml (append-only)   cmt (mutable)
   │        ╲             ╱
-  │       epoch  ◄── this crate (the combinator)
+  │      polydigest  ◄── this crate (the combinator)
   │         │
   │       EML / EMT / ETL  (k=2 instantiations)
 ```

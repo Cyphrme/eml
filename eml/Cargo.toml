@@ -11,9 +11,9 @@ repository    = "https://github.com/Cyphrme/eml"
 name = "eml"
 
 [dependencies]
-# The EML library is the epoch combinator over the CML single-algorithm engine;
-# this crate is its k=2, no-prefix instantiation.
-epoch = { path = "../epoch" }
+# The EML library is the polydigest combinator over the CML single-algorithm
+# engine; this crate is its k=2, no-prefix instantiation.
+polydigest = { path = "../polydigest" }
 
 [dev-dependencies]
 sha2 = "0.10"

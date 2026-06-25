@@ -76,7 +76,7 @@ impl std::fmt::Debug for AlgState {
 /// addressed under many algorithms (per-node multi-hash) and an algorithm may be
 /// added after the fact with the root recomputed in `O(log n)` along the changed
 /// node's ancestors only ([`Cmt::set`], retroactive add). The cross-tree binding
-/// of those per-algorithm roots is the `epoch` combinator's concern, not the
+/// of those per-algorithm roots is the `polydigest` combinator's concern, not the
 /// CMT's — the CMT exposes each algorithm's raw member [`root`](Cmt::root) and
 /// the structural [`seal`](Cmt::seal), never a binding/combined root.
 #[derive(Debug)]
@@ -208,8 +208,8 @@ impl Cmt {
     ///
     /// This is the structural per-algorithm root. The cross-tree **binding /
     /// combined root** that folds every algorithm's member root together is the
-    /// `epoch` combinator's derived view, not the CMT's (D9/D12); the CMT exposes
-    /// the raw member roots it materializes and leaves the binding to `epoch`.
+    /// `polydigest` combinator's derived view, not the CMT's (D9/D12); the CMT exposes
+    /// the raw member roots it materializes and leaves the binding to `polydigest`.
     #[must_use]
     pub fn root(&self, alg_id: u64) -> Option<Vec<u8>> {
         self.states.get(&alg_id).and_then(|s| s.root.clone())
@@ -218,7 +218,7 @@ impl Cmt {
     /// The set of registered algorithm IDs paired with their current member
     /// root, sorted by algorithm ID, skipping any with no root (empty tree).
     ///
-    /// The `epoch` combinator reads these raw member roots as the children of
+    /// The `polydigest` combinator reads these raw member roots as the children of
     /// its binding/combined-root fold; the CMT itself never folds them.
     #[must_use]
     pub fn member_roots(&self) -> Vec<(u64, Vec<u8>)> {
@@ -230,7 +230,7 @@ impl Cmt {
 
     /// The hasher registered under `alg_id`, or `None` if unregistered.
     ///
-    /// The `epoch` combinator needs the algorithm's own hash to fold the binding
+    /// The `polydigest` combinator needs the algorithm's own hash to fold the binding
     /// root over the member roots; the CMT materializes the per-algorithm roots
     /// but never folds them, so it lends the hasher rather than computing the
     /// binding root itself.
@@ -315,7 +315,7 @@ impl Cmt {
     /// "Post-Facto Digest" / retroactive algorithm addition).
     ///
     /// This is the mutable tree's *incremental* multi-hash operation: distinct
-    /// from bulk filling (an `epoch` operator, `O(n)`, which re-derives a whole
+    /// from bulk filling (a `polydigest` operator, `O(n)`, which re-derives a whole
     /// algorithm's history). Here a node gains a digest under a *newly seeded*
     /// algorithm and only its ancestor path is touched; positions other than
     /// `index` contribute their already-materialized digests (the null
@@ -368,8 +368,8 @@ impl Cmt {
     /// registered algorithm's frontier peaks (the digests of the perfect k-ary
     /// subtrees the spine topology names at this size). The `Seal` carries **no
     /// committed epoch timeline and no binding root** — those are the *epoch
-    /// facet*, added by the `epoch` combinator as a wrapper over this general
-    /// `Seal` (`epoch(cmt)`), never baked in here.
+    /// facet*, added by the `polydigest` combinator as a wrapper over this general
+    /// `Seal` (`polydigest(cmt)`), never baked in here.
     ///
     /// A live `Cmt` has no frontier stack — that absence is the mutable/append
     /// tell. Computing the peaks at seal erases the distinction, so every `Seal`
@@ -387,7 +387,7 @@ impl Cmt {
     /// Reviving arbitrary mutation over the committed positions would also
     /// *un-seal the committed past* — the one-way guarantee the seal exists to
     /// make. The way to a readable, mutable-or-append tree over the committed
-    /// data is the `epoch` combinator's `fill` (data-required), which rebuilds
+    /// data is the `polydigest` combinator's `fill` (data-required), which rebuilds
     /// and verifies against the committed binding root; the discarded frontier is
     /// simply unused when the fill target is a mutable tree.
     ///

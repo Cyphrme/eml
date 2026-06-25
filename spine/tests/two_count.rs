@@ -5,7 +5,7 @@
 //! the same holds for **promotion**. So the structural root and the structural
 //! geometry a [`spine::Seal`] commits reflect the **canonical (reduced) form**,
 //! never pre-collapse multiplicity. The *only* counted quantity in the whole
-//! stack — the null-run-extent (the logical count) — belongs to the `epoch`
+//! stack — the null-run-extent (the logical count) — belongs to the `polydigest`
 //! combinator and is **absent below it**: the structural core (`spine`) names no
 //! logical/null count.
 //!
@@ -74,7 +74,7 @@ fn collapse_root_is_the_reduced_value_not_the_multiplicity() {
 
     // Two runs of the *same* value but different multiplicity are
     // byte-identical at the structural root: the count is genuinely absent, not
-    // merely small. Distinguishing them is the logical (epoch) layer's job via
+    // merely small. Distinguishing them is the logical (polydigest) layer's job via
     // the run-extent, never the structural digest's.
     let root_two = nary_mr(&hasher, &[&v, &v]);
     let root_seven = nary_mr(&hasher, &[&v, &v, &v, &v, &v, &v, &v]);
@@ -158,7 +158,7 @@ fn structural_root_equals_the_canonical_reduced_tree() {
 /// count. A `Seal` built from the same frontier under two different sizes yields
 /// run-extents fixed by geometry alone; nothing in the structural snapshot
 /// records how many *null* (logically-inactive) leaves a run absorbed. That
-/// logical count is the `epoch` combinator's null-run-extent, and it has no home
+/// logical count is the `polydigest` combinator's null-run-extent, and it has no home
 /// here.
 #[test]
 fn seal_run_extents_are_geometry_not_a_logical_count() {

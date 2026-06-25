@@ -9,13 +9,13 @@
 //!
 //! It is **epoch-free and multi-algorithm-free** (D7): the engine reads one
 //! algorithm's view ([`AlgView`]) over a borrowed [`NodeReader`] substrate and
-//! never owns the store, so the `epoch` combinator can drive **N** views over
+//! never owns the store, so the `polydigest` combinator can drive **N** views over
 //! **one** shared data substrate without duplicating leaf data (D14). The
 //! activation timeline, the null-run-extents, the binding root, and coupling are
 //! the combinator's facet, not CML's.
 //!
 //! The structural commitment a CML seal produces is the general [`spine::Seal`]
-//! (re-exported here); the epoch facet over it is `epoch::BoundSnapshot`.
+//! (re-exported here); the epoch facet over it is `polydigest::BoundSnapshot`.
 
 pub mod consistency;
 pub mod engine;

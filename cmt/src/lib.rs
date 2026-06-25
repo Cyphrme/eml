@@ -18,8 +18,8 @@
 //!
 //! **Epoch-free (D13).** The CMT carries no committed timeline and no binding /
 //! combined root. The cross-tree binding of its per-algorithm member roots is the
-//! `epoch` combinator's facet, added as a wrapper over the structural `Seal`
-//! (`epoch(cmt)`); the CMT exposes each algorithm's raw [`root`](Cmt::root) and
+//! `polydigest` combinator's facet, added as a wrapper over the structural `Seal`
+//! (`polydigest(cmt)`); the CMT exposes each algorithm's raw [`root`](Cmt::root) and
 //! [`member_roots`](Cmt::member_roots), never a binding root.
 //!
 //! Verification stays in the spine: a proof generated here is checked with

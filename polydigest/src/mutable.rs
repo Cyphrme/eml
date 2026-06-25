@@ -1,4 +1,4 @@
-//! `epoch(cmt)` — the epoch combinator over the Canonical Mutable Tree.
+//! `polydigest(cmt)` — the polydigest combinator over the Canonical Mutable Tree.
 //!
 //! [`EpochTree`] lifts a single-algorithm [`cmt::Cmt`] across **N algorithms**
 //! and adds the **epoch facet** the structural tree deliberately omits (D13): the
@@ -18,7 +18,7 @@
 //! the structural `Seal` to form the one commitment currency [`Sealed`].
 
 // The mutable tree's structural construction/mutation types, re-exported so an
-// instantiation (e.g. `emt`) names them through `epoch` alongside
+// instantiation (e.g. `emt`) names them through `polydigest` alongside
 // [`EpochTree`]. Aliased to avoid colliding with the combinator's own
 // `Error`/`Result` (the timeline/binding errors).
 use cmt::{Cmt, Config, Hasher, ProofStep};
@@ -32,7 +32,7 @@ use crate::root::combined_root;
 /// active from genesis, never closed.
 const OPEN_EPOCH: (u64, u64) = (0, u64::MAX);
 
-/// The epoch combinator over a [`Cmt`] — the Epoch Merkle Tree (`epoch(cmt)`).
+/// The polydigest combinator over a [`Cmt`] — the Epoch Merkle Tree (`polydigest(cmt)`).
 ///
 /// Wraps a structural [`Cmt`] and adds the binding/combined root and the
 /// combined-currency seal. The structural surface (`set`, `get`, inclusion, the

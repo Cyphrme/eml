@@ -1,10 +1,10 @@
 //! `eml` — the Epoch Merkle Log: a general-purpose append-only log.
 //!
-//! The EML library — the [`epoch`] combinator over the [`cml`](epoch) single-
+//! The EML library — the [`polydigest`] combinator over the [`cml`](polydigest) single-
 //! algorithm engine — instantiated at arity `k = 2`, no prefix (the caller's
 //! [`Hasher`] is used directly, with no domain-separation wrapper). It is the
-//! behavioral successor of the historical `neml` crate and reproduces its
-//! outputs byte-for-byte.
+//! behavioral successor of the frozen pre-campaign baseline and reproduces its
+//! outputs byte-for-byte (pinned by the `difftest` oracle).
 //!
 //! The full EML surface is re-exported, so a consumer reaches the library
 //! through `eml::*`. The instantiation's only opinion is the arity: the
@@ -12,18 +12,18 @@
 //! while the re-exported [`NaryMerkleLog`] still accepts any [`TreeConfig`] for
 //! callers that need a different arity.
 
-pub use epoch::*;
+pub use polydigest::*;
 // The combinator driver's storage-parameterised error/result are the EML
 // library's public `Error`/`Result` (the combinator also has a distinct,
 // non-parameterised snapshot `Error`, not re-exported under this name).
-pub use epoch::{LogError as Error, LogResult as Result};
+pub use polydigest::{LogError as Error, LogResult as Result};
 
 /// The EML library's error surface, reached through `eml::error::*`. The
-/// driver's storage-parameterised [`epoch::LogError`] is the public
+/// driver's storage-parameterised [`polydigest::LogError`] is the public
 /// `Error`; this module preserves the `eml::error::Error` path the historical
 /// surface exposed.
 pub mod error {
-    pub use epoch::{LogError as Error, LogResult as Result};
+    pub use polydigest::{LogError as Error, LogResult as Result};
 }
 
 /// The log arity: binary (`k = 2`).
@@ -68,7 +68,7 @@ pub async fn from_storage<S: Storage>(
 
 #[cfg(test)]
 mod tests {
-    use epoch::MemoryStorage;
+    use polydigest::MemoryStorage;
     use sha2::{Digest, Sha256};
 
     use super::*;

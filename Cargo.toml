@@ -2,13 +2,13 @@
 resolver = "2"
 members = [
     "spine",
-    "epoch",
+    "polydigest",
     "cml",
     "eml",
     "difftest",
     "cmt",
     "emt",
-    "storage/neml-fjall",
+    "storage-fjall",
     "etl",
     "examples",
 ]

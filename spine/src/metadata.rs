@@ -1,6 +1,6 @@
-//! Opaque metadata channel for PMT commitments.
+//! Opaque metadata channel for Merkle commitments.
 //!
-//! `Meta` is an **arbitrary, opaque byte buffer** that PMT attaches to a
+//! `Meta` is an **arbitrary, opaque byte buffer** that the spine attaches to a
 //! commitment ([`crate::Sealed`]) without interpretation. The library never
 //! reads, validates, or signs its contents — that is the consumer's concern.
 //! Any byte sequence is a valid `Meta` value, including the empty slice.
@@ -14,7 +14,7 @@
 //! fact that an optional tree-head attestation *may* ride here is purely a
 //! consumer convention, invisible to the kernel.
 
-/// Opaque, application-defined byte payload attached to a PMT commitment.
+/// Opaque, application-defined byte payload attached to a Merkle commitment.
 ///
 /// The library never inspects or validates the contents; round-trip
 /// fidelity (store then retrieve) is the only guarantee.

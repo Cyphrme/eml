@@ -8,7 +8,7 @@
 //! tree at `old_size` is a prefix of the tree at `new_size`).
 //!
 //! The *temporal* analog over the committed epoch timeline (`verify_epoch_evolution`)
-//! and the coupling-wrapped consistency check are the `epoch` combinator's
+//! and the coupling-wrapped consistency check are the `polydigest` combinator's
 //! concern — they need the timeline, which the spine and CML do not see.
 
 use spine::{ARITY_RANGE, Hasher, fold_frontier, frontier_for_size, nary_mr};
