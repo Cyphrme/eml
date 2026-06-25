@@ -3,7 +3,7 @@
 //! A snapshot proof answers, in one self-contained witness, "are these leaves
 //! legitimately in the sealed commitment?" — rooted in the commitment's
 //! **trusted binding roots**. It is the aggregate peer of inclusion /
-//! consistency / leaf / binding proofs, and its **base case is the PMT leaf
+//! consistency / leaf / binding proofs, and its **base case is the spine leaf
 //! proof** ([`spine::LeafProof`]).
 //!
 //! # The leaf-proof sequence ⇄ snapshot duality

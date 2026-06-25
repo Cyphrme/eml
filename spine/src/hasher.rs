@@ -6,7 +6,7 @@
 
 use std::fmt::Debug;
 
-/// Hash operations required by the Polymorphic Merkle Tree.
+/// Hash operations required by the Merkle Spine.
 ///
 /// # Fixed-width contract (load-bearing for binding soundness)
 ///
