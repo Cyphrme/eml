@@ -43,7 +43,7 @@ pub(crate) mod error;
 
 pub use binding_proof::{BindingProof, TrustedBindingRoot};
 // The single-algorithm engine surface re-exported through epoch for the
-// `cyphr-log` facade: the log kind, the consistency proof surface, and the spine
+// `eml` facade: the log kind, the consistency proof surface, and the spine
 // primitives a consumer reaches via the combinator.
 pub use cml::LogKind;
 pub use cml::proof::{
@@ -70,7 +70,7 @@ pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
 pub use tree::{NaryMerkleLog, TreeConfig};
 
 /// The full proof surface a consumer reaches through `epoch::proof::*` (and so
-/// `cyphr_log::proof::*`): the CML engine's append-only consistency + inclusion/
+/// `eml::proof::*`): the CML engine's append-only consistency + inclusion/
 /// leaf proofs, plus the combinator's binding/coupling/audit proofs and the
 /// epoch-coupled evolution checks. The originals live in [`cml`] and the
 /// combinator modules; this module re-exports them, never a parallel copy.

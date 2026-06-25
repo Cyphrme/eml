@@ -10,9 +10,9 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
+use eml::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig, verify_consistency, verify_inclusion};
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use cyphr_log::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig, verify_consistency, verify_inclusion};
 
 #[derive(Debug)]
 struct FuzzHasher;
@@ -24,6 +24,7 @@ impl Hasher for FuzzHasher {
         h.update(data);
         h.finalize().to_vec()
     }
+
     fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01]);
@@ -32,12 +33,15 @@ impl Hasher for FuzzHasher {
         }
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
     fn clone_box(&self) -> Box<dyn Hasher> {
         Box::new(FuzzHasher)
     }
@@ -93,7 +97,15 @@ fuzz_target!(|input: Input| {
 
         // Valid proof MUST verify.
         assert!(
-            verify_inclusion(&FuzzHasher, &leaf_hash, target, tree_size, ARITY, &inc_proof.path, &root),
+            verify_inclusion(
+                &FuzzHasher,
+                &leaf_hash,
+                target,
+                tree_size,
+                ARITY,
+                &inc_proof.path,
+                &root
+            ),
             "valid inclusion proof failed to verify"
         );
 
@@ -112,7 +124,15 @@ fuzz_target!(|input: Input| {
 
                     // Mutated proof MUST NOT verify.
                     assert!(
-                        !verify_inclusion(&FuzzHasher, &leaf_hash, target, tree_size, ARITY, &mutated.path, &root),
+                        !verify_inclusion(
+                            &FuzzHasher,
+                            &leaf_hash,
+                            target,
+                            tree_size,
+                            ARITY,
+                            &mutated.path,
+                            &root
+                        ),
                         "mutated inclusion proof falsely verified!"
                     );
                 }

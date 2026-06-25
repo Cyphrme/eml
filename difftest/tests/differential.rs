@@ -1,4 +1,4 @@
-//! Differential property tests: the current side (`cyphr_log`) must produce
+//! Differential property tests: the current side (`eml`) must produce
 //! output structurally identical to the frozen baseline (`neml_baseline`) for
 //! every sampled history.
 //!
@@ -13,14 +13,14 @@
 //! Any divergence here means a change altered an observable output of the log —
 //! exactly what this harness exists to catch.
 
-use cyphr_log::proof::{
+use difftest::{RevSha256Hasher, Sha256Hasher, TaggedSha256Hasher};
+use eml::proof::{
     ConsistencyProof as CurConsistency, InclusionProof as CurInclusion, ProofStep as CurStep,
 };
-use cyphr_log::{
+use eml::{
     Hasher as CurHasher, MemoryStorage as CurStorage, NaryMerkleLog as CurLog,
     TreeConfig as CurConfig,
 };
-use difftest::{RevSha256Hasher, Sha256Hasher, TaggedSha256Hasher};
 use neml_baseline::proof::{
     ConsistencyProof as BaseConsistency, InclusionProof as BaseInclusion, ProofStep as BaseStep,
 };
@@ -223,7 +223,7 @@ proptest! {
 
 /// Positive divergence assertion: general same-value collapse is INTENTIONAL.
 ///
-/// cyphr-log's `nary_mr` collapses any equal-value sibling run to that value,
+/// eml's `nary_mr` collapses any equal-value sibling run to that value,
 /// including non-null runs (SEV-1 general-collapse design). The frozen neml
 /// baseline collapses only null runs. This test documents that intended
 /// divergence: two identical non-null leaves yield different roots on the two
@@ -274,7 +274,7 @@ enum Op {
     ResumeAlg(u64),
 }
 
-fn alg_hasher_cur(alg_id: u64) -> Box<dyn cyphr_log::Hasher> {
+fn alg_hasher_cur(alg_id: u64) -> Box<dyn eml::Hasher> {
     match alg_id % 3 {
         1 => Box::new(TaggedSha256Hasher),
         2 => Box::new(RevSha256Hasher),
@@ -404,7 +404,7 @@ proptest! {
                     // oracle exists for this case — the combined-root fold model
                     // changed post-campaign (intentional redesign), so the frozen
                     // baseline is the wrong oracle for the multi-alg value, and
-                    // recomputing via `cyphr_log::combined_root` would be a
+                    // recomputing via `eml::combined_root` would be a
                     // tautology (the same function `combined_root_for` calls).
                 }
 

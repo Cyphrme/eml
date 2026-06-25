@@ -6,20 +6,21 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
+use eml::{ProofStep, verify_consistency};
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use cyphr_log::{ProofStep, verify_consistency};
 
 #[derive(Debug)]
 struct FuzzHasher;
 
-impl cyphr_log::Hasher for FuzzHasher {
+impl eml::Hasher for FuzzHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x00]);
         h.update(data);
         h.finalize().to_vec()
     }
+
     fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01]);
@@ -28,13 +29,16 @@ impl cyphr_log::Hasher for FuzzHasher {
         }
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
-    fn clone_box(&self) -> Box<dyn cyphr_log::Hasher> {
+
+    fn clone_box(&self) -> Box<dyn eml::Hasher> {
         Box::new(FuzzHasher)
     }
 }
@@ -60,7 +64,10 @@ fuzz_target!(|input: Input| {
     let path: Vec<ProofStep> = input
         .path
         .into_iter()
-        .map(|s| ProofStep { siblings: s.siblings, position: s.position })
+        .map(|s| ProofStep {
+            siblings: s.siblings,
+            position: s.position,
+        })
         .collect();
     let _ = verify_consistency(
         &FuzzHasher,

@@ -1,6 +1,6 @@
 //! Shared hashers for the differential harness.
 //!
-//! The current side (`cyphr_log`) and the frozen baseline (`neml_baseline`)
+//! The current side (`eml`) and the frozen baseline (`neml_baseline`)
 //! each define their own `Hasher` trait. A differential case drives both with the
 //! *same* hashing behavior, so the structs below implement both traits with
 //! byte-identical logic. The two `node` implementations concatenate children
@@ -42,7 +42,7 @@ fn reversed(data: &[u8]) -> Vec<u8> {
 }
 
 // A macro keeps the two trait impls byte-identical: any divergence between the
-// `cyphr_log` and `neml_baseline` impls would be a harness bug, so they are
+// `eml` and `neml_baseline` impls would be a harness bug, so they are
 // generated from one source.
 macro_rules! impl_hasher {
     ($trait_path:path) => {
@@ -126,5 +126,5 @@ macro_rules! impl_hasher {
     };
 }
 
-impl_hasher!(cyphr_log::Hasher);
+impl_hasher!(eml::Hasher);
 impl_hasher!(neml_baseline::Hasher);
