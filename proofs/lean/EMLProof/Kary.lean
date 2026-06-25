@@ -1741,4 +1741,396 @@ theorem kary_inclusion_soundness (k : Nat) (cells : List Digest)
     hshape hwfdrop hhwf hfeq hH hN
   exact hab
 
+/-! ## `karyRoot` injectivity — the bag canonical-uniqueness theorem
+
+The unprefixed `nary_mr` fold over the frontier peaks (`karyRoot` =
+`foldFrontierRoot` over the per-coordinate `perfectRoot`s) is **injective over
+equal-length cell lists**. This is the formal discharge of the MMR "no size
+prefix" decision (`cml/src/mountain.rs`): the peak bag deliberately omits the
+`H(size ‖ peak ‖ acc)` size prefix that OpenTimestamps/Grin use to guard
+cross-size confusion, because `tree_size` is a trusted verifier parameter and the
+anti-confusion job is done by *proven uniqueness* (this theorem) plus the trusted
+size — not a prefix.
+
+Lifted here from the consistency layer to its natural home: it is pure structural
+injectivity about `karyRoot`/`perfectRoot`/`foldFrontierRoot`/`naryMr` (all
+defined above), with no consistency-proof dependency, so both the consistency
+layer and the durability/mountain layer consume it from the spine. -/
+
+/-- Every index in `[start, stop)` lands in some tile of a `Tiles`
+    decomposition. -/
+private theorem Tiles_covers (k : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat), Tiles k start coords stop →
+      ∀ i, start ≤ i → i < stop → ∃ c ∈ coords, c.1 ≤ i ∧ i < c.1 + k ^ c.2 := by
+  intro coords
+  induction coords with
+  | nil => intro start stop htiles i hs hi; simp only [Tiles] at htiles; omega
+  | cons p rest ih =>
+    intro start stop htiles i hs hi
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    by_cases hlt : i < start + k ^ ph
+    · refine ⟨(pl, ph), ?_, ?_, ?_⟩
+      · simp
+      · show pl ≤ i; omega
+      · show i < pl + k ^ ph; omega
+    · obtain ⟨c, hc, h1, h2⟩ := ih (start + k ^ ph) stop htrest i (by omega) hi
+      exact ⟨c, List.mem_cons_of_mem _ hc, h1, h2⟩
+
+/-- **`perfectRoot` injectivity over a span.** Equal perfect-subtree roots over
+    `xs` and `ys` force the two cell lists to agree at every index the subtree
+    covers — or a hash assumption broke. Induction on height, `naryMr_inj_of_length`
+    at each level. -/
+private theorem perfectRoot_inj (k : Nat) (hk : 2 ≤ k)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) (xs ys : List Digest) :
+    ∀ (h left : Nat), perfectRoot k xs left h = perfectRoot k ys left h →
+      ∀ i, i < k ^ h → xs.getD (left + i) emptyHash = ys.getD (left + i) emptyHash := by
+  intro h
+  induction h with
+  | zero =>
+    intro left heq i hi
+    simp only [pow_zero, Nat.lt_one_iff] at hi
+    subst hi
+    simpa only [perfectRoot, Nat.add_zero] using heq
+  | succ n ih =>
+    intro left heq i hi
+    have eL : perfectRoot k xs left (n + 1)
+        = naryMr ((List.range k).map (fun j => perfectRoot k xs (left + j * k ^ n) n)) := by
+      rw [perfectRoot]
+    have eR : perfectRoot k ys left (n + 1)
+        = naryMr ((List.range k).map (fun j => perfectRoot k ys (left + j * k ^ n) n)) := by
+      rw [perfectRoot]
+    rw [eL, eR] at heq
+    have h2 : 2 ≤ ((List.range k).map
+        (fun j => perfectRoot k xs (left + j * k ^ n) n)).length := by simp; omega
+    have hlen : ((List.range k).map (fun j => perfectRoot k xs (left + j * k ^ n) n)).length
+        = ((List.range k).map (fun j => perfectRoot k ys (left + j * k ^ n) n)).length := by simp
+    have hmapeq := naryMr_inj_of_length _ _ hlen h2 heq hH hN
+    -- per-child equality
+    have hchild : ∀ j, j < k →
+        perfectRoot k xs (left + j * k ^ n) n = perfectRoot k ys (left + j * k ^ n) n :=
+      fun j hj => List.map_inj_left.mp hmapeq j (List.mem_range.mpr hj)
+    -- decompose i = j*k^n + r
+    have hkn : 0 < k ^ n := pow_pos (by omega) n
+    have hj : i / k ^ n < k := by
+      have hpow : k ^ (n + 1) = k ^ n * k := pow_succ k n
+      rw [hpow] at hi
+      exact Nat.div_lt_of_lt_mul hi
+    have hr : i % k ^ n < k ^ n := Nat.mod_lt _ hkn
+    have hdecomp : left + i = (left + (i / k ^ n) * k ^ n) + i % k ^ n := by
+      have hdm := Nat.div_add_mod i (k ^ n)
+      have hc : (i / k ^ n) * k ^ n = k ^ n * (i / k ^ n) := Nat.mul_comm _ _
+      omega
+    rw [hdecomp]
+    exact ih (left + (i / k ^ n) * k ^ n) (hchild _ hj) (i % k ^ n) hr
+
+/-- `naryMr` injectivity extended to **all** equal lengths (including the
+    empty and singleton cases the length-≥2 version excludes): the empty/empty
+    and singleton/singleton arms are promotion (no hashing). -/
+private theorem naryMr_inj_eqlen (xs ys : List Digest)
+    (hlen : xs.length = ys.length) (heq : naryMr xs = naryMr ys)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) : xs = ys := by
+  rcases xs with _ | ⟨a, xs'⟩
+  · rcases ys with _ | ⟨c, ys'⟩
+    · rfl
+    · simp only [List.length_nil, List.length_cons] at hlen; omega
+  · rcases ys with _ | ⟨c, ys'⟩
+    · simp only [List.length_nil, List.length_cons] at hlen; omega
+    · rcases xs' with _ | ⟨b, s⟩
+      · rcases ys' with _ | ⟨d, t⟩
+        · have e1 : naryMr [a] = a := rfl
+          have e2 : naryMr [c] = c := rfl
+          rw [e1, e2] at heq; rw [heq]
+        · simp only [List.length_cons, List.length_nil] at hlen; omega
+      · rcases ys' with _ | ⟨d, t⟩
+        · simp only [List.length_cons, List.length_nil] at hlen; omega
+        · exact naryMr_inj_of_length _ _ hlen (by simp) heq hH hN
+
+/-- **`foldFrontierRoot` injectivity over equal-length stacks.** Two stacks of
+    equal length folding to the same spine root coincide — or a hash assumption
+    broke. Strong induction on the (shared) length: the merge schedule is
+    length-determined, so each `mergeTopD` step stays aligned and inverts via
+    `naryMr_inj_of_length`. -/
+private theorem foldFrontierRoot_inj (k : Nat) (hk : 2 ≤ k)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
+    ∀ (n : Nat) (xs ys : List Digest), xs.length = n → ys.length = n →
+      foldFrontierRoot k xs = foldFrontierRoot k ys → xs = ys := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro xs ys hx hy heq
+    by_cases hbase : xs.length ≤ k
+    · have hbx : k < 2 ∨ xs.length ≤ k := Or.inr hbase
+      have hby : k < 2 ∨ ys.length ≤ k := Or.inr (by omega)
+      rw [foldFrontierRoot, dif_pos hbx] at heq
+      conv_rhs at heq => rw [foldFrontierRoot, dif_pos hby]
+      -- heq : naryMr xs = naryMr ys
+      exact naryMr_inj_eqlen xs ys (by omega) heq hH hN
+    · push_neg at hbase
+      have hbx : ¬(k < 2 ∨ xs.length ≤ k) := by push_neg; exact ⟨by omega, by omega⟩
+      have hby : ¬(k < 2 ∨ ys.length ≤ k) := by push_neg; exact ⟨by omega, by omega⟩
+      rw [foldFrontierRoot, dif_neg hbx] at heq
+      conv_rhs at heq => rw [foldFrontierRoot, dif_neg hby]
+      have hmx : (mergeTopD k xs).length = n - k + 1 := by
+        rw [mergeTopD, if_neg (by omega)]; simp only [List.length_append, List.length_take,
+          List.length_cons, List.length_nil]; omega
+      have hmy : (mergeTopD k ys).length = n - k + 1 := by
+        rw [mergeTopD, if_neg (by omega)]; simp only [List.length_append, List.length_take,
+          List.length_cons, List.length_nil]; omega
+      have hmerge := ih (n - k + 1) (by omega) (mergeTopD k xs) (mergeTopD k ys) hmx hmy heq
+      -- mergeTopD xs = mergeTopD ys  ⇒  xs = ys
+      rw [mergeTopD, if_neg (by omega), mergeTopD, if_neg (by omega)] at hmerge
+      have hlenx : (xs.take (xs.length - k)).length = (ys.take (ys.length - k)).length := by
+        simp only [List.length_take]; omega
+      obtain ⟨htake, hsnoc⟩ := List.append_inj hmerge hlenx
+      have hdrop2 : 2 ≤ (xs.drop (xs.length - k)).length := by
+        simp only [List.length_drop]; omega
+      have hdroplen : (xs.drop (xs.length - k)).length = (ys.drop (ys.length - k)).length := by
+        simp only [List.length_drop]; omega
+      have hnary : naryMr (xs.drop (xs.length - k)) = naryMr (ys.drop (ys.length - k)) := by
+        have := List.cons.inj hsnoc; exact this.1
+      have hdrop := naryMr_inj_of_length _ _ hdroplen hdrop2 hnary hH hN
+      calc xs = xs.take (xs.length - k) ++ xs.drop (xs.length - k) := (List.take_append_drop _ _).symm
+        _ = ys.take (ys.length - k) ++ ys.drop (ys.length - k) := by rw [htake, hdrop]
+        _ = ys := List.take_append_drop _ _
+
+/-- **Bag canonical-uniqueness: `karyRoot` injectivity over equal-length cell
+    lists.** Two cell lists of the same length with equal k-ary root coincide —
+    or a hash assumption broke. Equal length is essential: by the
+    flat-null-promotion design, all-null lists of *different* lengths share a root
+    (`naryRoot = nullDigest`), so injectivity can only hold once length is pinned
+    (which the trusted `tree_size` does). The k-ary analog of
+    `naryMr_inj_of_length` lifted from one node to the whole unprefixed peak fold.
+
+    *Strategy:* induct on the frontier structure / `foldFrontierRoot`, applying
+    `naryMr_inj_of_length` at each merge; the equal-length hypothesis keeps the
+    two folds shape-aligned. -/
+theorem karyRoot_inj_of_length (k : Nat) (hk : 2 ≤ k) (xs ys : List Digest)
+    (hlen : xs.length = ys.length) (heq : karyRoot k xs = karyRoot k ys)
+    (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
+    xs = ys := by
+  rw [karyRoot, karyRoot, kary_bridge k hk xs, kary_bridge k hk ys, ← hlen] at heq
+  set F := frontierForSizeT k xs.length with hF
+  have hstacklen : (F.map (fun lh => perfectRoot k xs lh.1 lh.2)).length
+      = (F.map (fun lh => perfectRoot k ys lh.1 lh.2)).length := by simp
+  have hmaps := foldFrontierRoot_inj k hk hH hN _ _ _ rfl hstacklen.symm heq
+  -- per-coordinate root equality
+  have hcoord : ∀ c ∈ F, perfectRoot k xs c.1 c.2 = perfectRoot k ys c.1 c.2 :=
+    fun c hc => List.map_inj_left.mp hmaps c hc
+  -- index-wise equality via tiling
+  have hcover := Tiles_covers k F 0 xs.length (frontier_tiles k xs.length hk)
+  have hpt : ∀ i, i < xs.length → xs.getD i emptyHash = ys.getD i emptyHash := by
+    intro i hi
+    obtain ⟨c, hc, h1, h2⟩ := hcover i (by omega) hi
+    have hpr := perfectRoot_inj k hk hH hN xs ys c.2 c.1 (hcoord c hc) (i - c.1) (by omega)
+    rwa [show c.1 + (i - c.1) = i from by omega] at hpr
+  apply List.ext_getElem hlen
+  intro i h1 h2
+  have hp := hpt i h1
+  simp only [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem h1,
+    List.getElem?_eq_getElem h2, Option.getD_some] at hp
+  exact hp
+
+/-! ## Frontier block-height monotonicity
+
+The greedy k-ary decomposition only ever merges a fixed leaf's perfect subtree
+**upward** as the log grows: the height of the mountain containing `index` is
+monotone non-decreasing in the tree size. This is the structural invariant behind
+durable witnesses (`EMLProof.Durability`) and the consistency layer's
+`new_height ≥ boundary_height` guard — proven here once, generally, via the
+base-`k` digit recursion `frontier_divstep`. -/
+
+/-- `Covers k index n h`: leaf `index` sits in a height-`h` mountain of the
+    size-`n` frontier. The membership-and-span relation `findFrontier`/the
+    inclusion skeleton pin a proof against. -/
+def Covers (k index n h : Nat) : Prop :=
+  ∃ l, (l, h) ∈ frontierForSizeT k n ∧ l ≤ index ∧ index < l + k ^ h
+
+/-- A scaled mountain is in the larger frontier: `(l, h) ∈ frontier a` lifts to
+    `(l·k, h+1) ∈ frontier (a·k + b)` for `b < k` (the `frontier_divstep`
+    scaled prefix). -/
+private theorem mem_scaled_of_mem (k : Nat) (hk : 2 ≤ k) (a b l h : Nat) (hb : b < k)
+    (hmem : (l, h) ∈ frontierForSizeT k a) :
+    (l * k, h + 1) ∈ frontierForSizeT k (a * k + b) := by
+  rw [frontier_divstep k hk a b hb]
+  exact List.mem_append_left _ (List.mem_map.mpr ⟨(l, h), hmem, rfl⟩)
+
+/-- **Covers lifts under base-`k` scaling.** If `index / k`'s mountain at size
+    `a` has height `h₀`, then `index`'s mountain at size `a·k + b` (`b < k`) has
+    height `h₀ + 1` — the scaled-prefix half of the digit recursion. -/
+private theorem covers_scale (k : Nat) (hk : 2 ≤ k) (a b index h₀ : Nat) (hb : b < k)
+    (hinner : Covers k (index / k) a h₀) : Covers k index (a * k + b) (h₀ + 1) := by
+  obtain ⟨l, hmem, hsl, hslt⟩ := hinner
+  refine ⟨l * k, mem_scaled_of_mem k hk a b l h₀ hb hmem, ?_, ?_⟩
+  · -- l ≤ index/k ⟹ l*k ≤ index
+    calc l * k ≤ index / k * k := Nat.mul_le_mul_right k hsl
+      _ ≤ index := Nat.div_mul_le_self index k
+  · -- index < l*k + k^(h₀+1) = (l + k^h₀)*k
+    have hk0 : 0 < k := by omega
+    have hub : index / k < l + k ^ h₀ := hslt
+    have hdm : index / k * k + index % k = index := by
+      have h := Nat.div_add_mod index k; rw [Nat.mul_comm] at h; omega
+    have hmodlt : index % k < k := Nat.mod_lt index hk0
+    have hstep : index < (index / k + 1) * k := by
+      have : (index / k + 1) * k = index / k * k + k := by ring
+      rw [this]; omega
+    have hle : (index / k + 1) * k ≤ (l + k ^ h₀) * k := Nat.mul_le_mul_right k (by omega)
+    have : index < (l + k ^ h₀) * k := Nat.lt_of_lt_of_le hstep hle
+    calc index < (l + k ^ h₀) * k := this
+      _ = l * k + k ^ (h₀ + 1) := by rw [Nat.add_mul, pow_succ]
+
+/-- Every tile's left coordinate is at least the decomposition's start. -/
+private theorem Tiles_left_ge' (k : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat), Tiles k start coords stop →
+      ∀ lh ∈ coords, start ≤ lh.1 := by
+  intro coords
+  induction coords with
+  | nil => intro start stop _ lh hmem; simp only [List.not_mem_nil] at hmem
+  | cons p rest ih =>
+    intro start stop htiles lh hmem
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    rw [List.mem_cons] at hmem
+    rcases hmem with rfl | hmem'
+    · exact le_of_eq hpl.symm
+    · have := ih (start + k ^ ph) stop htrest lh hmem'; omega
+
+/-- **Tiles are disjoint.** In a `Tiles` decomposition, two member spans both
+    containing `index` coincide — consecutive disjoint spans cannot both cover a
+    point. Hence a leaf's mountain (height included) is unique per size. -/
+private theorem Tiles_cover_unique (k index₀ : Nat) :
+    ∀ (coords : List (Nat × Nat)) (start stop : Nat), Tiles k start coords stop →
+      ∀ la ha lb hb, (la, ha) ∈ coords → la ≤ index₀ → index₀ < la + k ^ ha →
+        (lb, hb) ∈ coords → lb ≤ index₀ → index₀ < lb + k ^ hb →
+        (la, ha) = (lb, hb) := by
+  intro coords
+  induction coords with
+  | nil => intro start stop _ la ha lb hb hma; simp only [List.not_mem_nil] at hma
+  | cons p rest ih =>
+    intro start stop htiles la ha lb hb hma hsla hslta hmb hslb hsltb
+    obtain ⟨pl, ph⟩ := p
+    obtain ⟨hpl, htrest⟩ := htiles
+    -- hpl : pl = start
+    have hbound : ∀ l h, (l, h) ∈ rest → pl + k ^ ph ≤ l := by
+      intro l h hm
+      rw [hpl]
+      exact Tiles_left_ge' k rest (start + k ^ ph) stop htrest (l, h) hm
+    rw [List.mem_cons] at hma hmb
+    rcases hma with hpa | hra <;> rcases hmb with hpb | hrb
+    · rw [hpa, hpb]
+    · exfalso
+      injection hpa with hla hha; subst hla; subst hha
+      have := hbound lb hb hrb; omega
+    · exfalso
+      injection hpb with hlb hhb; subst hlb; subst hhb
+      have := hbound la ha hra; omega
+    · exact ih (start + k ^ ph) stop htrest la ha lb hb hra hsla hslta hrb hslb hsltb
+
+/-- **Frontier block-height monotonicity.** For a fixed `index`, growing the tree
+    never lowers the height of its containing mountain: `Covers k index n h` and
+    `n ≤ n'` (`index < n`) give a mountain at `n'` of height `≥ h`. Proven by
+    strong induction on `n` via the base-`k` digit recursion: `index` either falls
+    in the scaled prefix (descend to `index / k` at `n / k ≤ n' / k`, +1 both
+    sides) or is a fresh height-0 leaf (trivially `≤` anything). -/
+theorem covers_mono (k : Nat) (hk : 2 ≤ k) :
+    ∀ n index h n', Covers k index n h → index < n → n ≤ n' →
+      ∃ h', Covers k index n' h' ∧ h ≤ h' := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro index h n' hcov hidx hnn'
+    have hk0 : 0 < k := by omega
+    -- the size-n' mountain of index exists (index < n ≤ n', frontier tiles [0,n'))
+    obtain ⟨fIdx', l', h', hff'⟩ := findFrontier_cover k index (frontierForSizeT k n') 0 n' 0
+      (frontier_tiles k n' hk) (Nat.zero_le _) (by omega)
+    obtain ⟨hget', hsl', hslt'⟩ := findFrontier_spec k index (frontierForSizeT k n') 0 fIdx' l' h' hff'
+    have hmem' : (l', h') ∈ frontierForSizeT k n' := List.mem_of_getElem? (by simpa using hget')
+    have hcov' : Covers k index n' h' := ⟨l', hmem', hsl', hslt'⟩
+    -- it suffices to show h ≤ h'
+    refine ⟨h', hcov', ?_⟩
+    -- decompose by whether h = 0 (then trivial) else descend
+    rcases Nat.eq_zero_or_pos h with hh0 | hhpos
+    · omega
+    -- h ≥ 1: index's mountain at n is scaled, so index < (n/k)*k and the inner
+    -- mountain of index/k at n/k has height h-1. Recurse.
+    obtain ⟨l, hmem, hsl, hslt⟩ := hcov
+    -- n = (n/k)*k + n%k
+    set a := n / k with ha
+    set b := n % k with hb
+    have hnab : n = a * k + b := by
+      rw [ha, hb]; have h := Nat.div_add_mod n k; rw [Nat.mul_comm] at h; omega
+    have hblt : b < k := Nat.mod_lt n hk0
+    -- the size-n frontier splits; index's height-h (≥1) mountain must be in the scaled part
+    have hsplit := frontier_divstep k hk a b hblt
+    rw [← hnab] at hsplit
+    rw [hsplit, List.mem_append] at hmem
+    rcases hmem with hsc | hleaf
+    · -- scaled: (l,h) = (l₀*k, h₀+1) with (l₀,h₀) ∈ frontier a
+      rw [List.mem_map] at hsc
+      obtain ⟨⟨l₀, h₀⟩, hmem₀, heq⟩ := hsc
+      simp only [Prod.mk.injEq] at heq
+      obtain ⟨hl, hh⟩ := heq
+      -- h = h₀ + 1, l = l₀ * k
+      -- l₀ + k^h₀ ≤ a: the inner block fits in frontier a
+      have hinnerfit : l₀ + k ^ h₀ ≤ a :=
+        Tiles_entry_bound k (frontierForSizeT k a) 0 a (frontier_tiles k a hk) (l₀, h₀) hmem₀
+      have hil₀ : l₀ ≤ index / k := by
+        rw [← hl] at hsl; exact (Nat.le_div_iff_mul_le hk0).mpr hsl
+      have hiu₀ : index / k < l₀ + k ^ h₀ := by
+        rw [← hl, ← hh] at hslt
+        have hexp : l₀ * k + k ^ (h₀ + 1) = k * (l₀ + k ^ h₀) := by rw [pow_succ]; ring
+        rw [hexp] at hslt
+        exact Nat.div_lt_of_lt_mul hslt
+      have hcovInner : Covers k (index / k) a h₀ := ⟨l₀, hmem₀, hil₀, hiu₀⟩
+      have haidx : index / k < a := lt_of_lt_of_le hiu₀ hinnerfit
+
+      -- a ≤ n' / k? need n/k ≤ n'/k from n ≤ n'
+      have han' : a ≤ n' / k := by rw [ha]; exact Nat.div_le_div_right hnn'
+      -- recurse at a < n
+      have haltn : a < n := by rw [ha]; exact Nat.div_lt_self (by omega) (by omega)
+      obtain ⟨h₀', hcov₀', hle₀⟩ := ih a haltn (index / k) h₀ (n' / k) hcovInner haidx han'
+      -- lift back: Covers k index n' (h₀'+1) and h = h₀+1 ≤ h₀'+1 ≤ h'
+      have hcovLift : Covers k index ((n' / k) * k + n' % k) (h₀' + 1) :=
+        covers_scale k hk (n' / k) (n' % k) index h₀' (Nat.mod_lt n' hk0) hcov₀'
+      have hn'eq : (n' / k) * k + n' % k = n' := by
+        have h := Nat.div_add_mod n' k; rw [Nat.mul_comm] at h; omega
+      rw [hn'eq] at hcovLift
+      -- two coverings of index at n' ⟹ same height (tiles disjoint) — or just compare
+      -- h = h₀+1 ≤ h₀'+1; and the n'-covering height is unique, so h' ≥ h via hcovLift
+      -- the size-n' mountain height of index is unique (tiles disjoint)
+      obtain ⟨la, hma, hsla, hslta⟩ := hcov'
+      obtain ⟨lb, hmb, hslb, hsltb⟩ := hcovLift
+      have huniq := Tiles_cover_unique k index (frontierForSizeT k n') 0 n'
+        (frontier_tiles k n' hk) la h' lb (h₀' + 1) hma hsla hslta hmb hslb hsltb
+      injection huniq with _ hheq
+      omega
+    · -- leaf: (l,h) is a height-0 leaf, so h = 0, contradicting hhpos
+      rw [List.mem_map] at hleaf
+      obtain ⟨i, _, heq⟩ := hleaf
+      simp only [Prod.mk.injEq] at heq
+      omega
+
+/-- **A leaf's mountain height is unique per size.** Two `Covers` witnesses for
+    the same `index` and size `n` have equal height — the frontier tiles are
+    disjoint. Lets a caller pin the height `covers_mono` produces to the one a
+    concrete `findFrontier`/membership fact names. -/
+theorem covers_height_unique (k index n h₁ h₂ : Nat) (hk : 2 ≤ k)
+    (hc₁ : Covers k index n h₁) (hc₂ : Covers k index n h₂) : h₁ = h₂ := by
+  obtain ⟨l₁, hm₁, hsl₁, hslt₁⟩ := hc₁
+  obtain ⟨l₂, hm₂, hsl₂, hslt₂⟩ := hc₂
+  have heq := Tiles_cover_unique k index (frontierForSizeT k n) 0 n (frontier_tiles k n hk)
+    l₁ h₁ l₂ h₂ hm₁ hsl₁ hslt₁ hm₂ hsl₂ hslt₂
+  exact congrArg Prod.snd heq
+
+/-- **Frontier block height is monotone in size** (the `Covers`-level statement
+    specialized to named heights). For a fixed `index < n ≤ n'`, the mountain
+    height at `n` is `≤` the mountain height at `n'`. Durability's unconditional
+    growth premise. -/
+theorem frontier_height_mono (k index n h n' h' : Nat) (hk : 2 ≤ k)
+    (hcn : Covers k index n h) (hidx : index < n) (hnn' : n ≤ n')
+    (hcn' : Covers k index n' h') : h ≤ h' := by
+  obtain ⟨h'', hc'', hle⟩ := covers_mono k hk n index h n' hcn hidx hnn'
+  have : h'' = h' := covers_height_unique k index n' h'' h' hk hc'' hcn'
+  omega
+
 end NEML
