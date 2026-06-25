@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use eml::{AlgorithmMetas, Storage};
+use epoch::{AlgorithmMetas, Storage};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
 
 /// Reserved 9-byte key for log metadata in the `neml_metadata` keyspace.

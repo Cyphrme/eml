@@ -3,8 +3,8 @@ resolver = "2"
 members = [
     "spine",
     "epoch",
+    "cml",
     "pmt",
-    "eml",
     "cyphr-log",
     "difftest",
     "emt",

@@ -966,10 +966,9 @@ fn test_deep_subtree_inclusion_proofs() {
         let subtree = Subtree::Node(vec![branch_left, Subtree::Leaf(c_data.clone())]);
 
         let storage = MemoryStorage::new();
-        let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 3 })
-                .await
-                .unwrap();
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 3 })
+            .await
+            .unwrap();
         log.append_subtree(&subtree).await.unwrap();
         log.append_subtree(&Subtree::Node(vec![Subtree::Leaf(b"other_leaf".to_vec())]))
             .await
@@ -1677,7 +1676,13 @@ fn test_coupling_proof_verify_validation() {
 
     // Correct combined root: the canonicalization fold over the member roots
     // (trivial timeline ⇒ no coverage child, just nary_mr over the two roots).
-    let combined_root = cyphr_log::combined_root(&hasher, &proof.active_roots, &proof.alg_epochs, tree_size, 2);
+    let combined_root = cyphr_log::combined_root(
+        &hasher,
+        &proof.active_roots,
+        &proof.alg_epochs,
+        tree_size,
+        2,
+    );
 
     let config = cyphr_log::VerifierConfig::default();
 
@@ -1834,7 +1839,15 @@ fn test_coupling_proof_verify_validation() {
     );
     assert!(
         inconsistent_proof
-            .verify(&hasher, 0, tree_size, 2, &inconsistent_root, &[0, 1], config)
+            .verify(
+                &hasher,
+                0,
+                tree_size,
+                2,
+                &inconsistent_root,
+                &[0, 1],
+                config
+            )
             .is_none()
     );
 
@@ -1886,8 +1899,13 @@ fn test_coupling_proof_verify_validation() {
         active_roots: vec![(0, fw_root_0.clone()), (1, fw_root_1.clone())],
         alg_epochs: epochs.clone(),
     };
-    let fw_combined =
-        cyphr_log::combined_root(&hasher, &fw_proof.active_roots, &fw_proof.alg_epochs, tree_size, 2);
+    let fw_combined = cyphr_log::combined_root(
+        &hasher,
+        &fw_proof.active_roots,
+        &fw_proof.alg_epochs,
+        tree_size,
+        2,
+    );
     let target_fw = fw_proof.verify(&hasher, 0, tree_size, 2, &fw_combined, &[0, 1], config);
     assert_eq!(target_fw.unwrap(), fw_root_0);
 }
@@ -2741,9 +2759,7 @@ fn test_storage_len_error_masking_overwrite() {
 fn test_boundary_sizes_and_high_arities() {
     smol::block_on(async {
         for &k in &[3u64, 5, 128, 256] {
-            let config = TreeConfig {
-                arity: k,
-            };
+            let config = TreeConfig { arity: k };
 
             // Boundary sizes around K^1 and K^2
             let mut sizes = vec![k - 1, k, k + 1];
@@ -2941,10 +2957,9 @@ fn test_proof_malleability_position_spoofing() {
 fn test_inclusion_truncated_skeleton_rejected() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
-                .await
-                .unwrap();
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
+            .await
+            .unwrap();
         for d in [b"a".as_ref(), b"b", b"c", b"d"] {
             log.append_leaf(d).await.unwrap();
         }
@@ -2978,10 +2993,9 @@ fn test_inclusion_truncated_skeleton_rejected() {
 fn test_partial_rightmost_node_sibling_count() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 3 })
-                .await
-                .unwrap();
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 3 })
+            .await
+            .unwrap();
         for d in [b"a".as_ref(), b"b", b"c", b"d"] {
             log.append_leaf(d).await.unwrap();
         }
@@ -3028,10 +3042,9 @@ fn test_partial_rightmost_node_sibling_count() {
 fn test_skeleton_position_spoof_rejected() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
-                .await
-                .unwrap();
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
+            .await
+            .unwrap();
         for d in [b"a".as_ref(), b"b", b"c", b"d"] {
             log.append_leaf(d).await.unwrap();
         }
@@ -3064,10 +3077,9 @@ fn test_skeleton_position_spoof_rejected() {
 fn test_canonical_encoding_promotion_chain() {
     smol::block_on(async {
         let storage = MemoryStorage::new();
-        let mut log =
-            NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
-                .await
-                .unwrap();
+        let mut log = NaryMerkleLog::new(storage, Box::new(Sha256Hasher), TreeConfig { arity: 2 })
+            .await
+            .unwrap();
         // "x" sits under a two-level unary chain that contributes no proof steps.
         let subtree = Subtree::Node(vec![
             Subtree::Node(vec![Subtree::Node(vec![Subtree::Leaf(b"x".to_vec())])]),
@@ -3410,7 +3422,10 @@ fn test_frontier_freshness() {
         // No null position at size 1 (position 0 covered by [0, 1)), so the
         // deactivated log commits no null run: its CR is the SAME promoted root.
         // The tip-liveness distinction is gone by design.
-        assert_eq!(cr_dead, raw_dead, "tip-deactivated sole-alg CR stays promoted");
+        assert_eq!(
+            cr_dead, raw_dead,
+            "tip-deactivated sole-alg CR stays promoted"
+        );
         assert_eq!(cr_live, cr_dead, "no null gap ⇒ binding roots coincide");
 
         // Two-algorithm variant: identical leaves, second alg deactivated in one.
@@ -3443,7 +3458,10 @@ fn test_frontier_freshness() {
         // has a null run: both binding roots commit the same null-free structure
         // and coincide. (A *future* append would create alg 1's null gap and
         // diverge the roots — that is where the distinction lives now.)
-        assert_eq!(cr_a, cr_b, "tip-deactivation leaves no null run ⇒ CRs coincide");
+        assert_eq!(
+            cr_a, cr_b,
+            "tip-deactivation leaves no null run ⇒ CRs coincide"
+        );
     });
 }
 

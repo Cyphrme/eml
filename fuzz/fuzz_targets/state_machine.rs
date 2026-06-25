@@ -5,7 +5,7 @@ use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use eml::{AlgorithmMetas, Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use cyphr_log::{AlgorithmMetas, Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
 
 // ---------------------------------------------------------------------------
 // Faulty storage wrapper
@@ -328,7 +328,7 @@ fuzz_target!(|input: FuzzInput| {
                 }
             };
 
-            if let Err(eml::Error::Storage(_)) = res {
+            if let Err(cyphr_log::Error::Storage(_)) = res {
                 // Write failure! Verify that the log is consistent.
                 inject_faults.store(false, Ordering::SeqCst);
                 let len = log.size();

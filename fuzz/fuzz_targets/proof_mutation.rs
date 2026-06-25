@@ -12,7 +12,7 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use eml::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig, verify_consistency, verify_inclusion};
+use cyphr_log::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig, verify_consistency, verify_inclusion};
 
 #[derive(Debug)]
 struct FuzzHasher;

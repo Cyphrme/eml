@@ -4,7 +4,7 @@
 //! legitimately in the sealed commitment?" — rooted in the commitment's
 //! **trusted binding roots**. It is the aggregate peer of inclusion /
 //! consistency / leaf / binding proofs, and its **base case is the PMT leaf
-//! proof** ([`pmt::LeafProof`]).
+//! proof** ([`spine::LeafProof`]).
 //!
 //! # The leaf-proof sequence ⇄ snapshot duality
 //!
@@ -31,21 +31,22 @@
 //! [`TrustedBindingRoot`] values — the proof never establishes their origin. A
 //! consumer establishes that trust **out of band**: an optional attestation over
 //! the sealed snapshot rides on the snapshot's **opaque metadata channel**
-//! ([`pmt::Sealed::meta`]), which this library never reads, validates, or
+//! ([`crate::Sealed::meta`]), which this library never reads, validates, or
 //! interprets. The library has no notion of who attested the head, only that the
 //! caller presents heads it has chosen to trust — exactly the binding-proof
-//! contract ([`pmt::BindingProof`]). Supplying an unauthenticated `BR_i` makes
+//! contract ([`crate::BindingProof`]). Supplying an unauthenticated `BR_i` makes
 //! the guarantee vacuous, just as a forged `root` does for
-//! [`pmt::LeafProof::verify`].
+//! [`spine::LeafProof::verify`].
 //!
 //! [`verify`]: SnapshotProof::verify
 
-use pmt::{
-    Hasher, LeafProof, Sealed, TrustedBindingRoot, combined_root, committed_active_algs,
-    validate_committed_epochs,
-};
+use spine::{Hasher, LeafProof};
 
-/// One claimed leaf in a snapshot proof: a [`pmt::LeafProof`] paired with the
+use crate::Sealed;
+use crate::binding_proof::TrustedBindingRoot;
+use crate::root::{combined_root, committed_active_algs, validate_committed_epochs};
+
+/// One claimed leaf in a snapshot proof: a [`spine::LeafProof`] paired with the
 /// algorithm whose member root it verifies against.
 ///
 /// The leaf proof's own trusted positional parameters
@@ -73,8 +74,8 @@ impl ClaimedLeaf {
 ///
 /// It carries the commitment's frozen shared structure — the member roots `MR_i`
 /// and the committed epoch timeline they were bound under, the same material a
-/// [`pmt::BindingProof`] commits to — together with the sequence of claimed
-/// leaves whose base-case [`pmt::LeafProof`]s verify against those member roots.
+/// [`crate::BindingProof`] commits to — together with the sequence of claimed
+/// leaves whose base-case [`spine::LeafProof`]s verify against those member roots.
 /// The trusted binding roots `BR_i` are **not** stored here; they are the
 /// verifier's trusted inputs, supplied to [`Self::verify`], because their origin
 /// is established out of band (see the module trust contract).
@@ -136,7 +137,7 @@ impl SnapshotProof {
     }
 
     /// Recompute the head an algorithm's member roots bind to: the
-    /// canonicalization fold ([`pmt::combined_root`]) over the member roots as
+    /// canonicalization fold ([`crate::root::combined_root`]) over the member roots as
     /// children, plus a coverage child committing all algorithms' null runs iff
     /// the activation is non-trivial, under that algorithm's hash — exactly the
     /// head the log seals under
@@ -231,7 +232,7 @@ impl SnapshotProof {
         // is recomputed once per algorithm and bound to all member roots at once.
         for t in trusted {
             let head = self.recompute_head(t.hasher);
-            if !pmt::constant_time_eq(&head, t.root) {
+            if !spine::constant_time_eq(&head, t.root) {
                 return false;
             }
         }
@@ -258,8 +259,8 @@ impl SnapshotProof {
 
 #[cfg(test)]
 mod tests {
-    use pmt::Hasher;
     use sha2::{Digest, Sha256};
+    use spine::Hasher;
 
     use super::*;
     use crate::storage::MemoryStorage;
@@ -411,7 +412,7 @@ mod tests {
             // An arbitrary attestation payload rides the opaque channel; the
             // library never interprets it, so verification ignores it entirely.
             let sealed = log
-                .seal_with_meta(pmt::Meta::new(vec![0xAB; 64]))
+                .seal_with_meta(spine::Meta::new(vec![0xAB; 64]))
                 .await
                 .unwrap();
 
@@ -425,7 +426,7 @@ mod tests {
             assert!(proof.verify(&trusted, &hashers));
             // The proof carries nothing derived from the metadata payload.
             assert_eq!(
-                sealed.meta().map(pmt::Meta::as_bytes),
+                sealed.meta().map(spine::Meta::as_bytes),
                 Some([0xAB; 64].as_slice())
             );
         });

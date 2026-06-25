@@ -241,6 +241,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cml"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "smol",
+ "spine",
+]
+
+[[package]]
 name = "colored"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -323,7 +332,7 @@ dependencies = [
 name = "ct-build"
 version = "0.1.0"
 dependencies = [
- "eml",
+ "cyphr-log",
  "sha2",
  "smol",
 ]
@@ -335,7 +344,7 @@ dependencies = [
  "big_o",
  "bigoish",
  "cpu-time",
- "eml",
+ "epoch",
  "proptest",
  "sha2",
  "smol",
@@ -395,24 +404,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "eml"
-version = "0.1.0"
-dependencies = [
- "big_o",
- "bigoish",
- "cpu-time",
- "pmt",
- "proptest",
- "sha2",
- "smol",
-]
-
-[[package]]
 name = "eml-examples"
 version = "0.0.0"
 dependencies = [
  "cyphr-log",
- "eml",
  "emt",
  "pmt",
  "sha2",
@@ -444,7 +439,9 @@ dependencies = [
 name = "epoch"
 version = "0.1.0"
 dependencies = [
+ "cml",
  "sha2",
+ "smol",
  "spine",
 ]
 
@@ -800,7 +797,7 @@ version = "0.1.0-baseline"
 name = "neml-storage-fjall"
 version = "0.1.0"
 dependencies = [
- "eml",
+ "epoch",
  "fjall",
  "proptest",
  "sha2",

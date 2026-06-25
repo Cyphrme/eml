@@ -114,6 +114,33 @@ pub trait Storage: Send + Sync {
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 }
 
+/// A borrowed [`Storage`] presented as the CML engine's [`cml::NodeReader`] read
+/// substrate, so the combinator can drive N single-algorithm `cml` views over
+/// its **one** shared store (D14). The wrapper forwards the two read methods the
+/// engine needs; the write surface stays the combinator's concern.
+///
+/// A local newtype is required because [`cml::NodeReader`] and a generic backend
+/// `S` are both foreign to this crate's orphan scope; wrapping the borrow gives
+/// the impl a local owner.
+pub(crate) struct StorageReader<'a, S: Storage>(pub(crate) &'a S);
+
+impl<S: Storage> cml::NodeReader for StorageReader<'_, S> {
+    type Error = S::Error;
+
+    async fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        self.0.get_node(alg_id, left, height).await
+    }
+
+    async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
+        self.0.get_leaf(index).await
+    }
+}
+
 // ============================================================================
 // In-memory implementation
 // ============================================================================

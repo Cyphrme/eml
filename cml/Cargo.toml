@@ -1,0 +1,17 @@
+[package]
+name          = "cml"
+version       = "0.1.0"
+description   = "CML — the single-algorithm canonical append log over the Merkle Spine: frontier carry, root folds, the append-only consistency proof, inclusion/leaf proof generation, and the structural snapshot facet. No epochs, no multi-algorithm."
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+
+[dependencies]
+# CML is the single-algorithm engine over the structural spine; it depends on it
+# alone — no epoch symbol crosses this boundary.
+spine = { path = "../spine" }
+
+[dev-dependencies]
+sha2 = "0.10"
+smol = "2.0"
