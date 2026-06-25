@@ -95,6 +95,43 @@ fn seal_root_equals_native_append_root() {
     assert_eq!(sealed_root.as_slice(), log_root.as_slice());
 }
 
+// E1b — the same seal-root == log-root invariant at HIGHER ARITY, swept across
+// sizes including the k=3 / 4-peak frontier (n=40 → peaks 27, 9, 3, 1) that the
+// old right-recursive bag would have diverged on. Proves the invariant is a
+// property of the (root-preserving) rightmost-k grouping at every arity, not a
+// k=2 accident.
+#[test]
+fn seal_root_equals_native_append_root_kary() {
+    let payloads: Vec<Vec<u8>> = (0..40u64).map(|i| format!("p{i}").into_bytes()).collect();
+    let k = 3u64;
+
+    let mut t = polydigest::EpochTree::new(polydigest::CmtConfig { arity: k }).unwrap();
+    t.register_algorithm(0, Box::new(H)).unwrap();
+    for (i, p) in payloads.iter().enumerate() {
+        t.set(i as u64, p.clone(), Vec::new()).unwrap();
+    }
+    let sealed = t.seal().unwrap();
+
+    let log_root = smol::block_on(async {
+        let mut log = eml::NaryMerkleLog::new(
+            eml::MemoryStorage::new(),
+            Box::new(H),
+            eml::TreeConfig { arity: k },
+        )
+        .await
+        .unwrap();
+        for p in &payloads {
+            log.append_leaf(p).await.unwrap();
+        }
+        log.root_for(0).unwrap()
+    });
+
+    let sealed_root = sealed
+        .member_root(0, &H, polydigest::rebalanced_bag)
+        .expect("algorithm 0 present");
+    assert_eq!(sealed_root.as_slice(), log_root.as_slice());
+}
+
 // ---------------------------------------------------------------------------
 // E2 — eml root embeds in an EMT; composition is two independent
 //       inclusion verifications, no new proof type
