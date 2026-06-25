@@ -8,28 +8,24 @@
 //! module owns what the spine deliberately does not: how those peaks **bag** into
 //! one root, and what an inclusion proof points at.
 //!
-//! # Backward bagging (durable witnesses)
+//! # The peak bag — root-preserving
 //!
-//! The peaks are bagged **right-to-left** (DESIGN §2.1): the rightmost (youngest)
-//! peaks are folded first into a running accumulator, and the leftmost (oldest)
-//! peaks sit outermost. Concretely the bag is right-recursive over the peak list,
-//! `k` at a time, with the bagged remainder as the last child:
+//! The peaks are bagged with the **established fold**: repeatedly group the
+//! rightmost `k` into one [`nary_mr`](spine::nary_mr) node, exactly the shape the
+//! structural `fold_frontier` and `cmt::shape::build` produce. So [`bag_peaks`]
+//! is byte-identical to that fold at every arity, and the MMR commitment **root
+//! is unchanged** from the pre-MMR log — durability is bought entirely in the
+//! *proof*, not by re-rooting the commitment.
 //!
-//! ```text
-//! bag(P[0..m]) = P[0]                                    if m == 1   (promotion)
-//!              = H(P[0], …, P[m-1])                      if m <= k
-//!              = H(P[0], …, P[k-2], bag(P[k-1..m]))      if m  > k
-//! ```
-//!
-//! Each `H` is the spine's [`nary_mr`](spine::nary_mr) — collapse + promotion, no
-//! domain separation, **no size prefix**. This deliberately diverges from the
-//! OpenTimestamps / Grin convention `H(size ‖ peak ‖ acc)`: those bag a sole
-//! commitment in which `size` is otherwise unbound, so the size prefix guards
-//! against cross-size confusion. Our model binds `tree_size` as a trusted verifier
-//! parameter and closes malleability with the proven canonical-encoding
-//! uniqueness over `nary_mr` (the spine's `inclusion_proof_unique`); the prefix's
-//! job is already discharged, and keeping the bag a plain `nary_mr` fold is what
-//! lets the Lean corpus transfer the existing `nary_mr` uniqueness to the bag.
+//! Each `H` is plain `nary_mr` (collapse + promotion, no domain separation, **no
+//! size prefix**) — deliberately unlike the OpenTimestamps/Grin `H(size ‖ peak ‖
+//! acc)` convention: those bag a sole commitment where `size` is otherwise
+//! unbound, so the prefix guards cross-size confusion. Our model binds
+//! `tree_size` as a trusted verifier parameter and closes malleability with the
+//! proven canonical-encoding uniqueness over `nary_mr` (`inclusion_proof_unique`),
+//! so the prefix's job is already discharged. Keeping the bag the established
+//! `nary_mr` fold is also what makes the root preservation hold and lets the Lean
+//! corpus transfer verbatim.
 //!
 //! # Durable witnesses
 //!
@@ -38,7 +34,10 @@
 //! the durable prefix) followed by the `bagPath` from the peak to the root. As
 //! the log grows the `peakPath` never changes; only the `bagPath` suffix is
 //! re-derived against the current peak set. That is the durable-witness property
-//! RFC-6962's rebalancing tree structurally cannot have.
+//! RFC-6962's rebalancing tree structurally cannot have — and it is achieved
+//! *without* changing the root: the old construction climbed the leaf through the
+//! rebalanced tree's ephemeral interior nodes, while this stops at the permanent
+//! peak and re-bags, over the very same peak fold.
 //!
 //! # One shape, two readers
 //!
@@ -66,37 +65,35 @@ pub enum BagNode {
     Bag(Vec<BagNode>),
 }
 
-/// Build the backward-bag shape over `peak_count` peaks at arity `k`.
+/// Build the peak-bag shape over `peak_count` peaks at arity `k`. Returns `None`
+/// for an empty peak set (a non-empty log always has at least one peak).
 ///
-/// Right-recursive, `k` at a time, with the bagged remainder as the last child —
-/// so the oldest (leftmost) peaks sit outermost and an append only deepens the
-/// innermost bag (the durable-witness property). Returns `None` for an empty
-/// peak set (a non-empty log always has at least one peak).
+/// The peaks are grouped by repeatedly folding the **rightmost `k`** into one bag
+/// node — the same shape the structural `fold_frontier`/`cmt::shape::build`
+/// produce — so `bag_peaks` over this shape is byte-identical to that fold at
+/// every arity, and the MMR commitment **root is unchanged** from the pre-MMR
+/// log. Durability does not come from the bag's associativity; it comes from
+/// what the *proof* points at (prove-to-peak), so the bag stays the established
+/// fold and only the inclusion path is restructured.
 #[must_use]
 pub fn bag_shape(peak_count: usize, k: usize) -> Option<BagNode> {
     if peak_count == 0 {
         return None;
     }
-    Some(bag_shape_from(0, peak_count, k))
-}
-
-/// Build the bag over the peaks `[start, peak_count)` — the recursive worker.
-///
-/// `start` is the index of the oldest peak still to bag. With `rem` peaks left:
-/// a single peak promotes to itself; `rem <= k` peaks fold into one node; more
-/// than `k` puts the oldest `k-1` peaks as direct children and the bag of the
-/// rest as the `k`-th child.
-fn bag_shape_from(start: usize, peak_count: usize, k: usize) -> BagNode {
-    let rem = peak_count - start;
-    if rem == 1 {
-        return BagNode::Peak(start);
+    // Mirror `fold_frontier`: start with every peak, repeatedly replace the
+    // rightmost `k` with one bag node over them, until `2..=k` remain (then one
+    // final bag node) or a single node remains (promotion).
+    let mut frontier: Vec<BagNode> = (0..peak_count).map(BagNode::Peak).collect();
+    while frontier.len() > k {
+        let split = frontier.len() - k;
+        let group = frontier.split_off(split);
+        frontier.push(BagNode::Bag(group));
     }
-    if rem <= k {
-        return BagNode::Bag((start..peak_count).map(BagNode::Peak).collect());
+    if frontier.len() == 1 {
+        Some(frontier.pop().expect("len checked == 1"))
+    } else {
+        Some(BagNode::Bag(frontier))
     }
-    let mut children: Vec<BagNode> = (start..start + k - 1).map(BagNode::Peak).collect();
-    children.push(bag_shape_from(start + k - 1, peak_count, k));
-    BagNode::Bag(children)
 }
 
 /// Bag a frontier's peaks into the single member root under `hasher`.
@@ -320,8 +317,10 @@ mod tests {
     /// The bag is right-recursive: for m>k the oldest k-1 peaks are direct
     /// children and the rest bag into the last child.
     #[test]
-    fn bag_shape_is_backward_recursive_binary() {
-        // k=2, 4 peaks: H(P0, H(P1, H(P2, P3)))
+    fn bag_shape_groups_rightmost_k_binary() {
+        // k=2, 4 peaks: repeatedly group the rightmost 2 →
+        // H(P0, H(P1, H(P2, P3))). (At k=2 this coincides with a right-recursive
+        // fold, which is why the binary root is unchanged from the pre-MMR log.)
         let shape = bag_shape(4, 2).unwrap();
         let expected = BagNode::Bag(vec![
             BagNode::Peak(0),
@@ -333,7 +332,7 @@ mod tests {
         assert_eq!(shape, expected);
     }
 
-    /// The bag fold equals a hand-rolled backward fold over the peaks.
+    /// The bag fold equals a hand-rolled rightmost-k grouping over the peaks.
     #[test]
     fn bag_peaks_equals_hand_fold_binary() {
         let peaks: Vec<Vec<u8>> = (0u8..4).map(|i| vec![i; 32]).collect();
@@ -348,11 +347,12 @@ mod tests {
     /// the inner bag holds P2,P3,P4 (<= k, one node).
     #[test]
     fn bag_shape_kary() {
-        let shape = bag_shape(5, 3).unwrap();
+        // k=3, 4 peaks — a case where rightmost-k grouping differs from a
+        // right-recursive fold: group the rightmost 3 → H(P0, H(P1, P2, P3)).
+        let shape = bag_shape(4, 3).unwrap();
         let expected = BagNode::Bag(vec![
             BagNode::Peak(0),
-            BagNode::Peak(1),
-            BagNode::Bag(vec![BagNode::Peak(2), BagNode::Peak(3), BagNode::Peak(4)]),
+            BagNode::Bag(vec![BagNode::Peak(1), BagNode::Peak(2), BagNode::Peak(3)]),
         ]);
         assert_eq!(shape, expected);
     }

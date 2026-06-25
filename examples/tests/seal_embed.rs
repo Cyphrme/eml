@@ -49,14 +49,12 @@ impl spine::Hasher for H {
 // kernel topology and the same hash, so the same data maps to the same digest.
 // ---------------------------------------------------------------------------
 
-// INTENTIONAL MMR break, pending nrd confirm — an EMT seal's (rebalanced)
-// member root no longer equals a separately-built EML log's (mountain) root over
-// the same payloads; the log mountain-bags and the tree rebalances. Same dropped
-// cross-structure equality as `seal_emt_then_resume_eml_appends_forward`; the
-// D10 Principal-Tree embedding (opaque-leaf) is unaffected. (Coincides here only
-// because size 3 has <=k peaks, where the two folds agree.)
-#[ignore = "cross-structure EMT-seal vs EML-log root-equality is a dropped invariant under MMR; \
-            provisional, pending nrd confirm"]
+// PRESERVED under MMR: an EMT seal's member root still byte-equals a
+// separately-built EML log's root over the same payloads. The MMR peak-bag is the
+// established rightmost-k grouping (root-preserving at every arity), the same
+// fold the mutable tree uses, so the two constructions still map identical data
+// to an identical digest — the migration changed the inclusion proof, not the
+// root.
 #[test]
 fn seal_root_equals_native_append_root() {
     let payloads: &[&[u8]] = &[b"alpha", b"beta", b"gamma"];
@@ -86,8 +84,9 @@ fn seal_root_equals_native_append_root() {
         .member_root(0, &H, polydigest::rebalanced_bag)
         .expect("algorithm 0 present");
 
-    // For this input the rebalanced (EMT seal) and mountain (log MMR)
-    // topologies coincide, so the member root byte-equals the native log root.
+    // The MMR peak-bag is the established rightmost-k grouping (root-preserving),
+    // the same fold the mutable tree uses, so the member root byte-equals the
+    // native log root.
     assert_eq!(sealed_root.as_slice(), log_root.as_slice());
 }
 
@@ -274,14 +273,12 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
 // the sealed member root — the frontier carries forward losslessly.
 // ---------------------------------------------------------------------------
 
-// INTENTIONAL MMR break, pending nrd confirm — resuming an EML from an EMT's
-// sealed frontier no longer reproduces the EMT member root, since the log
-// mountain-bags and the tree rebalances; the D10 Principal-Tree embedding
-// (CML-root-as-opaque-leaf) is unaffected; same-structure (EML->EML) resume is
-// preserved. (This case coincides only because size 3 has <=k peaks, where the
-// two folds agree; it diverges once a seal has more than k peaks.)
-#[ignore = "cross-structure EMT-seal -> EML-resume root-equality is a dropped invariant under MMR; \
-            provisional, pending nrd confirm"]
+// PRESERVED under MMR: resuming an EML onto an EMT's sealed frontier still
+// reproduces the sealed member root. The MMR peak-bag is the established
+// rightmost-k grouping (root-preserving at every arity) — the same fold the
+// mutable tree uses — so the resumed log's root equals the EMT seal's member
+// root, and the frontier carries forward losslessly. The migration restructured
+// the inclusion proof (prove-to-peak), not the root.
 #[test]
 fn seal_emt_then_resume_eml_appends_forward() {
     smol::block_on(async {
@@ -303,8 +300,8 @@ fn seal_emt_then_resume_eml_appends_forward() {
                 .unwrap();
 
         // The resumed log carries the sealed size and reproduces the member
-        // root: for this input the EMT-origin rebalanced seal and the resumed
-        // log's mountain topology coincide.
+        // root: the MMR peak-bag is the established rightmost-k grouping, the same
+        // fold the EMT seal used, so the resumed root equals the sealed member root.
         assert_eq!(log.count(), 3);
         assert_eq!(log.root_for_at(0, 3).await.unwrap(), sealed_member);
 

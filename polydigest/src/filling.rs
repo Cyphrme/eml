@@ -43,12 +43,13 @@ use crate::root::combined_root;
 
 /// Which readable materialization [`fill`] produces.
 ///
-/// Both kinds unroll the same committed partition over the same data, but they
-/// **bag the resulting peaks differently** — the append-only log (EML) with the
-/// MMR backward-bag, the mutable tree (EMT) with the rebalanced fold — so the two
-/// reproduce *different* roots (the MMR migration's intentional divergence). A
-/// fill therefore reproduces, and verifies against, a commitment of its own kind:
-/// an EML fill against an EML-topology seal, an EMT fill against an EMT one.
+/// Both kinds unroll the same committed partition over the same data and bag the
+/// resulting peaks with their own peak-fold ([`FillKind::bag`]). Under MMR the
+/// log's peak-bag is the established rightmost-`k` grouping — the **same** fold
+/// the mutable tree uses — so the two kinds currently reproduce the **same** root
+/// (the commitment is unchanged by the migration; durability lives in the proof,
+/// not the root). A fill verifies against a commitment of its own kind; the
+/// per-kind `bag` keeps that correct should the topologies ever diverge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FillKind {
     /// A readable append-only log (EML) materialization.
@@ -58,8 +59,9 @@ pub enum FillKind {
 }
 
 impl FillKind {
-    /// The peak-bagging this kind commits with: the append-only log's MMR
-    /// backward-bag, the mutable tree's rebalanced fold.
+    /// The peak-bagging this kind commits with. Both are the established
+    /// rightmost-`k` grouping ([`cml::mountain::bag_peaks`] ≡ [`cmt::rebalanced_bag`]),
+    /// named per kind so the two stay distinguishable by intent.
     #[must_use]
     pub fn bag(self) -> spine::BagFn {
         match self {
@@ -499,16 +501,16 @@ mod tests {
 
     // ─────────────────────────────────────────────────────────────────────
     // CORRECTNESS ORACLE + TRUSTLESS VERIFY — each fill kind reproduces a
-    // from-scratch build of ITS OWN structure AND verifies against a committed
+    // from-scratch build of its own structure AND verifies against a committed
     // binding root of the MATCHING kind, across a sweep of sizes (incl.
     // non-powers-of-k) and arities. No difftest baseline (D7); the from-scratch
     // rebuild is the oracle.
     //
-    // Under MMR each kind commits its own way: an EML fill (MMR backward-bag)
-    // reproduces an append-only log seal; an EMT fill (rebalanced fold)
-    // reproduces a mutable-tree seal. Both retained capabilities are tested here,
-    // each against a seal of its own kind — only the now-false *cross-kind*
-    // equality (one fold serving both) is dropped, never the EMT-fill capability.
+    // Both retained capabilities (EML and EMT fill) are tested, each against a
+    // seal of its own kind. Under the root-preserving peak-bag (the established
+    // rightmost-k grouping) the two kinds' folds coincide, so this also confirms
+    // the commitment is unchanged across kinds; the test pins each kind against
+    // its own seal regardless, which stays correct if the topologies ever diverge.
     // ─────────────────────────────────────────────────────────────────────
 
     #[test]

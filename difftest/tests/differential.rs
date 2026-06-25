@@ -14,16 +14,12 @@
 //! exactly what this harness exists to catch.
 
 use difftest::{RevSha256Hasher, Sha256Hasher, TaggedSha256Hasher};
-use eml::proof::{
-    ConsistencyProof as CurConsistency, InclusionProof as CurInclusion, ProofStep as CurStep,
-};
+use eml::proof::{InclusionProof as CurInclusion, ProofStep as CurStep};
 use eml::{
     Hasher as CurHasher, MemoryStorage as CurStorage, NaryMerkleLog as CurLog,
     TreeConfig as CurConfig,
 };
-use neml_baseline::proof::{
-    ConsistencyProof as BaseConsistency, InclusionProof as BaseInclusion, ProofStep as BaseStep,
-};
+use neml_baseline::proof::{InclusionProof as BaseInclusion, ProofStep as BaseStep};
 use neml_baseline::{
     MemoryStorage as BaseStorage, NaryMerkleLog as BaseLog, TreeConfig as BaseConfig,
 };
@@ -37,16 +33,6 @@ fn step_eq(cur: &CurStep, base: &BaseStep) -> bool {
 
 fn inclusion_eq(cur: &CurInclusion, base: &BaseInclusion) -> bool {
     cur.path.len() == base.path.len()
-        && cur
-            .path
-            .iter()
-            .zip(base.path.iter())
-            .all(|(c, b)| step_eq(c, b))
-}
-
-fn consistency_eq(cur: &CurConsistency, base: &BaseConsistency) -> bool {
-    cur.start_hash == base.start_hash
-        && cur.path.len() == base.path.len()
         && cur
             .path
             .iter()
@@ -152,18 +138,22 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 1024, ..ProptestConfig::default() })]
 
     /// Core differential: for a random history, the current and baseline trees
-    /// agree structurally on `root`, an `InclusionProof` at a random valid
-    /// index, and a `ConsistencyProof` for a random valid `old < new`.
+    /// agree on `root` and on an `InclusionProof` at a random valid index, and
+    /// produce the same *outcome class* (Some/None/Err) for a `ConsistencyProof`.
     ///
-    /// IGNORED under MMR: `eml`'s commitment is now a Merkle Mountain Range
-    /// (backward-bagged peaks, prove-to-peak proofs), which **intentionally**
-    /// produces a different root and proof shape than the frozen RFC-9162-style
-    /// `neml_baseline`. The `eml ≡ neml` byte-equality was transition scaffolding
-    /// (a dropped non-goal); the durability property test (N55) + the Lean corpus
-    /// (N54) are the new conformance oracle. The whole `difftest` crate retires in
-    /// N53.
-    #[ignore = "eml≡neml byte-equality intentionally broken by the MMR migration; \
-                difftest retires in N53 (durability property test is the new oracle)"]
+    /// Under MMR, `eml`'s **root and inclusion proofs stay byte-identical** to the
+    /// RFC-9162-style `neml_baseline`: at the spine arity (k=2) the backward-bag of
+    /// the perfect-subtree peaks is the same tree as the baseline's rebalanced
+    /// fold (verified by `cml`'s `bag_peaks_equals_hand_fold_binary`), and an
+    /// inclusion proof's permanent within-mountain prefix is unchanged. So those
+    /// legs are kept as live preservation guards.
+    ///
+    /// The one intended divergence is the **consistency proof**: `eml` upgrades it
+    /// to the MMR prefix-form (prove-to-peak, durability-enabling), which is a
+    /// different — simpler — proof object than the baseline's, so the proof
+    /// *bytes* differ even though both still exist for the same `(old, new)`. Only
+    /// that byte-comparison is dropped (the outcome-class match is kept); N54's
+    /// Lean corpus + N55's durability property test are its conformance oracle.
     #[test]
     fn core_outputs_match(
         k in 2usize..=8,
@@ -214,10 +204,14 @@ proptest! {
             let cur_con = classify(cur.consistency_proof(old, new).await);
             let base_con = classify(base.consistency_proof(old, new).await);
             match (cur_con, base_con) {
-                (Outcome::Some(c), Outcome::Some(b)) => prop_assert!(
-                    consistency_eq(&c, &b),
-                    "consistency proof diverged at k={}, old={}, new={}", k, old, new
-                ),
+                // The *outcome class* must still match — a consistency proof
+                // exists for the same (old, new) on both sides. The proof BYTES
+                // are intentionally NOT compared: `eml` upgrades the consistency
+                // proof to the MMR prefix-form (prove-to-peak), a different,
+                // durability-enabling object than the baseline's. Root and
+                // inclusion (checked above) stay byte-identical; only this proof
+                // shape diverges, which N54/N55 anchor.
+                (Outcome::Some(_), Outcome::Some(_)) => {}
                 (Outcome::None, Outcome::None) => {}
                 (Outcome::Err, Outcome::Err) => {}
                 (c, b) => prop_assert!(
@@ -330,15 +324,12 @@ proptest! {
     ///   the wrong oracle for this case, so the current side is checked against
     ///   an independent recomputation of the fold itself.
     ///
-    /// IGNORED under MMR: the single-algorithm "byte-identical to baseline" leg
-    /// no longer holds — `eml`'s member root is now the Merkle Mountain Range
-    /// backward-bag of the frontier peaks, which differs from the frozen
-    /// RFC-9162-style baseline fold for any multi-peak size. This is the
-    /// intentional commitment change the migration exists to make; the durability
-    /// property test (N55) + the Lean corpus (N54) replace this oracle, and the
-    /// `difftest` crate retires in N53.
-    #[ignore = "eml≡neml byte-equality intentionally broken by the MMR migration; \
-                difftest retires in N53 (durability property test is the new oracle)"]
+    /// PRESERVED under MMR: the binding/combined root is **unchanged** by the
+    /// migration. The single-algorithm leg stays byte-identical to the baseline
+    /// because at k=2 the MMR backward-bag of the frontier peaks is the same tree
+    /// as the baseline's rebalanced fold (`cml`'s `bag_peaks_equals_hand_fold_binary`),
+    /// and the multi-algorithm binding fold over member roots is opaque (D9),
+    /// untouched. This test remains a live preservation guard.
     #[test]
     fn combined_root_matches(
         ops in prop::collection::vec(op_strategy(), 1..40),
