@@ -27,8 +27,8 @@ impl Sealed {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Spine`] for an ill-formed arity or frontier, or
-    /// [`Error::MalformedEpochs`] for an ill-formed timeline.
+    /// Returns [`crate::Error::Spine`] for an ill-formed arity or frontier, or
+    /// [`crate::Error::MalformedEpochs`] for an ill-formed timeline.
     pub fn new(
         tree_size: u64,
         arity: u64,
@@ -101,8 +101,8 @@ impl Sealed {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Spine`] wrapping [`spine::Error::MissingHasher`] (naming
-    /// the algorithm) if any active algorithm has no hasher in `hashers`.
+    /// Returns [`crate::Error::Spine`] wrapping [`spine::Error::MissingHasher`]
+    /// (naming the algorithm) if any active algorithm has no hasher in `hashers`.
     pub fn all_member_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
         self.0.seal().all_member_roots(hashers).map_err(Into::into)
     }
@@ -111,8 +111,8 @@ impl Sealed {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Spine`] wrapping [`spine::Error::MissingHasher`] (naming
-    /// the algorithm) if any active algorithm has no hasher in `hashers`.
+    /// Returns [`crate::Error::Spine`] wrapping [`spine::Error::MissingHasher`]
+    /// (naming the algorithm) if any active algorithm has no hasher in `hashers`.
     pub fn binding_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
         self.0.binding_roots(hashers)
     }
@@ -121,9 +121,9 @@ impl Sealed {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Spine`] wrapping [`spine::Error::MissingHasher`] (naming
-    /// the algorithm) if any active algorithm — including `alg_id` — has no
-    /// hasher in `all_hashers`.
+    /// Returns [`crate::Error::Spine`] wrapping [`spine::Error::MissingHasher`]
+    /// (naming the algorithm) if any active algorithm — including `alg_id` — has
+    /// no hasher in `all_hashers`.
     pub fn binding_root(
         &self,
         alg_id: u64,
