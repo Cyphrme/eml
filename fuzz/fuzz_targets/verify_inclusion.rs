@@ -69,14 +69,11 @@ fuzz_target!(|input: Input| {
             position: s.position,
         })
         .collect();
+    // The skeleton is the log's concrete topology for the (arbitrary) trusted
+    // position; an invalid position yields an empty skeleton so the verifier
+    // still runs (and must not panic). Result is discarded.
+    let skeleton =
+        eml::mountain_skeleton(input.arity, input.tree_size, input.index).unwrap_or_default();
     // Must not panic — result is discarded.
-    let _ = verify_inclusion(
-        &FuzzHasher,
-        &input.leaf_hash,
-        input.index,
-        input.tree_size,
-        input.arity,
-        &path,
-        &input.root,
-    );
+    let _ = verify_inclusion(&FuzzHasher, &input.leaf_hash, &skeleton, &path, &input.root);
 });

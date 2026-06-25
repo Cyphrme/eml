@@ -252,12 +252,11 @@ fn test_inclusion_and_consistency_proofs_simple() {
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf_hash = Sha256Hasher.leaf(b"c");
         let root = log.root();
+        let sk = eml::mountain_skeleton(2, 4, 2).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
-            2,
-            4,
-            2,
+            &sk,
             &proof.path,
             &root
         ));
@@ -311,12 +310,11 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                 // Verify inclusion proof for every index
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
+                    let sk = eml::mountain_skeleton(k as u64, size, idx).expect("valid position");
                     assert!(eml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
-                        idx,
-                        size,
-                        k as u64,
+                        &sk,
                         &proof.path,
                         &root
                     ));
@@ -406,12 +404,11 @@ fn test_inclusion_proofs_subtree_log_mode() {
         let leaf_hash = Sha256Hasher.leaf(b"d");
         let full_proof = eml::InclusionProof { path };
 
+        let sk = eml::mountain_skeleton(2, 2, 1).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
-            1,
-            2,
-            2,
+            &sk,
             &full_proof.path,
             &root
         ));
@@ -666,12 +663,11 @@ fn test_epoch_proofs() {
         // Verify inclusion proof for algorithm 0 (fully active)
         let proof0 = log.inclusion_proof_for(0, 2, 4).await.unwrap().unwrap();
         let root0 = log.root_for(0).unwrap();
+        let sk0 = eml::mountain_skeleton(2, 4, 2).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
-            2,
-            4,
-            2,
+            &sk0,
             &proof0.path,
             &root0
         ));
@@ -679,12 +675,11 @@ fn test_epoch_proofs() {
         // Verify inclusion proof for algorithm 1 (frozen at size 2)
         let proof1 = log.inclusion_proof_for(1, 1, 2).await.unwrap().unwrap();
         let root1 = log.root_for(1).unwrap();
+        let sk1 = eml::mountain_skeleton(2, 2, 1).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
-            1,
-            2,
-            2,
+            &sk1,
             &proof1.path,
             &root1
         ));
@@ -795,12 +790,11 @@ fn test_promotion_proofs_malt() {
         let proof = log.inclusion_proof_for(0, 0, 1).await.unwrap().unwrap();
         // Single leaf tree with arity 3 has empty path steps (direct leaf-to-root promotion)
         assert!(proof.path.is_empty());
+        let sk = eml::mountain_skeleton(3, 1, 0).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"x"),
-            0,
-            1,
-            3,
+            &sk,
             &proof.path,
             &root
         ));
@@ -813,12 +807,11 @@ fn test_promotion_proofs_malt() {
         // Inclusion proof for index 2
         let proof = log.inclusion_proof_for(0, 2, 3).await.unwrap().unwrap();
         assert_eq!(proof.path.len(), 1);
+        let sk = eml::mountain_skeleton(3, 3, 2).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"z"),
-            2,
-            3,
-            3,
+            &sk,
             &proof.path,
             &root
         ));
@@ -929,13 +922,12 @@ fn test_deep_subtree_inclusion_proofs() {
 
             let full_proof = eml::InclusionProof { path };
 
+            let sk = eml::mountain_skeleton(2, 1, 0).expect("valid position");
             assert!(
                 eml::verify_inclusion(
                     &Sha256Hasher,
                     &Sha256Hasher.leaf(&data),
-                    0,
-                    1,
-                    2,
+                    &sk,
                     &full_proof.path,
                     &root
                 ),
@@ -985,13 +977,12 @@ fn test_deep_subtree_inclusion_proofs() {
 
             let full_proof = eml::InclusionProof { path };
 
+            let sk = eml::mountain_skeleton(3, 2, 0).expect("valid position");
             assert!(
                 eml::verify_inclusion(
                     &Sha256Hasher,
                     &Sha256Hasher.leaf(&data),
-                    0,
-                    2,
-                    3,
+                    &sk,
                     &full_proof.path,
                     &root
                 ),
@@ -1152,12 +1143,11 @@ fn test_multi_algorithm_subtree_proofs() {
         path0.extend(log_proof0.path);
 
         let full_proof0 = eml::InclusionProof { path: path0 };
+        let sk0 = eml::mountain_skeleton(2, 2, 1).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"c"),
-            1,
-            2,
-            2,
+            &sk0,
             &full_proof0.path,
             &root0
         ));
@@ -1170,12 +1160,11 @@ fn test_multi_algorithm_subtree_proofs() {
         path1.extend(log_proof1.path);
 
         let full_proof1 = eml::InclusionProof { path: path1 };
+        let sk1 = eml::mountain_skeleton(2, 1, 0).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"b"),
-            0,
-            1,
-            2,
+            &sk1,
             &full_proof1.path,
             &root1
         ));
@@ -1247,12 +1236,12 @@ fn test_proof_error_edge_cases() {
 
         // 4. Verifier input validation failures
         let empty_proof = eml::InclusionProof { path: Vec::new() };
+        // index 1 is out of bounds for tree_size 1, so no valid skeleton exists.
+        let sk = eml::mountain_skeleton(2, 1, 1).unwrap_or_default();
         assert!(!eml::verify_inclusion(
             &Sha256Hasher,
             &Sha256Hasher.leaf(b"x"),
-            1,
-            1,
-            2,
+            &sk,
             &empty_proof.path,
             &[0; 32]
         ));
@@ -1343,12 +1332,11 @@ fn test_power_of_k_boundaries() {
 
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
+                    let sk = eml::mountain_skeleton(3, size, idx).expect("valid position");
                     assert!(eml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
-                        idx,
-                        size,
-                        3,
+                        &sk,
                         &proof.path,
                         &root
                     ));
@@ -1449,12 +1437,11 @@ fn test_power_of_k_boundaries() {
 
                 for idx in 0..size {
                     let proof = log.inclusion_proof(idx, size).await.unwrap().unwrap();
+                    let sk = eml::mountain_skeleton(4, size, idx).expect("valid position");
                     assert!(eml::verify_inclusion(
                         &Sha256Hasher,
                         &leaves[idx as usize],
-                        idx,
-                        size,
-                        4,
+                        &sk,
                         &proof.path,
                         &root
                     ));
@@ -1930,6 +1917,7 @@ fn test_verify_inclusion_with_coupling() {
         };
 
         let verifier_config = eml::VerifierConfig::default();
+        let sk = eml::mountain_skeleton(2, 1, 0).expect("valid position");
         let ok = eml::verify_inclusion_with_coupling(
             &Sha256Hasher,
             0,
@@ -1937,6 +1925,7 @@ fn test_verify_inclusion_with_coupling() {
             0,
             1,
             2,
+            &sk,
             &inclusion_proof.path,
             &coupling_proof,
             &combined_root,
@@ -2249,22 +2238,16 @@ fn test_inclusion_proof_dos_prevention() {
     let leaf_hash = hasher.leaf(b"test");
     let root = hasher.empty();
 
-    // Large log arity > 256
+    // Large log arity > 256: no valid skeleton exists for an out-of-range arity.
     let proof = eml::InclusionProof { path: Vec::new() };
-    let ok = eml::verify_inclusion(
-        &hasher,
-        &leaf_hash,
-        0,
-        1_000_000_000_000,
-        1_000_000_000_001,
-        &proof.path,
-        &root,
-    );
+    let sk = eml::mountain_skeleton(1_000_000_000_001, 1_000_000_000_000, 0).unwrap_or_default();
+    let ok = eml::verify_inclusion(&hasher, &leaf_hash, &sk, &proof.path, &root);
     assert!(!ok);
 
-    // Invalid log arity = 1
+    // Invalid log arity = 1: no valid skeleton exists.
     let proof = eml::InclusionProof { path: Vec::new() };
-    let ok = eml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 1, &proof.path, &root);
+    let sk = eml::mountain_skeleton(1, 10, 0).unwrap_or_default();
+    let ok = eml::verify_inclusion(&hasher, &leaf_hash, &sk, &proof.path, &root);
     assert!(!ok);
 
     // Path length > 256
@@ -2277,7 +2260,8 @@ fn test_inclusion_proof_dos_prevention() {
             257
         ],
     };
-    let ok = eml::verify_inclusion(&hasher, &leaf_hash, 0, 10, 2, &proof_huge_path.path, &root);
+    let sk = eml::mountain_skeleton(2, 10, 0).expect("valid position");
+    let ok = eml::verify_inclusion(&hasher, &leaf_hash, &sk, &proof_huge_path.path, &root);
     assert!(!ok);
 
     // Sibling count > 256
@@ -2287,15 +2271,8 @@ fn test_inclusion_proof_dos_prevention() {
             position: 0,
         }],
     };
-    let ok = eml::verify_inclusion(
-        &hasher,
-        &leaf_hash,
-        0,
-        10,
-        2,
-        &proof_huge_siblings.path,
-        &root,
-    );
+    let sk = eml::mountain_skeleton(2, 10, 0).expect("valid position");
+    let ok = eml::verify_inclusion(&hasher, &leaf_hash, &sk, &proof_huge_siblings.path, &root);
     assert!(!ok);
 }
 
@@ -2522,6 +2499,9 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
     let combined_root =
         eml::combined_root(&hasher, &coupling.active_roots, &coupling.alg_epochs, 2, 2);
 
+    // arity 0 is out of range, so no valid skeleton exists; the coupling
+    // verifier rejects the invalid arity before the skeleton is consulted.
+    let sk = eml::mountain_skeleton(0, 2, 1).unwrap_or_default();
     let is_valid = eml::verify_inclusion_with_coupling(
         &hasher,
         0,
@@ -2529,6 +2509,7 @@ fn test_inclusion_proof_arity_zero_index_spoofing() {
         1,
         2,
         0,
+        &sk,
         &spoofed_proof.path,
         &coupling,
         &combined_root,
@@ -2556,7 +2537,8 @@ fn test_proof_sibling_digest_length_mismatch() {
         }],
     };
 
-    let is_valid = eml::verify_inclusion(&hasher, &leaf_a, 0, 2, 2, &malformed_proof.path, &root);
+    let sk = eml::mountain_skeleton(2, 2, 0).expect("valid position");
+    let is_valid = eml::verify_inclusion(&hasher, &leaf_a, &sk, &malformed_proof.path, &root);
     assert!(
         !is_valid,
         "Expected proof with invalid sibling size to be rejected"
@@ -2779,13 +2761,12 @@ fn test_boundary_sizes_and_high_arities() {
                         .await
                         .unwrap()
                         .unwrap();
+                    let sk = eml::mountain_skeleton(k, size, idx).expect("valid position");
                     assert!(
                         eml::verify_inclusion(
                             &Sha256Hasher,
                             &leaves[idx as usize],
-                            idx,
-                            size,
-                            k,
+                            &sk,
                             &proof.path,
                             &root
                         ),
@@ -2855,13 +2836,13 @@ fn test_proof_malleability_path_extension() {
         let leaf_hash = Sha256Hasher.leaf(b"c");
         let root = log.root();
 
+        let sk = eml::mountain_skeleton(2, 4, 2).expect("valid position");
+
         // 1. Original proof verifies successfully
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
-            2,
-            4,
-            2,
+            &sk,
             &proof.path,
             &root
         ));
@@ -2875,7 +2856,7 @@ fn test_proof_malleability_path_extension() {
 
         // 3. Verifies should fail because of path length mismatch or position spoofing
         let verified =
-            eml::verify_inclusion(&Sha256Hasher, &leaf_hash, 2, 4, 2, &malleable_path, &root);
+            eml::verify_inclusion(&Sha256Hasher, &leaf_hash, &sk, &malleable_path, &root);
         assert!(!verified, "Malleable proof verification should fail");
     });
 }
@@ -2907,12 +2888,11 @@ fn test_proof_malleability_position_spoofing() {
         full_path.extend(log_proof.path);
 
         let leaf_hash = Sha256Hasher.leaf(b"a");
+        let sk = eml::mountain_skeleton(2, 1, 0).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf_hash,
-            0,
-            1,
-            2,
+            &sk,
             &full_path,
             &root
         ));
@@ -2930,7 +2910,7 @@ fn test_proof_malleability_position_spoofing() {
                 },
             );
             assert!(
-                !eml::verify_inclusion(&Sha256Hasher, &leaf_hash, 0, 1, 2, &spoofed, &root),
+                !eml::verify_inclusion(&Sha256Hasher, &leaf_hash, &sk, &spoofed, &root),
                 "prepended promoted step (position {position}) must be rejected"
             );
         }
@@ -2953,12 +2933,11 @@ fn test_inclusion_truncated_skeleton_rejected() {
 
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"c");
+        let sk = eml::mountain_skeleton(2, 4, 2).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf,
-            2,
-            4,
-            2,
+            &sk,
             &proof.path,
             &root
         ));
@@ -2966,7 +2945,7 @@ fn test_inclusion_truncated_skeleton_rejected() {
         assert!(!proof.path.is_empty());
         let truncated = &proof.path[..proof.path.len() - 1];
         assert!(
-            !eml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, truncated, &root),
+            !eml::verify_inclusion(&Sha256Hasher, &leaf, &sk, truncated, &root),
             "a proof missing a skeleton step must be rejected"
         );
     });
@@ -2989,12 +2968,11 @@ fn test_partial_rightmost_node_sibling_count() {
 
         let proof = log.inclusion_proof(3, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"d");
+        let sk = eml::mountain_skeleton(3, 4, 3).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf,
-            3,
-            4,
-            3,
+            &sk,
             &proof.path,
             &root
         ));
@@ -3008,7 +2986,7 @@ fn test_partial_rightmost_node_sibling_count() {
         let mut extra = proof.path.clone();
         extra.last_mut().unwrap().siblings.push(vec![0u8; 32]);
         assert!(
-            !eml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &extra, &root),
+            !eml::verify_inclusion(&Sha256Hasher, &leaf, &sk, &extra, &root),
             "an extra rightmost sibling must be rejected"
         );
 
@@ -3016,7 +2994,7 @@ fn test_partial_rightmost_node_sibling_count() {
         let mut fewer = proof.path.clone();
         fewer.last_mut().unwrap().siblings.clear();
         assert!(
-            !eml::verify_inclusion(&Sha256Hasher, &leaf, 3, 4, 3, &fewer, &root),
+            !eml::verify_inclusion(&Sha256Hasher, &leaf, &sk, &fewer, &root),
             "a missing rightmost sibling must be rejected"
         );
     });
@@ -3038,12 +3016,11 @@ fn test_skeleton_position_spoof_rejected() {
 
         let proof = log.inclusion_proof(2, 4).await.unwrap().unwrap();
         let leaf = Sha256Hasher.leaf(b"c");
+        let sk = eml::mountain_skeleton(2, 4, 2).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf,
-            2,
-            4,
-            2,
+            &sk,
             &proof.path,
             &root
         ));
@@ -3051,7 +3028,7 @@ fn test_skeleton_position_spoof_rejected() {
         let mut spoofed = proof.path.clone();
         spoofed[0].position ^= 1;
         assert!(
-            !eml::verify_inclusion(&Sha256Hasher, &leaf, 2, 4, 2, &spoofed, &root),
+            !eml::verify_inclusion(&Sha256Hasher, &leaf, &sk, &spoofed, &root),
             "a spoofed skeleton position must be rejected"
         );
     });
@@ -3083,12 +3060,11 @@ fn test_canonical_encoding_promotion_chain() {
         path.extend(log_proof.path);
 
         let leaf = Sha256Hasher.leaf(b"x");
+        let sk = eml::mountain_skeleton(2, 2, 0).expect("valid position");
         assert!(eml::verify_inclusion(
             &Sha256Hasher,
             &leaf,
-            0,
-            2,
-            2,
+            &sk,
             &path,
             &root
         ));
@@ -3103,7 +3079,7 @@ fn test_canonical_encoding_promotion_chain() {
                 },
             );
             assert!(
-                !eml::verify_inclusion(&Sha256Hasher, &leaf, 0, 2, 2, &tampered, &root),
+                !eml::verify_inclusion(&Sha256Hasher, &leaf, &sk, &tampered, &root),
                 "a zero-sibling step at offset {pos} must be rejected"
             );
         }
@@ -3253,12 +3229,14 @@ fn test_substituted_metadata_fails_proofs() {
 
         // Honest inactivity proof for X=1 at pos 0 (inactive, null cell).
         let inact_path = log.inclusion_proof_for(1, 0, 2).await.unwrap().unwrap();
+        let sk_inact = eml::mountain_skeleton(2, 2, 0).expect("valid position");
         let ok_inact = eml::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             0,
             2,
             2,
+            &sk_inact,
             &inact_path.path,
             &coupling,
             &cr,
@@ -3270,6 +3248,7 @@ fn test_substituted_metadata_fails_proofs() {
         // Honest inclusion proof for X=1 at pos 1 (active, real data).
         let incl_path = log.inclusion_proof_for(1, 1, 2).await.unwrap().unwrap();
         let leaf_hash = Sha256Hasher.leaf(b"data1");
+        let sk_incl = eml::mountain_skeleton(2, 2, 1).expect("valid position");
         let ok_incl = eml::verify_inclusion_with_coupling(
             &Sha256Hasher,
             1,
@@ -3277,6 +3256,7 @@ fn test_substituted_metadata_fails_proofs() {
             1,
             2,
             2,
+            &sk_incl,
             &incl_path.path,
             &coupling,
             &cr,
@@ -3296,6 +3276,7 @@ fn test_substituted_metadata_fails_proofs() {
             0,
             2,
             2,
+            &sk_inact,
             &inact_path.path,
             &bad_coupling,
             &cr,
@@ -3314,6 +3295,7 @@ fn test_substituted_metadata_fails_proofs() {
             1,
             2,
             2,
+            &sk_incl,
             &incl_path.path,
             &bad_coupling,
             &cr,
@@ -3353,6 +3335,7 @@ fn test_null_payload_stays_legal() {
         );
 
         let path = log.inclusion_proof(0, 1).await.unwrap().unwrap();
+        let sk = eml::mountain_skeleton(2, 1, 0).expect("valid position");
         let ok = eml::verify_inclusion_with_coupling(
             &Sha256Hasher,
             0,
@@ -3360,6 +3343,7 @@ fn test_null_payload_stays_legal() {
             0,
             1,
             2,
+            &sk,
             &path.path,
             &coupling,
             &cr,
@@ -3556,12 +3540,14 @@ fn test_inactivity_proofs() {
         // X is in coupling.active_roots (it is active at pos 4 = size 5 - 1).
         // We need the inclusion proof for the null constant at pos 2 in X's tree.
         let inact_path = log.inclusion_proof_for(1, 2, 5).await.unwrap().unwrap();
+        let sk_gap = eml::mountain_skeleton(2, 5, 2).expect("valid position");
         let ok_gap = eml::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             2,
             5,
             2,
+            &sk_gap,
             &inact_path.path,
             &coupling,
             &cr,
@@ -3572,12 +3558,14 @@ fn test_inactivity_proofs() {
 
         // Inactivity proof for an ACTIVE position must fail.
         let active_path = log.inclusion_proof_for(1, 1, 5).await.unwrap().unwrap();
+        let sk_active = eml::mountain_skeleton(2, 5, 1).expect("valid position");
         let fail_active = eml::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             1,
             5,
             2,
+            &sk_active,
             &active_path.path,
             &coupling,
             &cr,
@@ -3611,12 +3599,16 @@ fn test_inactivity_proofs() {
         let active_algs_f = eml::committed_active_algs(&coupling_f.alg_epochs, 4);
 
         // X is inactive at pos 3 (beyond its epoch [1,2)).
+        // The skeleton is ignored for a frozen algorithm (empty path), but the
+        // signature still requires one.
+        let sk_frozen = eml::mountain_skeleton(2, 4, 3).expect("valid position");
         let ok_frozen = eml::verify_inactivity_with_coupling(
             &Sha256Hasher,
             1,
             3,
             4,
             2,
+            &sk_frozen,
             &[],
             &coupling_f,
             &cr_f,
@@ -3639,6 +3631,7 @@ fn test_inactivity_proofs() {
             3,
             4,
             2,
+            &sk_frozen,
             &dummy_path,
             &coupling_f,
             &cr_f,

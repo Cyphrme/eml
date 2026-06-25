@@ -170,23 +170,9 @@ fn nary_mth(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> Vec<u8> {
         }
     }
 
-    if frontier.is_empty() {
-        return hasher.empty();
-    }
-    if frontier.len() == 1 {
-        return frontier[0].clone();
-    }
-    let mut current = frontier.clone();
-    while current.len() > k {
-        let split_idx = current.len() - k;
-        let right_elements = &current[split_idx..];
-        let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-        let merged = nary_mr(hasher, &refs);
-        current.truncate(split_idx);
-        current.push(merged);
-    }
-    let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-    nary_mr(hasher, &refs)
+    // Bag the frontier peaks with the MMR backward-bag — the log's commitment
+    // under the migration (replacing the old rebalanced rightmost-`k` grouping).
+    eml::bag_peaks(hasher, &frontier, k as u64)
 }
 
 // Recursively calculates the subtree root matching Definition 14c
@@ -229,17 +215,9 @@ fn recursive_subtree_root(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> 
             component_hashes.push(part_root);
         }
 
-        let mut current = component_hashes;
-        while current.len() > k {
-            let split_idx = current.len() - k;
-            let right_elements = &current[split_idx..];
-            let refs: Vec<&[u8]> = right_elements.iter().map(|v| v.as_slice()).collect();
-            let merged = nary_mr(hasher, &refs);
-            current.truncate(split_idx);
-            current.push(merged);
-        }
-        let refs: Vec<&[u8]> = current.iter().map(|v| v.as_slice()).collect();
-        nary_mr(hasher, &refs)
+        // A non-perfect range's root is the MMR backward-bag of its perfect
+        // frontier components — matching the engine's `reconstruct_subtree_root`.
+        eml::bag_peaks(hasher, &component_hashes, k as u64)
     }
 }
 
@@ -383,14 +361,13 @@ proptest! {
             let root = log.root_for(0).unwrap();
             let projected = project(&log, 0, &Sha256Hasher).await;
             let proof = log.inclusion_proof_for(0, index, ts).await.unwrap().unwrap();
+            let sk = eml::mountain_skeleton(k as u64, ts, index).expect("valid position");
 
             prop_assert!(
                 verify_inclusion(
                     &Sha256Hasher,
                     &projected[index as usize],
-                    index,
-                    ts,
-                    k as u64,
+                    &sk,
                     &proof.path,
                     &root
                 ),
@@ -399,7 +376,7 @@ proptest! {
 
             let wrong = Sha256Hasher.leaf(b"WRONG_LEAF_DATA");
             prop_assert!(
-                !verify_inclusion(&Sha256Hasher, &wrong, index, ts, k as u64, &proof.path, &root),
+                !verify_inclusion(&Sha256Hasher, &wrong, &sk, &proof.path, &root),
                 "I-SOUND-MALT accepted invalid forged leaf"
             );
             Ok(())
@@ -457,17 +434,10 @@ proptest! {
             let forged = Sha256Hasher.leaf(&payload);
             let ts = log.size();
             let proof = log.inclusion_proof_for(0, null_idx, ts).await.unwrap().unwrap();
+            let sk = eml::mountain_skeleton(k as u64, ts, null_idx).expect("valid position");
 
             prop_assert!(
-                !verify_inclusion(
-                    &Sha256Hasher,
-                    &forged,
-                    null_idx,
-                    ts,
-                    k as u64,
-                    &proof.path,
-                    &root
-                ),
+                !verify_inclusion(&Sha256Hasher, &forged, &sk, &proof.path, &root),
                 "T-BOUND-MALT accepted forged leaf at null position"
             );
             Ok(())
@@ -569,12 +539,11 @@ async fn check_state_invariants<S: eml::Storage>(
                     .await
                     .unwrap()
                     .unwrap();
+                let sk = eml::mountain_skeleton(k as u64, tree_size, idx).expect("valid position");
                 prop_assert!(verify_inclusion(
                     hasher.as_ref(),
                     &projected[idx as usize],
-                    idx,
-                    tree_size,
-                    k as u64,
+                    &sk,
                     &proof.path,
                     &incremental
                 ));

@@ -467,6 +467,11 @@ impl CouplingProof {
 }
 
 /// Helper wrapper demonstrating inclusion verification with decoupled coupling proofs.
+///
+/// `skeleton` is the structure's concrete inclusion topology for `index` —
+/// supplied by the instantiation, not derived here, since the combinator lifts
+/// both the append-only log (a mountain skeleton) and the mutable tree (a
+/// rebalanced skeleton). The spine verifier pins `path` against it.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn verify_inclusion_with_coupling(
@@ -476,6 +481,7 @@ pub fn verify_inclusion_with_coupling(
     index: u64,
     tree_size: u64,
     arity: u64,
+    skeleton: &[spine::SkeletonStep],
     path: &[ProofStep],
     coupling: &CouplingProof,
     combined_root: &[u8],
@@ -513,7 +519,7 @@ pub fn verify_inclusion_with_coupling(
         None => return false,
     }
 
-    verify_inclusion(hasher, leaf_hash, index, tree_size, arity, path, &raw_root)
+    verify_inclusion(hasher, leaf_hash, skeleton, path, &raw_root)
 }
 
 /// Verify an inactivity claim for a leaf at `index` using a coupling proof.
@@ -527,6 +533,11 @@ pub fn verify_inclusion_with_coupling(
 ///   matching Merkle path.
 /// - If `alg_id` is frozen at `tree_size` (no committed root), `path` must be empty — the committed
 ///   timeline alone is sufficient evidence.
+///
+/// `skeleton` is the structure's concrete inclusion topology for `index` (see
+/// [`verify_inclusion_with_coupling`]); it pins the null-leaf inclusion path when
+/// the algorithm has a committed root. It is ignored for a frozen algorithm,
+/// whose `path` must be empty.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn verify_inactivity_with_coupling(
@@ -535,6 +546,7 @@ pub fn verify_inactivity_with_coupling(
     index: u64,
     tree_size: u64,
     arity: u64,
+    skeleton: &[spine::SkeletonStep],
     path: &[ProofStep],
     coupling: &CouplingProof,
     combined_root: &[u8],
@@ -567,15 +579,7 @@ pub fn verify_inactivity_with_coupling(
     // inclusion proof.  If it is frozen (not in active_roots), the timeline
     // commitment alone is the evidence and the path must be empty.
     if let Some((_, raw_root)) = coupling.active_roots.iter().find(|&&(id, _)| id == alg_id) {
-        verify_inclusion(
-            hasher,
-            &hasher.null(),
-            index,
-            tree_size,
-            arity,
-            path,
-            raw_root,
-        )
+        verify_inclusion(hasher, &hasher.null(), skeleton, path, raw_root)
     } else {
         path.is_empty()
     }

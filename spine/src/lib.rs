@@ -1,10 +1,18 @@
 //! `spine` — the Merkle Spine: the structural core.
 //!
-//! The structural engine shared by every tree built above it, **epoch-free**:
-//! **canonicalization** (collapse + promotion, in [`mr`]), the **proof spine**
-//! ([`topology`]), the [`Hasher`] seam, **inclusion** proof/verify, the
-//! [`LeafProof`], the general structural [`Seal`], and the opaque **metadata
-//! channel** ([`Meta`]). It depends on nothing.
+//! The structural engine shared by every tree built above it, **epoch-free** and
+//! **topology-agnostic**: **canonicalization** (collapse + promotion, in [`mr`]),
+//! the perfect-subtree **decomposition** and grouping combinator ([`topology`]),
+//! the [`Hasher`] seam, the **abstract inclusion verifier** (proof pinned against
+//! a consumer-supplied skeleton, in [`proof`]), the [`LeafProof`], the general
+//! structural [`Seal`] (peak storage), and the opaque **metadata channel**
+//! ([`Meta`]). It depends on nothing.
+//!
+//! The spine carries no **commitment topology**: how perfect subtrees are bagged
+//! into one root, and what an inclusion proof points at, are owned by each
+//! consumer (the append-only log's mountain range; the mutable tree's rebalanced
+//! fold). The seam between them is the [`SkeletonStep`] interface — the consumer
+//! computes its concrete skeleton, the spine verifier pins a proof against it.
 //!
 //! Activation, the committed epoch timeline, the null-run-extents, the binding
 //! root, and coupling are **not** here — they are the `polydigest` combinator's
@@ -34,7 +42,7 @@ pub use proof::{
 pub use seal::{RunExtent, Seal};
 pub use subtree::Subtree;
 pub use topology::{
-    ARITY_RANGE, SkeletonStep, fold_frontier, frontier_for_size, inclusion_skeleton,
+    ARITY_RANGE, BagFn, SkeletonFn, SkeletonStep, fold_frontier, frontier_for_size,
 };
 
 /// Dynamically generate a null digest constant using the hasher.

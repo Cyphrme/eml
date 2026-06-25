@@ -49,9 +49,20 @@ impl spine::Hasher for H {
 // kernel topology and the same hash, so the same data maps to the same digest.
 // ---------------------------------------------------------------------------
 
+// PRESERVED under MMR: an EMT seal's member root still byte-equals a
+// separately-built EML log's root over the same payloads. The MMR peak-bag is the
+// established rightmost-k grouping (root-preserving at every arity), the same
+// fold the mutable tree uses, so the two constructions still map identical data
+// to an identical digest — the migration changed the inclusion proof, not the
+// root.
 #[test]
 fn seal_root_equals_native_append_root() {
-    let payloads: &[&[u8]] = &[b"alpha", b"beta", b"gamma"];
+    // Seven payloads → a frontier of three peaks (sizes 4, 2, 1) at k=2, i.e.
+    // MORE than k peaks: the bag does real multi-level grouping, so this proves
+    // the equality beyond the trivial ≤k-peak case where any fold coincides.
+    let payloads: &[&[u8]] = &[
+        b"alpha", b"beta", b"gamma", b"delta", b"eps", b"zeta", b"eta",
+    ];
 
     // Build the mutable tree and seal it.
     let mut t = polydigest::EpochTree::new(polydigest::CmtConfig { arity: 2 }).unwrap();
@@ -74,8 +85,50 @@ fn seal_root_equals_native_append_root() {
 
     // The derived member root for algorithm 0 (the fold of the sealed frontier
     // peaks) must equal the native log root.
-    let sealed_root = sealed.member_root(0, &H).expect("algorithm 0 present");
+    let sealed_root = sealed
+        .member_root(0, &H, polydigest::rebalanced_bag)
+        .expect("algorithm 0 present");
 
+    // The MMR peak-bag is the established rightmost-k grouping (root-preserving),
+    // the same fold the mutable tree uses, so the member root byte-equals the
+    // native log root.
+    assert_eq!(sealed_root.as_slice(), log_root.as_slice());
+}
+
+// E1b — the same seal-root == log-root invariant at HIGHER ARITY, swept across
+// sizes including the k=3 / 4-peak frontier (n=40 → peaks 27, 9, 3, 1) that the
+// old right-recursive bag would have diverged on. Proves the invariant is a
+// property of the (root-preserving) rightmost-k grouping at every arity, not a
+// k=2 accident.
+#[test]
+fn seal_root_equals_native_append_root_kary() {
+    let payloads: Vec<Vec<u8>> = (0..40u64).map(|i| format!("p{i}").into_bytes()).collect();
+    let k = 3u64;
+
+    let mut t = polydigest::EpochTree::new(polydigest::CmtConfig { arity: k }).unwrap();
+    t.register_algorithm(0, Box::new(H)).unwrap();
+    for (i, p) in payloads.iter().enumerate() {
+        t.set(i as u64, p.clone(), Vec::new()).unwrap();
+    }
+    let sealed = t.seal().unwrap();
+
+    let log_root = smol::block_on(async {
+        let mut log = eml::NaryMerkleLog::new(
+            eml::MemoryStorage::new(),
+            Box::new(H),
+            eml::TreeConfig { arity: k },
+        )
+        .await
+        .unwrap();
+        for p in &payloads {
+            log.append_leaf(p).await.unwrap();
+        }
+        log.root_for(0).unwrap()
+    });
+
+    let sealed_root = sealed
+        .member_root(0, &H, polydigest::rebalanced_bag)
+        .expect("algorithm 0 present");
     assert_eq!(sealed_root.as_slice(), log_root.as_slice());
 }
 
@@ -126,16 +179,23 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
             .inclusion_proof(0, embed_pos)
             .expect("embed_pos is in range");
 
-        // Verification step 1: log entry E → log root.
-        assert!(log_leaf_proof.verify(&H, &log_root));
+        // Verification step 1: log entry E → log root (log-origin: mountain).
+        let log_sk = polydigest::mountain_skeleton(
+            log_leaf_proof.arity,
+            log_leaf_proof.tree_size,
+            log_leaf_proof.index,
+        )
+        .expect("valid log position");
+        assert!(log_leaf_proof.verify(&H, &log_sk, &log_root));
 
-        // Verification step 2: log root (as a leaf) → outer EMT root.
+        // Verification step 2: log root (as a leaf) → outer EMT root
+        // (EMT-origin: rebalanced).
+        let outer_sk = polydigest::rebalanced_skeleton(outer.len(), outer.arity(), embed_pos)
+            .expect("valid position");
         assert!(spine::verify_inclusion(
             &H,
             &outer_leaf_hash,
-            embed_pos,
-            outer.len(),
-            outer.arity(),
+            &outer_sk,
             &outer_path,
             &outer_root,
         ));
@@ -174,7 +234,12 @@ fn seal_yields_currency_with_derived_binding_root_and_extents() {
 
         // The binding root for algorithm 0 is derived from the frontier on demand.
         let hashers: [(u64, &dyn spine::Hasher); 1] = [(0, &H)];
-        assert!(sealed.binding_root(0, &H, &hashers).unwrap().is_some());
+        assert!(
+            sealed
+                .binding_root(0, &H, &hashers, polydigest::bag_peaks)
+                .unwrap()
+                .is_some()
+        );
         // The committed run-extents are the non-promoted frontier nodes (height >= 1).
         assert!(!sealed.run_extents().is_empty());
         // The opaque metadata channel carries the attestation verbatim.
@@ -226,6 +291,7 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
         let proof = eml::SnapshotProof::produce(
             &sealed,
             &hashers,
+            polydigest::bag_peaks,
             vec![eml::ClaimedLeaf::new(0, leaf_proof)],
         );
 
@@ -235,7 +301,8 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
             root: &binding_root,
         }];
 
-        assert!(proof.verify(&trusted, &hashers));
+        // Log-origin seal: leaf proofs verify against the mountain topology.
+        assert!(proof.verify(&trusted, &hashers, polydigest::mountain_skeleton));
     });
 }
 
@@ -248,17 +315,30 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
 // the sealed member root — the frontier carries forward losslessly.
 // ---------------------------------------------------------------------------
 
+// PRESERVED under MMR: resuming an EML onto an EMT's sealed frontier still
+// reproduces the sealed member root. The MMR peak-bag is the established
+// rightmost-k grouping (root-preserving at every arity) — the same fold the
+// mutable tree uses — so the resumed log's root equals the EMT seal's member
+// root, and the frontier carries forward losslessly. The migration restructured
+// the inclusion proof (prove-to-peak), not the root.
 #[test]
 fn seal_emt_then_resume_eml_appends_forward() {
     smol::block_on(async {
-        // Build and seal a mutable tree of three cells.
+        // Build and seal a mutable tree of SEVEN cells → a frontier of three
+        // peaks (4, 2, 1) at k=2, i.e. MORE than k peaks: the resumed log must
+        // reproduce a genuinely multi-level bagged root, not a trivial ≤k case.
         let mut t = polydigest::EpochTree::new(polydigest::CmtConfig { arity: 2 }).unwrap();
         t.register_algorithm(0, Box::new(H)).unwrap();
-        for (i, p) in [b"a" as &[u8], b"b", b"c"].iter().enumerate() {
+        for (i, p) in [b"a" as &[u8], b"b", b"c", b"d", b"e", b"f", b"g"]
+            .iter()
+            .enumerate()
+        {
             t.set(i as u64, p.to_vec(), Vec::new()).unwrap();
         }
         let sealed = t.seal().unwrap();
-        let sealed_member = sealed.member_root(0, &H).unwrap();
+        let sealed_member = sealed
+            .member_root(0, &H, polydigest::rebalanced_bag)
+            .unwrap();
 
         // Resume an append-only log onto the EMT-origin frontier.
         let mut log =
@@ -266,22 +346,24 @@ fn seal_emt_then_resume_eml_appends_forward() {
                 .await
                 .unwrap();
 
-        // The resumed log carries the sealed size and reproduces the member root.
-        assert_eq!(log.count(), 3);
-        assert_eq!(log.root_for_at(0, 3).await.unwrap(), sealed_member);
+        // The resumed log carries the sealed size and reproduces the member
+        // root: the MMR peak-bag is the established rightmost-k grouping, the same
+        // fold the EMT seal used, so the resumed root equals the sealed member root.
+        assert_eq!(log.count(), 7);
+        assert_eq!(log.root_for_at(0, 7).await.unwrap(), sealed_member);
 
         // Append real leaves forward; the log continues from the committed
         // frontier. A resumed log is subtree-kind, so a real leaf is a
         // single-leaf subtree (its digest is the leaf hash).
-        log.append_subtree(&spine::Subtree::Leaf(b"d".to_vec()))
+        log.append_subtree(&spine::Subtree::Leaf(b"h".to_vec()))
             .await
             .unwrap();
-        log.append_subtree(&spine::Subtree::Leaf(b"e".to_vec()))
+        log.append_subtree(&spine::Subtree::Leaf(b"i".to_vec()))
             .await
             .unwrap();
-        assert_eq!(log.count(), 5);
-        // A consistency proof bridges the resume boundary (3 -> 5).
-        let proof = log.consistency_proof(3, 5).await.unwrap();
+        assert_eq!(log.count(), 9);
+        // A consistency proof bridges the resume boundary (7 -> 9).
+        let proof = log.consistency_proof(7, 9).await.unwrap();
         assert!(proof.is_some());
     });
 }
@@ -318,7 +400,13 @@ fn seal_eml_then_fill_emt_verifies_against_binding_root() {
         let filled = eml::fill(&sealed, 0, &H, &data, eml::FillKind::Emt, &hashers).unwrap();
         assert_eq!(filled.tree_size(), 6);
         // The verified member root equals the sealed member root.
-        assert_eq!(filled.root(), sealed.member_root(0, &H).unwrap().as_slice());
+        assert_eq!(
+            filled.root(),
+            sealed
+                .member_root(0, &H, polydigest::bag_peaks)
+                .unwrap()
+                .as_slice()
+        );
     });
 }
 

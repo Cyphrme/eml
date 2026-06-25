@@ -1,17 +1,22 @@
-//! Shared k-ary log-spine topology — the proof spine.
+//! Shared k-ary structural primitives — the perfect-subtree decomposition and
+//! the generic grouping fold.
 //!
-//! The proof spine has a fixed arity `k` (`2..=256`). For a given `tree_size`
-//! it decomposes into a *frontier* of perfect k-ary subtrees
-//! ([`frontier_for_size`]); those frontier nodes are then folded into one root
-//! by repeatedly grouping the rightmost `k` of them. The shape of an inclusion
-//! proof's log skeleton — how many steps it has and, per step, the path node's
-//! position and sibling count — is fully determined by `(tree_size, arity,
-//! index)`.
+//! The structural core is **topology-agnostic**. It names the perfect k-ary
+//! subtree decomposition of a log of `n` leaves ([`frontier_for_size`]) and a
+//! generic grouping combinator over an arbitrary item list ([`fold_frontier`]),
+//! but it does **not** decide how those subtrees are bagged into one root, nor
+//! what an inclusion proof points at. Those are *commitment* choices owned by
+//! each consumer: the append-only log bags its perfect-subtree peaks into a
+//! durable mountain range, the mutable tree folds them into a rebalanced tree —
+//! so the concrete topology lives with the structure that owns it, never here.
 //!
-//! This module is the single place that derivation lives. The verifier checks a
-//! proof's skeleton field-by-field against [`inclusion_skeleton`]; the generator
-//! emits the same skeleton. Keeping one source of truth is what prevents the
-//! producer and verifier from drifting into disagreeing topologies.
+//! What the core keeps is the **abstract skeleton interface** ([`SkeletonStep`]):
+//! the per-step `(position, sibling_count)` shape a consumer's concrete topology
+//! emits and the [`crate::proof`] verifier pins a proof against. The verifier
+//! *mechanism* lives in [`crate::proof::verify_inclusion`]; the concrete skeleton
+//! it checks against is supplied by the consumer, computed once from its own
+//! trusted `(tree_size, arity, index)`. Keeping the skeleton as the seam is what
+//! lets one verifier serve any topology without the core knowing which.
 
 use std::ops::RangeInclusive;
 
@@ -90,7 +95,33 @@ pub fn frontier_for_size(n: u64, k: u64) -> Vec<(u64, u32)> {
     frontier
 }
 
-/// One step of a log-spine inclusion skeleton, ordered leaf → root.
+/// A peak-bagging function: fold a structure's frontier peaks (under its own
+/// `hasher`, at arity `k`) into one member root.
+///
+/// The [`Seal`](crate::Seal) stores peaks only and is topology-agnostic; the
+/// consumer supplies how they bag — the append-only log's mountain backward-bag,
+/// the mutable tree's rebalanced fold. A function pointer (not a closure type) so
+/// it threads through the snapshot layer without per-call generics.
+pub type BagFn = fn(&dyn crate::Hasher, &[Vec<u8>], u64) -> Vec<u8>;
+
+/// A skeleton provider: compute a structure's concrete inclusion skeleton for
+/// `(arity, tree_size, index)`, or `None` for an invalid position.
+///
+/// The verifier is topology-agnostic; a caller that holds a proof but not the
+/// generating structure (a snapshot proof, a coupling verifier) threads this to
+/// supply the topology — the append-only log's `mountain_skeleton`, the mutable
+/// tree's `rebalanced_skeleton`. A function pointer so it threads without
+/// per-call generics.
+pub type SkeletonFn = fn(u64, u64, u64) -> Option<Vec<SkeletonStep>>;
+
+/// One step of an inclusion skeleton, ordered leaf → root.
+///
+/// A consumer's concrete topology emits a sequence of these — one per hashing
+/// node on the path from a leaf's perfect-subtree peak up to the structure's
+/// root — and the [`crate::proof`] verifier pins a proof's trailing steps
+/// against it field by field. The core defines only the interface; which
+/// sequence a given structure produces (a mountain range's bag path, a
+/// rebalanced tree's grouping path) is the consumer's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkeletonStep {
     /// Position of the path node among its parent's children (0-indexed).
@@ -98,124 +129,8 @@ pub struct SkeletonStep {
     /// Number of sibling digests at this step (children count minus one).
     ///
     /// Always `>= 1`: uniform steps inside a frontier subtree carry `k - 1`
-    /// siblings, and grouping nodes have `2..=k` children. The log skeleton
-    /// therefore never contains a zero-sibling (promoted) step.
+    /// siblings, and a bagging/grouping node has `2..=k` children. A skeleton
+    /// therefore never contains a zero-sibling (promoted) step — see the
+    /// canonical proof encoding in [`crate::proof`].
     pub sibling_count: usize,
-}
-
-/// Compute the log-spine inclusion skeleton for a leaf `index` in a tree of
-/// `tree_size` leaves at arity `k`.
-///
-/// Returns the per-step `(position, sibling_count)` from the leaf's frontier
-/// subtree up to the spine root, or `None` when the inputs cannot describe a
-/// valid log position (`k` out of range, empty frontier, or `index` outside the
-/// covered range).
-#[must_use]
-pub fn inclusion_skeleton(k: u64, tree_size: u64, index: u64) -> Option<Vec<SkeletonStep>> {
-    if !ARITY_RANGE.contains(&k) {
-        return None;
-    }
-    let coords = frontier_for_size(tree_size, k);
-    if coords.is_empty() {
-        return None;
-    }
-    let k_usize = k as usize;
-
-    // Locate the perfect frontier subtree that contains `index`.
-    let mut target = None;
-    for (f_idx, &(left, height)) in coords.iter().enumerate() {
-        let cap = k.checked_pow(height)?;
-        let limit = left.checked_add(cap)?;
-        if index >= left && index < limit {
-            target = Some((f_idx, left, height));
-            break;
-        }
-    }
-    let (f_idx, left, height) = target?;
-
-    let mut steps = Vec::with_capacity(height as usize);
-
-    // Uniform steps inside the frontier subtree: the base-k digits of the
-    // offset, low digit first (leaf → frontier-node root).
-    let mut offset = index - left;
-    for _ in 0..height {
-        steps.push(SkeletonStep {
-            position: (offset % k) as usize,
-            sibling_count: k_usize - 1,
-        });
-        offset /= k;
-    }
-
-    // Grouping steps: from the frontier node up to the spine root.
-    for (position, child_count) in grouping_steps(coords.len(), k_usize, f_idx) {
-        steps.push(SkeletonStep {
-            position,
-            sibling_count: child_count - 1,
-        });
-    }
-
-    Some(steps)
-}
-
-/// The grouping steps a frontier node at `f_idx` traverses to reach the root.
-///
-/// The frontier is folded by repeatedly merging the rightmost `k` nodes; when
-/// `2..=k` remain they merge into the root. Each returned `(position, child_count)`
-/// describes one merge the target participates in, ordered from the frontier node
-/// up to the root.
-fn grouping_steps(coords_len: usize, k: usize, f_idx: usize) -> Vec<(usize, usize)> {
-    let mut frontier_len = coords_len;
-    let mut target_pos = f_idx;
-    let mut steps = Vec::new();
-    while frontier_len > k {
-        let split = frontier_len - k;
-        if target_pos >= split {
-            steps.push((target_pos - split, k));
-            target_pos = split;
-        }
-        frontier_len = split + 1;
-    }
-    if frontier_len > 1 {
-        steps.push((target_pos, frontier_len));
-    }
-    steps
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The skeleton length equals the expected log-level path length
-    /// `c + height`, and every step carries at least one sibling.
-    #[test]
-    fn skeleton_steps_never_promoted() {
-        for k in [2u64, 3, 5, 16] {
-            for tree_size in 1..=130u64 {
-                for index in 0..tree_size {
-                    let skeleton =
-                        inclusion_skeleton(k, tree_size, index).expect("valid log position");
-                    for step in &skeleton {
-                        assert!(step.sibling_count >= 1, "k={k} n={tree_size} i={index}");
-                        assert!(step.position <= step.sibling_count);
-                    }
-                }
-            }
-        }
-    }
-
-    /// A singleton tree's honest proof is the empty path.
-    #[test]
-    fn singleton_skeleton_is_empty() {
-        for k in [2u64, 4, 7] {
-            assert_eq!(inclusion_skeleton(k, 1, 0), Some(Vec::new()));
-        }
-    }
-
-    #[test]
-    fn rejects_out_of_range() {
-        assert_eq!(inclusion_skeleton(1, 4, 0), None);
-        assert_eq!(inclusion_skeleton(257, 4, 0), None);
-        assert_eq!(inclusion_skeleton(2, 0, 0), None);
-        assert_eq!(inclusion_skeleton(2, 4, 4), None);
-    }
 }

@@ -78,12 +78,18 @@ mod tests {
     /// (`inclusion_skeleton(k, tree_size, index)`).
     ///
     /// This guard couples both crates: `reduction_count` lives here in CML
-    /// (the frontier carry); `frontier_for_size` / `inclusion_skeleton` /
-    /// `SkeletonStep` live in the `spine` core. It stays where it can reach
-    /// both.
+    /// (the frontier carry); `frontier_for_size` lives in the `spine` core; the
+    /// concrete MMR `mountain_skeleton` lives in CML (the log owns its topology
+    /// now). It stays where it can reach all three.
+    ///
+    /// The `inclusionSkeleton` Lean guards move to N54's mountain re-spec; here
+    /// the structural `frontier_for_size`/`reduction_count` parity is pinned, plus
+    /// the mountain skeleton's leaf → peak → bag shape on small cases.
     #[test]
     fn lean_guard_parity() {
-        use spine::{SkeletonStep, frontier_for_size, inclusion_skeleton};
+        use spine::{SkeletonStep, frontier_for_size};
+
+        use crate::mountain::mountain_skeleton;
 
         let step = |position: usize, sibling_count: usize| SkeletonStep {
             position,
@@ -101,16 +107,23 @@ mod tests {
         let rc3: Vec<u32> = (0..9).map(|n| reduction_count(n, 3)).collect();
         assert_eq!(rc3, vec![0, 0, 1, 0, 0, 1, 0, 0, 2]);
 
-        // inclusionSkeleton k treeSize index  ⟷  inclusion_skeleton(k, tree_size, index)
-        // Each Lean pair `(position, siblingCount)` maps to one `SkeletonStep`.
-        assert_eq!(inclusion_skeleton(2, 1, 0), Some(vec![])); // singleton: empty path
-        assert_eq!(inclusion_skeleton(2, 5, 4), Some(vec![step(1, 1)])); // lone height-0 node
+        // The MMR mountain skeleton: leaf → peak (within-mountain base-k digits)
+        // then bagPath (peak → root). A singleton tree promotes to the root.
+        assert_eq!(mountain_skeleton(2, 1, 0), Some(vec![]));
+        // n=5, k=2: peaks = mountains of [4, 1]. Leaf 4 is the lone size-1
+        // mountain (peak 1); empty peakPath, one bag step (2 peaks → 1 bag node,
+        // peak 1 at position 1, one sibling).
+        assert_eq!(mountain_skeleton(2, 5, 4), Some(vec![step(1, 1)]));
+        // n=4, k=2: one perfect mountain (height 2), no bag. Leaf 1: two digit
+        // steps inside the mountain, empty bagPath.
         assert_eq!(
-            inclusion_skeleton(2, 4, 1),
+            mountain_skeleton(2, 4, 1),
             Some(vec![step(1, 1), step(0, 1)])
-        ); // two digit steps
-        assert_eq!(inclusion_skeleton(3, 4, 3), Some(vec![step(1, 1)]));
-        assert_eq!(inclusion_skeleton(2, 4, 4), None); // index out of range
-        assert_eq!(inclusion_skeleton(1, 4, 0), None); // arity out of range
+        );
+        // n=4, k=3: peaks = mountains of [3, 1]. Leaf 3 is the lone peak 1; one
+        // bag step (2 peaks → 1 bag node, position 1).
+        assert_eq!(mountain_skeleton(3, 4, 3), Some(vec![step(1, 1)]));
+        assert_eq!(mountain_skeleton(2, 4, 4), None); // index out of range
+        assert_eq!(mountain_skeleton(1, 4, 0), None); // arity out of range
     }
 }

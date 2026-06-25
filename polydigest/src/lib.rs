@@ -90,8 +90,16 @@ pub mod proof {
         verify_inclusion_with_coupling,
     };
 }
+// The append-only log's concrete MMR topology — the mountain skeleton (the
+// `SkeletonStep` shape an `eml` inclusion proof pins against) and the backward-bag
+// peak fold (the `bag` a `Seal` member root is folded with). Re-exported so the
+// `eml` facade reaches its topology through the combinator.
+pub use cml::mountain::{bag_peaks, mountain_skeleton};
+// The mutable tree's concrete rebalanced topology — the peer the `emt` facade
+// supplies (its skeleton and peak fold). The combinator lifts both, so both
+// topologies are reachable through it.
+pub use cmt::{rebalanced_bag, rebalanced_skeleton};
 pub use spine::{
     Hasher, LeafProof, Meta, RunExtent, Seal, SkeletonStep, Subtree, count_leaves, evaluate,
-    frontier_for_size, hasher, inclusion_skeleton, mr, nary_mr, null_digest, subtree, topology,
-    within_subtree_path,
+    frontier_for_size, hasher, mr, nary_mr, null_digest, subtree, topology, within_subtree_path,
 };

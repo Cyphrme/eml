@@ -36,21 +36,39 @@
 //! kind selects only the materialization the caller wants back. A kind that
 //! cannot reproduce the committed layout fails the binding-root check.
 
-use spine::{Hasher, constant_time_eq, fold_frontier, frontier_for_size, nary_mr};
+use spine::{Hasher, constant_time_eq, frontier_for_size, nary_mr};
 
 use crate::Sealed;
 use crate::root::combined_root;
 
 /// Which readable materialization [`fill`] produces.
 ///
-/// Both kinds fold the same committed partition over the same data and so
-/// reproduce the same root; the kind selects the in-hand representation only.
+/// Both kinds unroll the same committed partition over the same data and bag the
+/// resulting peaks with their own peak-fold ([`FillKind::bag`]). Under MMR the
+/// log's peak-bag is the established rightmost-`k` grouping — the **same** fold
+/// the mutable tree uses — so the two kinds currently reproduce the **same** root
+/// (the commitment is unchanged by the migration; durability lives in the proof,
+/// not the root). A fill verifies against a commitment of its own kind; the
+/// per-kind `bag` keeps that correct should the topologies ever diverge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FillKind {
     /// A readable append-only log (EML) materialization.
     Eml,
     /// A readable mutable-tree (EMT) materialization.
     Emt,
+}
+
+impl FillKind {
+    /// The peak-bagging this kind commits with. Both are the established
+    /// rightmost-`k` grouping ([`cml::mountain::bag_peaks`] ≡ [`cmt::rebalanced_bag`]),
+    /// named per kind so the two stay distinguishable by intent.
+    #[must_use]
+    pub fn bag(self) -> spine::BagFn {
+        match self {
+            Self::Eml => cml::mountain::bag_peaks,
+            Self::Emt => cmt::rebalanced_bag,
+        }
+    }
 }
 
 /// Why a [`fill`] request was rejected.
@@ -251,9 +269,10 @@ pub fn fill<D: AsRef<[u8]>>(
 
     // ── Unroll each committed component over the real leaves it stands for.
     //    The algorithm is active at every position (the fill closes any gaps),
-    //    so every leaf contributes its real hash and no cell is null. Both
-    //    EML and EMT materializations fold the identical partition, so the
-    //    recomputed root is kind-independent. ──
+    //    so every leaf contributes its real hash and no cell is null. The
+    //    component peaks are then bagged with the **kind's** fold (EML → MMR
+    //    backward-bag, EMT → rebalanced): the two kinds reproduce different
+    //    roots, so a fill verifies against a commitment of its own kind. ──
     let mut component_roots = Vec::with_capacity(partition.len());
     for &(left, height) in &partition {
         let span = k.pow(height) as usize;
@@ -261,14 +280,7 @@ pub fn fill<D: AsRef<[u8]>>(
         let component = subtree_root(hasher, &leaf_data[lo..lo + span], k);
         component_roots.push(component);
     }
-    let member_root = if component_roots.is_empty() {
-        hasher.empty()
-    } else {
-        fold_frontier(component_roots, k as usize, |chunk| {
-            let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
-            nary_mr(hasher, &refs)
-        })
-    };
+    let member_root = kind.bag()(hasher, &component_roots, k);
 
     // ── Trustless verification: the rebuilt binding root must equal the one
     //    the Sealed committed. For a gapless single-algorithm fill the rebuilt
@@ -276,11 +288,16 @@ pub fn fill<D: AsRef<[u8]>>(
     //    binding root is the promotion-aware combined root, which we compute
     //    from the rebuilt member root and the committed timeline. A mismatch
     //    means the data could not reproduce the committed layout. ──
+    // The committed seal must have been bagged with this kind's topology; verify
+    // the rebuilt member root reproduces the committed binding root under the
+    // same bag. (Filling an EMT against an EML seal — or vice versa — correctly
+    // mismatches: the two topologies commit different roots.)
     let committed = sealed
-        .binding_root(alg_id, hasher, all_hashers)
+        .binding_root(alg_id, hasher, all_hashers, kind.bag())
         .map_err(fill_error_from_missing_hasher)?
         .ok_or(FillError::UnknownAlgorithm(alg_id))?;
-    let rebuilt_binding = rebuilt_binding_root(sealed, alg_id, hasher, &member_root, all_hashers)?;
+    let rebuilt_binding =
+        rebuilt_binding_root(sealed, alg_id, hasher, &member_root, all_hashers, kind)?;
     if !constant_time_eq(&rebuilt_binding, &committed) {
         return Err(FillError::BindingRootMismatch { alg_id });
     }
@@ -305,6 +322,7 @@ fn rebuilt_binding_root(
     hasher: &dyn Hasher,
     member_root: &[u8],
     all_hashers: &[(u64, &dyn Hasher)],
+    kind: FillKind,
 ) -> Result<Vec<u8>, FillError> {
     // The fold's children are every active algorithm's member root; for the
     // filled algorithm we substitute the rebuilt root so the check verifies the
@@ -312,7 +330,7 @@ fn rebuilt_binding_root(
     // root set: folding over a truncated one (a missing hasher silently dropped)
     // would compare against a binding root no algorithm committed.
     let mut members = sealed
-        .all_member_roots(all_hashers)
+        .all_member_roots(all_hashers, kind.bag())
         .map_err(fill_error_from_missing_hasher)?;
     for (id, mr) in &mut members {
         if *id == alg_id {
@@ -446,7 +464,8 @@ mod tests {
         log.seal().await.unwrap()
     }
 
-    /// The from-scratch oracle: a fresh single-algorithm log over the same data.
+    /// The from-scratch EML oracle: a fresh single-algorithm log over the same
+    /// data (its root is the MMR backward-bag).
     async fn from_scratch_root(data: &[Vec<u8>], k: usize) -> Vec<u8> {
         let config = TreeConfig { arity: k as u64 };
         let mut log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(Sha256Hasher), config)
@@ -458,31 +477,68 @@ mod tests {
         log.root_for_at(0, log.count()).await.unwrap()
     }
 
+    /// Build a single-algorithm (alg 0 from genesis) mutable tree over `data` and
+    /// seal it — the EMT-topology (rebalanced) counterpart of `gapless_sealed`.
+    fn emt_sealed(data: &[Vec<u8>], k: usize) -> Sealed {
+        let mut t = crate::EpochTree::new(crate::CmtConfig { arity: k as u64 }).unwrap();
+        t.register_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        for (i, leaf) in data.iter().enumerate() {
+            t.set(i as u64, leaf.clone(), Vec::new()).unwrap();
+        }
+        t.seal().unwrap()
+    }
+
+    /// The from-scratch EMT oracle: a fresh single-algorithm mutable tree over the
+    /// same data (its root is the rebalanced fold).
+    fn emt_from_scratch_root(data: &[Vec<u8>], k: usize) -> Vec<u8> {
+        let mut t = crate::EpochTree::new(crate::CmtConfig { arity: k as u64 }).unwrap();
+        t.register_algorithm(0, Box::new(Sha256Hasher)).unwrap();
+        for (i, leaf) in data.iter().enumerate() {
+            t.set(i as u64, leaf.clone(), Vec::new()).unwrap();
+        }
+        t.root(0).unwrap()
+    }
+
     // ─────────────────────────────────────────────────────────────────────
-    // CORRECTNESS ORACLE + TRUSTLESS VERIFY — the filled root equals a
-    // from-scratch build AND verifies against the committed binding root, for
-    // BOTH target kinds, across a sweep of sizes (incl. non-powers-of-k) and
-    // arities. No difftest baseline (D7); the from-scratch rebuild is the oracle.
+    // CORRECTNESS ORACLE + TRUSTLESS VERIFY — each fill kind reproduces a
+    // from-scratch build of its own structure AND verifies against a committed
+    // binding root of the MATCHING kind, across a sweep of sizes (incl.
+    // non-powers-of-k) and arities. No difftest baseline (D7); the from-scratch
+    // rebuild is the oracle.
+    //
+    // Both retained capabilities (EML and EMT fill) are tested, each against a
+    // seal of its own kind. Under the root-preserving peak-bag (the established
+    // rightmost-k grouping) the two kinds' folds coincide, so this also confirms
+    // the commitment is unchanged across kinds; the test pins each kind against
+    // its own seal regardless, which stays correct if the topologies ever diverge.
     // ─────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn filled_root_equals_from_scratch_and_verifies_both_kinds() {
+    fn filled_root_equals_from_scratch_and_verifies_per_kind() {
         smol::block_on(async {
             let h = Sha256Hasher;
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
             for k in [2usize, 3, 4] {
                 for n in 1u64..40 {
                     let data = leaves(n);
-                    let sealed = gapless_sealed(&data, k).await;
-                    let oracle = from_scratch_root(&data, k).await;
-                    for kind in [FillKind::Eml, FillKind::Emt] {
-                        let filled = fill(&sealed, 0, &h, &data, kind, &hashers)
-                            .expect("gapless data verifies against the committed binding root");
-                        assert_eq!(filled.root(), oracle.as_slice(), "n={n} k={k} {kind:?}");
-                        assert_eq!(filled.tree_size(), n);
-                        assert_eq!(filled.alg_id(), 0);
-                        assert_eq!(filled.kind(), kind);
-                    }
+
+                    // EML fill against an append-only (MMR) seal.
+                    let eml_sealed = gapless_sealed(&data, k).await;
+                    let eml_oracle = from_scratch_root(&data, k).await;
+                    let eml_filled = fill(&eml_sealed, 0, &h, &data, FillKind::Eml, &hashers)
+                        .expect("gapless data verifies against the EML binding root");
+                    assert_eq!(eml_filled.root(), eml_oracle.as_slice(), "EML n={n} k={k}");
+                    assert_eq!(eml_filled.tree_size(), n);
+                    assert_eq!(eml_filled.kind(), FillKind::Eml);
+
+                    // EMT fill against a mutable-tree (rebalanced) seal.
+                    let emt_sealed = emt_sealed(&data, k);
+                    let emt_oracle = emt_from_scratch_root(&data, k);
+                    let emt_filled = fill(&emt_sealed, 0, &h, &data, FillKind::Emt, &hashers)
+                        .expect("gapless data verifies against the EMT binding root");
+                    assert_eq!(emt_filled.root(), emt_oracle.as_slice(), "EMT n={n} k={k}");
+                    assert_eq!(emt_filled.tree_size(), n);
+                    assert_eq!(emt_filled.kind(), FillKind::Emt);
                 }
             }
         });

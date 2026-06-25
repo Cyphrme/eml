@@ -68,10 +68,12 @@ fn leaf_proof_accepts_legit_and_rejects_forged() {
             assert_eq!(proof.index, index);
             assert_eq!(proof.tree_size, size);
             assert_eq!(proof.arity, 2);
-            assert!(proof.verify(&h, &root), "index={index}");
+            // The log's concrete MMR skeleton for this leaf's trusted position.
+            let sk = polydigest::mountain_skeleton(2, size, index).expect("valid position");
+            assert!(proof.verify(&h, &sk, &root), "index={index}");
             let mut forged = proof.clone();
             forged.leaf_hash = h.leaf(b"forged-item");
-            assert!(!forged.verify(&h, &root), "index={index}");
+            assert!(!forged.verify(&h, &sk, &root), "index={index}");
         }
 
         // Out of range yields no proof.

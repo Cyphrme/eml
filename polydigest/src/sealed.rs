@@ -84,40 +84,63 @@ impl Sealed {
         self.0.seal().meta()
     }
 
-    /// **Derived view.** Each active algorithm's member root.
+    /// **Derived view.** Each active algorithm's member root, bagged with `bag`
+    /// (the structure's peak fold — see [`spine::BagFn`]).
     #[must_use]
-    pub fn member_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Vec<(u64, Vec<u8>)> {
-        self.0.seal().member_roots(hashers)
+    pub fn member_roots(
+        &self,
+        hashers: &[(u64, &dyn Hasher)],
+        bag: spine::BagFn,
+    ) -> Vec<(u64, Vec<u8>)> {
+        self.0.seal().member_roots(hashers, bag)
     }
 
-    /// **Derived view.** A single algorithm's member root.
+    /// **Derived view.** A single algorithm's member root, bagged with `bag`.
     #[must_use]
-    pub fn member_root(&self, alg_id: u64, hasher: &dyn Hasher) -> Option<Vec<u8>> {
-        self.0.seal().member_root(alg_id, hasher)
+    pub fn member_root(
+        &self,
+        alg_id: u64,
+        hasher: &dyn Hasher,
+        bag: spine::BagFn,
+    ) -> Option<Vec<u8>> {
+        self.0.seal().member_root(alg_id, hasher, bag)
     }
 
     /// **Derived view.** Every active algorithm's member root, erroring on a
-    /// missing hasher.
+    /// missing hasher. Bagged with `bag`.
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Spine`] wrapping [`spine::Error::MissingHasher`]
     /// (naming the algorithm) if any active algorithm has no hasher in `hashers`.
-    pub fn all_member_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
-        self.0.seal().all_member_roots(hashers).map_err(Into::into)
+    pub fn all_member_roots(
+        &self,
+        hashers: &[(u64, &dyn Hasher)],
+        bag: spine::BagFn,
+    ) -> Result<Vec<(u64, Vec<u8>)>> {
+        self.0
+            .seal()
+            .all_member_roots(hashers, bag)
+            .map_err(Into::into)
     }
 
-    /// **Derived view.** Each active algorithm's binding root.
+    /// **Derived view.** Each active algorithm's binding root, over member roots
+    /// bagged with `bag`.
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Spine`] wrapping [`spine::Error::MissingHasher`]
     /// (naming the algorithm) if any active algorithm has no hasher in `hashers`.
-    pub fn binding_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
-        self.0.binding_roots(hashers)
+    pub fn binding_roots(
+        &self,
+        hashers: &[(u64, &dyn Hasher)],
+        bag: spine::BagFn,
+    ) -> Result<Vec<(u64, Vec<u8>)>> {
+        self.0.binding_roots(hashers, bag)
     }
 
-    /// **Derived view.** A single algorithm's binding root under `hasher`.
+    /// **Derived view.** A single algorithm's binding root under `hasher`, over
+    /// member roots bagged with `bag`.
     ///
     /// # Errors
     ///
@@ -129,8 +152,9 @@ impl Sealed {
         alg_id: u64,
         hasher: &dyn Hasher,
         all_hashers: &[(u64, &dyn Hasher)],
+        bag: spine::BagFn,
     ) -> Result<Option<Vec<u8>>> {
-        self.0.binding_root(alg_id, hasher, all_hashers)
+        self.0.binding_root(alg_id, hasher, all_hashers, bag)
     }
 
     /// **Derived view.** The committed canonicalization run-extents.

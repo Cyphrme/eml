@@ -5,7 +5,6 @@ members = [
     "polydigest",
     "cml",
     "eml",
-    "difftest",
     "cmt",
     "emt",
     "storage-fjall",

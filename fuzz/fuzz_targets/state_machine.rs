@@ -412,13 +412,13 @@ fuzz_target!(|input: FuzzInput| {
                         Ok(None) | Err(_) => continue,
                     };
 
+                    let skeleton =
+                        eml::mountain_skeleton(2, ts, i).expect("valid log position");
                     assert!(
                         eml::verify_inclusion(
                             hasher.as_ref(),
                             &hasher.leaf(&reference_leaves[i as usize]),
-                            i,
-                            ts,
-                            2,
+                            &skeleton,
                             &proof.path,
                             &root,
                         ),

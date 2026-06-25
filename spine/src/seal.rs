@@ -25,15 +25,19 @@
 //! metadata is provably derivable from the tree, not a parallel committed
 //! channel):
 //!
-//! - each algorithm's **member root** is the fold of its frontier peaks ([`Seal::member_root`]) —
-//!   the raw per-algorithm root the leaves authenticate against;
+//! - each algorithm's **member root** is the consumer's *bag* of its frontier peaks
+//!   ([`Seal::member_root`]) — the raw per-algorithm root the leaves authenticate against. The
+//!   `Seal` stores peaks only and is topology-agnostic: how peaks bag into one root (an append-only
+//!   log's mountain backward-bag, a mutable tree's rebalanced fold) is supplied by the consumer,
+//!   not owned here;
 //! - the **canonicalization run-extents** are the height `>= 1` frontier nodes, derived from
 //!   `(tree_size, arity)` alone ([`Seal::run_extents`]).
 //!
-//! Member roots are folds, so they need the algorithm's own hasher; the
-//! run-extents are pure geometry and need nothing. The **binding root** — the
-//! combined root over the member roots and the committed timeline — is the
-//! `polydigest` combinator's derived view, not the structural `Seal`'s.
+//! Member roots are bags, so they need the algorithm's own hasher *and* the
+//! consumer's bagging function; the run-extents are pure geometry and need
+//! nothing. The **binding root** — the combined root over the member roots and
+//! the committed timeline — is the `polydigest` combinator's derived view, not the
+//! structural `Seal`'s.
 //!
 //! # One-way
 //!
@@ -53,8 +57,7 @@
 use crate::error::{Error, Result};
 use crate::hasher::Hasher;
 use crate::metadata::Meta;
-use crate::mr::nary_mr;
-use crate::topology::{ARITY_RANGE, fold_frontier, frontier_for_size};
+use crate::topology::{ARITY_RANGE, frontier_for_size};
 
 /// One committed canonicalization run-extent: a contiguous collapse of
 /// `arity^height` consecutive leaves into a single subtree, beginning at leaf
@@ -213,47 +216,68 @@ impl Seal {
     // --- derived views -------------------------------------------------------
 
     /// **Derived view.** Each algorithm's member root: `(alg_id, member_root)`,
-    /// sorted by algorithm ID. A member root is the fold of that algorithm's
-    /// frontier peaks under its own hash — the raw per-algorithm root the leaves
-    /// authenticate against. Folded on demand, never stored.
+    /// sorted by algorithm ID. A member root is the consumer's `bag` of that
+    /// algorithm's frontier peaks under its own hash — the raw per-algorithm root
+    /// the leaves authenticate against. Folded on demand, never stored.
+    ///
+    /// The `Seal` stores peaks only and is **topology-agnostic**: how the peaks
+    /// bag into one root is the consumer's choice, supplied as
+    /// `bag(hasher, peaks, arity)` — the append-only log passes its mountain
+    /// backward-bag, the mutable tree its rebalanced fold. The same `bag` applies
+    /// to every algorithm (one topology per structure).
     ///
     /// `hashers` resolves an algorithm's own hash; an algorithm with no hasher
     /// in `hashers` is skipped (its member root cannot be folded).
     #[must_use]
-    pub fn member_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Vec<(u64, Vec<u8>)> {
+    pub fn member_roots(
+        &self,
+        hashers: &[(u64, &dyn Hasher)],
+        bag: crate::topology::BagFn,
+    ) -> Vec<(u64, Vec<u8>)> {
         self.frontiers
             .iter()
             .filter_map(|(id, peaks)| {
                 let hasher = hashers.iter().find(|(hid, _)| hid == id).map(|(_, h)| *h)?;
-                Some((*id, fold_peaks(hasher, peaks, self.arity)))
+                Some((*id, bag(hasher, peaks, self.arity)))
             })
             .collect()
     }
 
-    /// **Derived view.** A single algorithm's member root — the fold of its
-    /// frontier peaks under `hasher`. Returns `None` if the algorithm has no
-    /// frontier in this seal.
+    /// **Derived view.** A single algorithm's member root — the consumer's `bag`
+    /// of its frontier peaks under `hasher`. Returns `None` if the algorithm has
+    /// no frontier in this seal. See [`Self::member_roots`] for the `bag`
+    /// contract.
     #[must_use]
-    pub fn member_root(&self, alg_id: u64, hasher: &dyn Hasher) -> Option<Vec<u8>> {
+    pub fn member_root(
+        &self,
+        alg_id: u64,
+        hasher: &dyn Hasher,
+        bag: crate::topology::BagFn,
+    ) -> Option<Vec<u8>> {
         let peaks = self.peaks(alg_id)?;
-        Some(fold_peaks(hasher, peaks, self.arity))
+        Some(bag(hasher, peaks, self.arity))
     }
 
     /// **Derived view.** Every algorithm's member root, in sealed (sorted)
-    /// order, folded under the supplied hashers — or [`Error::MissingHasher`]
+    /// order, bagged under the supplied hashers — or [`Error::MissingHasher`]
     /// naming the first algorithm with no hasher.
     ///
     /// Unlike [`Self::member_roots`], which is the *produce*-side view a caller
     /// may legitimately take over a subset of hashers, this is the *complete*
     /// member-root child set the `polydigest` binding-root fold commits. Folding over
     /// a truncated child list would yield a combined root no algorithm
-    /// published, so a missing hasher is an error, never a silent skip.
+    /// published, so a missing hasher is an error, never a silent skip. See
+    /// [`Self::member_roots`] for the `bag` contract.
     ///
     /// # Errors
     ///
     /// Returns [`Error::MissingHasher`] (naming the algorithm) if any algorithm
     /// with a frontier in this seal has no hasher in `hashers`.
-    pub fn all_member_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
+    pub fn all_member_roots(
+        &self,
+        hashers: &[(u64, &dyn Hasher)],
+        bag: crate::topology::BagFn,
+    ) -> Result<Vec<(u64, Vec<u8>)>> {
         self.frontiers
             .iter()
             .map(|(id, peaks)| {
@@ -262,7 +286,7 @@ impl Seal {
                     .find(|(hid, _)| hid == id)
                     .map(|(_, h)| *h)
                     .ok_or(Error::MissingHasher { alg_id: *id })?;
-                Ok((*id, fold_peaks(hasher, peaks, self.arity)))
+                Ok((*id, bag(hasher, peaks, self.arity)))
             })
             .collect()
     }
@@ -280,20 +304,6 @@ impl Seal {
             .map(|(left, height)| RunExtent { left, height })
             .collect()
     }
-}
-
-/// Fold a frontier's peaks into the single member root using the shared
-/// [`fold_frontier`] combinator — identical to the append-only log's own root
-/// fold, so the folded member root matches a from-scratch build over the same
-/// data.
-fn fold_peaks(hasher: &dyn Hasher, peaks: &[Vec<u8>], k: u64) -> Vec<u8> {
-    if peaks.is_empty() {
-        return hasher.empty();
-    }
-    fold_frontier(peaks.to_vec(), k as usize, |chunk| {
-        let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
-        nary_mr(hasher, &refs)
-    })
 }
 
 #[cfg(test)]
@@ -329,6 +339,22 @@ mod tests {
         fn clone_box(&self) -> Box<dyn Hasher> {
             Box::new(self.clone())
         }
+    }
+
+    /// A generic rightmost-`k` grouping bag, used here only to exercise the
+    /// `Seal`'s topology-agnostic peak-storage mechanism. A real consumer
+    /// supplies its own (the log's mountain backward-bag, the tree's rebalanced
+    /// fold); the `Seal` itself owns no topology.
+    fn test_bag(hasher: &dyn Hasher, peaks: &[Vec<u8>], k: u64) -> Vec<u8> {
+        use crate::mr::nary_mr;
+        use crate::topology::fold_frontier;
+        if peaks.is_empty() {
+            return hasher.empty();
+        }
+        fold_frontier(peaks.to_vec(), k as usize, |chunk| {
+            let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+            nary_mr(hasher, &refs)
+        })
     }
 
     #[test]
@@ -375,17 +401,18 @@ mod tests {
         // A single frontier peak is the member root (promotion).
         let peak = vec![0xCD; 32];
         let sealed = Seal::new(1, 2, vec![(0, vec![peak.clone()])]).expect("well-formed");
-        assert_eq!(sealed.member_root(0, &H), Some(peak));
+        assert_eq!(sealed.member_root(0, &H, test_bag), Some(peak));
     }
 
     #[test]
     fn member_root_folds_two_peaks_with_the_hasher() {
-        // Two peaks fold to nary_mr(hasher, [p0, p1]).
+        use crate::mr::nary_mr;
+        // Two peaks bag to nary_mr(hasher, [p0, p1]) under the generic bag.
         let p0 = vec![0x01; 32];
         let p1 = vec![0x02; 32];
         let expected = nary_mr(&H, &[p0.as_slice(), p1.as_slice()]);
         let sealed = Seal::new(3, 2, vec![(0, vec![p0.clone(), p1.clone()])]).expect("well-formed");
-        assert_eq!(sealed.member_root(0, &H), Some(expected));
+        assert_eq!(sealed.member_root(0, &H, test_bag), Some(expected));
     }
 
     #[test]
@@ -403,12 +430,12 @@ mod tests {
         .expect("well-formed");
         let partial: [(u64, &dyn Hasher); 1] = [(0, &H)];
         assert_eq!(
-            sealed.all_member_roots(&partial),
+            sealed.all_member_roots(&partial, test_bag),
             Err(Error::MissingHasher { alg_id: 1 })
         );
         // With every hasher present the fold succeeds.
         let full: [(u64, &dyn Hasher); 2] = [(0, &H), (1, &H)];
-        assert_eq!(sealed.all_member_roots(&full).unwrap().len(), 2);
+        assert_eq!(sealed.all_member_roots(&full, test_bag).unwrap().len(), 2);
     }
 
     #[test]
