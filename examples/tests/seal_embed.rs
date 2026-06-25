@@ -49,6 +49,14 @@ impl spine::Hasher for H {
 // kernel topology and the same hash, so the same data maps to the same digest.
 // ---------------------------------------------------------------------------
 
+// INTENTIONAL MMR break, pending nrd confirm — an EMT seal's (rebalanced)
+// member root no longer equals a separately-built EML log's (mountain) root over
+// the same payloads; the log mountain-bags and the tree rebalances. Same dropped
+// cross-structure equality as `seal_emt_then_resume_eml_appends_forward`; the
+// D10 Principal-Tree embedding (opaque-leaf) is unaffected. (Coincides here only
+// because size 3 has <=k peaks, where the two folds agree.)
+#[ignore = "cross-structure EMT-seal vs EML-log root-equality is a dropped invariant under MMR; \
+            provisional, pending nrd confirm"]
 #[test]
 fn seal_root_equals_native_append_root() {
     let payloads: &[&[u8]] = &[b"alpha", b"beta", b"gamma"];
@@ -266,6 +274,14 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
 // the sealed member root — the frontier carries forward losslessly.
 // ---------------------------------------------------------------------------
 
+// INTENTIONAL MMR break, pending nrd confirm — resuming an EML from an EMT's
+// sealed frontier no longer reproduces the EMT member root, since the log
+// mountain-bags and the tree rebalances; the D10 Principal-Tree embedding
+// (CML-root-as-opaque-leaf) is unaffected; same-structure (EML->EML) resume is
+// preserved. (This case coincides only because size 3 has <=k peaks, where the
+// two folds agree; it diverges once a seal has more than k peaks.)
+#[ignore = "cross-structure EMT-seal -> EML-resume root-equality is a dropped invariant under MMR; \
+            provisional, pending nrd confirm"]
 #[test]
 fn seal_emt_then_resume_eml_appends_forward() {
     smol::block_on(async {
