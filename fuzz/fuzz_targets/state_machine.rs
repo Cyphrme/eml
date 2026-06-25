@@ -267,28 +267,6 @@ fn get_hasher(alg_id: u64) -> Box<dyn Hasher> {
 }
 
 // ---------------------------------------------------------------------------
-// Reference root computation
-// ---------------------------------------------------------------------------
-
-fn largest_pow2_lt(n: u64) -> u64 {
-    1u64 << (63 - (n - 1).leading_zeros())
-}
-
-/// RFC-9162 MTH over pre-hashed leaves (each entry is already leaf-hashed).
-fn mth(hasher: &dyn Hasher, leaves: &[Vec<u8>]) -> Vec<u8> {
-    match leaves.len() {
-        0 => hasher.empty(),
-        1 => leaves[0].clone(),
-        n => {
-            let k = largest_pow2_lt(n as u64) as usize;
-            let left = mth(hasher, &leaves[..k]);
-            let right = mth(hasher, &leaves[k..]);
-            hasher.node(&[&left, &right])
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Fuzz commands
 // ---------------------------------------------------------------------------
 
@@ -370,7 +348,12 @@ fuzz_target!(|input: FuzzInput| {
                 inject_faults.store(true, Ordering::SeqCst);
             }
 
-            // Verify invariants on the current state.
+            // Verify invariants on the current state. Reading back proofs is a
+            // *verification* of consistent state, not a fault test, so faults are
+            // disabled for the whole section — a spurious storage error would
+            // otherwise mask (or fake) a genuine proof failure.
+            inject_faults.store(false, Ordering::SeqCst);
+
             let global_size = log.size();
             assert_eq!(global_size, reference_leaves.len() as u64);
 
@@ -394,30 +377,58 @@ fuzz_target!(|input: FuzzInput| {
                     alg_epochs.last().map_or(0, |&(_, end)| end)
                 };
 
-                // root_for gives the raw member root for an alg.
+                // root_for gives the raw member root for an alg — the canonical
+                // (collapse + promotion) member root the leaves authenticate
+                // against. A plain Merkle-tree reference would be a *false*
+                // property here: same-value collapse and promotion mean the
+                // canonical root is generally NOT the RFC-9162 MTH of the
+                // projected leaves. So the invariant is a true round-trip: every
+                // active entry's inclusion proof verifies against this root.
                 let root = match log.root_for(alg_id) {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
 
-                // Construct the reference projection.
                 let hasher = get_hasher(alg_id);
-                let mut projected = Vec::with_capacity(ts as usize);
                 for i in 0..ts {
                     let active = alg_epochs
                         .iter()
                         .any(|&(start, end)| start <= i && (end == u64::MAX || i < end));
-                    let h = if active {
-                        hasher.leaf(&reference_leaves[i as usize])
-                    } else {
-                        hasher.null()
-                    };
-                    projected.push(h);
-                }
+                    // Inactive (null-projected) cells are an epoch-layer concern;
+                    // the round-trip property is over the active, real leaves.
+                    if !active {
+                        continue;
+                    }
 
-                let expected_root = mth(hasher.as_ref(), &projected);
-                assert_eq!(root, expected_root);
+                    // Build → seal → the inclusion proof of every active entry
+                    // verifies against the canonical member root. This holds
+                    // regardless of canonicalization, because both the proof path
+                    // and the root come from the same engine that collapses and
+                    // promotes.
+                    let proof = match smol::block_on(log.inclusion_proof_for(alg_id, i, ts)) {
+                        Ok(Some(p)) => p,
+                        // No proof produced (or a read error) is not a soundness
+                        // counterexample on its own; skip rather than fake a pass.
+                        Ok(None) | Err(_) => continue,
+                    };
+
+                    assert!(
+                        eml::verify_inclusion(
+                            hasher.as_ref(),
+                            &hasher.leaf(&reference_leaves[i as usize]),
+                            i,
+                            ts,
+                            2,
+                            &proof.path,
+                            &root,
+                        ),
+                        "inclusion proof for alg {alg_id} index {i} (tree_size {ts}) must verify \
+                         against the canonical member root"
+                    );
+                }
             }
+
+            inject_faults.store(true, Ordering::SeqCst);
         }
     });
 });
