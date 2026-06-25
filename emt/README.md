@@ -36,10 +36,9 @@ the outer mutable tree.
 spine → cmt → polydigest → EMT  (this crate: polydigest(cmt) @ k=2, no prefix)
 ```
 
-Compare the sibling instantiations:
+Compare the sibling instantiation:
 
 - **EML** (`eml`) — the append-only peer, `polydigest(cml)` @ `k = 2`.
-- **ETL** (`etl`) — `polydigest(cml)` @ `k = 2`, subtrees banned and prefixed.
 
 ## Further reading
 

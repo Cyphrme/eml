@@ -3,7 +3,7 @@
 This document describes the architecture of the repository: a **four-tier stack**
 of library crates — the structural **Merkle Spine**, the two single-algorithm
 canonical libraries **CML** and **CMT**, the **`polydigest`** combinator that lifts
-them across algorithms, and the concrete **EML / EMT / ETL** instantiations. It is the
+them across algorithms, and the concrete **EML / EMT** instantiations. It is the
 durable reference the crate documentation and the README point back to. Every
 architectural claim here is checkable against the source; the relevant paths are
 cited inline.
@@ -17,11 +17,10 @@ same way — the abstract core changes least, the instantiations most.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ L4 — EML / EMT / ETL — the instantiations ("Epoch" lives here)    eml/emt/etl │
+│ L4 — EML / EMT — the instantiations ("Epoch" lives here)            eml/emt  │
 │   EML = polydigest(CML) @ k=2, arbitrary subtrees · EMT = polydigest(CMT) @ k=2 │
-│   ETL = polydigest(CML) @ k=2, subtrees banned, prefixed (RFC 9162 + agility)   │
 └───────────────────────────────┬────────────────────────────────────────────────┘
-                                 │  instantiate at k=2 (+ prefix / subtree policy)
+                                 │  instantiate at k=2
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L3 — `polydigest` — the combinator (multi-hash, epochs)        polydigest     │
 │   lifts a CML or CMT across N algorithms over ONE shared data substrate         │
@@ -48,7 +47,7 @@ same way — the abstract core changes least, the instantiations most.
 
 CML and CMT depend only on the Spine, never on each other; the one currency they
 exchange is the spine's `Seal` (`spine/src/seal.rs`). `polydigest` depends on CML/CMT.
-EML/EMT/ETL depend on `polydigest`. No tier carries an application concept.
+EML/EMT depend on `polydigest`. No tier carries an application concept.
 
 ## Layer 1 — the Merkle Spine, the structural core
 
@@ -124,8 +123,8 @@ Orthogonal axes are kept separate and below the authentication boundary: subtree
 deduplication / hash-consing is a *storage* concern (ROBDD rule R1, tree → DAG) and
 entropy coding is a *serialization* concern, neither of which changes a root.
 
-A strict-binary construction (ETL) obtains its shape by *banning n-ary subtrees and
-fixing `k = 2`* — not by disabling canonicalization, which always runs.
+A strict-binary construction obtains its shape by *banning n-ary subtrees and fixing
+`k = 2`* — not by disabling canonicalization, which always runs.
 
 #### What canonicalization commits
 
@@ -389,38 +388,27 @@ deliverable is de-branded.
 | :--- | :--- | :--- | :--- |
 | **EML** — Epoch Merkle Log (`eml`) | `polydigest(CML)` | `k = 2`, no prefix, arbitrary subtrees | the general-purpose append-only log |
 | **EMT** — Epoch Merkle Tree (`emt`) | `polydigest(CMT)` | `k = 2`, no prefix | the general-purpose mutable tree |
-| **ETL** — Epoch Transparency Log (`etl`) | `polydigest(CML)` | `k = 2`, subtrees banned, prefixed | RFC 9162 root equality + crypto-agility |
 
 `k = 2` is a sane default, not an opinion: binary spine traversal is cheaply
 logarithmic.
 
 **EML** (`eml/src/lib.rs`) fixes `polydigest(CML)` at `k = 2` with no prefix and
-re-exports the whole surface, so a consumer reaches the library through `eml::*`. It
-is the behavioral successor of the historical reference log and reproduces its
-outputs byte-for-byte on matching shapes — the difftest oracle (below).
+re-exports the whole surface, so a consumer reaches the library through `eml::*`.
+Root and inclusion proofs are preserved from the prior design; the consistency proof
+is upgraded to the MMR prefix-form for durable witnesses.
 
 **EMT** (`emt/src/lib.rs`) fixes `polydigest(CMT)` at `k = 2`, pairing the combinator with
 a concrete unprefixed SHA-256 hasher so an application gets a ready mutable tree in a
 few lines.
 
-**ETL** (`etl/src/lib.rs`) fixes `polydigest(CML)` at `k = 2` with subtrees banned
-(flat-leaf only) and a **prefixed `Hasher`** that domain-separates leaf from
-inner-node hashes to match RFC 9162. A single-algorithm-from-genesis ETL computes a
-root equal to the RFC 9162 `MTH(D[n])`: the binding root has one constituent, so
-promotion lifts it to the raw single-algorithm root. RFC 9162's hash prefix
-distinguishes inner from leaf hashes, which **contradicts general promotion** (a
-promoted lone child must be indistinguishable from a plain node) — so the prefix is
-an instantiation-local `Hasher` policy, not a library axis, and the unprefixed EML is
-where promotion applies uniformly. Epochs and the `add_algorithm` surface stay fully
-active, so a second algorithm can activate.
-
 A consumer composes its own application structures over EML/EMT — for example a
 single principal tree (a mutable outer tree with an embedded append-only commit log,
-joined by the spine's opaque subtree embedding). That composition lives at the
-consumer's layer; no consumer-specific crate pollutes the library namespace.
+joined by the spine's opaque subtree embedding); a CT-style build can supply a
+prefixing `Hasher` wrapper over EML. That composition lives at the consumer's layer;
+no consumer-specific crate pollutes the library namespace.
 
 The repository's contribution is the **Spine + CML/CMT + `polydigest`**; the
-EML/EMT/ETL instantiations are thin.
+EML/EMT instantiations are thin.
 
 ## Dependency graph
 
@@ -430,10 +418,10 @@ EML/EMT/ETL instantiations are thin.
               CML (L2)            CMT (L2)
                   ╲               ╱
                  polydigest  (L3 combinator over CML/CMT, shared substrate)
-                  ╱      ╲              ╲
-            EML            ETL            EMT     (L4 instantiations)
-   =polydigest(CML)  =polydigest(CML)  =polydigest(CMT)
-        @k2 plain       @k2 prefixed    @k2
+                  ╱                    ╲
+            EML                        EMT        (L4 instantiations)
+   =polydigest(CML)              =polydigest(CMT)
+        @k2 plain                    @k2
 ```
 
 ## Formal guarantees
@@ -477,11 +465,12 @@ consumes roots as **opaque digests** and sits at the **`polydigest`** layer.
 - **Snapshot proof (`polydigest`)** — `snapshot_proof_sound` (`SnapshotProof.lean`),
   composed from the leaf proof against a sealed commitment.
 
-### Differential testing against a frozen baseline
+### Conformance and durability property tests
 
-Beyond the proofs, a differential harness (`difftest/`) pins the general-purpose
-log's output to a frozen reference implementation: for every sampled history, the
-current log's roots and proofs must equal the reference's, compared structurally
-through the types' derived equality. Any divergence on matching-shape inputs means a
-change altered an observable output of the log — which is exactly what the harness
-exists to catch.
+Beyond the proofs, the conformance oracle is the Lean corpus and the durability
+property tests (`eml/tests/proptests.rs`, `polydigest/tests/`). The log uses MMR
+**durable witnesses**: each leaf's inclusion path to its peak is permanent and extends
+append-only, so a witness generated before an append remains valid after it. Root and
+inclusion verification are preserved from the prior design; the consistency proof is
+upgraded to the MMR prefix-form. The durability property tests assert witness
+permanence across appends.

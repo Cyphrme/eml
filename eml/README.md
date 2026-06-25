@@ -10,13 +10,12 @@ This is one of the three concrete crates where "Epoch" lives.
 EML fixes the one opinion an instantiation makes — the arity — and re-exports the
 whole `polydigest` surface, so a consumer reaches the library through `eml::*`. `k = 2`
 is a sane default, not an opinion: binary spine traversal is cheaply logarithmic.
-The caller's `Hasher` is used directly, with no domain-separation wrapper (that is
-ETL's job).
+The caller's `Hasher` is used directly, with no domain-separation wrapper.
 
-EML is the **behavioral successor of the historical reference log** and reproduces
-its outputs **byte-for-byte on matching shapes** — distinct leaf payloads with no
-same-value sibling run. That equality is the correctness marker for the whole
-four-tier refactor, checked continuously by the differential oracle (`difftest/`).
+EML uses MMR **durable witnesses**: inclusion and binding-root verification are
+preserved from the prior design; the consistency proof is upgraded to the MMR
+prefix-form. Conformance is anchored by the Lean corpus and the durability property
+tests, not a byte-equality oracle.
 
 The re-exported driver still accepts any arity for callers that need a different
 `k`; the `eml::config()` preset and the `new` / `from_storage` constructors fix
@@ -28,11 +27,9 @@ The re-exported driver still accepts any arity for callers that need a different
 spine → cml → polydigest → EML  (this crate: polydigest(cml) @ k=2, no prefix, subtrees ok)
 ```
 
-Compare the sibling instantiations:
+Compare the sibling instantiation:
 
 - **EMT** (`emt`) — the mutable peer, `polydigest(cmt)` @ `k = 2`.
-- **ETL** (`etl`) — `polydigest(cml)` @ `k = 2`, subtrees banned and prefixed (RFC 9162
-  root equality + crypto-agility).
 
 ## Further reading
 
