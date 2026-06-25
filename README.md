@@ -17,13 +17,13 @@ instantiations.
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L4 — EML / EMT / ETL — the instantiations (where "Epoch" lives)   eml/emt/etl │
-│   EML = epoch(CML) @ k=2, arbitrary subtrees — the general-purpose log         │
-│   EMT = epoch(CMT) @ k=2 — the mutable peer                                    │
-│   ETL = epoch(CML) @ k=2, subtrees banned, prefixed — RFC 9162 + agility       │
+│   EML = polydigest(CML) @ k=2, arbitrary subtrees — the general-purpose log    │
+│   EMT = polydigest(CMT) @ k=2 — the mutable peer                               │
+│   ETL = polydigest(CML) @ k=2, subtrees banned, prefixed — RFC 9162 + agility  │
 └───────────────────────────────┬────────────────────────────────────────────────┘
                                  │  instantiate at k=2 (+ prefix / subtree policy)
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ L3 — the combinator                                                  epoch    │
+│ L3 — the combinator                                             polydigest    │
 │   lifts a CML or CMT across N algorithms over ONE shared data substrate:        │
 │   activation timeline · null-run-extents · binding root · binding proof         │
 └───────────────────────────────┬────────────────────────────────────────────────┘
@@ -56,20 +56,20 @@ multi-hash, but no frontier and so no consistency proofs. Both are `k`-generic a
 epoch-free; neither depends on the other. The one currency they exchange is the
 spine's `Seal`.
 
-**`epoch`** is the combinator that lifts a CML or CMT across **N algorithms over
-one shared data substrate**. It is *not* a composition of independent logs — that
-would duplicate the data and raise per-algorithm cost. The leaf entries live once;
-each algorithm is a frontier / hash-view over them, so its only per-algorithm cost
-is its own hashing. The combinator adds the three concepts the structural core
+**`polydigest`** is the combinator that lifts a CML or CMT across **N algorithms
+over one shared data substrate**. It is *not* a composition of independent logs —
+that would duplicate the data and raise per-algorithm cost. The leaf entries live
+once; each algorithm is a frontier / hash-view over them, so its only per-algorithm
+cost is its own hashing. The combinator adds the three concepts the structural core
 deliberately omits: the **activation timeline** (which algorithm is live where),
 the **null-run-extents** (the one logical count, for cross-tree alignment), and the
 **binding root** (the atomic multi-tree commitment).
 
 **EML / EMT / ETL** (`eml` / `emt` / `etl`) are the concrete instantiations, fixed
-at arity `k = 2`. **EML** — the Epoch Merkle Log, `epoch(CML)` — is the
-general-purpose append-only log. **EMT** — the Epoch Merkle Tree, `epoch(CMT)` — is
-the mutable peer. **ETL** — the Epoch Transparency Log, `epoch(CML)` with subtrees
-banned and a prefixed hasher — matches RFC 9162 root equality while keeping
+at arity `k = 2`. **EML** — the Epoch Merkle Log, `polydigest(CML)` — is the
+general-purpose append-only log. **EMT** — the Epoch Merkle Tree, `polydigest(CMT)` —
+is the mutable peer. **ETL** — the Epoch Transparency Log, `polydigest(CML)` with
+subtrees banned and a prefixed hasher — matches RFC 9162 root equality while keeping
 crypto-agility. `k = 2` is a sane default, not an opinion: binary spine traversal
 is cheaply logarithmic.
 
@@ -95,8 +95,8 @@ they *reduce* the count, tracking nothing.
 **The two-count model.** The structural tiers (Spine / CML / CMT) carry the bare
 *reduced* count and commit nothing. The only thing ever counted is the
 **null-run-extent**, retained solely for cross-tree alignment — and it lives only
-at the `epoch` combinator, because it is the one collapse instance that diverges
-per algorithm. Everything follows from this boundary.
+at the `polydigest` combinator, because it is the one collapse instance that
+diverges per algorithm. Everything follows from this boundary.
 
 **The binding root.** Per algorithm, `BR_i` is the same canonicalization fold
 applied one level up, over the per-algorithm member roots as opaque children (plus
@@ -137,7 +137,7 @@ verification has two properties:
 
 The proof split mirrors the code split: the structural theorems carry no epoch
 hypothesis and sit at the Spine / CML layer; the binding theorems consume roots as
-opaque digests and sit at the `epoch` layer.
+opaque digests and sit at the `polydigest` layer.
 
 | Theorem | Layer | Statement |
 | :--- | :--- | :--- |
@@ -147,11 +147,11 @@ opaque digests and sit at the `epoch` layer.
 | `leaf_proof_sound` | Spine | A leaf proof soundly binds a leaf hash to its trusted parameters |
 | `consistency_soundness` | CML | An accepting consistency proof forces the reconstructed old root to the genuine prefix root |
 | `consistency_append_only` | CML | Lifts consistency soundness to the data-level append-only relation |
-| `combinedRoot_binds_timeline` | epoch | A fixed binding root pins the member-digest list and binds the timeline |
-| `coupling_extract_sound` | epoch | Coupling opens the binding root soundly |
-| `binding_root_sound` | epoch | Each algorithm's binding root folds under its own hash |
-| `binding_proof_consistent` | epoch | Mutually consistent trusted binding roots prove agreement on the shared structure |
-| `snapshot_proof_sound` | epoch | A snapshot proof soundly aggregates leaf proofs against a sealed commitment |
+| `combinedRoot_binds_timeline` | polydigest | A fixed binding root pins the member-digest list and binds the timeline |
+| `coupling_extract_sound` | polydigest | Coupling opens the binding root soundly |
+| `binding_root_sound` | polydigest | Each algorithm's binding root folds under its own hash |
+| `binding_proof_consistent` | polydigest | Mutually consistent trusted binding roots prove agreement on the shared structure |
+| `snapshot_proof_sound` | polydigest | A snapshot proof soundly aggregates leaf proofs against a sealed commitment |
 
 ### Differential oracle
 

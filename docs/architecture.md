@@ -2,8 +2,8 @@
 
 This document describes the architecture of the repository: a **four-tier stack**
 of library crates — the structural **Merkle Spine**, the two single-algorithm
-canonical libraries **CML** and **CMT**, the **`epoch`** combinator that lifts them
-across algorithms, and the concrete **EML / EMT / ETL** instantiations. It is the
+canonical libraries **CML** and **CMT**, the **`polydigest`** combinator that lifts
+them across algorithms, and the concrete **EML / EMT / ETL** instantiations. It is the
 durable reference the crate documentation and the README point back to. Every
 architectural claim here is checkable against the source; the relevant paths are
 cited inline.
@@ -18,12 +18,12 @@ same way — the abstract core changes least, the instantiations most.
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L4 — EML / EMT / ETL — the instantiations ("Epoch" lives here)    eml/emt/etl │
-│   EML = epoch(CML) @ k=2, arbitrary subtrees · EMT = epoch(CMT) @ k=2          │
-│   ETL = epoch(CML) @ k=2, subtrees banned, prefixed (RFC 9162 + agility)        │
+│   EML = polydigest(CML) @ k=2, arbitrary subtrees · EMT = polydigest(CMT) @ k=2 │
+│   ETL = polydigest(CML) @ k=2, subtrees banned, prefixed (RFC 9162 + agility)   │
 └───────────────────────────────┬────────────────────────────────────────────────┘
                                  │  instantiate at k=2 (+ prefix / subtree policy)
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ L3 — `epoch` — the combinator (epoch / multi-hash)                  epoch     │
+│ L3 — `polydigest` — the combinator (multi-hash, epochs)        polydigest     │
 │   lifts a CML or CMT across N algorithms over ONE shared data substrate         │
 │   activation timeline · null-run-extents · binding root · binding proof         │
 └───────────────────────────────┬────────────────────────────────────────────────┘
@@ -42,13 +42,13 @@ same way — the abstract core changes least, the instantiations most.
 └──────────────────────────────────────────────────────────────────────────────┘
 
   seal stack (one-way):   CMT ──► Seal (general lattice) ──► CML ──► Snapshot
-  combinator:   epoch(CML) / epoch(CMT) over one shared data substrate
+  combinator:   polydigest(CML) / polydigest(CMT) over one shared data substrate
   embedding:    any tree's root ──► an opaque leaf in any other tree
 ```
 
 CML and CMT depend only on the Spine, never on each other; the one currency they
-exchange is the spine's `Seal` (`spine/src/seal.rs`). `epoch` depends on CML/CMT.
-EML/EMT/ETL depend on `epoch`. No tier carries an application concept.
+exchange is the spine's `Seal` (`spine/src/seal.rs`). `polydigest` depends on CML/CMT.
+EML/EMT/ETL depend on `polydigest`. No tier carries an application concept.
 
 ## Layer 1 — the Merkle Spine, the structural core
 
@@ -71,7 +71,7 @@ prefix byte, and an application that wants domain separation supplies a prefixin
 One identity follows: because `leaf(d) = H(d)`, a leaf whose payload is the four
 bytes `null` hashes to the same digest as the null constant `null() = H(b"null")`.
 The structural core treats this as intentional and inert — activity is read from the
-`epoch` combinator's committed timeline, never inferred from a digest equaling the
+`polydigest` combinator's committed timeline, never inferred from a digest equaling the
 null constant, so a correct verifier is never fooled by it.
 
 ### The proof spine
@@ -141,7 +141,7 @@ tracked**:
 The one collapse instance that *is* committed — the null-run-extent — is not a
 structural-layer concern: nulls are the only value whose run geometry diverges
 between algorithms, so their extents must be committed for cross-tree alignment, and
-that commitment lives at the `epoch` combinator (Layer 3). The active geometry that
+that commitment lives at the `polydigest` combinator (Layer 3). The active geometry that
 is structurally derivable stays derived; only the null gaps are committed.
 
 ### The general structural Seal
@@ -153,7 +153,7 @@ lattice** whose structural facet is invariant under algorithm churn, and it carr
 **no epoch field**. The seal is **one-way**: there is no `unseal` and no field
 mutator, so a value cannot be walked back to the construction it came from.
 
-The `epoch` combinator adds the epoch facet (activation timeline + binding root +
+The `polydigest` combinator adds the epoch facet (activation timeline + binding root +
 null-run-extents) as a **wrapper over** the general `Seal` — not as a field on it.
 This keeps an illegal "canonical-layer Seal with an epoch field" state
 unrepresentable and keeps the stable Seal decoupled from algorithm churn.
@@ -219,7 +219,7 @@ append-only-versus-mutable split is what decides which proofs are sound.
 | Consistency proofs    | **yes** (append-only prefix)           | **no** (unsound under mutation)         |
 | Inherits from Spine   | spine, canonicalization, inclusion, leaf proof, metadata | same (no consistency)  |
 | Adds                  | `seal → Snapshot`, snapshot proof base | per-node multi-hash add                 |
-| Epochs / binding      | **none** (added by `epoch`)            | **none** (added by `epoch`)             |
+| Epochs / binding      | **none** (added by `polydigest`)       | **none** (added by `polydigest`)        |
 | Config                | `k`                                    | `k`                                     |
 
 A standalone CML/CMT is **simpler** than a multi-algorithm engine, because the
@@ -231,9 +231,9 @@ CML (`cml/src/lib.rs`) owns the single-algorithm append-only mechanism: the fron
 carry (the base-`k` reduction schedule), the member-root fold, the append-only
 `ConsistencyProof` (`cml/src/consistency.rs`), inclusion and leaf proof generation,
 and the structural snapshot facet. It reads one algorithm's view (`AlgView`) over a
-borrowed node-reader substrate and never owns the store, so the `epoch` combinator
-can drive **N** views over **one** shared data substrate without duplicating leaf
-data.
+borrowed node-reader substrate and never owns the store, so the `polydigest`
+combinator can drive **N** views over **one** shared data substrate without
+duplicating leaf data.
 
 ### CMT — the mutable tree
 
@@ -246,18 +246,18 @@ leaf proof, and **per-node multi-hash add** — a single cell gains a digest und
 new algorithm and the root is recomputed by path-recompute at `O(log n)`
 (`Cmt::add_algorithm_at`, `cmt/src/tree.rs`). CMT exposes each algorithm's raw
 member root and the structural seal; it never folds them into a binding root — that
-is `epoch`'s facet.
+is `polydigest`'s facet.
 
-## Layer 3 — `epoch`, the combinator
+## Layer 3 — `polydigest`, the combinator
 
-`epoch` (`epoch/src/lib.rs`) is the combinator that adds the polymorphic dimension.
-It is **not a composition of independent CML/CMT instances** — that would duplicate
-the data and raise per-algorithm cost. It is a **combinator over a single shared
-data substrate**: the entries live once; each algorithm is a frontier / hash-view
-over them (its only per-algorithm cost is its own hashing). The append-only driver
-(`NaryMerkleLog`) holds the shared store plus, per algorithm, a `{hasher, frontier}`
-view; its mutable peer is `EpochTree` (`epoch/src/mutable.rs`), the same combinator
-lifting a `Cmt`.
+`polydigest` (`polydigest/src/lib.rs`) is the combinator that adds the polymorphic
+dimension. It is **not a composition of independent CML/CMT instances** — that would
+duplicate the data and raise per-algorithm cost. It is a **combinator over a single
+shared data substrate**: the entries live once; each algorithm is a frontier /
+hash-view over them (its only per-algorithm cost is its own hashing). The append-only
+driver (`NaryMerkleLog`) holds the shared store plus, per algorithm, a
+`{hasher, frontier}` view; its mutable peer is `EpochTree`
+(`polydigest/src/mutable.rs`), the same combinator lifting a `Cmt`.
 
 It adds the three concepts the structural core omits:
 
@@ -265,7 +265,7 @@ It adds the three concepts the structural core omits:
 
 A **committed epoch timeline** per algorithm: a vector of disjoint, ordered
 `(start, end)` intervals, with an open final interval for a live algorithm
-(`epoch/src/proof.rs`). It is the source for "is algorithm X active at position p?"
+(`polydigest/src/proof.rs`). It is the source for "is algorithm X active at position p?"
 (`committed_active_at`) and "what is the active set?" (`committed_active_algs`);
 `validate_committed_epochs` enforces strict sort by algorithm ID, ordered
 non-overlapping intervals, and a single trailing open interval. A timeline is
@@ -286,7 +286,7 @@ serialization committed in every binding root.
 The **binding root** is the live primary root: the head every per-algorithm root
 authenticates against. It is *not* a bespoke hash — it is the same canonicalization
 fold (`nary_mr`) applied one level up, over the per-algorithm **member roots as
-children** (`combined_root`, `epoch/src/root.rs`):
+children** (`combined_root`, `polydigest/src/root.rs`):
 
 ```
 combined_root(H, member_roots, alg_epochs, tree_size, arity)
@@ -313,13 +313,13 @@ Two facts make this a fold rather than a special-cased commitment:
 
 ### Coupling and the binding proof
 
-A `CouplingProof` (`epoch/src/proof.rs`) is the primitive that opens *one* binding
+A `CouplingProof` (`polydigest/src/proof.rs`) is the primitive that opens *one* binding
 root to its children: the per-algorithm raw roots together with the committed
 timeline. Its `authenticate` method revalidates structure and recomputes the binding
 root via the same `combined_root` fold; on success both the roots and the timeline
 are authenticated by the head.
 
-The **binding proof** (`epoch/src/binding_proof.rs`) is the first-class,
+The **binding proof** (`polydigest/src/binding_proof.rs`) is the first-class,
 cross-algorithm peer of the inclusion / consistency / leaf / snapshot proofs. It
 proves that a set of per-algorithm binding roots (each computed under its own hash)
 are mutually consistent — that every algorithm committed to the *same* member-root
@@ -340,13 +340,13 @@ per-algorithm cost increase.
 
 The seal stack is **three monotonic, one-way levels: mutable (CMT) → append-only
 (CML) → snapshot**. The Seal is the general structural lattice (Layer 1); the
-`epoch` combinator wraps it.
+`polydigest` combinator wraps it.
 
 - **Seal (CMT → CML), one-way.** A CMT's current topology is materialized as a
   frontier and consumed by CML. One-way because the frontier's efficiency invariant
   holds only while semantics stay append-only.
-- **`Sealed` — the combinator's snapshot.** `Sealed` (`epoch/src/sealed.rs`) is the
-  `epoch` combinator's frozen multi-algorithm commitment: the structural `Seal`
+- **`Sealed` — the combinator's snapshot.** `Sealed` (`polydigest/src/sealed.rs`) is the
+  `polydigest` combinator's frozen multi-algorithm commitment: the structural `Seal`
   paired with the committed timeline, deriving the binding root. It is a thin wrapper
   over the general `Seal` (the `BoundSnapshot` epoch facet), not an epoch field baked
   into the structural type.
@@ -355,10 +355,10 @@ The seal stack is **three monotonic, one-way levels: mutable (CMT) → append-on
   member root is the fold of an algorithm's frontier peaks, the binding root is the
   `combined_root` fold, and the run-extents are the `height >= 1` frontier nodes
   (pure `(tree_size, arity)` geometry).
-- **resume** (`epoch/src/tree.rs`) reopens an append-only log onto the committed
+- **resume** (`polydigest/src/tree.rs`) reopens an append-only log onto the committed
   frontier and appends forward. It is **data-free**: only the peaks are carried, so a
   resumed log cannot read the committed past — exactly the one-way guarantee.
-- **fill** (`epoch/src/filling.rs`) is the **trustless** path. It consumes the
+- **fill** (`polydigest/src/filling.rs`) is the **trustless** path. It consumes the
   `Sealed` *and* the real historical leaf data, rebuilds a full readable tree, and
   **verifies the rebuilt binding root against the committed one**. Both inputs are
   mandatory: because a log abstracts its leaves by hash, only the data-holding
@@ -373,7 +373,7 @@ The seal stack is **three monotonic, one-way levels: mutable (CMT) → append-on
 
 ### The snapshot proof
 
-The **snapshot proof** (`epoch/src/snapshot_proof.rs`) is the aggregate peer of the
+The **snapshot proof** (`polydigest/src/snapshot_proof.rs`) is the aggregate peer of the
 other proofs, answering "are these leaves legitimately in the sealed commitment?" in
 one self-contained witness. Its base case is the spine leaf proof: a sequence of
 leaf proofs verifies against the sealed member roots, and the member roots bind to
@@ -387,23 +387,23 @@ deliverable is de-branded.
 
 | Instantiation | Composed as | Choices | Role |
 | :--- | :--- | :--- | :--- |
-| **EML** — Epoch Merkle Log (`eml`) | `epoch(CML)` | `k = 2`, no prefix, arbitrary subtrees | the general-purpose append-only log |
-| **EMT** — Epoch Merkle Tree (`emt`) | `epoch(CMT)` | `k = 2`, no prefix | the general-purpose mutable tree |
-| **ETL** — Epoch Transparency Log (`etl`) | `epoch(CML)` | `k = 2`, subtrees banned, prefixed | RFC 9162 root equality + crypto-agility |
+| **EML** — Epoch Merkle Log (`eml`) | `polydigest(CML)` | `k = 2`, no prefix, arbitrary subtrees | the general-purpose append-only log |
+| **EMT** — Epoch Merkle Tree (`emt`) | `polydigest(CMT)` | `k = 2`, no prefix | the general-purpose mutable tree |
+| **ETL** — Epoch Transparency Log (`etl`) | `polydigest(CML)` | `k = 2`, subtrees banned, prefixed | RFC 9162 root equality + crypto-agility |
 
 `k = 2` is a sane default, not an opinion: binary spine traversal is cheaply
 logarithmic.
 
-**EML** (`eml/src/lib.rs`) fixes `epoch(CML)` at `k = 2` with no prefix and
+**EML** (`eml/src/lib.rs`) fixes `polydigest(CML)` at `k = 2` with no prefix and
 re-exports the whole surface, so a consumer reaches the library through `eml::*`. It
 is the behavioral successor of the historical reference log and reproduces its
 outputs byte-for-byte on matching shapes — the difftest oracle (below).
 
-**EMT** (`emt/src/lib.rs`) fixes `epoch(CMT)` at `k = 2`, pairing the combinator with
+**EMT** (`emt/src/lib.rs`) fixes `polydigest(CMT)` at `k = 2`, pairing the combinator with
 a concrete unprefixed SHA-256 hasher so an application gets a ready mutable tree in a
 few lines.
 
-**ETL** (`etl/src/lib.rs`) fixes `epoch(CML)` at `k = 2` with subtrees banned
+**ETL** (`etl/src/lib.rs`) fixes `polydigest(CML)` at `k = 2` with subtrees banned
 (flat-leaf only) and a **prefixed `Hasher`** that domain-separates leaf from
 inner-node hashes to match RFC 9162. A single-algorithm-from-genesis ETL computes a
 root equal to the RFC 9162 `MTH(D[n])`: the binding root has one constituent, so
@@ -419,8 +419,8 @@ single principal tree (a mutable outer tree with an embedded append-only commit 
 joined by the spine's opaque subtree embedding). That composition lives at the
 consumer's layer; no consumer-specific crate pollutes the library namespace.
 
-The repository's contribution is the **Spine + CML/CMT + `epoch`**; the EML/EMT/ETL
-instantiations are thin.
+The repository's contribution is the **Spine + CML/CMT + `polydigest`**; the
+EML/EMT/ETL instantiations are thin.
 
 ## Dependency graph
 
@@ -429,10 +429,10 @@ instantiations are thin.
                       ╱           ╲
               CML (L2)            CMT (L2)
                   ╲               ╱
-                   `epoch`  (L3 combinator over CML/CMT, shared substrate)
+                 polydigest  (L3 combinator over CML/CMT, shared substrate)
                   ╱      ╲              ╲
             EML            ETL            EMT     (L4 instantiations)
-       =epoch(CML)     =epoch(CML)     =epoch(CMT)
+   =polydigest(CML)  =polydigest(CML)  =polydigest(CMT)
         @k2 plain       @k2 prefixed    @k2
 ```
 
@@ -452,7 +452,7 @@ reviewer's guide). Two properties bound what the verification rests on:
 
 The proof split mirrors the code split: the structural theorems carry no epoch
 hypothesis and sit at the **Spine / CML** layer; every binding/epoch theorem
-consumes roots as **opaque digests** and sits at the **`epoch`** layer.
+consumes roots as **opaque digests** and sits at the **`polydigest`** layer.
 
 - **Canonicalization (Spine)** — `canonical_unique` (`Canonical.lean`): a structure
   reduces to a unique canonical normal form, the injectivity that pins a layout to
@@ -467,14 +467,14 @@ consumes roots as **opaque digests** and sits at the **`epoch`** layer.
   root forces the reconstructed old root to the genuine prefix root, and lifts to the
   data-level append-only relation. CMT has no consistency theorem because it has no
   consistency proof.
-- **Binding root and coupling (`epoch`)** — `combinedRoot_binds_timeline`,
+- **Binding root and coupling (`polydigest`)** — `combinedRoot_binds_timeline`,
   `coupling_extract_sound`: the binding root is the `nary_mr` fold over the
   member-root child digests plus the coverage child, so a fixed root pins the
   member-digest list (modulo collision) and binds the timeline.
-- **Binding proof (`epoch`)** — `binding_root_sound`, `binding_proof_consistent`
+- **Binding proof (`polydigest`)** — `binding_root_sound`, `binding_proof_consistent`
   (`BindingProof.lean`): each algorithm's binding root folds under its own hash, and
   mutually consistent trusted binding roots prove agreement on the shared structure.
-- **Snapshot proof (`epoch`)** — `snapshot_proof_sound` (`SnapshotProof.lean`),
+- **Snapshot proof (`polydigest`)** — `snapshot_proof_sound` (`SnapshotProof.lean`),
   composed from the leaf proof against a sealed commitment.
 
 ### Differential testing against a frozen baseline
