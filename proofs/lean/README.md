@@ -166,7 +166,7 @@ locations in the source files:
     — *under the fixed-width contract* (`EqWidth`, the `Hasher` digest-width hypothesis, N32)
     that makes the unprefixed concat parseable (`flatten_inj_of_eqWidth`); algorithm identities
     are the verifier's trusted active-set input, not recovered from the root. The combinator
-    imports the spine; the arrow runs epoch → spine only.
+    imports the spine; the arrow runs polydigest → spine only.
 - **[BindingProof.lean](EMLProof/BindingProof.lean)** (polydigest combinator):
   - `binding_root_sound`, `binding_proof_consistent`, `binding_proof_forgery_rejected` — the
     cross-algorithm binding-proof soundness theorems over the per-algorithm binding root
@@ -363,7 +363,7 @@ The **coupling verifier** is now discharged in [Polydigest.lean](EMLProof/Polydi
 carrying the same bytes a committed algorithm bound, modulo a byte-hash collision,
 under the fixed-width contract.
 
-**Still UNVERIFIED** (honest scope): the full multi-algorithm/epoch interaction
+**Still UNVERIFIED** (honest scope): the full multi-algorithm/polydigest interaction
 with the k-ary spine (the combinator soundness is proven over opaque digests, but
 its composition with the concrete k-ary roots is not yet end-to-end); and
 Rust-to-Lean transcription fidelity itself (mitigated, not eliminated, by the
