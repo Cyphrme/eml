@@ -16,8 +16,8 @@ crates**:
   the Spine (append-only log and mutable tree). Epoch-free.
 - **`epoch`** — the combinator that lifts a CML or CMT across N algorithms over one
   shared data substrate (activation timeline, null-run-extents, binding root).
-- **EML / EMT / ETL** (`eml` / `emt` / `etl`) — the concrete `k = 2` instantiations,
-  where "Epoch" lives.
+- **EML / EMT** (`eml` / `emt`) — the concrete `k = 2` instantiations, where "Epoch"
+  lives.
 
 ## What the whitepaper has wrong relative to the current model
 

@@ -16,12 +16,11 @@ instantiations.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ L4 — EML / EMT / ETL — the instantiations (where "Epoch" lives)   eml/emt/etl │
+│ L4 — EML / EMT — the instantiations (where "Epoch" lives)           eml/emt  │
 │   EML = polydigest(CML) @ k=2, arbitrary subtrees — the general-purpose log    │
 │   EMT = polydigest(CMT) @ k=2 — the mutable peer                               │
-│   ETL = polydigest(CML) @ k=2, subtrees banned, prefixed — RFC 9162 + agility  │
 └───────────────────────────────┬────────────────────────────────────────────────┘
-                                 │  instantiate at k=2 (+ prefix / subtree policy)
+                                 │  instantiate at k=2
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L3 — the combinator                                             polydigest    │
 │   lifts a CML or CMT across N algorithms over ONE shared data substrate:        │
@@ -65,19 +64,17 @@ deliberately omits: the **activation timeline** (which algorithm is live where),
 the **null-run-extents** (the one logical count, for cross-tree alignment), and the
 **binding root** (the atomic multi-tree commitment).
 
-**EML / EMT / ETL** (`eml` / `emt` / `etl`) are the concrete instantiations, fixed
-at arity `k = 2`. **EML** — the Epoch Merkle Log, `polydigest(CML)` — is the
-general-purpose append-only log. **EMT** — the Epoch Merkle Tree, `polydigest(CMT)` —
-is the mutable peer. **ETL** — the Epoch Transparency Log, `polydigest(CML)` with
-subtrees banned and a prefixed hasher — matches RFC 9162 root equality while keeping
-crypto-agility. `k = 2` is a sane default, not an opinion: binary spine traversal
-is cheaply logarithmic.
+**EML / EMT** (`eml` / `emt`) are the concrete instantiations, fixed at arity
+`k = 2`. **EML** — the Epoch Merkle Log, `polydigest(CML)` — is the general-purpose
+append-only log. **EMT** — the Epoch Merkle Tree, `polydigest(CMT)` — is the mutable
+peer. `k = 2` is a sane default, not an opinion: binary spine traversal is cheaply
+logarithmic.
 
 The library is **de-branded**. The deliverable is the crates; the instantiations
 are thin. A consumer composes its own application structures over EML/EMT — for
 example a mutable outer tree with an embedded append-only commit log, joined by the
-spine's opaque subtree embedding — but no consumer-specific crate lives in the
-library namespace.
+spine's opaque subtree embedding; a CT-style build can wrap any `Hasher` with RFC
+9162 prefix bytes — but no consumer-specific crate lives in the library namespace.
 
 ## Key design points
 
@@ -153,22 +150,14 @@ opaque digests and sit at the `polydigest` layer.
 | `binding_proof_consistent` | polydigest | Mutually consistent trusted binding roots prove agreement on the shared structure |
 | `snapshot_proof_sound` | polydigest | A snapshot proof soundly aggregates leaf proofs against a sealed commitment |
 
-### Differential oracle
+### Conformance
 
-A differential harness (`difftest/`) pins the general-purpose log's output to a
-frozen reference implementation. For matching-shape inputs (distinct leaf payloads,
-no same-value sibling run) the current log's roots and proofs must equal the
-reference's structurally. Any divergence on matching-shape inputs means a change
-altered an observable log output.
-
-The frozen baseline is materialized as a git worktree at
-`.scratch/worktrees/baseline-N1`. Because Cargo requires path dependencies outside
-the workspace root, this worktree must be created once after a fresh clone before
-running `cargo test --workspace`:
-
-```sh
-bash difftest/setup-baseline.sh
-```
+The log uses MMR **durable witnesses**: each leaf's inclusion path to its peak is
+permanent and extends append-only. Inclusion and binding-root verification are
+preserved from the prior design; the consistency proof is upgraded to the MMR
+prefix-form. The conformance oracle is the Lean corpus and the durability property
+tests (`eml/tests/proptests.rs`, `polydigest/tests/`), which assert witness
+permanence across appends.
 
 ## Building and testing
 

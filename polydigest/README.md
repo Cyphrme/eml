@@ -3,7 +3,7 @@
 **Tier L3 — the combinator over a shared data substrate.** `polydigest` lifts a
 single-algorithm `cml` log or `cmt` tree across **N algorithms over one shared data
 substrate**. It depends on `cml` and `cmt` (which depend on `spine`); the
-instantiations `eml` / `emt` / `etl` depend on it.
+instantiations `eml` / `emt` depend on it.
 
 ## Role
 
@@ -53,11 +53,11 @@ spine — the structural core
   │        ╲             ╱
   │      polydigest  ◄── this crate (the combinator)
   │         │
-  │       EML / EMT / ETL  (k=2 instantiations)
+  │       EML / EMT  (k=2 instantiations)
 ```
 
 ## Further reading
 
 - `cml` / `cmt` — the single-algorithm engines this combinator drives.
-- `eml` / `emt` / `etl` — the concrete instantiations at `k = 2`.
+- `eml` / `emt` — the concrete instantiations at `k = 2`.
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.

@@ -8,6 +8,5 @@ members = [
     "cmt",
     "emt",
     "storage-fjall",
-    "etl",
     "examples",
 ]
