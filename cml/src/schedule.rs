@@ -77,13 +77,13 @@ mod tests {
     /// (`frontier_for_size(n, k)`, `reduction_count(n, k)`) or first
     /// (`inclusion_skeleton(k, tree_size, index)`).
     ///
-    /// This guard couples both crates: `reduction_count` lives here in EML
+    /// This guard couples both crates: `reduction_count` lives here in CML
     /// (the frontier carry); `frontier_for_size` / `inclusion_skeleton` /
-    /// `SkeletonStep` live in the `pmt` kernel. It stays where it can reach
+    /// `SkeletonStep` live in the `spine` core. It stays where it can reach
     /// both.
     #[test]
     fn lean_guard_parity() {
-        use pmt::{SkeletonStep, frontier_for_size, inclusion_skeleton};
+        use spine::{SkeletonStep, frontier_for_size, inclusion_skeleton};
 
         let step = |position: usize, sibling_count: usize| SkeletonStep {
             position,

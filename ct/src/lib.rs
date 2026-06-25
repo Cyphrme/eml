@@ -28,7 +28,7 @@
 //! Subtree appends are not allowed in the CT build.  The log is created
 //! with [`new`], which fixes `LogKind::Flat`.
 
-pub use eml::*;
+pub use cyphr_log::*;
 
 /// CT build arity: binary (`k = 2`).
 pub const LOG_ARITY: u64 = 2;
@@ -36,9 +36,7 @@ pub const LOG_ARITY: u64 = 2;
 /// CT build configuration: arity `k = 2`.
 #[must_use]
 pub fn config() -> TreeConfig {
-    TreeConfig {
-        arity: LOG_ARITY,
-    }
+    TreeConfig { arity: LOG_ARITY }
 }
 
 /// Prefixed `Hasher` that implements RFC 9162 domain separation.

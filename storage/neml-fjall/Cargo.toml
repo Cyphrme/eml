@@ -10,7 +10,8 @@ license-file  = "../../LICENSE"
 doctest = false
 
 [dependencies]
-eml = { version = "0.1.0", path = "../../eml" }
+# The Storage trait is the epoch combinator's; this backend implements it.
+epoch = { version = "0.1.0", path = "../../epoch" }
 fjall      = "3"
 thiserror  = "2"
 

@@ -8,12 +8,12 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
-use eml::{ProofStep, verify_consistency};
+use cyphr_log::{ProofStep, verify_consistency};
 
 #[derive(Debug)]
 struct FuzzHasher;
 
-impl eml::Hasher for FuzzHasher {
+impl cyphr_log::Hasher for FuzzHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x00]);
@@ -34,7 +34,7 @@ impl eml::Hasher for FuzzHasher {
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
-    fn clone_box(&self) -> Box<dyn eml::Hasher> {
+    fn clone_box(&self) -> Box<dyn cyphr_log::Hasher> {
         Box::new(FuzzHasher)
     }
 }

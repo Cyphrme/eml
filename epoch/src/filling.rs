@@ -1,4 +1,4 @@
-//! `fill` — the operator-level filling operation over a sealed [`pmt::Sealed`].
+//! `fill` — the operator-level filling operation over a sealed [`crate::Sealed`].
 //!
 //! `fill` is the **trustless verification path**: it consumes a `Sealed` (the
 //! committed basis) and the **real historical leaf data**, rebuilds a full,
@@ -15,10 +15,10 @@
 //! `fill` consumes **two** things and neither substitutes for the other:
 //!
 //! - the **trusted `Sealed`** — the authoritative, committed basis. Its
-//!   [`run-extents`](pmt::Sealed::run_extents) and sealed [`tree_size`](pmt::Sealed::tree_size) are
-//!   the boundary the fill unrolls against; the unroll length and the canonical contiguous-collapse
-//!   geometry are read from the *committed* record, never inferred from a digest or a node's shape
-//!   (INV-AUTH-BOUNDARY);
+//!   [`run-extents`](crate::Sealed::run_extents) and sealed [`tree_size`](crate::Sealed::tree_size)
+//!   are the boundary the fill unrolls against; the unroll length and the canonical
+//!   contiguous-collapse geometry are read from the *committed* record, never inferred from a
+//!   digest or a node's shape (INV-AUTH-BOUNDARY);
 //! - the **complete original leaf data** — every leaf the `Sealed` committed, in index order. This
 //!   is a hard physical requirement and a *feature*: a log abstracts its leaves by hash, so only
 //!   the party that still holds the real data can fill. A `Sealed` alone cannot reconstruct the
@@ -36,9 +36,10 @@
 //! kind selects only the materialization the caller wants back. A kind that
 //! cannot reproduce the committed layout fails the binding-root check.
 
-use pmt::{
-    Hasher, Sealed, combined_root, constant_time_eq, fold_frontier, frontier_for_size, nary_mr,
-};
+use spine::{Hasher, constant_time_eq, fold_frontier, frontier_for_size, nary_mr};
+
+use crate::Sealed;
+use crate::root::combined_root;
 
 /// Which readable materialization [`fill`] produces.
 ///
@@ -279,8 +280,7 @@ pub fn fill<D: AsRef<[u8]>>(
         .binding_root(alg_id, hasher, all_hashers)
         .map_err(fill_error_from_missing_hasher)?
         .ok_or(FillError::UnknownAlgorithm(alg_id))?;
-    let rebuilt_binding =
-        rebuilt_binding_root(sealed, alg_id, hasher, &member_root, all_hashers)?;
+    let rebuilt_binding = rebuilt_binding_root(sealed, alg_id, hasher, &member_root, all_hashers)?;
     if !constant_time_eq(&rebuilt_binding, &committed) {
         return Err(FillError::BindingRootMismatch { alg_id });
     }
@@ -294,7 +294,7 @@ pub fn fill<D: AsRef<[u8]>>(
 }
 
 /// Compute the binding root the *rebuilt* member root implies: the
-/// canonicalization fold ([`pmt::combined_root`]) over every active algorithm's
+/// canonicalization fold ([`crate::root::combined_root`]) over every active algorithm's
 /// member root, with the filled algorithm's committed member root replaced by
 /// the *rebuilt* (gapless) one, under that algorithm's hash. Genesis promotion
 /// is native to the fold — a single member root under a trivial timeline folds
@@ -328,14 +328,17 @@ fn rebuilt_binding_root(
     ))
 }
 
-/// Map a kernel [`pmt::Error`] from a member/binding-root fold into the fill
-/// error channel. Only [`pmt::Error::MissingHasher`] can arise here — the
+/// Map a combinator [`crate::Error`] from a member/binding-root fold into the
+/// fill error channel. Only [`spine::Error::MissingHasher`] can arise here — the
 /// timeline and arity were validated when the `Sealed` was constructed — so any
 /// other variant is unreachable on this path.
-fn fill_error_from_missing_hasher(e: pmt::Error) -> FillError {
+fn fill_error_from_missing_hasher(e: crate::Error) -> FillError {
     match e {
-        pmt::Error::MissingHasher { alg_id } => FillError::MissingHasher { alg_id },
-        pmt::Error::BadArity | pmt::Error::MalformedEpochs | pmt::Error::MalformedFrontier => {
+        crate::Error::Spine(spine::Error::MissingHasher { alg_id }) => {
+            FillError::MissingHasher { alg_id }
+        },
+        crate::Error::Spine(spine::Error::BadArity | spine::Error::MalformedFrontier)
+        | crate::Error::MalformedEpochs => {
             unreachable!("binding-root fold over a validated Sealed yields only MissingHasher")
         },
     }
@@ -391,8 +394,8 @@ fn subtree_root<D: AsRef<[u8]>>(hasher: &dyn Hasher, leaves: &[D], k: u64) -> Ve
 
 #[cfg(test)]
 mod tests {
-    use pmt::Hasher;
     use sha2::{Digest, Sha256};
+    use spine::Hasher;
 
     use super::*;
     use crate::storage::MemoryStorage;

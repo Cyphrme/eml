@@ -11,8 +11,8 @@ repository    = "https://github.com/Cyphrme/eml"
 name = "ct_build"
 
 [dependencies]
-# The general append-only library; this crate fixes k=2 + prefixed Hasher.
-eml = { path = "../eml" }
+# The EML library instantiation; this crate fixes k=2 + prefixed Hasher over it.
+cyphr-log = { path = "../cyphr-log" }
 
 [dev-dependencies]
 sha2 = "0.10"

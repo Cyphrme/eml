@@ -8,8 +8,13 @@ license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 
 [dependencies]
-# The epoch combinator lifts the structural spine; it depends on it alone.
+# The epoch combinator lifts the structural spine across N algorithms by driving
+# N single-algorithm CML engines over one shared substrate; it depends on the
+# spine (the structural facet, the binding-root fold) and CML (the per-algorithm
+# engine it drives).
 spine = { path = "../spine" }
+cml = { path = "../cml" }
 
 [dev-dependencies]
 sha2 = "0.10"
+smol = "2.0"

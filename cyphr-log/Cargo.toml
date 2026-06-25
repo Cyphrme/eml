@@ -11,8 +11,9 @@ repository    = "https://github.com/Cyphrme/eml"
 name = "cyphr_log"
 
 [dependencies]
-# The general append-only library; this crate is its k=2, no-prefix instantiation.
-eml = { path = "../eml" }
+# The EML library is the epoch combinator over the CML single-algorithm engine;
+# this crate is its k=2, no-prefix instantiation.
+epoch = { path = "../epoch" }
 
 [dev-dependencies]
 sha2 = "0.10"
