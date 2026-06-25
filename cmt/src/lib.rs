@@ -1,36 +1,41 @@
-//! `emt` — the Epoch Merkle Tree, the **mutable** engineering library over the
-//! [`pmt`] kernel.
+//! `cmt` — the Canonical Mutable Tree, the **single-algorithm mutable** tree
+//! over the [`spine`] structural core.
 //!
-//! EMT is the mutable peer of the append-only EML library: both are built on
-//! the kernel and neither depends on the other (the seal currency between them
-//! is [`pmt::Sealed`]). Where EML optimizes an append-only frontier and proves
-//! consistency, EMT lets interior cells change — so it keeps **no frontier and
-//! no consistency proofs** (the frontier's left-subtrees-sealed assumption is
-//! unsound under mutation). It is positional and dense, sharing the kernel's
-//! proof-spine index space, and supports:
+//! CMT is the mutable peer of the append-only [`cml`](https://docs.rs/cml) log:
+//! both are built on the spine and neither depends on the other (the structural
+//! currency between them is [`spine::Seal`]). Where CML optimizes an append-only
+//! frontier and proves consistency, CMT lets interior cells change — so it keeps
+//! **no frontier and no consistency proofs** (the frontier's left-subtrees-sealed
+//! assumption is unsound under mutation). It is positional and dense, sharing the
+//! spine's proof-spine index space, and supports:
 //!
-//! - construct, [`Emt::set`] / [`Emt::get`];
-//! - inclusion proofs and **non-membership** (inclusion of the kernel null constant via collapse);
+//! - construct, [`Cmt::set`] / [`Cmt::get`];
+//! - inclusion proofs and **non-membership** (inclusion of the spine null constant via collapse);
 //! - **per-node multi-hash** — a cell addressable under many algorithms — with **retroactive
-//!   per-node algorithm addition** at `O(log n)` ([`Emt::add_algorithm_at`]), distinct from bulk
-//!   filling (an EML operator);
-//! - a one-way [`Emt::seal`] into [`pmt::Sealed`] (no `unseal`).
+//!   per-node algorithm addition** at `O(log n)` ([`Cmt::add_algorithm_at`]), the structural
+//!   materialization of N per-algorithm roots (D11);
+//! - a one-way [`Cmt::seal`] into the general structural [`spine::Seal`] (no `unseal`).
 //!
-//! Verification stays in the kernel: a proof generated here is checked with
-//! [`pmt::verify_inclusion`] against an authenticated `(index, tree_size,
+//! **Epoch-free (D13).** The CMT carries no committed timeline and no binding /
+//! combined root. The cross-tree binding of its per-algorithm member roots is the
+//! `epoch` combinator's facet, added as a wrapper over the structural `Seal`
+//! (`epoch(cmt)`); the CMT exposes each algorithm's raw [`root`](Cmt::root) and
+//! [`member_roots`](Cmt::member_roots), never a binding root.
+//!
+//! Verification stays in the spine: a proof generated here is checked with
+//! [`spine::verify_inclusion`] against an authenticated `(index, tree_size,
 //! arity, root)`.
 
 mod error;
 mod proof;
-mod spine;
+mod shape;
 mod tree;
 
 pub use error::{Error, Result};
-// The kernel hasher seam and the proof/seal types the public surface returns
-// are re-exported so callers need not also name `pmt` directly.
-// Mirrors the re-export symmetry in eml-log (eml/src/lib.rs).
-pub use pmt::{Hasher, LeafProof, ProofStep, Sealed, verify_inclusion};
-pub use tree::{Config, Emt};
+// The structural hasher seam and the proof/seal types the public surface returns
+// are re-exported so callers need not also name `spine` directly.
+pub use spine::{Hasher, LeafProof, ProofStep, Seal, verify_inclusion};
+pub use tree::{Cmt, Config};
 
 #[cfg(test)]
 mod tests {
@@ -41,7 +46,7 @@ mod tests {
     #[derive(Debug)]
     struct Sha256Hasher;
 
-    impl pmt::Hasher for Sha256Hasher {
+    impl spine::Hasher for Sha256Hasher {
         fn leaf(&self, data: &[u8]) -> Vec<u8> {
             Sha256::digest(data).to_vec()
         }
@@ -62,7 +67,7 @@ mod tests {
             Sha256::digest(data).to_vec()
         }
 
-        fn clone_box(&self) -> Box<dyn pmt::Hasher> {
+        fn clone_box(&self) -> Box<dyn spine::Hasher> {
             Box::new(Sha256Hasher)
         }
     }
@@ -70,8 +75,8 @@ mod tests {
     const ALG: u64 = 0;
     const K: u64 = 2;
 
-    fn tree_with(payloads: &[&[u8]]) -> Emt {
-        let mut t = Emt::new(Config { arity: K }).expect("valid arity");
+    fn tree_with(payloads: &[&[u8]]) -> Cmt {
+        let mut t = Cmt::new(Config { arity: K }).expect("valid arity");
         t.register_algorithm(ALG, Box::new(Sha256Hasher))
             .expect("fresh alg");
         for (i, p) in payloads.iter().enumerate() {
@@ -82,7 +87,7 @@ mod tests {
 
     #[test]
     fn empty_tree_has_no_root() {
-        let t = Emt::new(Config::default()).unwrap();
+        let t = Cmt::new(Config::default()).unwrap();
         assert!(t.is_empty());
         assert_eq!(t.root(ALG), None);
     }
@@ -90,11 +95,11 @@ mod tests {
     #[test]
     fn rejects_out_of_range_arity() {
         assert_eq!(
-            Emt::new(Config { arity: 1 }).unwrap_err(),
+            Cmt::new(Config { arity: 1 }).unwrap_err(),
             Error::InvalidArity(1)
         );
         assert_eq!(
-            Emt::new(Config { arity: 257 }).unwrap_err(),
+            Cmt::new(Config { arity: 257 }).unwrap_err(),
             Error::InvalidArity(257)
         );
     }
@@ -131,26 +136,26 @@ mod tests {
         assert_eq!(t2.root(ALG).unwrap(), r_with_meta);
     }
 
-    /// The materialized root equals a from-scratch kernel evaluation of the
-    /// canonical subtree — the oracle pinning the spine to PMT semantics.
+    /// The materialized root equals a from-scratch spine evaluation of the
+    /// canonical subtree — the oracle pinning the materialization to spine semantics.
     #[test]
-    fn root_matches_kernel_evaluate() {
+    fn root_matches_spine_evaluate() {
         for size in 1u64..=20 {
             let payloads: Vec<Vec<u8>> = (0..size).map(|i| format!("p{i}").into_bytes()).collect();
             let refs: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
             let t = tree_with(&refs);
-            let expected = kernel_root(&payloads);
+            let expected = spine_root(&payloads);
             assert_eq!(t.root(ALG).unwrap(), expected, "size={size}");
         }
     }
 
-    /// Build the canonical kernel subtree for a flat sequence at k=2 and
-    /// evaluate it, independent of EMT's materialization.
-    fn kernel_root(payloads: &[Vec<u8>]) -> Vec<u8> {
-        use pmt::{Subtree, frontier_for_size};
+    /// Build the canonical spine subtree for a flat sequence at k=2 and
+    /// evaluate it, independent of the CMT's materialization.
+    fn spine_root(payloads: &[Vec<u8>]) -> Vec<u8> {
+        use spine::{Subtree, frontier_for_size};
         let h = Sha256Hasher;
         let leaves: Vec<Subtree> = payloads.iter().map(|p| Subtree::Leaf(p.clone())).collect();
-        // Reassemble the same frontier-folded shape the kernel topology uses.
+        // Reassemble the same frontier-folded shape the spine topology uses.
         let coords = frontier_for_size(payloads.len() as u64, K);
         let mut frontier: Vec<Subtree> = coords
             .iter()
@@ -167,11 +172,11 @@ mod tests {
         } else {
             Subtree::Node(frontier)
         };
-        pmt::evaluate(&h, &shape)
+        spine::evaluate(&h, &shape)
     }
 
-    fn perfect(leaves: &[pmt::Subtree], left: u64, height: u32) -> pmt::Subtree {
-        use pmt::Subtree;
+    fn perfect(leaves: &[spine::Subtree], left: u64, height: u32) -> spine::Subtree {
+        use spine::Subtree;
         if height == 0 {
             return leaves[left as usize].clone();
         }
@@ -183,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn inclusion_proof_verifies_against_kernel() {
+    fn inclusion_proof_verifies_against_spine() {
         for size in 1u64..=20 {
             let payloads: Vec<Vec<u8>> = (0..size).map(|i| format!("v{i}").into_bytes()).collect();
             let refs: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
@@ -193,7 +198,7 @@ mod tests {
             for index in 0..size {
                 let (leaf, path) = t.inclusion_proof(ALG, index).unwrap();
                 assert!(
-                    pmt::verify_inclusion(&h, &leaf, index, size, K, &path, &root),
+                    spine::verify_inclusion(&h, &leaf, index, size, K, &path, &root),
                     "size={size} index={index}"
                 );
             }
@@ -232,7 +237,7 @@ mod tests {
         let h = Sha256Hasher;
         let (_, path) = t.inclusion_proof(ALG, 2).unwrap();
         let forged = h.leaf(b"not-c");
-        assert!(!pmt::verify_inclusion(&h, &forged, 2, 4, K, &path, &root));
+        assert!(!spine::verify_inclusion(&h, &forged, 2, 4, K, &path, &root));
     }
 
     #[test]
@@ -245,7 +250,7 @@ mod tests {
         let root = t.root(ALG).unwrap();
         let (leaf, path) = t.non_membership_proof(ALG, 1).expect("cell hashes to null");
         assert_eq!(leaf, h.null());
-        assert!(pmt::verify_inclusion(
+        assert!(spine::verify_inclusion(
             &h,
             &leaf,
             1,
@@ -283,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn seal_is_one_way_into_kernel_sealed() {
+    fn seal_is_one_way_into_structural_seal() {
         let t = tree_with(&[b"a", b"b", b"c"]);
         let root = t.root(ALG).unwrap();
         let sealed = t.seal().expect("non-empty seal");
@@ -293,12 +298,12 @@ mod tests {
         // algorithm's own hash reproduces the live root.
         assert!(sealed.peaks(ALG).is_some());
         assert_eq!(sealed.member_root(ALG, &Sha256Hasher), Some(root));
-        // `sealed` is a kernel value; there is no path back to an `Emt`.
+        // `sealed` is a structural `Seal`; there is no path back to a `Cmt`.
     }
 
     #[test]
     fn empty_tree_cannot_be_sealed() {
-        let t = Emt::new(Config::default()).unwrap();
+        let t = Cmt::new(Config::default()).unwrap();
         assert_eq!(t.seal().unwrap_err(), Error::EmptySeal);
     }
 }

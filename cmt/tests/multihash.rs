@@ -1,14 +1,17 @@
-//! Property tests for the EMT's two cost classes (CN6-MULTIHASH, D11):
+//! Property tests for the CMT's structural multi-hash cost classes (CN6-MULTIHASH, D11):
 //!
-//! - **incremental** (this crate): a node gains a digest under a new algorithm, the root recomputed
-//!   in `O(log n)` along its ancestors only; and
+//! - **incremental**: a node gains a digest under a new algorithm, the root recomputed in `O(log
+//!   n)` along its ancestors only; and
 //! - the path-recompute on `set` agrees with a from-scratch rebuild.
 //!
 //! The incremental add is shown *distinct* from a from-scratch (`O(n)`) build:
 //! it yields the identical root while touching only the ancestor path, witnessed
 //! by the recompute count being the path depth rather than the node total.
+//!
+//! The binding / combined root over these per-algorithm member roots is the
+//! `epoch` combinator's facet, not the CMT's — its tests live in `epoch`.
 
-use emt::{Config, Emt, Hasher};
+use cmt::{Cmt, Config, Hasher};
 use proptest::prelude::*;
 use sha2::{Digest, Sha256};
 
@@ -76,8 +79,8 @@ const ALG0: u64 = 0;
 const ALG1: u64 = 1;
 const K: u64 = 2;
 
-fn build(payloads: &[Vec<u8>]) -> Emt {
-    let mut t = Emt::new(Config { arity: K }).unwrap();
+fn build(payloads: &[Vec<u8>]) -> Cmt {
+    let mut t = Cmt::new(Config { arity: K }).unwrap();
     t.register_algorithm(ALG0, Box::new(Sha256Hasher)).unwrap();
     for (i, p) in payloads.iter().enumerate() {
         t.set(i as u64, p.clone(), Vec::new()).unwrap();
@@ -129,7 +132,7 @@ proptest! {
         let oracle: Vec<Vec<u8>> = (0..size)
             .map(|i| if i == index { payloads[index as usize].clone() } else { null.clone() })
             .collect();
-        let mut scratch = Emt::new(Config { arity: K }).unwrap();
+        let mut scratch = Cmt::new(Config { arity: K }).unwrap();
         scratch.register_algorithm(ALG1, Box::new(DoubleSha)).unwrap();
         for (i, p) in oracle.iter().enumerate() {
             // A cell whose payload IS the null preimage hashes to null(), so
@@ -162,83 +165,4 @@ proptest! {
 
         prop_assert_eq!(incremental, rebuilt);
     }
-}
-
-// ---------------------------------------------------------------------------
-// Live combined root: the primary identity of the mutable tree, the
-// canonicalization fold over the per-algorithm member roots (trivial coverage).
-// ---------------------------------------------------------------------------
-
-/// A single-algorithm tree's combined root IS its member root — native
-/// promotion (`nary_mr` len==1), no predicate.
-#[test]
-fn single_algorithm_combined_root_promotes_to_member_root() {
-    for n in 1u64..16 {
-        let payloads: Vec<Vec<u8>> = (0..n).map(|i| format!("c{i}").into_bytes()).collect();
-        let t = build(&payloads);
-        let member = t.root(ALG0).unwrap();
-        let combined = t
-            .combined_root(ALG0)
-            .expect("non-empty tree has a combined root");
-        assert_eq!(
-            combined, member,
-            "single-alg combined root must promote (n={n})"
-        );
-    }
-}
-
-/// A multi-algorithm tree's combined root is the flat `nary_mr` node over the
-/// per-algorithm member roots (children in algorithm-ID order). With a trivial
-/// timeline there is no coverage child, so under a hasher whose `node` simply
-/// concatenates-and-hashes the children, the combined root equals
-/// `H(member_root_0 ‖ member_root_1)`.
-#[test]
-fn multi_algorithm_combined_root_is_the_fold_over_members() {
-    let payloads: Vec<Vec<u8>> = (0..5u64).map(|i| format!("c{i}").into_bytes()).collect();
-    let mut t = Emt::new(Config { arity: K }).unwrap();
-    t.register_algorithm(ALG0, Box::new(Sha256Hasher)).unwrap();
-    t.register_algorithm(ALG1, Box::new(DoubleSha)).unwrap();
-    for (i, p) in payloads.iter().enumerate() {
-        t.set(i as u64, p.clone(), Vec::new()).unwrap();
-    }
-
-    let mr0 = t.root(ALG0).unwrap();
-    let mr1 = t.root(ALG1).unwrap();
-
-    // The combined root under ALG0's hash folds [mr0, mr1] as two children.
-    let combined0 = t.combined_root(ALG0).unwrap();
-    let expected0 = Sha256Hasher.node(&[mr0.as_slice(), mr1.as_slice()]);
-    assert_eq!(combined0, expected0);
-
-    // Under ALG1's hash the *same* two children fold under the other hasher —
-    // each algorithm's combined root rests solely on its own hash (D9).
-    let combined1 = t.combined_root(ALG1).unwrap();
-    let expected1 = DoubleSha.node(&[mr0.as_slice(), mr1.as_slice()]);
-    assert_eq!(combined1, expected1);
-    assert_ne!(combined0, combined1);
-
-    // The combined root is a genuine parent, not one of its member children.
-    assert_ne!(combined0, mr0);
-    assert_ne!(combined0, mr1);
-}
-
-/// An empty tree or an unregistered algorithm has no combined root.
-#[test]
-fn combined_root_is_none_for_empty_or_unregistered() {
-    let mut empty = Emt::new(Config { arity: K }).unwrap();
-    empty
-        .register_algorithm(ALG0, Box::new(Sha256Hasher))
-        .unwrap();
-    assert_eq!(
-        empty.combined_root(ALG0),
-        None,
-        "empty tree has no combined root"
-    );
-
-    let t = build(&[b"a".to_vec()]);
-    assert_eq!(
-        t.combined_root(99),
-        None,
-        "unregistered algorithm has no combined root"
-    );
 }

@@ -18,10 +18,17 @@
 //! epoch facet over a structural [`spine::Seal`]); the structural `Seal` carries
 //! no epoch field (D13). The [`fill`] operation and the [`SnapshotProof`] are the
 //! trustless verification and aggregate-proof surfaces over a `Sealed`.
+//!
+//! The append-only driver above is `epoch(cml)`; its mutable peer is
+//! [`EpochTree`] (`epoch(cmt)`), the same combinator lifting a [`cmt::Cmt`]: the
+//! binding/combined root over the per-algorithm member roots and the combined
+//! [`Sealed`] currency, with the mutable tree's trivial active-from-genesis
+//! timeline.
 
 pub mod binding_proof;
 pub mod evolution;
 pub mod filling;
+pub mod mutable;
 pub mod root;
 pub mod seal;
 pub mod snapshot;
@@ -49,6 +56,7 @@ pub use error::{Error, Result};
 pub use evolution::{verify_consistency_with_coupling, verify_epoch_evolution};
 pub use filling::{FillError, FillKind, FilledTree, fill};
 pub use log_error::{LogError, LogResult};
+pub use mutable::{CmtConfig, CmtError, CmtResult, EpochTree};
 pub use root::{
     AuditPayload, CouplingProof, NullRun, VerifierConfig, all_null_runs, combined_root,
     committed_active_algs, committed_active_at, null_runs_are_trivial, null_runs_for_alg,

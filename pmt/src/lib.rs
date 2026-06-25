@@ -16,10 +16,11 @@
 // combined `Sealed` (the one commitment currency both EMT and the append-only
 // log seal into) and the combinator error/result.
 pub use epoch::{
-    AuditPayload, BindingProof, BoundSnapshot, CouplingProof, Error, NullRun, Result, Sealed,
-    TrustedBindingRoot, VerifierConfig, all_null_runs, combined_root, committed_active_algs,
-    committed_active_at, null_runs_are_trivial, null_runs_for_alg, serialize_null_runs,
-    validate_committed_epochs, verify_inactivity_with_coupling, verify_inclusion_with_coupling,
+    AuditPayload, BindingProof, BoundSnapshot, CouplingProof, EpochTree, Error, NullRun, Result,
+    Sealed, TrustedBindingRoot, VerifierConfig, all_null_runs, combined_root,
+    committed_active_algs, committed_active_at, null_runs_are_trivial, null_runs_for_alg,
+    serialize_null_runs, validate_committed_epochs, verify_inactivity_with_coupling,
+    verify_inclusion_with_coupling,
 };
 pub use spine::{
     ARITY_RANGE, Hasher, InclusionProof, LeafProof, Meta, ProofStep, RunExtent, SkeletonStep,

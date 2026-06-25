@@ -250,6 +250,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmt"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "sha2",
+ "spine",
+]
+
+[[package]]
 name = "colored"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -354,7 +363,7 @@ dependencies = [
 name = "cyphr-tree"
 version = "0.1.0"
 dependencies = [
- "emt",
+ "epoch",
  "sha2",
 ]
 
@@ -408,19 +417,10 @@ name = "eml-examples"
 version = "0.0.0"
 dependencies = [
  "cyphr-log",
- "emt",
+ "epoch",
  "pmt",
  "sha2",
  "smol",
-]
-
-[[package]]
-name = "emt"
-version = "0.1.0"
-dependencies = [
- "pmt",
- "proptest",
- "sha2",
 ]
 
 [[package]]
@@ -440,6 +440,7 @@ name = "epoch"
 version = "0.1.0"
 dependencies = [
  "cml",
+ "cmt",
  "sha2",
  "smol",
  "spine",

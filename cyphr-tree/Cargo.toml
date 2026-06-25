@@ -8,6 +8,8 @@ license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 
 [dependencies]
-emt = { path = "../emt" }
+# The EMT instantiation = epoch(cmt)@k2. The mutable structural tree (cmt) lifted
+# by the epoch combinator (binding root + combined currency).
+epoch = { path = "../epoch" }
 # The concrete hash this instantiation fixes (unprefixed SHA-256).
 sha2 = "0.10"

@@ -1,14 +1,14 @@
 //! Errors raised by the mutable tree's construction and mutation surface.
 //!
-//! The kernel reports proof *verification* with `bool`/`Option`; these errors
-//! arise only where the EMT rejects an ill-formed mutation or seal.
+//! The spine reports proof *verification* with `bool`/`Option`; these errors
+//! arise only where the CMT rejects an ill-formed mutation or seal.
 
 use std::fmt;
 
-/// An EMT construction or mutation error.
+/// A CMT construction or mutation error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// The configured arity is outside the kernel's `2..=256` range.
+    /// The configured arity is outside the spine's `2..=256` range.
     InvalidArity(u64),
     /// An algorithm ID was registered twice.
     DuplicateAlgorithm(u64),
@@ -22,7 +22,7 @@ pub enum Error {
     },
     /// Sealing an empty tree, which has no root to carry.
     EmptySeal,
-    /// The kernel rejected the sealed timeline as malformed.
+    /// The spine rejected the resumable frontier as malformed.
     MalformedSeal,
 }
 
@@ -40,7 +40,7 @@ impl fmt::Display for Error {
             },
             Self::EmptySeal => write!(f, "cannot seal an empty tree: there is no root to carry"),
             Self::MalformedSeal => {
-                write!(f, "the kernel rejected the sealed committed epoch timeline")
+                write!(f, "the spine rejected the sealed resumable frontier")
             },
         }
     }
