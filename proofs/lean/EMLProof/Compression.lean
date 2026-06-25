@@ -1,4 +1,4 @@
-import EMLProof.NEML
+import EMLProof.Spine
 
 namespace NEML
 

@@ -2,14 +2,14 @@
 import EMLProof.Foundations
 
 -- Merkle Spine (structural core).
-import EMLProof.NEML
+import EMLProof.Spine
 import EMLProof.Canonical
 import EMLProof.Compression
 import EMLProof.Kary
 import EMLProof.LeafProof
 
--- Epoch combinator (over the spine).
-import EMLProof.Epoch
+-- Polydigest combinator (over the spine).
+import EMLProof.Polydigest
 import EMLProof.BindingProof
 
 -- CML / consistency layer.
@@ -24,7 +24,7 @@ import EMLProof.General.Instantiation
 # EMLProof — proof corpus root
 
 The corpus mirrors the layered code cut: a structural **Merkle Spine**, the
-**epoch combinator** over it, and the canonical-log consistency layer. The
+**polydigest combinator** over it, and the canonical-log consistency layer. The
 **authoritative** chain depends only on the four trust-base axioms in
 `Foundations`; the CT-lineage binary-bridge material is **relegated** to CT-build
 reference and is no longer authoritative.
@@ -36,7 +36,7 @@ reference and is no longer authoritative.
 ## Merkle Spine (structural core)
 Epoch-free; no activation timeline, binding root, or null-run-extent. Operates over
 the positional topology and the canonical evaluator alone.
-* `EMLProof.NEML` — the n-ary tree, the canonicalizing evaluator (collapse +
+* `EMLProof.Spine` — the n-ary tree, the canonicalizing evaluator (collapse +
   promotion), and the canonical inclusion proofs: `not_canonical_of_promoted`,
   `inclusion_soundness`, `inclusion_proof_unique`.
 * `EMLProof.Canonical` — **C-CANONICAL-UNIQUE (structural half)**: canonicalization
@@ -50,10 +50,10 @@ the positional topology and the canonical evaluator alone.
   (`kary_inclusion_soundness`, `kary_completeness`).
 * `EMLProof.LeafProof` — the live leaf-proof API over the spine topology.
 
-## Epoch combinator (over the spine)
+## Polydigest combinator (over the spine)
 Consumes the spine's roots as **opaque digest bytes**; never touches `eval` or
-`canonical_unique`. The dependency arrow runs epoch → spine only.
-* `EMLProof.Epoch` — the committed activation timeline (Design A+), the combined
+`canonical_unique`. The dependency arrow runs polydigest → spine only.
+* `EMLProof.Polydigest` — the committed activation timeline (Design A+), the combined
   root as the raw-concat canonicalization fold, the per-algorithm binding root, and
   **C-CANONICAL-UNIQUE (timeline-binding half)**: `combinedRoot_binds_timeline`
   (distinct committed activations ⇒ distinct binding roots), plus
@@ -74,8 +74,8 @@ Consumes the spine's roots as **opaque digest bytes**; never touches `eval` or
 
 ## CT-lineage (relegated — CT-build reference, NOT authoritative)
 The `Tree → Binary → Invariant → Bridge → Projection`/`General/*` chain is the
-binary CT-construction proof material. The authoritative spine/epoch chain above
-does not depend on it (NEML sources its axioms from `Foundations`, not
+binary CT-construction proof material. The authoritative spine/polydigest chain
+above does not depend on it (the spine sources its axioms from `Foundations`, not
 `Projection`); it is retained only as CT-build reference. See `EMLProof.Projection`'s
 header.
 -/

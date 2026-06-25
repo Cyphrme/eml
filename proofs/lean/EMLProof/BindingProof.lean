@@ -1,11 +1,11 @@
 import EMLProof.Foundations
-import EMLProof.Epoch
+import EMLProof.Polydigest
 
 /-!
-# Binding-proof soundness (epoch combinator, over `Foundations`)
+# Binding-proof soundness (polydigest combinator, over `Foundations`)
 
 The **binding proof** is the cross-algorithm peer of inclusion / consistency /
-leaf / snapshot proofs (`pmt/src/binding_proof.rs`). It proves that a set of
+leaf / snapshot proofs (`polydigest/src/binding_proof.rs`). It proves that a set of
 per-algorithm *binding roots* are mutually consistent: that every algorithm has
 committed, under its **own** hash, to the *same* logical structure — the same
 member-root tuple `ar` and the same committed epoch timeline `tl`.
@@ -18,7 +18,7 @@ Each algorithm `i` carries its own hash `Hᵢ` and its own binding root
 BRᵢ = combinedRootWith Hᵢ ar tl
 ```
 
-the canonicalization fold (`NEML.combinedRootWith`, mirroring `pmt::combined_root`)
+the canonicalization fold (`NEML.combinedRootWith`, mirroring `polydigest::combined_root`)
 over the shared member roots as children, plus a coverage child iff the timeline
 is non-trivial, **under `Hᵢ`**. Critically, `Hᵢ` is applied only to the shared
 children; no other algorithm's binding root ever enters `Hᵢ`. This is design

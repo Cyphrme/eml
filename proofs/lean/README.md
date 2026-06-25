@@ -86,7 +86,7 @@ an accepted inclusion proof strictly hashes (`not_canonical_of_promoted`).
 - `inclusion_proof_unique` proves non-malleability: for a fixed statement there is at most one
   accepting canonical path, modulo an internal-node hash collision. The proof-shape pinning
   (path length and per-step positions) that the shared topology module
-  (`neml/src/topology.rs`) derives from `(k, index, tree_size)` enters as premises; see
+  (`spine/src/topology.rs`) derives from `(k, index, tree_size)` enters as premises; see
   [Future Formalization Work](#7-future-formalization-work).
 
 ### F. Coexistence of Concrete and Generalized Proof Paths
@@ -137,8 +137,8 @@ locations in the source files:
   - `projection_equivalence`: EML Theorem 1 (Projection Equivalence).
   - The former "Temporal Binding" and "Algorithm Isolation" theorems were removed as vacuous
     (an axiom echo, and two independent copies of Projection Equivalence). Their intended
-    security content is formalized in the committed-epoch (Design A+) layer in `Epoch.lean`.
-- **[NEML.lean](EMLProof/NEML.lean)** (Merkle Spine — structural core):
+    security content is formalized in the committed-epoch (Design A+) layer in `Polydigest.lean`.
+- **[Spine.lean](EMLProof/Spine.lean)** (Merkle Spine — structural core):
   - `eval` and its five evaluation equations (`eval_leaf`/`eval_empty`/`eval_singleton_node`/
     `eval_flat_null_node`/`eval_node_hash`): a real `def` with proved equations (formerly
     axioms); `eval_singleton`, `eval_flat_null_promotion`: promotion soundness.
@@ -146,12 +146,12 @@ locations in the source files:
   - Canonical inclusion: `not_canonical_of_promoted`, `inclusion_soundness`, and
     `inclusion_proof_unique` (non-malleability) — all fully proved. Uniqueness holds modulo
     `NodeHashCollision` and takes the proof-shape pinning (`hlen`/`hpos`) as premises,
-    mirroring the guarantees of `neml/src/topology.rs`
+    mirroring the guarantees of `spine/src/topology.rs`
     (see [Future Formalization Work](#7-future-formalization-work)).
   - Epoch-free: no timeline, binding root, or null-run-extent. This is the structural half
     of C-CANONICAL-UNIQUE — distinct canonical structures ⇒ distinct roots — and it stands
     alone for a single-algorithm consumer with no epoch.
-- **[Epoch.lean](EMLProof/Epoch.lean)** (epoch combinator — over the spine):
+- **[Polydigest.lean](EMLProof/Polydigest.lean)** (polydigest combinator — over the spine):
   - Design A+: `inferredActiveFromNull_unsound`, `combinedRoot_binds_timeline`,
     `real_cell_forces_committed_active`, `committed_inactive_is_null` — activity is read from
     the committed timeline, which enters the combined-root fold as a coverage child, not from
@@ -161,13 +161,13 @@ locations in the source files:
     this half consumes only opaque digests), kept physically separate.
   - Combined-root fold (post-N29, raw-concat per D9): `combinedChildren_bound`,
     `coupling_extract_sound` — the combined root is the `nary_mr` fold over the member-root
-    **bytes** fed raw (no per-member re-hash; `pmt::combined_root` → `pmt::nary_mr`), plus the
+    **bytes** fed raw (no per-member re-hash; `polydigest::combined_root` → `spine::nary_mr`), plus the
     coverage child. So a fixed root pins the raw member-byte list modulo a byte-hash collision
     — *under the fixed-width contract* (`EqWidth`, the `Hasher` digest-width hypothesis, N32)
     that makes the unprefixed concat parseable (`flatten_inj_of_eqWidth`); algorithm identities
     are the verifier's trusted active-set input, not recovered from the root. The combinator
-    imports the spine; the arrow runs epoch → spine only.
-- **[BindingProof.lean](EMLProof/BindingProof.lean)** (epoch combinator):
+    imports the spine; the arrow runs polydigest → spine only.
+- **[BindingProof.lean](EMLProof/BindingProof.lean)** (polydigest combinator):
   - `binding_root_sound`, `binding_proof_consistent`, `binding_proof_forgery_rejected` — the
     cross-algorithm binding-proof soundness theorems over the per-algorithm binding root
     `combinedRootWith Hᵢ` (D9, no security mixing).
@@ -176,20 +176,21 @@ locations in the source files:
 To verify which axioms and `sorry` placeholders the theorems depend on, a reviewer can inspect
 the Trusted Computing Base (TCB) using Lean's `#print axioms` command:
 1. Place the following diagnostics in a scratch file that imports the corpus
-   (the spine theorems live in [NEML.lean](EMLProof/NEML.lean), the epoch ones in
-   [Epoch.lean](EMLProof/Epoch.lean); importing `Epoch` reaches both):
+   (the spine theorems live in [Spine.lean](EMLProof/Spine.lean), the combinator
+   ones in [Polydigest.lean](EMLProof/Polydigest.lean); importing `Polydigest`
+   reaches both):
    ```lean
-   import EMLProof.Epoch
+   import EMLProof.Polydigest
    #print axioms NEML.eval_flat_null_promotion
    #print axioms NEML.inclusion_proof_unique
    #print axioms NEML.combinedRoot_binds_timeline
    #print axioms NEML.coupling_extract_sound
    ```
 2. Build the project. The compiler output will display the exact axioms utilized.
-3. The spine/epoch layer declares **exactly four** domain constants:
+3. The spine/polydigest layer declares **exactly four** domain constants:
    `Digest`, `Digest.nonempty`, `H`, and `digestToBytes` (plus Lean built-ins `propext`,
    `Classical.choice`, `Quot.sound`). This corrects the earlier claim of five — the
-   `domain_separation` axiom and the NEML `numsSeed`/`xof`/`eval`-cluster axioms (thirteen in
+   `domain_separation` axiom and the legacy `numsSeed`/`xof`/`eval`-cluster axioms (thirteen in
    total before) were removed. Every theorem in the corpus is `sorry`-free: no `#print axioms`
    output contains `sorryAx`.
 
@@ -204,10 +205,10 @@ respective Lean symbols in the source code:
 | **Definition 3** | [cto](EMLProof/Tree.lean#L112) | Count Trailing Ones count |
 | **Theorem 1** | [bridge_lemma](EMLProof/Bridge.lean#L155) | Structural Bridge Lemma |
 | **Theorem 2** | [projection_equivalence](EMLProof/Projection.lean) | Projection Equivalence |
-| **Temporal Binding** | [combinedRoot_binds_timeline](EMLProof/Epoch.lean), [real_cell_forces_committed_active](EMLProof/Epoch.lean) | Inactivity authenticated by the committed epoch timeline (Design A+); supersedes the removed vacuous `temporal_binding` |
-| **Algorithm Isolation** | [combinedChildrenWith_bound](EMLProof/Epoch.lean), [binding_proof_consistent](EMLProof/BindingProof.lean) | Per-algorithm binding roots fold under each algorithm's own hash (D9); supersedes the removed vacuous `algorithm_isolation` |
-| **Inclusion Soundness** | [inclusion_soundness](EMLProof/NEML.lean) | Accepting canonical proof commits the leaf at the claimed log position (depth existential) |
-| **Non-Malleability** | [inclusion_proof_unique](EMLProof/NEML.lean) | At most one accepting canonical path per statement, modulo internal-node hash collision |
+| **Temporal Binding** | [combinedRoot_binds_timeline](EMLProof/Polydigest.lean), [real_cell_forces_committed_active](EMLProof/Polydigest.lean) | Inactivity authenticated by the committed epoch timeline (Design A+); supersedes the removed vacuous `temporal_binding` |
+| **Algorithm Isolation** | [combinedChildrenWith_bound](EMLProof/Polydigest.lean), [binding_proof_consistent](EMLProof/BindingProof.lean) | Per-algorithm binding roots fold under each algorithm's own hash (D9); supersedes the removed vacuous `algorithm_isolation` |
+| **Inclusion Soundness** | [inclusion_soundness](EMLProof/Spine.lean) | Accepting canonical proof commits the leaf at the claimed log position (depth existential) |
+| **Non-Malleability** | [inclusion_proof_unique](EMLProof/Spine.lean) | At most one accepting canonical path per statement, modulo internal-node hash collision |
 | **Theorem 5** | [generalized_bridge_lemma](EMLProof/General/Duality.lean#L444) | Generalized Bridge Lemma |
 | **K-ary Carry Schedule** | [frontier_append_consistent](EMLProof/Kary.lean) | The shipped `frontier_for_size` + `reduction_count` schedule is `AppendConsistent` (base-`k`, any `k ≥ 2`) |
 | **K-ary Bridge** | [kary_bridge](EMLProof/Kary.lean) | The frontier stack machine computes the perfect-subtree roots of the frontier decomposition (k-ary generalization of `bridge_lemma`) |
@@ -245,15 +246,15 @@ To verify that the formalized state machine matches the production implementatio
    `node(left_sibling, right_accumulator)`.
 3. **Null Prefix Peaks**: The MMR peaks initialized during algorithm activation in `src/log.rs`
    (`null_prefix_peaks`) match `null_prefix_peaks` in the formal model.
-4. **Epoch Combinator Layer**: The committed-epoch model in `Epoch.lean` mirrors the production
-   NEML crate: `nullPreimage`/`nullDigest` match `neml/src/hasher.rs`
+4. **Polydigest Combinator Layer**: The committed-epoch model in `Polydigest.lean` mirrors the
+   production spine + polydigest crates: `nullPreimage`/`nullDigest` match `spine/src/hasher.rs`
    (`null() = hash(b"null")`); `committedActiveAt` matches `committed_active_at` in
-   `neml/src/proof.rs`; the combined-root fold (`combinedRoot`/`combinedRootWith`) models
-   `pmt::combined_root` (`pmt/src/proof.rs`) and `combined_root_at` (`eml/src/tree.rs`); the
-   `inactive ⇒ N₀`
+   `polydigest/src/root.rs`; the combined-root fold (`combinedRoot`/`combinedRootWith`) models
+   `polydigest::combined_root` (`polydigest/src/root.rs`) and `combined_root_at`
+   (`polydigest/src/tree.rs`); the `inactive ⇒ N₀`
    consistency check (`InactiveImpliesNull`) models `verify_audit_payload`
-   (`neml/src/tree.rs`); the proof-shape pinning assumed by `inclusion_proof_unique`
-   corresponds to the shared topology module `neml/src/topology.rs` (`frontier_for_size`).
+   (`polydigest/src/tree.rs`); the proof-shape pinning assumed by `inclusion_proof_unique`
+   corresponds to the shared topology module `spine/src/topology.rs` (`frontier_for_size`).
 
 ---
 
@@ -263,10 +264,10 @@ To stress-test the formalization against potential mathematical or semantic expl
 the findings of our formal red-team audit:
 
 ### A. Axiom Minimality and Soundness
-- The codebase relies on exactly four structural/domain axioms declared in `Projection.lean`: the
+- The codebase relies on exactly four structural/domain axioms declared in `Foundations.lean`: the
   existence of `Digest`, its non-emptiness, a hashing operator `H`, and a digest serializer
   `digestToBytes`. (This corrects an earlier claim of five: the `domain_separation` axiom and the
-  NEML `numsSeed`/`xof`/`eval`-cluster axioms — thirteen in total before — were removed.)
+  legacy `numsSeed`/`xof`/`eval`-cluster axioms — thirteen in total before — were removed.)
 - We assume no structural algebraic properties of `H` (such as associativity or commutativity). The
   proof is purely combinatorial and arithmetic.
 - The model does **not** assume the null constant is unreachable. The faithful definition makes the
@@ -357,12 +358,12 @@ The k-ary soundness adds **no axioms** — its two collision-style escape hatche
 (`NodeHashCollision`, `NullAmbiguity`) appear as explicit *hypotheses* on the
 theorems, not as axioms.
 
-The **coupling verifier** is now discharged in [Epoch.lean](EMLProof/Epoch.lean)
+The **coupling verifier** is now discharged in [Polydigest.lean](EMLProof/Polydigest.lean)
 (`coupling_extract_sound`): an accepting coupling proof extracts a member root
 carrying the same bytes a committed algorithm bound, modulo a byte-hash collision,
 under the fixed-width contract.
 
-**Still UNVERIFIED** (honest scope): the full multi-algorithm/epoch interaction
+**Still UNVERIFIED** (honest scope): the full multi-algorithm/polydigest interaction
 with the k-ary spine (the combinator soundness is proven over opaque digests, but
 its composition with the concrete k-ary roots is not yet end-to-end); and
 Rust-to-Lean transcription fidelity itself (mitigated, not eliminated, by the
@@ -379,10 +380,10 @@ The realignment left the following gaps open, each flagged at its site in the so
    abstract `SkeletonValid`. The concrete topology is now ported in
    [Kary.lean](EMLProof/Kary.lean) (`inclusionSkeleton`), and
    `kary_inclusion_soundness` proves soundness against it directly; folding the
-   legacy `NEML.lean` uniqueness statement onto the concrete skeleton (or
+   legacy `Spine.lean` uniqueness statement onto the concrete skeleton (or
    retiring it in favor of the k-ary version) would discharge those premises.
 2. **Legacy verifier transcription.** `reconstructPathRoot`, `verifyInclusion`, and the
-   `partial def` topology helpers in `NEML.lean` are a direct transcription of the
+   `partial def` topology helpers in `Spine.lean` are a direct transcription of the
    pre-canonical Rust verifier, retained for reference; no theorem depends on them. They
    should either be connected to the canonical model (`foldCanonical`/`Accepts`) or removed
    once the topology port lands.

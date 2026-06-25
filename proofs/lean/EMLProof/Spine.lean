@@ -14,16 +14,17 @@ inclusion proofs (`inclusion_soundness`, `inclusion_proof_unique`,
 no activation timeline, no binding root, no null-run-extent — it operates purely
 over the positional topology and consumes nothing from the combinator.
 
-The epoch combinator — the committed activation timeline (Design A+), the combined
-root, the per-algorithm binding root, and coupling-verifier soundness — moved to
-`EMLProof.Epoch`, which imports *this* module (the arrow runs epoch → spine only).
-Splitting it out makes the boundary explicit: the structural injectivity guarantee
-(distinct canonical structures ⇒ distinct roots) stands alone here, and the
-timeline-binding guarantee composes on top in `EMLProof.Epoch`.
+The polydigest combinator — the committed activation timeline (Design A+), the
+combined root, the per-algorithm binding root, and coupling-verifier soundness —
+moved to `EMLProof.Polydigest`, which imports *this* module (the arrow runs
+polydigest → spine only). Splitting it out makes the boundary explicit: the
+structural injectivity guarantee (distinct canonical structures ⇒ distinct roots)
+stands alone here, and the timeline-binding guarantee composes on top in
+`EMLProof.Polydigest`.
 
 Same-value collapse (the null run included) is structural and reduces here without
 being counted; only the per-tree-divergent null-run-extent is counted, and that
-lives at the combinator (`EMLProof.Epoch`), never in this module.
+lives at the combinator (`EMLProof.Polydigest`), never in this module.
 -/
 
 namespace NEML
@@ -42,12 +43,13 @@ def NodeHashCollision : Prop := ∃ a b : List Digest, a ≠ b ∧ nodeHash a = 
 
 /-- A collision on the hash `H`: distinct preimages with equal digest. The
     structural `H`-collision lever, shared by the canonical-uniqueness layer
-    (`EMLProof.Canonical`) and the epoch combinator (`EMLProof.Epoch`); kept here in
-    the spine because it speaks only of the bare hash `H`, no epoch concept. -/
+    (`EMLProof.Canonical`) and the polydigest combinator (`EMLProof.Polydigest`);
+    kept here in the spine because it speaks only of the bare hash `H`, no epoch
+    concept. -/
 def HashCollision : Prop := ∃ a b : List UInt8, a ≠ b ∧ H a = H b
 
 /-- Canonical preimage of the null constant: the literal bytes of `b"null"`.
-    Mirrors `neml/src/hasher.rs` (`null() = hash(b"null")`). -/
+    Mirrors `spine/src/hasher.rs` (`null() = hash(b"null")`). -/
 def nullPreimage : List UInt8 := [0x6e, 0x75, 0x6c, 0x6c]
 
 /-- The null digest `N₀`, defined faithfully as `H` of the null preimage —
@@ -104,7 +106,7 @@ def IsNEMLTree {α : Type} (k : Nat) (t : NaryTree (NaryTree α)) : Prop :=
 `eval` was previously an `axiom` together with five `eval_*` equation axioms
 (six axioms in total). It is now a real `def`; the five equations are derived
 lemmas, removing those axioms from the trust base. The case split mirrors
-`nary_mr` in `neml/src/mr.rs` and `Compression.lean`'s `evalConstructive`. -/
+`nary_mr` in `spine/src/mr.rs` and `Compression.lean`'s `evalConstructive`. -/
 
 /-! Structural size metric for termination of the evaluator (`nsize`/`nlsize`).
     Local to NEML; `Compression.lean` carries its own `treeSize`/`listSize` for
@@ -285,7 +287,7 @@ theorem eval_flat_null_promotion (L : Nat) (children : List (NaryTree (List UInt
 The inclusion-proof material below is structural: it pins the proof *shape* over
 the positional topology and binds a leaf to its log position. It carries no epoch
 hypothesis (the combined-root / binding-root / timeline material that once sat
-between the evaluator and this section now lives in `EMLProof.Epoch`). Its only
+between the evaluator and this section now lives in `EMLProof.Polydigest`). Its only
 collision lever is `NodeHashCollision` on the structural `nodeHash`, defined at the
 top of this module. -/
 
@@ -503,7 +505,7 @@ reject zero-*sibling* steps. The two mechanisms are independent.
 
 The log skeleton pinned by `(k, index, tree_size)` is the security boundary
 (exact length, per-step position, per-level sibling count). Its concrete
-computation is the shared topology module (`neml/src/topology.rs`); the theorems
+computation is the shared topology module (`spine/src/topology.rs`); the theorems
 below take it as an abstract predicate `SkeletonValid`, so they hold for whatever
 pinning that module enforces. -/
 
@@ -795,7 +797,7 @@ Collision resistance is never assumed: `null_collision` makes the
 assumptions as explicit *hypotheses* (`¬ NodeHashCollision`), not axioms. The
 combinator half — the combined root, the binding root, and the timeline-binding
 non-equivocation that consume these structural roots as opaque digests — lives in
-`EMLProof.Epoch` over the same four axioms; it too adds none.
+`EMLProof.Polydigest` over the same four axioms; it too adds none.
 
 Every theorem in this file is now fully proved and sorry-free.
 -/

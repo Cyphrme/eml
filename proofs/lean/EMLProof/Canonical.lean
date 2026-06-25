@@ -33,7 +33,7 @@ prove it is a **confluent terminating rewrite system**:
 This mirrors the **ROBDD canonicalization theorem** (Bryant): a reduced ordered BDD
 is the canonical normal form reached by exactly these reduction rules, and ROBDD's
 node-elimination rule **R2 is `collapse` verbatim** (PRIOR-ART). The proof here is
-the generic, PMT-level statement (not the k=2 cyphr-log instance).
+the generic, polydigest-level statement (not the k=2 cyphr-log instance).
 
 ## The injective-encoding theorem
 
@@ -410,7 +410,7 @@ theorem map_eval_inj (L : Nat) :
     This is the GENERAL collapse statement: `NoCollapse` excludes every same-value
     fold (the all-null collapse is one instance), so distinct equal-entry runs —
     which a collapse would conflate — are outside the domain and disambiguated by
-    the committed run-extent (SAD §3.1). Generic and PMT-level: any arity, any
+    the committed run-extent (SAD §3.1). Generic and polydigest-level: any arity, any
     structure — not the k = 2 cyphr-log instance. -/
 theorem canonical_eval_injective (L : Nat)
     (leaf_node_sep : ∀ (d : List UInt8) (ds : List Digest), leafHash d ≠ nodeHash ds)

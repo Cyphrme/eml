@@ -1,13 +1,13 @@
 /-!
 # Foundations — the minimal cryptographic trust base
 
-This module is the **entire trusted computing base** of the authoritative PMT/EML
+This module is the **entire trusted computing base** of the authoritative
 proof corpus: the four structural axioms that model an abstract collision-resistant
 hash, the decidability/inhabitedness instances they license, and the few hash
 constants every downstream layer shares.
 
-It exists so the authoritative chain (`NEML → Kary → KaryConsistency`, plus the
-PMT theorems built over it in later nodes) depends on **these four axioms and
+It exists so the authoritative chain (`Spine → Kary → KaryConsistency`, plus the
+polydigest theorems built over it in later nodes) depends on **these four axioms and
 nothing else**. Lifting them here severs that chain from the CT-lineage
 `Tree/Binary/Invariant/Bridge` proof material, which is retained only as
 CT-build reference (see `Bridge.lean`'s header) and is no longer authoritative.
@@ -18,7 +18,7 @@ CT-build reference (see `Bridge.lean`'s header) and is no longer authoritative.
 * `Digest.nonempty` — digests exist (licenses `Inhabited`/`Classical` choice).
 * `H` — the abstract hash, `List UInt8 → Digest`. Collision resistance is **not**
   an axiom: it is modeled wherever needed as a *hypothesis* `¬ HashCollision`
-  (`NEML.lean`), so the trust base never assumes `H` injective.
+  (`Spine.lean`), so the trust base never assumes `H` injective.
 * `digestToBytes` — the serialization a node hash folds its children through.
 
 `#print axioms` on every downstream theorem must report a subset of
