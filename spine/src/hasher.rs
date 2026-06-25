@@ -19,7 +19,7 @@ use std::fmt::Debug;
 /// child-digest *list* (and not merely some other splitting of the same bytes).
 ///
 /// The Lean corpus discharges binding-root soundness over exactly this seam:
-/// `combinedChildrenWith_bound` (`proofs/lean/EMLProof/NEML.lean`) recovers the
+/// `combinedChildrenWith_bound` (`proofs/lean/EMLProof/Spine.lean`) recovers the
 /// committed child-digest list from an equal node hash with **no** uniform-width
 /// assumption *in the model* because the model's `Digest` is abstract — the Rust
 /// realization supplies that uniformity here, via this contract, so the abstract
