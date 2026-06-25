@@ -1,5 +1,5 @@
 [package]
-name          = "neml-storage-fjall"
+name          = "storage-fjall"
 version       = "0.1.0"
 description   = "Fjall-backed storage backend for the EML append-only library"
 edition       = "2024"

@@ -8,13 +8,13 @@ use std::path::Path;
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
 use polydigest::{AlgorithmMetas, Storage};
 
-/// Reserved 9-byte key for log metadata in the `neml_metadata` keyspace.
+/// Reserved 9-byte key for log metadata in the `eml_metadata` keyspace.
 ///
 /// All algorithm-epoch keys are exactly 8 bytes (alg_id as big-endian u64), so
 /// this 9-byte key never collides with any valid algorithm entry.
 const LOG_META_KEY: [u8; 9] = *b"_logmeta_";
 
-/// 10-byte key prefix for per-algorithm checkpoint roots in `neml_metadata`.
+/// 10-byte key prefix for per-algorithm checkpoint roots in `eml_metadata`.
 ///
 /// Format: `[b'r', b'o', alg_id_be_bytes[0..8]]` — does not collide with the
 /// 8-byte epoch keys or the 9-byte LOG_META_KEY.
@@ -42,7 +42,7 @@ pub enum FjallStorageError {
     MetadataCorruption(String),
 }
 
-/// A production-grade neml storage backend backed by a Fjall database.
+/// A production-grade EML storage backend backed by a Fjall database.
 ///
 /// Not `Clone` — enforces single-writer ownership so the tree-level
 /// read-count→write-at-count window cannot race across aliased handles.
@@ -71,13 +71,13 @@ impl FjallStorage {
     /// Initialize storage keyspaces using an existing, shared Fjall database.
     pub(crate) fn with_database(db: Database) -> Result<Self, FjallStorageError> {
         let leaves = db
-            .keyspace("neml_leaves", KeyspaceCreateOptions::default)
+            .keyspace("eml_leaves", KeyspaceCreateOptions::default)
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         let nodes = db
-            .keyspace("neml_nodes", KeyspaceCreateOptions::default)
+            .keyspace("eml_nodes", KeyspaceCreateOptions::default)
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         let metadata = db
-            .keyspace("neml_metadata", KeyspaceCreateOptions::default)
+            .keyspace("eml_metadata", KeyspaceCreateOptions::default)
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
 
         Ok(Self {

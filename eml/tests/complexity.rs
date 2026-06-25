@@ -195,7 +195,7 @@ fn complexity_resume_algorithm_log_n() {
 // Subtree complexity tests
 //
 // The tests above only exercise flat leaf appends. The following tests verify
-// the complexity of the operations that are specific to NEML's novel
+// the complexity of the operations that are specific to EML's novel
 // structure: appending recursive subtrees and generating inclusion proofs
 // through them.
 // ============================================================================

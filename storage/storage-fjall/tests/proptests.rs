@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use neml_storage_fjall::FjallStorage;
 use polydigest::Storage;
 use proptest::prelude::*;
+use storage_fjall::FjallStorage;
 use tempfile::tempdir;
 
 #[derive(Debug, Clone)]

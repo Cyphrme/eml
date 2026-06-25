@@ -8,7 +8,7 @@ members = [
     "difftest",
     "cmt",
     "emt",
-    "storage/neml-fjall",
+    "storage/storage-fjall",
     "etl",
     "examples",
 ]

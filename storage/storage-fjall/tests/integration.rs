@@ -1,6 +1,6 @@
-use neml_storage_fjall::FjallStorage;
 use polydigest::{Hasher, NaryMerkleLog, Storage, TreeConfig};
 use sha2::{Digest, Sha256};
+use storage_fjall::FjallStorage;
 use tempfile::tempdir;
 
 #[derive(Debug)]
@@ -122,7 +122,7 @@ fn test_fjall_metadata_corruption() {
         {
             let db = fjall::Database::builder(dir.path()).open().unwrap();
             let metadata = db
-                .keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default)
+                .keyspace("eml_metadata", fjall::KeyspaceCreateOptions::default)
                 .unwrap();
             metadata.insert(b"short", [0; 16]).unwrap();
         }
@@ -143,7 +143,7 @@ fn test_fjall_metadata_corruption() {
         {
             let db = fjall::Database::builder(dir.path()).open().unwrap();
             let metadata = db
-                .keyspace("neml_metadata", fjall::KeyspaceCreateOptions::default)
+                .keyspace("eml_metadata", fjall::KeyspaceCreateOptions::default)
                 .unwrap();
             metadata.insert(0u64.to_be_bytes(), [0; 15]).unwrap();
         }
