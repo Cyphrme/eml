@@ -48,7 +48,7 @@
 //! the verifier's skeleton in lockstep (the same discipline `cmt::shape` uses for
 //! the rebalanced tree).
 
-use spine::{Hasher, ProofStep, SkeletonStep, frontier_for_size, nary_mr};
+use spine::{Hasher, ProofStep, SkeletonStep, fold_frontier, frontier_for_size, nary_mr};
 
 /// One node of the bag tree.
 ///
@@ -69,31 +69,25 @@ pub enum BagNode {
 /// for an empty peak set (a non-empty log always has at least one peak).
 ///
 /// The peaks are grouped by repeatedly folding the **rightmost `k`** into one bag
-/// node — the same shape the structural `fold_frontier`/`cmt::shape::build`
-/// produce — so `bag_peaks` over this shape is byte-identical to that fold at
-/// every arity, and the MMR commitment **root is unchanged** from the pre-MMR
-/// log. Durability does not come from the bag's associativity; it comes from
-/// what the *proof* points at (prove-to-peak), so the bag stays the established
-/// fold and only the inclusion path is restructured.
+/// node — the same shape `cmt::shape::build` produces — so `bag_peaks` over
+/// this shape is byte-identical to that fold at every arity, and the MMR
+/// commitment **root is unchanged** from the pre-MMR log. Durability does not
+/// come from the bag's associativity; it comes from what the *proof* points at
+/// (prove-to-peak), so the bag stays the established fold and only the inclusion
+/// path is restructured.
+///
+/// Expressed via [`fold_frontier`]: a single peak promotes to itself (no `Bag`
+/// wrapper); `2..=k` or more peaks fold rightmost-`k` until one root bag node
+/// remains.
 #[must_use]
 pub fn bag_shape(peak_count: usize, k: usize) -> Option<BagNode> {
     if peak_count == 0 {
         return None;
     }
-    // Mirror `fold_frontier`: start with every peak, repeatedly replace the
-    // rightmost `k` with one bag node over them, until `2..=k` remain (then one
-    // final bag node) or a single node remains (promotion).
-    let mut frontier: Vec<BagNode> = (0..peak_count).map(BagNode::Peak).collect();
-    while frontier.len() > k {
-        let split = frontier.len() - k;
-        let group = frontier.split_off(split);
-        frontier.push(BagNode::Bag(group));
-    }
-    if frontier.len() == 1 {
-        Some(frontier.pop().expect("len checked == 1"))
-    } else {
-        Some(BagNode::Bag(frontier))
-    }
+    let frontier: Vec<BagNode> = (0..peak_count).map(BagNode::Peak).collect();
+    Some(fold_frontier(frontier, k, |chunk| {
+        BagNode::Bag(chunk.to_vec())
+    }))
 }
 
 /// Bag a frontier's peaks into the single member root under `hasher`.
@@ -264,7 +258,10 @@ fn descend_bag(node: &BagNode, target: usize, out: &mut Vec<SkeletonStep>) -> bo
 }
 
 /// Whether `node` covers peak index `target`.
-fn covers_peak(node: &BagNode, target: usize) -> bool {
+///
+/// Shared by `mountain` (bag descent) and `consistency` (bag-path collection);
+/// defined once here to avoid duplication.
+pub(crate) fn covers_peak(node: &BagNode, target: usize) -> bool {
     match node {
         BagNode::Peak(f_idx) => *f_idx == target,
         BagNode::Bag(children) => children.iter().any(|c| covers_peak(c, target)),
