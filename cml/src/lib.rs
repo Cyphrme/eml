@@ -19,6 +19,7 @@
 
 pub mod consistency;
 pub mod engine;
+pub mod mountain;
 pub mod schedule;
 
 pub mod error;
@@ -36,8 +37,8 @@ pub mod proof {
 pub use consistency::{ConsistencyProof, reconstruct_consistency_roots, verify_consistency};
 pub use engine::{
     AlgView, LogKind, NodeReader, carry, compute_root, consistency_proof, frontier_peaks,
-    get_node_hash, inclusion_proof, leaf_proof, merge_frontier_paths, peak_at,
-    reconstruct_subtree_root, reconstruct_view, root_for_at, validate_epochs,
+    get_node_hash, inclusion_proof, leaf_proof, peak_at, reconstruct_subtree_root,
+    reconstruct_view, root_for_at, validate_epochs,
 };
 pub use error::{Error, Result};
 pub use schedule::reduction_count;

@@ -94,18 +94,13 @@ fuzz_target!(|input: Input| {
             None => return,
         };
         let leaf_hash = FuzzHasher.leaf(&target.to_le_bytes());
+        // The log's concrete MMR skeleton for this leaf's trusted position.
+        let skeleton =
+            eml::mountain_skeleton(ARITY, tree_size, target).expect("valid log position");
 
         // Valid proof MUST verify.
         assert!(
-            verify_inclusion(
-                &FuzzHasher,
-                &leaf_hash,
-                target,
-                tree_size,
-                ARITY,
-                &inc_proof.path,
-                &root
-            ),
+            verify_inclusion(&FuzzHasher, &leaf_hash, &skeleton, &inc_proof.path, &root),
             "valid inclusion proof failed to verify"
         );
 
@@ -127,9 +122,7 @@ fuzz_target!(|input: Input| {
                         !verify_inclusion(
                             &FuzzHasher,
                             &leaf_hash,
-                            target,
-                            tree_size,
-                            ARITY,
+                            &skeleton,
                             &mutated.path,
                             &root
                         ),

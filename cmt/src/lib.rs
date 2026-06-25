@@ -28,10 +28,14 @@
 
 mod error;
 mod proof;
-mod shape;
+pub mod shape;
 mod tree;
 
 pub use error::{Error, Result};
+// The CMT's own rebalanced topology, supplied to the spine's topology-agnostic
+// verifier: the skeleton a proof is pinned against and the peak fold a member
+// root is bagged with. The mutable peer of the append-only log's mountain range.
+pub use shape::{rebalanced_bag, rebalanced_skeleton};
 // The structural hasher seam and the proof/seal types the public surface returns
 // are re-exported so callers need not also name `spine` directly.
 pub use spine::{Hasher, LeafProof, ProofStep, Seal, verify_inclusion};
@@ -197,8 +201,9 @@ mod tests {
             let h = Sha256Hasher;
             for index in 0..size {
                 let (leaf, path) = t.inclusion_proof(ALG, index).unwrap();
+                let skeleton = rebalanced_skeleton(size, K, index).expect("valid position");
                 assert!(
-                    spine::verify_inclusion(&h, &leaf, index, size, K, &path, &root),
+                    spine::verify_inclusion(&h, &leaf, &skeleton, &path, &root),
                     "size={size} index={index}"
                 );
             }
@@ -237,7 +242,10 @@ mod tests {
         let h = Sha256Hasher;
         let (_, path) = t.inclusion_proof(ALG, 2).unwrap();
         let forged = h.leaf(b"not-c");
-        assert!(!spine::verify_inclusion(&h, &forged, 2, 4, K, &path, &root));
+        let skeleton = rebalanced_skeleton(4, K, 2).expect("valid position");
+        assert!(!spine::verify_inclusion(
+            &h, &forged, &skeleton, &path, &root
+        ));
     }
 
     #[test]
@@ -250,15 +258,8 @@ mod tests {
         let root = t.root(ALG).unwrap();
         let (leaf, path) = t.non_membership_proof(ALG, 1).expect("cell hashes to null");
         assert_eq!(leaf, h.null());
-        assert!(spine::verify_inclusion(
-            &h,
-            &leaf,
-            1,
-            t.len(),
-            K,
-            &path,
-            &root
-        ));
+        let skeleton = rebalanced_skeleton(t.len(), K, 1).expect("valid position");
+        assert!(spine::verify_inclusion(&h, &leaf, &skeleton, &path, &root));
         // A present (non-null) cell has no non-membership proof.
         assert_eq!(t.non_membership_proof(ALG, 0), None);
     }
@@ -273,12 +274,19 @@ mod tests {
             let root = t.root(ALG).unwrap();
             for index in 0..size {
                 let proof = t.leaf_proof(ALG, index).expect("in range");
+                let skeleton = rebalanced_skeleton(size, K, index).expect("valid position");
                 // Legitimate leaf accepted.
-                assert!(proof.verify(&h, &root), "size={size} index={index}");
+                assert!(
+                    proof.verify(&h, &skeleton, &root),
+                    "size={size} index={index}"
+                );
                 // Forged leaf at the same position rejected.
                 let mut forged = proof.clone();
                 forged.leaf_hash = h.leaf(b"forged");
-                assert!(!forged.verify(&h, &root), "size={size} index={index}");
+                assert!(
+                    !forged.verify(&h, &skeleton, &root),
+                    "size={size} index={index}"
+                );
             }
         }
         // Out-of-range and unknown-algorithm produce no proof.
@@ -295,9 +303,13 @@ mod tests {
         assert_eq!(sealed.tree_size(), 3);
         assert_eq!(sealed.arity(), 2);
         // The seal computed the resumable frontier; folding its peaks under the
-        // algorithm's own hash reproduces the live root.
+        // algorithm's own hash with the CMT's rebalanced bag reproduces the live
+        // root.
         assert!(sealed.peaks(ALG).is_some());
-        assert_eq!(sealed.member_root(ALG, &Sha256Hasher), Some(root));
+        assert_eq!(
+            sealed.member_root(ALG, &Sha256Hasher, rebalanced_bag),
+            Some(root)
+        );
         // `sealed` is a structural `Seal`; there is no path back to a `Cmt`.
     }
 

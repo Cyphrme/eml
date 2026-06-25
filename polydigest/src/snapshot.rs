@@ -88,8 +88,12 @@ impl BoundSnapshot {
     /// Returns [`Error::Spine`] wrapping [`spine::Error::MissingHasher`] (naming
     /// the algorithm) if any algorithm with a frontier in the seal has no hasher
     /// in `hashers`.
-    pub fn binding_roots(&self, hashers: &[(u64, &dyn Hasher)]) -> Result<Vec<(u64, Vec<u8>)>> {
-        let members = self.seal.all_member_roots(hashers)?;
+    pub fn binding_roots(
+        &self,
+        hashers: &[(u64, &dyn Hasher)],
+        bag: spine::BagFn,
+    ) -> Result<Vec<(u64, Vec<u8>)>> {
+        let members = self.seal.all_member_roots(hashers, bag)?;
         members
             .iter()
             .map(|(id, _)| {
@@ -134,6 +138,7 @@ impl BoundSnapshot {
         alg_id: u64,
         hasher: &dyn Hasher,
         all_hashers: &[(u64, &dyn Hasher)],
+        bag: spine::BagFn,
     ) -> Result<Option<Vec<u8>>> {
         // An algorithm with no frontier was never active at the sealed size:
         // a well-formed `None`, distinct from a missing-hasher error.
@@ -142,7 +147,7 @@ impl BoundSnapshot {
         }
         // The complete child set the fold commits — errors if any algorithm
         // lacks a hasher, rather than silently dropping it.
-        let members = self.seal.all_member_roots(all_hashers)?;
+        let members = self.seal.all_member_roots(all_hashers, bag)?;
         Ok(Some(combined_root(
             hasher,
             &members,
@@ -198,17 +203,27 @@ mod tests {
         );
     }
 
+    /// The append-only log's mountain bag — these tests exercise the
+    /// binding-root fold over member roots, so any consistent `bag` works; the
+    /// MMR bag stands in for a concrete topology.
+    fn bag(hasher: &dyn Hasher, peaks: &[Vec<u8>], k: u64) -> Vec<u8> {
+        cml::mountain::bag_peaks(hasher, peaks, k)
+    }
+
     #[test]
     fn promoted_registry_binding_root_equals_member_root() {
         let p0 = vec![0x11; 32];
         let p1 = vec![0x22; 32];
         let seal = Seal::new(3, 2, vec![(0, vec![p0.clone(), p1.clone()])]).expect("well-formed");
-        let member = seal.member_root(0, &H).unwrap();
+        let member = seal.member_root(0, &H, bag).unwrap();
         let snap =
             BoundSnapshot::new(seal, vec![(0, vec![(0, u64::MAX)])]).expect("well-formed timeline");
         let hashers: [(u64, &dyn Hasher); 1] = [(0, &H)];
-        assert_eq!(snap.binding_root(0, &H, &hashers), Ok(Some(member.clone())));
-        assert_eq!(snap.binding_roots(&hashers), Ok(vec![(0, member)]));
+        assert_eq!(
+            snap.binding_root(0, &H, &hashers, bag),
+            Ok(Some(member.clone()))
+        );
+        assert_eq!(snap.binding_roots(&hashers, bag), Ok(vec![(0, member)]));
     }
 
     #[test]
@@ -234,22 +249,22 @@ mod tests {
 
         // The single-root accessor errors naming the absent algorithm …
         assert_eq!(
-            snap.binding_root(0, &H, &partial),
+            snap.binding_root(0, &H, &partial, bag),
             Err(Error::Spine(spine::Error::MissingHasher { alg_id: 1 }))
         );
         // … and so does the all-roots accessor.
         assert_eq!(
-            snap.binding_roots(&partial),
+            snap.binding_roots(&partial, bag),
             Err(Error::Spine(spine::Error::MissingHasher { alg_id: 1 }))
         );
 
         // With every hasher present the fold succeeds.
         let full: [(u64, &dyn Hasher); 2] = [(0, &H), (1, &H)];
-        assert!(snap.binding_root(0, &H, &full).unwrap().is_some());
-        assert_eq!(snap.binding_roots(&full).unwrap().len(), 2);
+        assert!(snap.binding_root(0, &H, &full, bag).unwrap().is_some());
+        assert_eq!(snap.binding_roots(&full, bag).unwrap().len(), 2);
 
         // An algorithm with no frontier is a well-formed `Ok(None)`, never an
         // error — distinct from a missing hasher for an active algorithm.
-        assert_eq!(snap.binding_root(9, &H, &full), Ok(None));
+        assert_eq!(snap.binding_root(9, &H, &full, bag), Ok(None));
     }
 }

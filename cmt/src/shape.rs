@@ -8,15 +8,17 @@
 //! the digests on its root-path, which is what makes both `set` and retroactive
 //! per-node algorithm addition cost `O(log n)` rather than a full `O(n)` rebuild.
 //!
-//! The shape is derived purely from `(size, arity)` by the same two rules the
-//! structural core's [`spine::topology`] uses: decompose into a frontier of
-//! perfect k-ary subtrees, then fold the frontier by repeatedly grouping the
-//! rightmost `k`. Keeping the shape derivation here aligned with the spine is
-//! load-bearing — [`crate::Cmt::root`] is property-tested to equal
-//! [`spine::evaluate`] over the canonical subtree, so a drift in this shape is
-//! caught deterministically.
+//! The shape is derived purely from `(size, arity)` by two rules the CMT owns:
+//! decompose into a frontier of perfect k-ary subtrees ([`spine::frontier_for_size`],
+//! the shared structural primitive), then fold the frontier by repeatedly
+//! grouping the rightmost `k` — the **rebalanced** topology. The spine itself is
+//! topology-agnostic (it owns no fold); the CMT owns this rebalanced fold and the
+//! matching [`rebalanced_skeleton`] the spine verifier pins a proof against, the
+//! mutable peer of the append-only log's mountain range. [`crate::Cmt::root`] is
+//! property-tested to equal [`spine::evaluate`] over the canonical subtree, so a
+//! drift in this shape is caught deterministically.
 
-use spine::{ARITY_RANGE, frontier_for_size};
+use spine::{ARITY_RANGE, Hasher, SkeletonStep, fold_frontier, frontier_for_size, nary_mr};
 
 /// One node of the materialized proof spine.
 ///
@@ -100,6 +102,65 @@ pub(crate) fn rightmost(node: &ShapeNode) -> u64 {
 /// Whether `node` covers flat position `index`.
 pub(crate) fn covers(node: &ShapeNode, index: u64) -> bool {
     leftmost(node) <= index && index <= rightmost(node)
+}
+
+/// The CMT's concrete inclusion skeleton for `index` in a tree of `size` leaves
+/// at arity `k` — the rebalanced topology the spine verifier pins a proof
+/// against.
+///
+/// Walks the [`build`] shape from the root down to the leaf, emitting one
+/// [`SkeletonStep`] per inner node on the path; the steps are returned leaf →
+/// root, matching the proof path order. Returns `None` for an undefined shape
+/// (`k` out of range, `size == 0`, or `index >= size`).
+///
+/// This is the mutable peer of the append-only log's `mountain_skeleton`: the
+/// spine owns no concrete topology, so the CMT supplies its own. `build` is the
+/// single shape source, so the producer's `inclusion_path` and this verifier
+/// skeleton cannot drift.
+#[must_use]
+pub fn rebalanced_skeleton(size: u64, k: u64, index: u64) -> Option<Vec<SkeletonStep>> {
+    if index >= size {
+        return None;
+    }
+    let shape = build(size, k)?;
+    let mut steps = Vec::new();
+    descend_skeleton(&shape, index, &mut steps);
+    // `descend_skeleton` pushes root → leaf; the proof path is leaf → root.
+    steps.reverse();
+    Some(steps)
+}
+
+/// Push one [`SkeletonStep`] per inner node on the root → leaf path to `index`,
+/// in root → leaf order. A lone-child inner node never occurs in `build` (a
+/// perfect subtree or a `2..=k` group), so every emitted step hashes.
+fn descend_skeleton(node: &ShapeNode, index: u64, out: &mut Vec<SkeletonStep>) {
+    if let ShapeNode::Inner(children) = node {
+        let position = children
+            .iter()
+            .position(|c| covers(c, index))
+            .expect("the path index is covered by exactly one child");
+        out.push(SkeletonStep {
+            position,
+            sibling_count: children.len() - 1,
+        });
+        descend_skeleton(&children[position], index, out);
+    }
+}
+
+/// Bag a frontier's peaks into the CMT member root under `hasher` — the
+/// rebalanced fold, grouping the rightmost `k` (the mutable peer of the
+/// append-only log's backward-bag). Mirrors [`build`]'s grouping so the folded
+/// member root equals the live [`crate::Cmt::root`] over the same peaks. An empty
+/// peak set is the empty-tree root.
+#[must_use]
+pub fn rebalanced_bag(hasher: &dyn Hasher, peaks: &[Vec<u8>], k: u64) -> Vec<u8> {
+    if peaks.is_empty() {
+        return hasher.empty();
+    }
+    fold_frontier(peaks.to_vec(), k as usize, |chunk| {
+        let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
+        nary_mr(hasher, &refs)
+    })
 }
 
 #[cfg(test)]

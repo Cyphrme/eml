@@ -116,10 +116,11 @@ impl SnapshotProof {
     pub fn produce(
         sealed: &Sealed,
         hashers: &[(u64, &dyn Hasher)],
+        bag: spine::BagFn,
         claims: Vec<ClaimedLeaf>,
     ) -> Self {
         Self {
-            member_roots: sealed.member_roots(hashers),
+            member_roots: sealed.member_roots(hashers, bag),
             alg_epochs: sealed.alg_epochs().to_vec(),
             tree_size: sealed.tree_size(),
             arity: sealed.arity(),
@@ -188,6 +189,7 @@ impl SnapshotProof {
         &self,
         trusted: &[TrustedBindingRoot<'_>],
         hashers: &[(u64, &dyn Hasher)],
+        skeleton: spine::SkeletonFn,
     ) -> bool {
         // An empty trusted set roots trust in nothing; reject rather than
         // vacuously accept.
@@ -248,7 +250,12 @@ impl SnapshotProof {
             let Some(&(_, hasher)) = hashers.iter().find(|(id, _)| *id == claim.alg_id) else {
                 return false;
             };
-            if !claim.leaf_proof.verify(hasher, member_root) {
+            // The structure's concrete skeleton for this leaf's trusted position.
+            let lp = &claim.leaf_proof;
+            let Some(sk) = skeleton(lp.arity, lp.tree_size, lp.index) else {
+                return false;
+            };
+            if !lp.verify(hasher, &sk, member_root) {
                 return false;
             }
         }
@@ -379,7 +386,8 @@ mod tests {
                     let sealed = log.seal().await.unwrap();
 
                     let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-                    let proof = SnapshotProof::produce(&sealed, &hashers, claims);
+                    let proof =
+                        SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
                     let trusted = [TrustedBindingRoot {
                         alg_id: 0,
                         hasher: &h,
@@ -387,7 +395,7 @@ mod tests {
                     }];
                     let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
                     assert!(
-                        proof.verify(&trusted, &hashers),
+                        proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton),
                         "valid snapshot must verify (n={n}, k={k})"
                     );
                 }
@@ -417,13 +425,13 @@ mod tests {
                 .unwrap();
 
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,
                 root: &br,
             }];
-            assert!(proof.verify(&trusted, &hashers));
+            assert!(proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton));
             // The proof carries nothing derived from the metadata payload.
             assert_eq!(
                 sealed.meta().map(spine::Meta::as_bytes),
@@ -446,7 +454,7 @@ mod tests {
             let sealed = log.seal().await.unwrap();
 
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
             let forged = vec![0x00; 32];
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
@@ -455,7 +463,7 @@ mod tests {
             }];
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
             assert!(
-                !proof.verify(&trusted, &hashers),
+                !proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton),
                 "a head the member roots do not reconstruct must be rejected"
             );
         });
@@ -479,7 +487,7 @@ mod tests {
             claims[3].leaf_proof.leaf_hash = h.leaf(b"forged-payload");
 
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,
@@ -487,7 +495,7 @@ mod tests {
             }];
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
             assert!(
-                !proof.verify(&trusted, &hashers),
+                !proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton),
                 "a forged leaf must break the aggregate proof"
             );
         });
@@ -530,7 +538,7 @@ mod tests {
             let h0 = Sha256Hasher;
             let h1 = PrefixedSha256Hasher;
             let hashers: [(u64, &dyn Hasher); 2] = [(0, &h0), (1, &h1)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
             let trusted = [
                 TrustedBindingRoot {
                     alg_id: 0,
@@ -543,7 +551,7 @@ mod tests {
                     root: &br1,
                 },
             ];
-            assert!(proof.verify(&trusted, &hashers));
+            assert!(proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton));
 
             // Wrong hash on a trusted head (alg 1 verified with alg 0's hash):
             // the head no longer reconstructs — rejected. No security mixing.
@@ -559,7 +567,7 @@ mod tests {
                     root: &br1,
                 },
             ];
-            assert!(!proof.verify(&bad, &hashers));
+            assert!(!proof.verify(&bad, &hashers, cml::mountain::mountain_skeleton));
         });
     }
 
@@ -575,8 +583,8 @@ mod tests {
             let claims = claims_for_all(&log, 4).await;
             let sealed = log.seal().await.unwrap();
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
-            assert!(!proof.verify(&[], &hashers));
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
+            assert!(!proof.verify(&[], &hashers, cml::mountain::mountain_skeleton));
         });
     }
 
@@ -589,7 +597,7 @@ mod tests {
             let br = log.combined_root_at(0, 4).await.unwrap();
             let sealed = log.seal().await.unwrap();
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
             // Algorithm 9 has no member root in the snapshot.
             let trusted = [TrustedBindingRoot {
                 alg_id: 9,
@@ -597,7 +605,7 @@ mod tests {
                 root: &br,
             }];
             let hashers: [(u64, &dyn Hasher); 1] = [(9, &h)];
-            assert!(!proof.verify(&trusted, &hashers));
+            assert!(!proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton));
         });
     }
 
@@ -610,7 +618,7 @@ mod tests {
             let br = log.combined_root_at(0, 5).await.unwrap();
             let sealed = log.seal().await.unwrap();
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, claims);
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, claims);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,
@@ -618,7 +626,7 @@ mod tests {
             }];
             // No hasher provided for algorithm 0's claims.
             let hashers: [(u64, &dyn Hasher); 0] = [];
-            assert!(!proof.verify(&trusted, &hashers));
+            assert!(!proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton));
         });
     }
 
@@ -633,14 +641,14 @@ mod tests {
             let br = log.combined_root_at(0, 6).await.unwrap();
             let sealed = log.seal().await.unwrap();
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            let proof = SnapshotProof::produce(&sealed, &hashers, vec![]);
+            let proof = SnapshotProof::produce(&sealed, &hashers, cml::mountain::bag_peaks, vec![]);
             let trusted = [TrustedBindingRoot {
                 alg_id: 0,
                 hasher: &h,
                 root: &br,
             }];
             let hashers: [(u64, &dyn Hasher); 1] = [(0, &h)];
-            assert!(proof.verify(&trusted, &hashers));
+            assert!(proof.verify(&trusted, &hashers, cml::mountain::mountain_skeleton));
         });
     }
 }

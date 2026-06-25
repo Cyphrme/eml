@@ -115,7 +115,8 @@ impl Emt {
     }
 
     /// An inclusion proof for cell `index`: the leaf digest and proof path,
-    /// verifiable with [`polydigest::verify_inclusion`] against `(index, len, 2, root)`.
+    /// verifiable with [`polydigest::verify_inclusion`] against `root` and the
+    /// rebalanced skeleton ([`polydigest::rebalanced_skeleton`]) for `(index, len, 2)`.
     #[must_use]
     pub fn inclusion_proof(&self, index: u64) -> Option<(Vec<u8>, Vec<ProofStep>)> {
         self.inner.inclusion_proof(ALG, index)
@@ -149,9 +150,9 @@ mod tests {
         let root = tree.root().unwrap();
         let (leaf, path) = tree.inclusion_proof(1).unwrap();
         let h = Sha256Hasher;
-        assert!(polydigest::verify_inclusion(
-            &h, &leaf, 1, 3, ARITY, &path, &root
-        ));
+        // EMT = polydigest(cmt): the mutable tree's rebalanced skeleton.
+        let sk = polydigest::rebalanced_skeleton(3, ARITY, 1).expect("valid position");
+        assert!(polydigest::verify_inclusion(&h, &leaf, &sk, &path, &root));
         assert_eq!(leaf, Sha256::digest(b"second").to_vec());
     }
 

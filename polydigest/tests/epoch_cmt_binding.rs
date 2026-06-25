@@ -170,13 +170,17 @@ fn seal_yields_combined_currency_with_derived_roots() {
     let sealed = t.seal().unwrap();
     assert_eq!(sealed.tree_size(), 3);
     assert_eq!(sealed.arity(), K);
-    // The sealed member root (fold of the frontier peaks) equals the live root.
-    assert_eq!(sealed.member_root(ALG0, &Sha256Hasher), Some(live_member));
+    // The sealed member root (the mutable tree's rebalanced fold of the frontier
+    // peaks) equals the live root.
+    assert_eq!(
+        sealed.member_root(ALG0, &Sha256Hasher, polydigest::rebalanced_bag),
+        Some(live_member)
+    );
     // The binding root for the lone algorithm is derived on demand.
     let hashers: [(u64, &dyn polydigest::Hasher); 1] = [(ALG0, &Sha256Hasher)];
     assert!(
         sealed
-            .binding_root(ALG0, &Sha256Hasher, &hashers)
+            .binding_root(ALG0, &Sha256Hasher, &hashers, polydigest::rebalanced_bag)
             .unwrap()
             .is_some()
     );

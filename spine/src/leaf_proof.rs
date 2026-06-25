@@ -27,13 +27,17 @@
 
 use crate::hasher::Hasher;
 use crate::proof::{ProofStep, verify_inclusion};
+use crate::topology::SkeletonStep;
 
-/// A self-contained leaf proof: a leaf hash bound to its log position, ready to
-/// verify against a trusted root.
+/// A self-contained leaf proof: a leaf hash bound to its position, ready to
+/// verify against a trusted root and the structure's skeleton.
 ///
 /// The path and positional fields are exactly the inclusion contract; bundling
-/// them is what makes the proof self-describing — `verify` needs only the hasher
-/// and the trusted root, not a re-supply of `(index, tree_size, arity)`.
+/// them keeps the proof self-describing about *which* position it claims. Because
+/// the structural core is topology-agnostic, `verify` takes the concrete
+/// `skeleton` for the leaf's position — the holding consumer computes it from the
+/// trusted `(index, tree_size, arity)` under its own topology (an append-only
+/// log's mountain skeleton, a mutable tree's rebalanced skeleton).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeafProof {
     /// The proven leaf's digest at `index`.
@@ -73,24 +77,18 @@ impl LeafProof {
         }
     }
 
-    /// Verify the leaf proof against an authenticated `root`: is `leaf_hash` the
-    /// legitimate leaf at `index` in the size-`tree_size` tree rooted at `root`?
+    /// Verify the leaf proof against an authenticated `root` and the structure's
+    /// `skeleton` for this leaf's position: is `leaf_hash` the legitimate leaf at
+    /// `index` in the size-`tree_size` tree rooted at `root`?
     ///
-    /// Soundness rests entirely on the topology the verifier reconstructs from
-    /// the trusted `(index, tree_size, arity)`; the proof supplies only
-    /// sibling digests. See the module-level trust contract — `root` and the
-    /// positional fields MUST be authenticated.
+    /// Soundness rests on the verifier pinning the proof's trailing steps against
+    /// `skeleton`; the proof supplies only sibling digests. The `skeleton` is the
+    /// consumer's concrete topology for the trusted `(index, tree_size, arity)`
+    /// and MUST be authenticated alongside `root` (see the module-level trust
+    /// contract).
     #[must_use]
-    pub fn verify(&self, hasher: &dyn Hasher, root: &[u8]) -> bool {
-        verify_inclusion(
-            hasher,
-            &self.leaf_hash,
-            self.index,
-            self.tree_size,
-            self.arity,
-            &self.path,
-            root,
-        )
+    pub fn verify(&self, hasher: &dyn Hasher, skeleton: &[SkeletonStep], root: &[u8]) -> bool {
+        verify_inclusion(hasher, &self.leaf_hash, skeleton, &self.path, root)
     }
 }
 
@@ -173,7 +171,10 @@ mod tests {
             for index in 0..n {
                 let (proof, root2) = proof_for(&hasher, n, index);
                 assert_eq!(root2, root, "n={n} index={index}");
-                assert!(proof.verify(&hasher, &root), "n={n} index={index}");
+                // `balanced` is one explicit subtree (no frontier grouping), so
+                // every path step is a hash-chained subtree-prefix step and the
+                // skeleton is empty.
+                assert!(proof.verify(&hasher, &[], &root), "n={n} index={index}");
             }
         }
     }
@@ -186,7 +187,7 @@ mod tests {
             for index in 0..n {
                 let (mut proof, root) = proof_for(&hasher, n, index);
                 proof.leaf_hash = hasher.leaf(b"forged-payload");
-                assert!(!proof.verify(&hasher, &root), "n={n} index={index}");
+                assert!(!proof.verify(&hasher, &[], &root), "n={n} index={index}");
             }
         }
     }
@@ -204,49 +205,43 @@ mod tests {
                     continue;
                 }
                 proof.leaf_hash = hasher.leaf(format!("leaf-{other}").into_bytes().as_slice());
-                assert!(!proof.verify(&hasher, &root), "index={index} other={other}");
+                assert!(
+                    !proof.verify(&hasher, &[], &root),
+                    "index={index} other={other}"
+                );
             }
             // Restore: the genuine leaf still verifies.
             proof.leaf_hash = hasher.leaf(format!("leaf-{index}").into_bytes().as_slice());
-            assert!(proof.verify(&hasher, &root), "index={index}");
+            assert!(proof.verify(&hasher, &[], &root), "index={index}");
         }
     }
 
     /// Property: a proof never verifies against the root of a genuinely
-    /// different tree (wrong-root rejection), nor under a mismatched trusted
-    /// `tree_size`.
+    /// different tree (wrong-root rejection).
+    ///
+    /// Topology/size binding is now a property of the supplied skeleton, not of
+    /// `LeafProof::verify` (the structural core no longer derives topology from
+    /// `tree_size`); the mismatched-size rejection is exercised where the
+    /// skeleton is computed — the `cml`/`cmt` topology tests.
     #[test]
-    fn wrong_root_or_size_is_rejected() {
+    fn wrong_root_is_rejected() {
         let hasher = Sha256Hasher;
         let (proof, root) = proof_for(&hasher, 8, 3);
         // A different tree (different size) has a different root.
         let other_root = crate::mr::evaluate(&hasher, &balanced(12));
         assert_ne!(root, other_root);
-        assert!(proof.verify(&hasher, &root));
-        assert!(!proof.verify(&hasher, &other_root));
-
-        // Mismatched trusted tree_size reconstructs a different topology.
-        let mut wrong_size = proof.clone();
-        wrong_size.tree_size = 9;
-        assert!(!wrong_size.verify(&hasher, &root));
+        assert!(proof.verify(&hasher, &[], &root));
+        assert!(!proof.verify(&hasher, &[], &other_root));
     }
 
     /// The leaf proof is exactly the inclusion contract repackaged: its `verify`
-    /// agrees with a direct `verify_inclusion` call on the same parameters.
+    /// agrees with a direct `verify_inclusion` call on the same skeleton.
     #[test]
     fn verify_agrees_with_raw_inclusion() {
         let hasher = Sha256Hasher;
         let (proof, root) = proof_for(&hasher, 11, 7);
-        let direct = verify_inclusion(
-            &hasher,
-            &proof.leaf_hash,
-            proof.index,
-            proof.tree_size,
-            proof.arity,
-            &proof.path,
-            &root,
-        );
-        assert_eq!(proof.verify(&hasher, &root), direct);
+        let direct = verify_inclusion(&hasher, &proof.leaf_hash, &[], &proof.path, &root);
+        assert_eq!(proof.verify(&hasher, &[], &root), direct);
         assert!(direct);
     }
 }

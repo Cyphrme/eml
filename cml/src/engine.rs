@@ -11,10 +11,11 @@
 //! view's epoch intervals are read locally only to project a coordinate's
 //! null/active value, never to bind a cross-tree timeline.
 
-use spine::{Hasher, fold_frontier, frontier_for_size, nary_mr};
+use spine::{Hasher, frontier_for_size, nary_mr};
 
 use crate::consistency::ProofStep;
 use crate::error::{Error, Result};
+use crate::mountain::{bag_path, bag_peaks, mountain_skeleton};
 use crate::schedule::reduction_count;
 
 /// A borrowed read substrate the single-algorithm engine folds over.
@@ -215,18 +216,11 @@ impl AlgView {
     }
 }
 
-/// Compute the member root from an algorithm's in-memory frontier — the fold of
-/// its frontier peaks under its own hash.
+/// Compute the member root from an algorithm's in-memory frontier — the MMR
+/// backward-bag of its frontier peaks under its own hash.
 #[must_use]
 pub fn compute_root(view: &AlgView, k: usize) -> Vec<u8> {
-    if view.frontier.is_empty() {
-        return view.hasher.empty();
-    }
-    let h = view.hasher.as_ref();
-    fold_frontier(view.frontier.clone(), k, |chunk| {
-        let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
-        nary_mr(h, &refs)
-    })
+    bag_peaks(view.hasher.as_ref(), &view.frontier, k as u64)
 }
 
 /// One step of the base-k frontier carry for a single algorithm view.
@@ -283,100 +277,6 @@ pub fn carry<E>(
             .push((parent_left_index, parent_height));
     }
     Ok(())
-}
-
-/// A frontier node carrying its hash and the path accumulated so far while
-/// merging across the frontier reduction loop.
-struct MergeNode {
-    hash: Vec<u8>,
-    path: Vec<ProofStep>,
-}
-
-/// Fold a set of frontier hashes (and an already-accumulated `bisect_path`)
-/// across the canonical frontier-reduction loop, accumulating [`ProofStep`]s for
-/// `target_idx` and appending them to `bisect_path`.
-///
-/// `hashes` must be the ordered list of frontier-node hashes (left-to-right).
-/// `target_idx` is the index into `hashes` that the proof is for.
-/// `k` is the log arity.
-/// `hasher` supplies the hash combiner (`nary_mr`).
-///
-/// After the call `bisect_path` contains the complete frontier leg of the proof.
-pub fn merge_frontier_paths(
-    hashes: Vec<Vec<u8>>,
-    target_idx: usize,
-    k: usize,
-    hasher: &dyn Hasher,
-    bisect_path: &mut Vec<ProofStep>,
-) {
-    let mut current: Vec<MergeNode> = hashes
-        .into_iter()
-        .map(|h| MergeNode {
-            hash: h,
-            path: Vec::new(),
-        })
-        .collect();
-
-    let mut target = target_idx;
-    while current.len() > k {
-        let split_idx = current.len() - k;
-
-        let refs: Vec<&[u8]> = current[split_idx..]
-            .iter()
-            .map(|n| n.hash.as_slice())
-            .collect();
-        let merged_hash = nary_mr(hasher, &refs);
-
-        let mut target_path = Vec::new();
-        let mut is_target_merged = false;
-        if target >= split_idx {
-            let mut siblings = Vec::with_capacity(k - 1);
-            for (j, item) in current.iter().enumerate().skip(split_idx) {
-                if j != target {
-                    siblings.push(item.hash.clone());
-                }
-            }
-            let step = ProofStep {
-                siblings,
-                position: target - split_idx,
-            };
-            let mut p = std::mem::take(&mut current[target].path);
-            p.push(step);
-            target_path = p;
-            is_target_merged = true;
-        }
-
-        if is_target_merged {
-            current.truncate(split_idx);
-            current.push(MergeNode {
-                hash: merged_hash,
-                path: target_path,
-            });
-            target = split_idx;
-        } else {
-            current.truncate(split_idx);
-            current.push(MergeNode {
-                hash: merged_hash,
-                path: Vec::new(),
-            });
-        }
-    }
-
-    if current.len() > 1 {
-        let mut siblings = Vec::with_capacity(current.len() - 1);
-        for (j, item) in current.iter().enumerate() {
-            if j != target {
-                siblings.push(item.hash.clone());
-            }
-        }
-        let step = ProofStep {
-            siblings,
-            position: target,
-        };
-        current[target].path.push(step);
-    }
-
-    bisect_path.extend(std::mem::take(&mut current[target].path));
 }
 
 /// Retrieve a node hash from the read substrate, or return the algorithm's null
@@ -483,31 +383,28 @@ pub async fn inclusion_proof<R: NodeReader>(
     .await?;
     path.reverse();
 
-    let mut hashes = Vec::with_capacity(coords.len());
+    let mut peaks = Vec::with_capacity(coords.len());
     for &(l, h) in &coords {
         let hash = get_node_hash(reader, view, alg_id, l, h, arity).await?;
-        hashes.push(hash);
+        peaks.push(hash);
     }
 
-    merge_frontier_paths(
-        hashes,
-        f_idx,
-        arity as usize,
-        view.hasher.as_ref(),
-        &mut path,
-    );
+    // bagPath: lift the leaf's mountain peak through the backward-bag to the
+    // root. peakPath (above) is the durable prefix; this is the re-derived suffix.
+    let bag = bag_path(&peaks, f_idx, view.hasher.as_ref(), arity);
+    path.extend(bag);
 
-    // The log spine's shape is owned by the topology module; generation must
-    // emit exactly the skeleton the verifier will check against. This holds by
-    // construction — the pin guards against the producer and verifier drifting.
+    // The MMR commitment topology is owned by the `mountain` module; generation
+    // must emit exactly the skeleton the verifier will check against. This holds
+    // by construction — the pin guards against the producer and verifier drifting.
     debug_assert!(
-        spine::inclusion_skeleton(k, tree_size, index).is_some_and(|skeleton| {
+        mountain_skeleton(k, tree_size, index).is_some_and(|skeleton| {
             skeleton.len() == path.len()
                 && path.iter().zip(skeleton.iter()).all(|(step, shape)| {
                     step.position == shape.position && step.siblings.len() == shape.sibling_count
                 })
         }),
-        "generated inclusion proof must match the canonical log skeleton"
+        "generated inclusion proof must match the canonical mountain skeleton"
     );
 
     Ok(Some(crate::consistency::InclusionProof { path }))
@@ -606,19 +503,16 @@ pub async fn consistency_proof<R: NodeReader>(
     .await?;
     path.reverse();
 
-    let mut hashes = Vec::with_capacity(new_coords.len());
+    let mut new_peaks = Vec::with_capacity(new_coords.len());
     for &(l, h) in &new_coords {
         let hash = get_node_hash(reader, view, alg_id, l, h, arity).await?;
-        hashes.push(hash);
+        new_peaks.push(hash);
     }
 
-    merge_frontier_paths(
-        hashes,
-        f_idx,
-        arity as usize,
-        view.hasher.as_ref(),
-        &mut path,
-    );
+    // The boundary node's mountain bags to the new root through the backward-bag,
+    // the same commitment cml's member root and inclusion proofs use.
+    let bag = bag_path(&new_peaks, f_idx, view.hasher.as_ref(), arity);
+    path.extend(bag);
 
     Ok(Some(crate::consistency::ConsistencyProof {
         start_hash,
@@ -704,7 +598,6 @@ pub async fn root_for_at<R: NodeReader>(
         return Ok(view.hasher.empty());
     }
 
-    let k = arity as usize;
     let coords = frontier_for_size(alg_size, arity);
 
     let mut frontier = Vec::with_capacity(coords.len());
@@ -713,14 +606,7 @@ pub async fn root_for_at<R: NodeReader>(
         frontier.push(hash);
     }
 
-    if frontier.is_empty() {
-        return Ok(view.hasher.empty());
-    }
-    let h = view.hasher.as_ref();
-    Ok(fold_frontier(frontier, k, |chunk| {
-        let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
-        nary_mr(h, &refs)
-    }))
+    Ok(bag_peaks(view.hasher.as_ref(), &frontier, arity))
 }
 
 /// Gather an algorithm's frontier peaks at `size` — the digests of the perfect
@@ -1016,12 +902,10 @@ where
                 mixed_nodes.extend(part_mixed);
             }
 
-            let k_usize = k as usize;
-            let h = view.hasher.as_ref();
-            let root = fold_frontier(component_hashes, k_usize, |chunk| {
-                let refs: Vec<&[u8]> = chunk.iter().map(|v| v.as_slice()).collect();
-                nary_mr(h, &refs)
-            });
+            // A non-perfect range's root is the backward-bag of its perfect
+            // frontier components — the same MMR commitment cml uses everywhere,
+            // so a reconstructed subtree root agrees with a from-scratch build.
+            let root = bag_peaks(view.hasher.as_ref(), &component_hashes, k);
             Ok((root, mixed_nodes))
         }
     })

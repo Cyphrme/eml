@@ -154,6 +154,16 @@ proptest! {
     /// Core differential: for a random history, the current and baseline trees
     /// agree structurally on `root`, an `InclusionProof` at a random valid
     /// index, and a `ConsistencyProof` for a random valid `old < new`.
+    ///
+    /// IGNORED under MMR: `eml`'s commitment is now a Merkle Mountain Range
+    /// (backward-bagged peaks, prove-to-peak proofs), which **intentionally**
+    /// produces a different root and proof shape than the frozen RFC-9162-style
+    /// `neml_baseline`. The `eml ≡ neml` byte-equality was transition scaffolding
+    /// (a dropped non-goal); the durability property test (N55) + the Lean corpus
+    /// (N54) are the new conformance oracle. The whole `difftest` crate retires in
+    /// N53.
+    #[ignore = "eml≡neml byte-equality intentionally broken by the MMR migration; \
+                difftest retires in N53 (durability property test is the new oracle)"]
     #[test]
     fn core_outputs_match(
         k in 2usize..=8,
@@ -319,6 +329,16 @@ proptest! {
     ///   built on the old flat-hash preimage — cannot reproduce. The baseline is
     ///   the wrong oracle for this case, so the current side is checked against
     ///   an independent recomputation of the fold itself.
+    ///
+    /// IGNORED under MMR: the single-algorithm "byte-identical to baseline" leg
+    /// no longer holds — `eml`'s member root is now the Merkle Mountain Range
+    /// backward-bag of the frontier peaks, which differs from the frozen
+    /// RFC-9162-style baseline fold for any multi-peak size. This is the
+    /// intentional commitment change the migration exists to make; the durability
+    /// property test (N55) + the Lean corpus (N54) replace this oracle, and the
+    /// `difftest` crate retires in N53.
+    #[ignore = "eml≡neml byte-equality intentionally broken by the MMR migration; \
+                difftest retires in N53 (durability property test is the new oracle)"]
     #[test]
     fn combined_root_matches(
         ops in prop::collection::vec(op_strategy(), 1..40),

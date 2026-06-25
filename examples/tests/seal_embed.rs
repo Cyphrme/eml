@@ -74,8 +74,12 @@ fn seal_root_equals_native_append_root() {
 
     // The derived member root for algorithm 0 (the fold of the sealed frontier
     // peaks) must equal the native log root.
-    let sealed_root = sealed.member_root(0, &H).expect("algorithm 0 present");
+    let sealed_root = sealed
+        .member_root(0, &H, polydigest::rebalanced_bag)
+        .expect("algorithm 0 present");
 
+    // For this input the rebalanced (EMT seal) and mountain (log MMR)
+    // topologies coincide, so the member root byte-equals the native log root.
     assert_eq!(sealed_root.as_slice(), log_root.as_slice());
 }
 
@@ -126,16 +130,23 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
             .inclusion_proof(0, embed_pos)
             .expect("embed_pos is in range");
 
-        // Verification step 1: log entry E → log root.
-        assert!(log_leaf_proof.verify(&H, &log_root));
+        // Verification step 1: log entry E → log root (log-origin: mountain).
+        let log_sk = polydigest::mountain_skeleton(
+            log_leaf_proof.arity,
+            log_leaf_proof.tree_size,
+            log_leaf_proof.index,
+        )
+        .expect("valid log position");
+        assert!(log_leaf_proof.verify(&H, &log_sk, &log_root));
 
-        // Verification step 2: log root (as a leaf) → outer EMT root.
+        // Verification step 2: log root (as a leaf) → outer EMT root
+        // (EMT-origin: rebalanced).
+        let outer_sk = polydigest::rebalanced_skeleton(outer.len(), outer.arity(), embed_pos)
+            .expect("valid position");
         assert!(spine::verify_inclusion(
             &H,
             &outer_leaf_hash,
-            embed_pos,
-            outer.len(),
-            outer.arity(),
+            &outer_sk,
             &outer_path,
             &outer_root,
         ));
@@ -174,7 +185,12 @@ fn seal_yields_currency_with_derived_binding_root_and_extents() {
 
         // The binding root for algorithm 0 is derived from the frontier on demand.
         let hashers: [(u64, &dyn spine::Hasher); 1] = [(0, &H)];
-        assert!(sealed.binding_root(0, &H, &hashers).unwrap().is_some());
+        assert!(
+            sealed
+                .binding_root(0, &H, &hashers, polydigest::bag_peaks)
+                .unwrap()
+                .is_some()
+        );
         // The committed run-extents are the non-promoted frontier nodes (height >= 1).
         assert!(!sealed.run_extents().is_empty());
         // The opaque metadata channel carries the attestation verbatim.
@@ -226,6 +242,7 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
         let proof = eml::SnapshotProof::produce(
             &sealed,
             &hashers,
+            polydigest::bag_peaks,
             vec![eml::ClaimedLeaf::new(0, leaf_proof)],
         );
 
@@ -235,7 +252,8 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
             root: &binding_root,
         }];
 
-        assert!(proof.verify(&trusted, &hashers));
+        // Log-origin seal: leaf proofs verify against the mountain topology.
+        assert!(proof.verify(&trusted, &hashers, polydigest::mountain_skeleton));
     });
 }
 
@@ -258,7 +276,9 @@ fn seal_emt_then_resume_eml_appends_forward() {
             t.set(i as u64, p.to_vec(), Vec::new()).unwrap();
         }
         let sealed = t.seal().unwrap();
-        let sealed_member = sealed.member_root(0, &H).unwrap();
+        let sealed_member = sealed
+            .member_root(0, &H, polydigest::rebalanced_bag)
+            .unwrap();
 
         // Resume an append-only log onto the EMT-origin frontier.
         let mut log =
@@ -266,7 +286,9 @@ fn seal_emt_then_resume_eml_appends_forward() {
                 .await
                 .unwrap();
 
-        // The resumed log carries the sealed size and reproduces the member root.
+        // The resumed log carries the sealed size and reproduces the member
+        // root: for this input the EMT-origin rebalanced seal and the resumed
+        // log's mountain topology coincide.
         assert_eq!(log.count(), 3);
         assert_eq!(log.root_for_at(0, 3).await.unwrap(), sealed_member);
 
@@ -318,7 +340,13 @@ fn seal_eml_then_fill_emt_verifies_against_binding_root() {
         let filled = eml::fill(&sealed, 0, &H, &data, eml::FillKind::Emt, &hashers).unwrap();
         assert_eq!(filled.tree_size(), 6);
         // The verified member root equals the sealed member root.
-        assert_eq!(filled.root(), sealed.member_root(0, &H).unwrap().as_slice());
+        assert_eq!(
+            filled.root(),
+            sealed
+                .member_root(0, &H, polydigest::bag_peaks)
+                .unwrap()
+                .as_slice()
+        );
     });
 }
 

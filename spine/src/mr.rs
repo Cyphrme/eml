@@ -268,12 +268,12 @@ mod tests {
         let leaf_hash = hasher.leaf(b"b");
         let root = evaluate(&hasher, &subtree);
         let proof = crate::proof::InclusionProof { path };
+        // An explicit subtree carries no frontier grouping, so every step is a
+        // hash-chained subtree-prefix step and the skeleton is empty.
         assert!(crate::proof::verify_inclusion(
             &hasher,
             &leaf_hash,
-            0,
-            1,
-            2,
+            &[],
             &proof.path,
             &root
         ));
