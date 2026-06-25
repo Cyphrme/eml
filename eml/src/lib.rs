@@ -19,7 +19,7 @@ pub use epoch::*;
 pub use epoch::{LogError as Error, LogResult as Result};
 
 /// The EML library's error surface, reached through `eml::error::*`. The
-/// driver's storage-parameterised [`LogError`](epoch::LogError) is the public
+/// driver's storage-parameterised [`epoch::LogError`] is the public
 /// `Error`; this module preserves the `eml::error::Error` path the historical
 /// surface exposed.
 pub mod error {

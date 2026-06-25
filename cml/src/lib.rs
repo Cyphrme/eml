@@ -3,7 +3,7 @@
 //! CML (Canonical Merkle Log) is the **single-algorithm** append-only engine
 //! layered over the structural Merkle Spine. It owns one algorithm's frontier
 //! carry (the base-k reduction [`schedule`]), the member-root fold, the
-//! append-only [`ConsistencyProof`](consistency::ConsistencyProof), inclusion
+//! append-only [`consistency::ConsistencyProof`], inclusion
 //! and leaf proof generation, and the structural snapshot facet — the frontier
 //! peaks a [`spine::Seal`] freezes.
 //!

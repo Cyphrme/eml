@@ -48,7 +48,7 @@ What CMT adds over the spine:
               │ the activation timeline + binding root over either     │
               └────────────────────────────┬───────────────────────────┘
               ┌────────────────────────────┴──────────────────────────┐
-              │ instantiations — EML / EMT / ETL (cyphr-tree, …)       │
+              │ instantiations — EML / EMT / ETL (k=2, named)         │
               └────────────────────────────────────────────────────────┘
 ```
 
