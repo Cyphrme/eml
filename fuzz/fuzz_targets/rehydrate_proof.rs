@@ -6,10 +6,11 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use eml::{ProofStep, reconstruct_inclusion_root};
+use eml::{ProofStep, mountain_skeleton, reconstruct_inclusion_root};
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
 
+/// Hasher for fuzz context — SHA-256 with domain separation.
 #[derive(Debug)]
 struct FuzzHasher;
 
@@ -67,12 +68,11 @@ fuzz_target!(|input: Input| {
             position: s.position,
         })
         .collect();
-    let _ = reconstruct_inclusion_root(
-        &FuzzHasher,
-        &input.leaf_hash,
-        input.index,
-        input.tree_size,
-        input.arity,
-        &path,
-    );
+    // The skeleton is the log's concrete topology for the (arbitrary) trusted
+    // position; an invalid position yields an empty skeleton so the verifier
+    // still runs (and must not panic). Result is discarded.
+    let skeleton =
+        mountain_skeleton(input.arity, input.tree_size, input.index).unwrap_or_default();
+    // Must not panic — result is discarded.
+    let _ = reconstruct_inclusion_root(&FuzzHasher, &input.leaf_hash, &skeleton, &path);
 });
