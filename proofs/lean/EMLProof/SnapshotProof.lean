@@ -7,7 +7,7 @@ import EMLProof.BindingProof
 The **snapshot proof** is the aggregate proof over a sealed snapshot
 (`eml/src/snapshot_proof.rs`): it answers "are these leaves legitimately in the
 snapshot?" in one witness, rooted in the snapshot's **trusted binding root**. Its
-**base case is the PMT leaf proof** (`LeafProof.lean`, N13), and this module
+**base case is the spine leaf proof** (`LeafProof.lean`, N13), and this module
 discharges its soundness *over* that base case — adding **no new axiom** beyond
 `Foundations`' four.
 

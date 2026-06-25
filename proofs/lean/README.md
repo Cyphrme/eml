@@ -264,7 +264,7 @@ To stress-test the formalization against potential mathematical or semantic expl
 the findings of our formal red-team audit:
 
 ### A. Axiom Minimality and Soundness
-- The codebase relies on exactly four structural/domain axioms declared in `Projection.lean`: the
+- The codebase relies on exactly four structural/domain axioms declared in `Foundations.lean`: the
   existence of `Digest`, its non-emptiness, a hashing operator `H`, and a digest serializer
   `digestToBytes`. (This corrects an earlier claim of five: the `domain_separation` axiom and the
   legacy `numsSeed`/`xof`/`eval`-cluster axioms — thirteen in total before — were removed.)

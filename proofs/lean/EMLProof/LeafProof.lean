@@ -1,7 +1,7 @@
 import EMLProof.Kary
 
 /-!
-# Leaf-proof soundness (PMT, over `Foundations`)
+# Leaf-proof soundness (spine, over `Foundations`)
 
 The **leaf proof** is the peer of the inclusion proof: a self-contained
 "is this a legitimate leaf?" witness over a live tree. In the shipped Rust
