@@ -19,7 +19,7 @@ pub use spine::{
     verify_inclusion_path_structure,
 };
 
-use crate::mountain::{BagNode, bag_peaks, bag_shape};
+use crate::mountain::{BagNode, bag_peaks, bag_shape, covers_peak};
 
 /// Consistency proof: proves tree at `old_size` is a prefix of tree at `new_size`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,11 +266,6 @@ pub fn reconstruct_consistency_roots(
     Some((computed_old_root, computed_new_root))
 }
 
-/// Walk the bag shape from its root to `Peak(f_idx)`, consuming one bagPath
-/// [`ProofStep`] per bag node crossed and recovering each single-peak sibling's
-/// digest into `peaks`. Returns `false` on any mismatch between the proof step
-/// and the bag shape (wrong position, sibling count, or an out-of-range index).
-///
 /// Collect the bag nodes on the root → peak path to `Peak(f_idx)` in `node`,
 /// each as `(children, path_child_position)`, appended to `out` in root → peak
 /// order. Returns `false` if `f_idx` is not covered (a malformed proof).
@@ -282,19 +277,11 @@ fn collect_bag_path<'a>(
     match node {
         BagNode::Peak(idx) => *idx == f_idx,
         BagNode::Bag(children) => {
-            let Some(position) = children.iter().position(|c| bag_covers(c, f_idx)) else {
+            let Some(position) = children.iter().position(|c| covers_peak(c, f_idx)) else {
                 return false;
             };
             out.push((children.as_slice(), position));
             collect_bag_path(&children[position], f_idx, out)
         },
-    }
-}
-
-/// Whether `node` covers peak index `f_idx`.
-fn bag_covers(node: &BagNode, f_idx: usize) -> bool {
-    match node {
-        BagNode::Peak(idx) => *idx == f_idx,
-        BagNode::Bag(children) => children.iter().any(|c| bag_covers(c, f_idx)),
     }
 }
