@@ -189,6 +189,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cml"
+version = "0.1.0"
+dependencies = [
+ "spine",
+]
+
+[[package]]
+name = "cmt"
+version = "0.1.0"
+dependencies = [
+ "spine",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -247,7 +261,7 @@ dependencies = [
 name = "eml"
 version = "0.1.0"
 dependencies = [
- "pmt",
+ "epoch",
 ]
 
 [[package]]
@@ -259,6 +273,15 @@ dependencies = [
  "libfuzzer-sys",
  "sha2",
  "smol",
+]
+
+[[package]]
+name = "epoch"
+version = "0.1.0"
+dependencies = [
+ "cml",
+ "cmt",
+ "spine",
 ]
 
 [[package]]
@@ -413,10 +436,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pmt"
-version = "0.1.0"
-
-[[package]]
 name = "polling"
 version = "3.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -516,6 +535,10 @@ dependencies = [
  "blocking",
  "futures-lite",
 ]
+
+[[package]]
+name = "spine"
+version = "0.1.0"
 
 [[package]]
 name = "syn"
