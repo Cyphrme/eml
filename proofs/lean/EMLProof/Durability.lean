@@ -158,41 +158,6 @@ theorem aligned_le_of_lt_top (m x y p : Nat) (hm : 0 < m)
       _ ≤ m * b := Nat.mul_le_mul_left _ (by omega)
   omega
 
-/-- **Greedy slot height.** A frontier slot `(sl, sh)` has `sh = log_k (n - sl)`:
-    the height is the log of the leaves remaining when the greedy decomposition
-    reaches `sl`. Generalized over `frontierGo`'s offset for the induction;
-    `frontierForSizeT` is the `off = 0` case. -/
-theorem frontierGo_slot_height (k : Nat) (hk : 2 ≤ k) :
-    ∀ (n off sl sh : Nat), (sl, sh) ∈ frontierGo k off n →
-      sh = Nat.log k (off + n - sl) := by
-  intro n
-  induction n using Nat.strong_induction_on with
-  | _ n ih =>
-    intro off sl sh hmem
-    rw [frontierGo] at hmem
-    split at hmem
-    · simp only [List.not_mem_nil] at hmem
-    · next h =>
-        push_neg at h
-        obtain ⟨hn0, _⟩ := h
-        rw [List.mem_cons] at hmem
-        have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
-        have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
-        rcases hmem with heq | hmem'
-        · rw [Prod.ext_iff] at heq
-          obtain ⟨hsl, hsh⟩ := heq
-          simp only at hsl hsh
-          subst hsl; subst hsh
-          congr 1; omega
-        · have hrec := ih (n - k ^ Nat.log k n) (by omega) (off + k ^ Nat.log k n) sl sh hmem'
-          rw [hrec]; congr 1; omega
-
-/-- Frontier slot height in closed form for the size-`n` decomposition. -/
-theorem frontier_slot_height (k n sl sh : Nat) (hk : 2 ≤ k)
-    (hmem : (sl, sh) ∈ frontierForSizeT k n) : sh = Nat.log k (n - sl) := by
-  have := frontierGo_slot_height k hk n 0 sl sh hmem
-  simpa using this
-
 /-! ## Mountain growth is append-only on the digit path
 
 The leaf-path-prefix theorem: locating leaf `index` in the size-`n` frontier
@@ -204,8 +169,8 @@ size-`n'` peak path. -/
 /-- **Mountain merge keeps the low digits.** Given the mountain `(l, h)` of leaf
     `index` at size `n` and its mountain `(l', h')` at the larger size `n'`, the
     merge only widened the block: with `h ≤ h'` and `l' ≤ l` (the geometric
-    nesting, supplied from the slot heights and alignment), the offset within the
-    larger mountain reduces mod `k ^ h` to the offset within the smaller —
+    nesting — both derived from `n ≤ n'`, see `peakPath_prefix`), the offset within
+    the larger mountain reduces mod `k ^ h` to the offset within the smaller —
     `(index - l') % k ^ h = index - l`. This is what makes the size-`n` digit
     path the low digits of the size-`n'` digit path. -/
 theorem mountain_digit_agree (k index l h l' h' : Nat) (hk : 2 ≤ k)
@@ -228,10 +193,10 @@ theorem mountain_digit_agree (k index l h l' h' : Nat) (hk : 2 ≤ k)
     `index < l + k ^ h` cannot exceed `l`.
 
     The companion fact `h ≤ h'` — that growth raises the height — is the greedy
-    monotonicity of `frontier_for_size` under append; it is supplied as the
-    hypothesis `hhh` here (it holds for any `n ≤ n'`, and is exactly the
-    `new_height ≥ boundary_height` invariant the consistency verifier also
-    relies on). With it, the leftward-merge direction is pure alignment. -/
+    monotonicity of `frontier_for_size` under append (`frontier_height_mono`,
+    proven from `n ≤ n'`); it is threaded in as `hhh` here so this lemma is the
+    pure leftward-merge alignment step. `peakPath_prefix` supplies it from
+    `n ≤ n'`, making durability unconditional. -/
 theorem frontier_nest (k n n' index l h l' h' : Nat) (hk : 2 ≤ k)
     (hmemsmall : (l, h) ∈ frontierForSizeT k n) (hsl : l ≤ index) (hslt : index < l + k ^ h)
     (hmembig : (l', h') ∈ frontierForSizeT k n') (hsl' : l' ≤ index) (hslt' : index < l' + k ^ h')
@@ -252,13 +217,18 @@ theorem frontier_nest (k n n' index l h l' h' : Nat) (hk : 2 ≤ k)
 
     The hypotheses are the leaf's located mountain at each size — the
     `findFrontier`/`frontier_for_size` covering blocks, here as membership + span
-    facts. Mountain nesting (`l' ≤ l`, `h ≤ h'`) is *derived* from `n ≤ n'`
-    (`frontier_nest`), not assumed. -/
-theorem peakPath_prefix (k n n' index l h l' h' : Nat) (hk : 2 ≤ k)
+    facts — plus `n ≤ n'`. The mountain growth is now **unconditional**: both
+    `h ≤ h'` (height monotonicity, `frontier_height_mono`) and the leftward merge
+    `l' ≤ l` (`frontier_nest`) are *derived* from `n ≤ n'`, not assumed. -/
+theorem peakPath_prefix (k n n' index l h l' h' : Nat) (hk : 2 ≤ k) (hnn' : n ≤ n')
+    (hidx : index < n)
     (hmemsmall : (l, h) ∈ frontierForSizeT k n) (hsl : l ≤ index) (hslt : index < l + k ^ h)
-    (hmembig : (l', h') ∈ frontierForSizeT k n') (hsl' : l' ≤ index) (hslt' : index < l' + k ^ h')
-    (hhh : h ≤ h') :
+    (hmembig : (l', h') ∈ frontierForSizeT k n') (hsl' : l' ≤ index) (hslt' : index < l' + k ^ h') :
     peakPath k index l h <+: peakPath k index l' h' := by
+  -- height monotonicity (the greedy append-only invariant), now PROVEN
+  have hhh : h ≤ h' :=
+    frontier_height_mono k index n h n' h' hk ⟨l, hmemsmall, hsl, hslt⟩ hidx hnn'
+      ⟨l', hmembig, hsl', hslt'⟩
   have hl'le : l' ≤ l :=
     frontier_nest k n n' index l h l' h' hk hmemsmall hsl hslt hmembig hsl' hslt' hhh
   have hall : k ^ h ∣ l := frontier_aligned k n l h hk hmemsmall
