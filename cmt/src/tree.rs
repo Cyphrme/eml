@@ -1,17 +1,17 @@
-//! The mutable Epoch Merkle Tree state machine.
+//! The Canonical Mutable Tree state machine.
 
 use std::collections::BTreeMap;
 
-use pmt::{ARITY_RANGE, Hasher, ProofStep, Sealed, nary_mr};
+use spine::{ARITY_RANGE, Hasher, ProofStep, Seal, nary_mr};
 
 use crate::error::{Error, Result};
-use crate::spine::{self, SpineNode, covers, leftmost, rightmost};
+use crate::shape::{self, ShapeNode, covers, leftmost, rightmost};
 
-/// Configuration for an [`Emt`].
+/// Configuration for a [`Cmt`].
 ///
 /// The mutable tree's only structural axis is the proof-spine arity `k`
-/// (`2..=256`), shared with the kernel topology. (Prefix domain-separation is
-/// not a kernel axis — an application that wants it wraps the [`Hasher`].)
+/// (`2..=256`), shared with the spine topology. (Prefix domain-separation is
+/// not a spine axis — an application that wants it wraps the [`Hasher`].)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
     /// Proof-spine arity `k` (`2..=256`).
@@ -39,7 +39,7 @@ struct Cell {
 
 /// The mutable materialization state for one registered algorithm: the current
 /// root and the materialized node cache. Split from the immutable hasher identity
-/// so [`Emt::set`] can borrow the state mutably and the hasher immutably at the
+/// so [`Cmt::set`] can borrow the state mutably and the hasher immutably at the
 /// same time, without the remove-and-reinsert dance a single `Alg` struct forced.
 struct AlgState {
     /// The materialized root digest at the current size, or `None` for the
@@ -62,20 +62,25 @@ impl std::fmt::Debug for AlgState {
     }
 }
 
-/// The mutable Epoch Merkle Tree over the PMT kernel.
+/// The Canonical Mutable Tree over the Merkle Spine.
 ///
 /// Positional and dense: cells are addressed by flat index `0..len`. The tree
-/// shares the kernel's proof-spine index space, so an inclusion proof generated
-/// here verifies with `pmt::verify_inclusion` against the trusted
-/// `(index, tree_size, arity, root)` topology. Unlike the append-only EML it has
+/// shares the spine's proof-spine index space, so an inclusion proof generated
+/// here verifies with [`spine::verify_inclusion`] against the trusted
+/// `(index, tree_size, arity, root)` topology. Unlike the append-only CML it has
 /// no frontier and no consistency proofs — interior cells mutate, which the
 /// frontier's left-subtrees-sealed assumption cannot model.
 ///
-/// Multiple algorithms may address the same node (per-node multi-hash), and an
-/// algorithm may be added after the fact with the root recomputed in `O(log n)`
-/// along the changed node's ancestors only ([`Emt::set`], retroactive add).
+/// Single-algorithm structurally, but the materialization holds one
+/// `{hasher, root, cache}` view per registered algorithm, so a node may be
+/// addressed under many algorithms (per-node multi-hash) and an algorithm may be
+/// added after the fact with the root recomputed in `O(log n)` along the changed
+/// node's ancestors only ([`Cmt::set`], retroactive add). The cross-tree binding
+/// of those per-algorithm roots is the `epoch` combinator's concern, not the
+/// CMT's — the CMT exposes each algorithm's raw member [`root`](Cmt::root) and
+/// the structural [`seal`](Cmt::seal), never a binding/combined root.
 #[derive(Debug)]
-pub struct Emt {
+pub struct Cmt {
     config: Config,
     cells: Vec<Cell>,
     /// Immutable hasher identity, keyed by stable algorithm ID.
@@ -84,11 +89,11 @@ pub struct Emt {
     states: BTreeMap<u64, AlgState>,
 }
 
-impl Emt {
+impl Cmt {
     /// Create an empty tree.
     ///
     /// Fails with [`Error::InvalidArity`] if `config.arity` is outside the
-    /// kernel's `2..=256` range.
+    /// spine's `2..=256` range.
     pub fn new(config: Config) -> Result<Self> {
         if !ARITY_RANGE.contains(&config.arity) {
             return Err(Error::InvalidArity(config.arity));
@@ -197,54 +202,41 @@ impl Emt {
         self.config.arity
     }
 
-    /// The current per-algorithm **member root** under `alg_id` — the child of
-    /// the combined root — or `None` if the algorithm is unregistered or the
-    /// tree is empty.
+    /// The current per-algorithm **member root** under `alg_id` — the raw root
+    /// the leaves authenticate against — or `None` if the algorithm is
+    /// unregistered or the tree is empty.
+    ///
+    /// This is the structural per-algorithm root. The cross-tree **binding /
+    /// combined root** that folds every algorithm's member root together is the
+    /// `epoch` combinator's derived view, not the CMT's (D9/D12); the CMT exposes
+    /// the raw member roots it materializes and leaves the binding to `epoch`.
     #[must_use]
     pub fn root(&self, alg_id: u64) -> Option<Vec<u8>> {
         self.states.get(&alg_id).and_then(|s| s.root.clone())
     }
 
-    /// The current live **combined root** under `alg_id`'s hash — the primary
-    /// identity of the tree.
+    /// The set of registered algorithm IDs paired with their current member
+    /// root, sorted by algorithm ID, skipping any with no root (empty tree).
     ///
-    /// The combined root is the canonicalization fold ([`pmt::combined_root`])
-    /// over every registered algorithm's member root as children, under
-    /// `alg_id`'s own hash. A mutable tree is dense and active-from-genesis, so
-    /// its committed timeline is trivial and no coverage child joins the fold;
-    /// the combined root is `nary_mr(H_alg_id, [member roots sorted by id])`.
-    /// Genesis promotion is native: a single registered algorithm folds to its
-    /// own member root, so for the common one-algorithm tree the combined root
-    /// equals [`Self::root`].
-    ///
-    /// Computed live from the materialized per-algorithm roots — no seal
-    /// required — and symmetric with the append-only log's combined root.
-    /// Returns `None` if `alg_id` is unregistered or the tree is empty.
+    /// The `epoch` combinator reads these raw member roots as the children of
+    /// its binding/combined-root fold; the CMT itself never folds them.
     #[must_use]
-    pub fn combined_root(&self, alg_id: u64) -> Option<Vec<u8>> {
-        let hasher = self.hashers.get(&alg_id)?.as_ref();
-        // Empty tree: no member root for any algorithm, hence no combined root.
-        self.states.get(&alg_id)?.root.as_ref()?;
-        // The member roots are the fold's children, in algorithm-ID order
-        // (BTreeMap iterates sorted). A mutable tree is dense and active from
-        // genesis, so no algorithm has a null run: the activation is trivial and
-        // no coverage child joins the fold, whatever the size or arity.
-        let member_roots: Vec<(u64, Vec<u8>)> = self
-            .states
+    pub fn member_roots(&self) -> Vec<(u64, Vec<u8>)> {
+        self.states
             .iter()
             .filter_map(|(&id, s)| s.root.clone().map(|r| (id, r)))
-            .collect();
-        let active: Vec<(u64, Vec<(u64, u64)>)> = member_roots
-            .iter()
-            .map(|&(id, _)| (id, vec![(0u64, u64::MAX)]))
-            .collect();
-        Some(pmt::combined_root(
-            hasher,
-            &member_roots,
-            &active,
-            self.len(),
-            self.config.arity,
-        ))
+            .collect()
+    }
+
+    /// The hasher registered under `alg_id`, or `None` if unregistered.
+    ///
+    /// The `epoch` combinator needs the algorithm's own hash to fold the binding
+    /// root over the member roots; the CMT materializes the per-algorithm roots
+    /// but never folds them, so it lends the hasher rather than computing the
+    /// binding root itself.
+    #[must_use]
+    pub fn hasher(&self, alg_id: u64) -> Option<&dyn Hasher> {
+        self.hashers.get(&alg_id).map(AsRef::as_ref)
     }
 
     // --- proofs --------------------------------------------------------------
@@ -252,8 +244,8 @@ impl Emt {
     /// Generate an inclusion proof for cell `index` under `alg_id`.
     ///
     /// Returns the leaf digest and the proof path. The path verifies with
-    /// [`pmt::verify_inclusion`] against the trusted `(index, len, arity, root)`
-    /// — the EMT shares the kernel index space, so it generates paths the kernel
+    /// [`spine::verify_inclusion`] against the trusted `(index, len, arity, root)`
+    /// — the CMT shares the spine index space, so it generates paths the spine
     /// checks rather than running a second verifier. Returns `None` if `alg_id`
     /// is unregistered or `index` is out of range.
     #[must_use]
@@ -263,7 +255,7 @@ impl Emt {
         }
         let h = self.hashers.get(&alg_id)?.as_ref();
         let state = self.states.get(&alg_id)?;
-        let shape = spine::build(self.len(), self.config.arity)?;
+        let shape = shape::build(self.len(), self.config.arity)?;
         let leaf_hash = leaf_digest_raw(&self.cells, h, index);
         let path = crate::proof::inclusion_path(
             &shape,
@@ -275,17 +267,17 @@ impl Emt {
         Some((leaf_hash, path))
     }
 
-    /// Produce a self-contained [`pmt::LeafProof`] for cell `index` under
+    /// Produce a self-contained [`spine::LeafProof`] for cell `index` under
     /// `alg_id` — the live "is this a legitimate leaf?" witness, peer of the
     /// inclusion proof. It bundles the leaf digest with its trusted positional
     /// parameters `(index, len, arity)` and the inclusion path, so a consumer
-    /// verifies with one [`pmt::LeafProof::verify`] call against an
+    /// verifies with one [`spine::LeafProof::verify`] call against an
     /// authenticated root. Returns `None` for an unregistered algorithm or an
     /// out-of-range index.
     #[must_use]
-    pub fn leaf_proof(&self, alg_id: u64, index: u64) -> Option<pmt::LeafProof> {
+    pub fn leaf_proof(&self, alg_id: u64, index: u64) -> Option<spine::LeafProof> {
         let (leaf_hash, path) = self.inclusion_proof(alg_id, index)?;
-        Some(pmt::LeafProof::new(
+        Some(spine::LeafProof::new(
             leaf_hash,
             index,
             self.len(),
@@ -295,7 +287,7 @@ impl Emt {
     }
 
     /// Generate a non-membership proof for `index` under `alg_id`: an inclusion
-    /// proof for the kernel null constant (SAD §5, inclusion-of-null via
+    /// proof for the spine null constant (SAD §5, inclusion-of-null via
     /// collapse).
     ///
     /// Succeeds only when cell `index` actually hashes to `null()` — i.e. the
@@ -322,8 +314,8 @@ impl Emt {
     /// root in `O(log n)` along that cell's ancestors only (D11, the
     /// "Post-Facto Digest" / retroactive algorithm addition).
     ///
-    /// This is the EMT's *incremental* multi-hash operation: distinct from
-    /// bulk filling (an EML operator, `O(n)`, which re-derives a whole
+    /// This is the mutable tree's *incremental* multi-hash operation: distinct
+    /// from bulk filling (an `epoch` operator, `O(n)`, which re-derives a whole
     /// algorithm's history). Here a node gains a digest under a *newly seeded*
     /// algorithm and only its ancestor path is touched; positions other than
     /// `index` contribute their already-materialized digests (the null
@@ -368,24 +360,26 @@ impl Emt {
         Ok(recomputed)
     }
 
-    /// Consume the tree and seal it into the one kernel currency [`Sealed`].
+    /// Consume the tree and seal it into the general structural [`spine::Seal`]
+    /// (D13, the structural facet of the seal chain).
     ///
-    /// One-way: there is no `unseal` and no path back to an `Emt`
+    /// One-way: there is no `unseal` and no path back to a `Cmt`
     /// (C-SEAL-ONEWAY). The seal **computes the resumable frontier** — every
     /// registered algorithm's frontier peaks (the digests of the perfect k-ary
-    /// subtrees the kernel topology names at this size) — under the default open
-    /// epoch timeline `(0, MAX)`, the only timeline a mutable tree (which has no
-    /// epoch lifecycle of its own) can assert.
+    /// subtrees the spine topology names at this size). The `Seal` carries **no
+    /// committed epoch timeline and no binding root** — those are the *epoch
+    /// facet*, added by the `epoch` combinator as a wrapper over this general
+    /// `Seal` (`epoch(cmt)`), never baked in here.
     ///
-    /// A live `Emt` has no frontier stack — that absence is the EMT/EML tell.
-    /// Computing the peaks at seal erases the distinction, so *every* `Sealed`
+    /// A live `Cmt` has no frontier stack — that absence is the mutable/append
+    /// tell. Computing the peaks at seal erases the distinction, so every `Seal`
     /// uniformly carries a resumable frontier regardless of source kind, and the
     /// member root every consumer sees is the fold of those peaks (identical to
-    /// the EMT's own root, since both fold the same perfect-subtree digests).
+    /// the tree's own root, since both fold the same perfect-subtree digests).
     ///
-    /// # No `from_sealed` — why a `Sealed` cannot revive an `Emt`
+    /// # No `from_seal` — why a `Seal` cannot revive a `Cmt`
     ///
-    /// There is deliberately **no `Emt::from_sealed`**. A frontier is the
+    /// There is deliberately **no `Cmt::from_seal`**. A frontier is the
     /// *complete* continuation state of an append-only log (every future append
     /// folds against the peaks alone), but only *partial* state for a mutable
     /// tree: mutating an interior cell needs every cell's digest along its
@@ -393,21 +387,20 @@ impl Emt {
     /// Reviving arbitrary mutation over the committed positions would also
     /// *un-seal the committed past* — the one-way guarantee the seal exists to
     /// make. The way to a readable, mutable-or-append tree over the committed
-    /// data is [`fill`](../../eml/fn.fill.html) (data-required), which
-    /// rebuilds and verifies against the committed binding root; the discarded
-    /// frontier is simply unused when the fill target is an EMT.
+    /// data is the `epoch` combinator's `fill` (data-required), which rebuilds
+    /// and verifies against the committed binding root; the discarded frontier is
+    /// simply unused when the fill target is a mutable tree.
     ///
     /// Fails with [`Error::EmptySeal`] on an empty tree (nothing to seal) and
-    /// propagates [`Error::MalformedSeal`] if the kernel rejects the timeline.
-    pub fn seal(self) -> Result<Sealed> {
+    /// propagates [`Error::MalformedSeal`] if the spine rejects the frontier.
+    pub fn seal(self) -> Result<Seal> {
         if self.cells.is_empty() {
             return Err(Error::EmptySeal);
         }
         let size = self.cells.len() as u64;
         let k = self.config.arity;
-        let coords = pmt::frontier_for_size(size, k);
+        let coords = spine::frontier_for_size(size, k);
         let mut frontiers: Vec<(u64, Vec<Vec<u8>>)> = Vec::with_capacity(self.states.len());
-        let mut alg_epochs: Vec<(u64, Vec<(u64, u64)>)> = Vec::with_capacity(self.states.len());
         // Iterate states mutably for peak_digest's defensive cache-healing fallback.
         let mut states = self.states;
         for (id, state) in &mut states {
@@ -424,9 +417,8 @@ impl Emt {
                 .map(|&(left, height)| peak_digest(&self.cells, h, state, left, height, k))
                 .collect();
             frontiers.push((*id, peaks));
-            alg_epochs.push((*id, vec![(0, u64::MAX)]));
         }
-        Sealed::new(size, k, frontiers, alg_epochs).map_err(|_| Error::MalformedSeal)
+        Seal::new(size, k, frontiers).map_err(|_| Error::MalformedSeal)
     }
 
     /// Like [`Self::inclusion_proof`] but also returns the number of off-path
@@ -443,7 +435,7 @@ impl Emt {
         }
         let h = self.hashers.get(&alg_id)?.as_ref();
         let state = self.states.get(&alg_id)?;
-        let shape = spine::build(self.len(), self.config.arity)?;
+        let shape = shape::build(self.len(), self.config.arity)?;
         let leaf_hash = leaf_digest_raw(&self.cells, h, index);
         let (path, misses) = crate::proof::inclusion_path_with_miss_count(
             &shape,
@@ -462,7 +454,7 @@ impl Emt {
 /// registration and on append, where the spine shape may change.
 fn recompute_full(cells: &[Cell], arity: u64, hasher: &dyn Hasher, state: &mut AlgState) {
     state.cache.clear();
-    state.root = spine::build(cells.len() as u64, arity).map(|shape| {
+    state.root = shape::build(cells.len() as u64, arity).map(|shape| {
         eval_subtree(&mut state.cache, hasher, &shape, &mut |pos| {
             leaf_digest_raw(cells, hasher, pos)
         })
@@ -485,7 +477,7 @@ fn recompute_path(
     state: &mut AlgState,
     index: u64,
 ) -> usize {
-    let Some(shape) = spine::build(cells.len() as u64, arity) else {
+    let Some(shape) = shape::build(cells.len() as u64, arity) else {
         state.root = None;
         return 0;
     };
@@ -509,17 +501,17 @@ fn eval_on_path(
     cells: &[Cell],
     hasher: &dyn Hasher,
     state: &mut AlgState,
-    node: &SpineNode,
+    node: &ShapeNode,
     index: u64,
     recomputed: &mut usize,
 ) -> Vec<u8> {
     match node {
-        SpineNode::Leaf(_) => {
-            let digest = leaf_digest_raw(cells, hasher, spine::leftmost(node));
+        ShapeNode::Leaf(_) => {
+            let digest = leaf_digest_raw(cells, hasher, shape::leftmost(node));
             state.cache.insert(node_key(node), digest.clone());
             digest
         },
-        SpineNode::Inner(children) => {
+        ShapeNode::Inner(children) => {
             let mut refs_owned: Vec<Vec<u8>> = Vec::with_capacity(children.len());
             for child in children {
                 if covers(child, index) {
@@ -557,7 +549,7 @@ fn eval_on_path(
 fn seed_null(cells: &[Cell], arity: u64, hasher: &dyn Hasher, state: &mut AlgState) {
     state.cache.clear();
     let null = hasher.null();
-    state.root = spine::build(cells.len() as u64, arity).map(|shape| {
+    state.root = shape::build(cells.len() as u64, arity).map(|shape| {
         // Cache the leaf as null so the subsequent path-recompute reads
         // every off-path sibling from the cache (never the real
         // payload): only the target cell gains a real digest.
@@ -598,7 +590,7 @@ fn peak_digest(
     if let Some(d) = state.cache.get(&(left, right)) {
         return d.clone();
     }
-    let shape = spine::perfect(left, height, k);
+    let shape = shape::perfect(left, height, k);
     eval_subtree(&mut state.cache, hasher, &shape, &mut |pos| {
         leaf_digest_raw(cells, hasher, pos)
     })
@@ -615,17 +607,17 @@ fn peak_digest(
 fn eval_subtree(
     cache: &mut BTreeMap<(u64, u64), Vec<u8>>,
     hasher: &dyn Hasher,
-    node: &SpineNode,
+    node: &ShapeNode,
     leaf_fn: &mut dyn FnMut(u64) -> Vec<u8>,
 ) -> Vec<u8> {
     let key = node_key(node);
     match node {
-        SpineNode::Leaf(pos) => {
+        ShapeNode::Leaf(pos) => {
             let digest = leaf_fn(*pos);
             cache.insert(key, digest.clone());
             digest
         },
-        SpineNode::Inner(children) => {
+        ShapeNode::Inner(children) => {
             let child_digests: Vec<Vec<u8>> = children
                 .iter()
                 .map(|c| eval_subtree(cache, hasher, c, leaf_fn))
@@ -652,6 +644,6 @@ fn leaf_digest_raw(cells: &[Cell], hasher: &dyn Hasher, pos: u64) -> Vec<u8> {
 /// is uniquely identified by the leaves beneath it — distinguishing nested
 /// left-aligned nodes (e.g. the root and its leftmost descendants), which a
 /// `(leftmost, child_count)` key would alias.
-fn node_key(node: &SpineNode) -> (u64, u64) {
+fn node_key(node: &ShapeNode) -> (u64, u64) {
     (leftmost(node), rightmost(node))
 }

@@ -1,11 +1,11 @@
 //! Inclusion and non-membership proof generation over the materialized spine.
 //!
-//! Both reuse the kernel's proof machinery: the path produced here verifies with
-//! [`pmt::verify_inclusion`] against the trusted `(index, tree_size, arity,
-//! root)` topology. The EMT shares the kernel index space, so it is *not* a
-//! second proof system — it only generates paths the kernel checks.
+//! Both reuse the spine's proof machinery: the path produced here verifies with
+//! [`spine::verify_inclusion`] against the trusted `(index, tree_size, arity,
+//! root)` topology. The CMT shares the spine index space, so it is *not* a
+//! second proof system — it only generates paths the spine checks.
 //!
-//! **Non-membership** is inclusion of the kernel null constant at a position
+//! **Non-membership** is inclusion of the spine null constant at a position
 //! (SAD §5): a cell that carries no real value hashes to `null()`, and an
 //! inclusion proof for `null()` at that index is the membership-of-null witness.
 //! It rests on the same collapse/promotion canonical encoding as inclusion, so
@@ -13,9 +13,9 @@
 
 use std::collections::BTreeMap;
 
-use pmt::ProofStep;
+use spine::ProofStep;
 
-use crate::spine::{self, SpineNode};
+use crate::shape::{self, ShapeNode};
 
 /// Build the inclusion path (leaf → root) for `index` over `shape`.
 ///
@@ -26,11 +26,11 @@ use crate::spine::{self, SpineNode};
 ///
 /// Emits one [`ProofStep`] per inner node on the path, its `siblings` being
 /// the other children's digests in order — exactly the shape
-/// [`pmt::proof::reconstruct_inclusion_root`] reconstructs against. The spine
-/// build never produces a lone-child inner node, so every emitted step hashes
-/// (the kernel rejects a zero-sibling step), preserving proof uniqueness.
+/// [`spine::reconstruct_inclusion_root`] reconstructs against. The shape build
+/// never produces a lone-child inner node, so every emitted step hashes (the
+/// spine rejects a zero-sibling step), preserving proof uniqueness.
 pub(crate) fn inclusion_path(
-    shape: &SpineNode,
+    shape: &ShapeNode,
     index: u64,
     cache: &BTreeMap<(u64, u64), Vec<u8>>,
     leaf_digest: &mut dyn FnMut(u64) -> Vec<u8>,
@@ -45,7 +45,7 @@ pub(crate) fn inclusion_path(
 /// pushed leaf-first (the deepest recursion pushes first), matching the kernel's
 /// leaf → root path order.
 fn descend(
-    cur: &SpineNode,
+    cur: &ShapeNode,
     index: u64,
     cache: &BTreeMap<(u64, u64), Vec<u8>>,
     leaf_digest: &mut dyn FnMut(u64) -> Vec<u8>,
@@ -53,11 +53,11 @@ fn descend(
     path: &mut Vec<ProofStep>,
 ) -> Vec<u8> {
     match cur {
-        SpineNode::Leaf(pos) => leaf_digest(*pos),
-        SpineNode::Inner(children) => {
+        ShapeNode::Leaf(pos) => leaf_digest(*pos),
+        ShapeNode::Inner(children) => {
             let position = children
                 .iter()
-                .position(|c| spine::covers(c, index))
+                .position(|c| shape::covers(c, index))
                 .expect("the path index is covered by exactly one child");
 
             // Digest every child; recurse into the one on the path.
@@ -93,20 +93,20 @@ fn descend(
 /// subtree traversal. Falls back to recursive evaluation only on a cache miss.
 /// When `miss_counter` is provided, increments it on each cache miss.
 fn eval(
-    cur: &SpineNode,
+    cur: &ShapeNode,
     cache: &BTreeMap<(u64, u64), Vec<u8>>,
     leaf_digest: &mut dyn FnMut(u64) -> Vec<u8>,
     node: &mut dyn FnMut(&[&[u8]]) -> Vec<u8>,
     miss_counter: &mut usize,
 ) -> Vec<u8> {
-    let key = (spine::leftmost(cur), spine::rightmost(cur));
+    let key = (shape::leftmost(cur), shape::rightmost(cur));
     if let Some(cached) = cache.get(&key) {
         return cached.clone();
     }
     *miss_counter += 1;
     match cur {
-        SpineNode::Leaf(pos) => leaf_digest(*pos),
-        SpineNode::Inner(children) => {
+        ShapeNode::Leaf(pos) => leaf_digest(*pos),
+        ShapeNode::Inner(children) => {
             let digests: Vec<Vec<u8>> = children
                 .iter()
                 .map(|c| eval(c, cache, leaf_digest, node, miss_counter))
@@ -122,7 +122,7 @@ fn eval(
 /// some off-path subtree was re-evaluated instead of being served from cache.
 #[cfg(test)]
 pub(crate) fn inclusion_path_with_miss_count(
-    shape: &SpineNode,
+    shape: &ShapeNode,
     index: u64,
     cache: &BTreeMap<(u64, u64), Vec<u8>>,
     leaf_digest: &mut dyn FnMut(u64) -> Vec<u8>,
@@ -144,7 +144,7 @@ pub(crate) fn inclusion_path_with_miss_count(
 
 #[cfg(test)]
 fn descend_counted(
-    cur: &SpineNode,
+    cur: &ShapeNode,
     index: u64,
     cache: &BTreeMap<(u64, u64), Vec<u8>>,
     leaf_digest: &mut dyn FnMut(u64) -> Vec<u8>,
@@ -153,11 +153,11 @@ fn descend_counted(
     misses: &mut usize,
 ) -> Vec<u8> {
     match cur {
-        SpineNode::Leaf(pos) => leaf_digest(*pos),
-        SpineNode::Inner(children) => {
+        ShapeNode::Leaf(pos) => leaf_digest(*pos),
+        ShapeNode::Inner(children) => {
             let position = children
                 .iter()
-                .position(|c| spine::covers(c, index))
+                .position(|c| shape::covers(c, index))
                 .expect("the path index is covered by exactly one child");
 
             let mut child_digests: Vec<Vec<u8>> = Vec::with_capacity(children.len());

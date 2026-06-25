@@ -9,11 +9,13 @@ repository    = "https://github.com/Cyphrme/eml"
 
 [dependencies]
 # The epoch combinator lifts the structural spine across N algorithms by driving
-# N single-algorithm CML engines over one shared substrate; it depends on the
-# spine (the structural facet, the binding-root fold) and CML (the per-algorithm
-# engine it drives).
+# N single-algorithm CML/CMT engines over one shared substrate; it depends on the
+# spine (the structural facet, the binding-root fold), CML (the append-only
+# per-algorithm engine), and CMT (the mutable single-algorithm tree it lifts as
+# `epoch(cmt)`).
 spine = { path = "../spine" }
 cml = { path = "../cml" }
+cmt = { path = "../cmt" }
 
 [dev-dependencies]
 sha2 = "0.10"

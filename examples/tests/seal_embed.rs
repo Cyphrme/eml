@@ -54,7 +54,7 @@ fn seal_root_equals_native_append_root() {
     let payloads: &[&[u8]] = &[b"alpha", b"beta", b"gamma"];
 
     // Build the mutable tree and seal it.
-    let mut t = emt::Emt::new(emt::Config { arity: 2 }).unwrap();
+    let mut t = epoch::EpochTree::new(epoch::CmtConfig { arity: 2 }).unwrap();
     t.register_algorithm(0, Box::new(H)).unwrap();
     for (i, p) in payloads.iter().enumerate() {
         t.set(i as u64, p.to_vec(), Vec::new()).unwrap();
@@ -114,7 +114,7 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
             .expect("entry 1 is in range");
 
         // Embed the log root as an opaque leaf at `embed_pos` in the outer EMT.
-        let mut outer = emt::Emt::new(emt::Config { arity: 2 }).unwrap();
+        let mut outer = epoch::EpochTree::new(epoch::CmtConfig { arity: 2 }).unwrap();
         outer.register_algorithm(0, Box::new(H)).unwrap();
         outer.set(0, b"other-cell".to_vec(), Vec::new()).unwrap();
         // The log root is opaque: indistinguishable from any other leaf payload.
@@ -252,7 +252,7 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
 fn seal_emt_then_resume_eml_appends_forward() {
     smol::block_on(async {
         // Build and seal a mutable tree of three cells.
-        let mut t = emt::Emt::new(emt::Config { arity: 2 }).unwrap();
+        let mut t = epoch::EpochTree::new(epoch::CmtConfig { arity: 2 }).unwrap();
         t.register_algorithm(0, Box::new(H)).unwrap();
         for (i, p) in [b"a" as &[u8], b"b", b"c"].iter().enumerate() {
             t.set(i as u64, p.to_vec(), Vec::new()).unwrap();

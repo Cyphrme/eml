@@ -1,43 +1,44 @@
 //! The proof-spine shape, materialized as an explicit positional tree.
 //!
-//! The EMT is *mutable*, so it cannot reuse EML's frontier (left-subtrees-sealed
-//! is unsound once interior cells change). Instead it materializes the proof
-//! spine — the same `(size, arity)` → topology the kernel pins inclusion proofs
-//! against — as an explicit tree of [`SpineNode`]s over the leaf positions. A
-//! single cell's change recomputes only the digests on its root-path, which is
-//! what makes both `set` and retroactive per-node algorithm addition cost
-//! `O(log n)` rather than a full `O(n)` rebuild.
+//! The CMT is *mutable*, so it cannot reuse the append-only log's frontier
+//! (left-subtrees-sealed is unsound once interior cells change). Instead it
+//! materializes the proof spine — the same `(size, arity)` → topology the
+//! [`spine`] crate pins inclusion proofs against — as an explicit tree of
+//! [`ShapeNode`]s over the leaf positions. A single cell's change recomputes only
+//! the digests on its root-path, which is what makes both `set` and retroactive
+//! per-node algorithm addition cost `O(log n)` rather than a full `O(n)` rebuild.
 //!
 //! The shape is derived purely from `(size, arity)` by the same two rules the
-//! kernel's [`pmt::topology`] uses: decompose into a frontier of perfect k-ary
-//! subtrees, then fold the frontier by repeatedly grouping the rightmost `k`.
-//! Keeping the shape derivation here aligned with the kernel is load-bearing —
-//! [`crate::Emt::root`] is property-tested to equal `pmt::evaluate` over the
-//! canonical subtree, so a drift in this shape is caught deterministically.
+//! structural core's [`spine::topology`] uses: decompose into a frontier of
+//! perfect k-ary subtrees, then fold the frontier by repeatedly grouping the
+//! rightmost `k`. Keeping the shape derivation here aligned with the spine is
+//! load-bearing — [`crate::Cmt::root`] is property-tested to equal
+//! [`spine::evaluate`] over the canonical subtree, so a drift in this shape is
+//! caught deterministically.
 
-use pmt::{ARITY_RANGE, frontier_for_size};
+use spine::{ARITY_RANGE, frontier_for_size};
 
 /// One node of the materialized proof spine.
 ///
 /// A `Leaf(position)` names a logical cell; an `Inner(children)` is a hashing
-/// node whose children are spine nodes left-to-right. The shape is uniquely
+/// node whose children are shape nodes left-to-right. The shape is uniquely
 /// determined by `(size, arity)` — never stored, always re-derived — so it
-/// stays in lockstep with the kernel topology that inclusion proofs check.
+/// stays in lockstep with the spine topology that inclusion proofs check.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SpineNode {
+pub enum ShapeNode {
     /// A logical leaf cell at this flat position.
     Leaf(u64),
     /// A hashing inner node over its children, left to right.
-    Inner(Vec<SpineNode>),
+    Inner(Vec<ShapeNode>),
 }
 
 /// Build the proof-spine shape for `size` leaves at arity `k`.
 ///
-/// Returns `None` when the shape is undefined: `k` out of the kernel's
-/// `2..=256` range, or an empty tree (`size == 0`) — an EMT always has a root
+/// Returns `None` when the shape is undefined: `k` out of the spine's
+/// `2..=256` range, or an empty tree (`size == 0`) — a CMT always has a root
 /// only once it holds at least one cell.
 #[must_use]
-pub fn build(size: u64, k: u64) -> Option<SpineNode> {
+pub fn build(size: u64, k: u64) -> Option<ShapeNode> {
     if !ARITY_RANGE.contains(&k) || size == 0 {
         return None;
     }
@@ -47,57 +48,57 @@ pub fn build(size: u64, k: u64) -> Option<SpineNode> {
     }
 
     // Each frontier entry is a perfect k-ary subtree rooted at its left index.
-    let mut frontier: Vec<SpineNode> = coords
+    let mut frontier: Vec<ShapeNode> = coords
         .iter()
         .map(|&(left, height)| perfect(left, height, k))
         .collect();
 
     // Fold the frontier by repeatedly grouping the rightmost `k`, mirroring the
-    // kernel's `grouping_steps`. When `2..=k` remain they merge into the root.
+    // spine's `grouping_steps`. When `2..=k` remain they merge into the root.
     let k_usize = k as usize;
     while frontier.len() > k_usize {
         let split = frontier.len() - k_usize;
         let group = frontier.split_off(split);
-        frontier.push(SpineNode::Inner(group));
+        frontier.push(ShapeNode::Inner(group));
     }
     if frontier.len() == 1 {
         Some(frontier.pop().expect("len checked == 1"))
     } else {
-        Some(SpineNode::Inner(frontier))
+        Some(ShapeNode::Inner(frontier))
     }
 }
 
 /// A perfect k-ary subtree of the given `height`, rooted so its leftmost leaf is
 /// flat position `left`. Height 0 is a lone leaf.
-pub(crate) fn perfect(left: u64, height: u32, k: u64) -> SpineNode {
+pub(crate) fn perfect(left: u64, height: u32, k: u64) -> ShapeNode {
     if height == 0 {
-        return SpineNode::Leaf(left);
+        return ShapeNode::Leaf(left);
     }
     let child_span = k.pow(height - 1);
     let children = (0..k)
         .map(|c| perfect(left + c * child_span, height - 1, k))
         .collect();
-    SpineNode::Inner(children)
+    ShapeNode::Inner(children)
 }
 
 /// The leftmost flat leaf position covered by `node`.
-pub(crate) fn leftmost(node: &SpineNode) -> u64 {
+pub(crate) fn leftmost(node: &ShapeNode) -> u64 {
     match node {
-        SpineNode::Leaf(pos) => *pos,
-        SpineNode::Inner(children) => leftmost(&children[0]),
+        ShapeNode::Leaf(pos) => *pos,
+        ShapeNode::Inner(children) => leftmost(&children[0]),
     }
 }
 
 /// The rightmost flat leaf position covered by `node`.
-pub(crate) fn rightmost(node: &SpineNode) -> u64 {
+pub(crate) fn rightmost(node: &ShapeNode) -> u64 {
     match node {
-        SpineNode::Leaf(pos) => *pos,
-        SpineNode::Inner(children) => rightmost(children.last().expect("inner node has children")),
+        ShapeNode::Leaf(pos) => *pos,
+        ShapeNode::Inner(children) => rightmost(children.last().expect("inner node has children")),
     }
 }
 
 /// Whether `node` covers flat position `index`.
-pub(crate) fn covers(node: &SpineNode, index: u64) -> bool {
+pub(crate) fn covers(node: &ShapeNode, index: u64) -> bool {
     leftmost(node) <= index && index <= rightmost(node)
 }
 
@@ -114,7 +115,7 @@ mod tests {
 
     #[test]
     fn singleton_is_a_lone_leaf() {
-        assert_eq!(build(1, 2), Some(SpineNode::Leaf(0)));
+        assert_eq!(build(1, 2), Some(ShapeNode::Leaf(0)));
     }
 
     /// Every flat position `0..size` appears exactly once, left to right.
@@ -130,10 +131,10 @@ mod tests {
         }
     }
 
-    fn collect_leaves(node: &SpineNode, out: &mut Vec<u64>) {
+    fn collect_leaves(node: &ShapeNode, out: &mut Vec<u64>) {
         match node {
-            SpineNode::Leaf(p) => out.push(*p),
-            SpineNode::Inner(children) => {
+            ShapeNode::Leaf(p) => out.push(*p),
+            ShapeNode::Inner(children) => {
                 for c in children {
                     collect_leaves(c, out);
                 }
