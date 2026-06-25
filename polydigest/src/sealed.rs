@@ -1,6 +1,6 @@
 //! `Sealed` — the combinator's frozen multi-algorithm snapshot.
 //!
-//! `Sealed` is the epoch combinator's public commitment: the structural
+//! `Sealed` is the polydigest combinator's public commitment: the structural
 //! [`spine::Seal`] (frontier peaks + run-extents + opaque metadata) paired with
 //! the **committed epoch timeline**, from which the **binding root** is derived.
 //! It is the combinator-over-`Seal` (D13): the structural facet stays invariant

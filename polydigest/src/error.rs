@@ -1,13 +1,13 @@
-//! The epoch combinator's error type.
+//! The polydigest combinator's error type.
 //!
 //! The structural spine reports its construction errors with [`spine::Error`]
-//! (bad arity, malformed frontier, missing hasher). The epoch combinator adds
+//! (bad arity, malformed frontier, missing hasher). The polydigest combinator adds
 //! the one failure mode the structural layer cannot have: a committed epoch
 //! timeline that is not well-formed at the bound size.
 
 use std::fmt;
 
-/// An epoch combinator error.
+/// A polydigest combinator error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// A snapshot was bound with a malformed committed epoch timeline: not
@@ -48,5 +48,5 @@ impl From<spine::Error> for Error {
     }
 }
 
-/// A specialized `Result` alias for the epoch combinator.
+/// A specialized `Result` alias for the polydigest combinator.
 pub type Result<T> = std::result::Result<T, Error>;

@@ -24,7 +24,7 @@ CML (Canonical Merkle Log) owns one algorithm's append-only mechanism:
 
 CML is **epoch-free and multi-algorithm-free**: it reads one algorithm's view over a
 *borrowed* node-reader substrate and never owns the store. That is what lets the
-`epoch` combinator drive **N** CML views over **one** shared data substrate without
+`polydigest` combinator drive **N** CML views over **one** shared data substrate without
 duplicating leaf data. The activation timeline, the null-run-extents, the binding
 root, and coupling are the combinator's facet, not CML's. The structural commitment
 a CML seal produces is the general `spine::Seal`; the epoch facet over it is
@@ -38,7 +38,7 @@ spine  ◄── the structural core
   ├── cml  ◄── this crate (append-only)
   └── cmt      (mutable)
         │
-      epoch (the combinator: epoch(cml) is the EML)
+      polydigest (the combinator: polydigest(cml) is the EML)
         │
       EML / EMT / ETL  (k=2 instantiations)
 ```
@@ -47,6 +47,6 @@ spine  ◄── the structural core
 
 - `spine` — the structural core this library builds on.
 - `cmt` — the mutable peer; both exchange `spine::Seal`.
-- `epoch` — the combinator that lifts `cml` to `epoch(cml)` (the EML) with the
+- `polydigest` — the combinator that lifts `cml` to `polydigest(cml)` (the EML) with the
   activation timeline and binding root.
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.

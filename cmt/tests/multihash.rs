@@ -9,7 +9,7 @@
 //! by the recompute count being the path depth rather than the node total.
 //!
 //! The binding / combined root over these per-algorithm member roots is the
-//! `epoch` combinator's facet, not the CMT's — its tests live in `epoch`.
+//! `polydigest` combinator's facet, not the CMT's — its tests live in `polydigest`.
 
 use cmt::{Cmt, Config, Hasher};
 use proptest::prelude::*;

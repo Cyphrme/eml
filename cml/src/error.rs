@@ -3,7 +3,7 @@
 //! The engine reads from a borrowed [`NodeReader`](crate::NodeReader) substrate
 //! and folds structure over it; its only failure modes are a propagated reader
 //! error and a corrupted-on-read invariant violation. Multi-algorithm and epoch
-//! errors (unknown algorithm, frozen, malformed timeline) are the `epoch`
+//! errors (unknown algorithm, frozen, malformed timeline) are the `polydigest`
 //! combinator's concern, not the single-algorithm engine's.
 
 use std::fmt;

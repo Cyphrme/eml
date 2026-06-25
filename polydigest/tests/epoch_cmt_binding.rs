@@ -1,4 +1,4 @@
-//! `epoch(cmt)` binding-view tests — the combined root over the mutable tree's
+//! `polydigest(cmt)` binding-view tests — the combined root over the mutable tree's
 //! per-algorithm member roots (D9/D12).
 //!
 //! The structural per-algorithm roots and the multi-hash materialization are the
@@ -6,7 +6,7 @@
 //! combined root under the mutable tree's trivial active-from-genesis timeline,
 //! so there is no coverage child and the fold is the plain canonicalization fold
 //! over the member roots. These tests pin that fold and the combined-currency
-//! seal of `epoch(cmt)`.
+//! seal of `polydigest(cmt)`.
 
 use polydigest::{CmtConfig, EpochTree, Hasher};
 use sha2::{Digest, Sha256};
@@ -158,7 +158,7 @@ fn combined_root_is_none_for_empty_or_unregistered() {
     );
 }
 
-/// The seal of `epoch(cmt)` is the combined currency `Sealed`: the structural
+/// The seal of `polydigest(cmt)` is the combined currency `Sealed`: the structural
 /// frontier paired with the trivial timeline, deriving the same member root the
 /// live tree carries, and a binding root.
 #[test]

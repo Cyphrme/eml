@@ -1,7 +1,7 @@
-//! The epoch combinator's root construction and coupling verification.
+//! The polydigest combinator's root construction and coupling verification.
 //!
 //! The structural spine ([`spine`]) folds a single tree to a member root. The
-//! epoch combinator lifts that across N algorithms over one shared data
+//! polydigest combinator lifts that across N algorithms over one shared data
 //! substrate: it adds the **activation timeline**, the **null-run-extents** (the
 //! one logical count), and the **binding root** — the atomic multi-tree
 //! commitment. None of this lives in the structural core.

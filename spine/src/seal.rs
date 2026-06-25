@@ -13,7 +13,7 @@
 //! `Seal` is the **structural facet** of a snapshot: frontier peaks, the member
 //! roots folded from them, the canonicalization run-extents, and an opaque
 //! metadata channel. It carries **no committed epoch timeline and no binding
-//! root** — those are the *epoch facet*, added by the `epoch` combinator as a
+//! root** — those are the *epoch facet*, added by the `polydigest` combinator as a
 //! wrapper over this general `Seal`, never baked in. Keeping the epoch logic out
 //! is what lets the structural facet stay invariant when algorithms are added or
 //! retired (the `Seal` interface does not move under algorithm churn).
@@ -33,7 +33,7 @@
 //! Member roots are folds, so they need the algorithm's own hasher; the
 //! run-extents are pure geometry and need nothing. The **binding root** — the
 //! combined root over the member roots and the committed timeline — is the
-//! `epoch` combinator's derived view, not the structural `Seal`'s.
+//! `polydigest` combinator's derived view, not the structural `Seal`'s.
 //!
 //! # One-way
 //!
@@ -104,7 +104,7 @@ impl RunExtent {
 /// perfect k-ary subtrees of the frontier (the resume state), and an optional
 /// opaque metadata channel ([`Meta`]). Member roots and run-extents are *derived
 /// views* — see the module docs. The committed epoch timeline and binding root
-/// are the `epoch` combinator's facet, not stored here.
+/// are the `polydigest` combinator's facet, not stored here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Seal {
     /// Tree size at which this frontier was sealed.
@@ -131,7 +131,7 @@ impl Seal {
     ///
     /// This is the only way to construct a `Seal`, so every value in
     /// circulation carries a correctly-sized frontier. The committed epoch
-    /// timeline is **not** an input — it is the `epoch` combinator's concern.
+    /// timeline is **not** an input — it is the `polydigest` combinator's concern.
     ///
     /// # Errors
     ///
@@ -245,7 +245,7 @@ impl Seal {
     ///
     /// Unlike [`Self::member_roots`], which is the *produce*-side view a caller
     /// may legitimately take over a subset of hashers, this is the *complete*
-    /// member-root child set the `epoch` binding-root fold commits. Folding over
+    /// member-root child set the `polydigest` binding-root fold commits. Folding over
     /// a truncated child list would yield a combined root no algorithm
     /// published, so a missing hasher is an error, never a silent skip.
     ///
