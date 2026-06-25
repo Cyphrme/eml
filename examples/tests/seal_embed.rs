@@ -57,7 +57,12 @@ impl spine::Hasher for H {
 // root.
 #[test]
 fn seal_root_equals_native_append_root() {
-    let payloads: &[&[u8]] = &[b"alpha", b"beta", b"gamma"];
+    // Seven payloads → a frontier of three peaks (sizes 4, 2, 1) at k=2, i.e.
+    // MORE than k peaks: the bag does real multi-level grouping, so this proves
+    // the equality beyond the trivial ≤k-peak case where any fold coincides.
+    let payloads: &[&[u8]] = &[
+        b"alpha", b"beta", b"gamma", b"delta", b"eps", b"zeta", b"eta",
+    ];
 
     // Build the mutable tree and seal it.
     let mut t = polydigest::EpochTree::new(polydigest::CmtConfig { arity: 2 }).unwrap();
@@ -282,10 +287,15 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
 #[test]
 fn seal_emt_then_resume_eml_appends_forward() {
     smol::block_on(async {
-        // Build and seal a mutable tree of three cells.
+        // Build and seal a mutable tree of SEVEN cells → a frontier of three
+        // peaks (4, 2, 1) at k=2, i.e. MORE than k peaks: the resumed log must
+        // reproduce a genuinely multi-level bagged root, not a trivial ≤k case.
         let mut t = polydigest::EpochTree::new(polydigest::CmtConfig { arity: 2 }).unwrap();
         t.register_algorithm(0, Box::new(H)).unwrap();
-        for (i, p) in [b"a" as &[u8], b"b", b"c"].iter().enumerate() {
+        for (i, p) in [b"a" as &[u8], b"b", b"c", b"d", b"e", b"f", b"g"]
+            .iter()
+            .enumerate()
+        {
             t.set(i as u64, p.to_vec(), Vec::new()).unwrap();
         }
         let sealed = t.seal().unwrap();
@@ -302,21 +312,21 @@ fn seal_emt_then_resume_eml_appends_forward() {
         // The resumed log carries the sealed size and reproduces the member
         // root: the MMR peak-bag is the established rightmost-k grouping, the same
         // fold the EMT seal used, so the resumed root equals the sealed member root.
-        assert_eq!(log.count(), 3);
-        assert_eq!(log.root_for_at(0, 3).await.unwrap(), sealed_member);
+        assert_eq!(log.count(), 7);
+        assert_eq!(log.root_for_at(0, 7).await.unwrap(), sealed_member);
 
         // Append real leaves forward; the log continues from the committed
         // frontier. A resumed log is subtree-kind, so a real leaf is a
         // single-leaf subtree (its digest is the leaf hash).
-        log.append_subtree(&spine::Subtree::Leaf(b"d".to_vec()))
+        log.append_subtree(&spine::Subtree::Leaf(b"h".to_vec()))
             .await
             .unwrap();
-        log.append_subtree(&spine::Subtree::Leaf(b"e".to_vec()))
+        log.append_subtree(&spine::Subtree::Leaf(b"i".to_vec()))
             .await
             .unwrap();
-        assert_eq!(log.count(), 5);
-        // A consistency proof bridges the resume boundary (3 -> 5).
-        let proof = log.consistency_proof(3, 5).await.unwrap();
+        assert_eq!(log.count(), 9);
+        // A consistency proof bridges the resume boundary (7 -> 9).
+        let proof = log.consistency_proof(7, 9).await.unwrap();
         assert!(proof.is_some());
     });
 }
