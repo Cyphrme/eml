@@ -10,7 +10,7 @@ publish       = false
 path = "src/lib.rs"
 
 [dev-dependencies]
-pmt       = { path = "../pmt" }
+spine     = { path = "../spine" }
 epoch     = { path = "../epoch" }
 eml       = { path = "../eml" }
 sha2      = "0.10"

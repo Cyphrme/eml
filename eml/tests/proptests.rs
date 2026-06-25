@@ -102,7 +102,7 @@ fn reduction_count(n: u64, k: u64) -> u64 {
 
 // Custom nary_mr helper — the independent reference model of the production
 // fold. Collapse is the GENERAL same-value fold (all children equal → that
-// value; the all-null run is its dominant instance), matching `pmt::nary_mr`.
+// value; the all-null run is its dominant instance), matching `spine::nary_mr`.
 fn nary_mr(hasher: &dyn Hasher, children: &[&[u8]]) -> Vec<u8> {
     match children.len() {
         0 => hasher.empty(),

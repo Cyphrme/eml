@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone, Copy)]
 struct H;
 
-impl pmt::Hasher for H {
+impl spine::Hasher for H {
     fn leaf(&self, d: &[u8]) -> Vec<u8> {
         Sha256::digest(d).to_vec()
     }
@@ -34,7 +34,7 @@ impl pmt::Hasher for H {
         Sha256::digest(d).to_vec()
     }
 
-    fn clone_box(&self) -> Box<dyn pmt::Hasher> {
+    fn clone_box(&self) -> Box<dyn spine::Hasher> {
         Box::new(*self)
     }
 }
@@ -43,7 +43,7 @@ impl pmt::Hasher for H {
 // E1 — mutable-tree seal root byte-equals a natively-appended log root
 //
 // The mutable tree's `seal()` computes the resumable frontier into the one
-// kernel currency `pmt::Sealed`; the member root is the fold of those frontier
+// kernel currency `epoch::Sealed`; the member root is the fold of those frontier
 // peaks. The append-only log accumulating the same payloads in order under the
 // same hasher must carry an identical root: the two constructions share the
 // kernel topology and the same hash, so the same data maps to the same digest.
@@ -83,9 +83,9 @@ fn seal_root_equals_native_append_root() {
 // E2 — eml root embeds in an EMT; composition is two independent
 //       inclusion verifications, no new proof type
 //
-// An append-only log root is an opaque `pmt` leaf at position P in the outer
+// An append-only log root is an opaque `spine` leaf at position P in the outer
 // EMT. Verifying that a log entry E is committed under the EMT root requires
-// exactly two `pmt::verify_inclusion` calls:
+// exactly two `spine::verify_inclusion` calls:
 //   1. the log's own inclusion proof (leaf E → log root),
 //   2. the EMT's inclusion proof (log root as a leaf → EMT root).
 // ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
         assert!(log_leaf_proof.verify(&H, &log_root));
 
         // Verification step 2: log root (as a leaf) → outer EMT root.
-        assert!(pmt::verify_inclusion(
+        assert!(spine::verify_inclusion(
             &H,
             &outer_leaf_hash,
             embed_pos,
@@ -149,7 +149,7 @@ fn embedded_log_root_composes_as_two_inclusion_verifications() {
 // E3 — seal yields the one currency `Sealed`; binding root + extents are
 //      derived views, and an opaque attestation rides the metadata channel
 //
-// `seal_with_meta` consumes the log and produces a `pmt::Sealed` carrying the
+// `seal_with_meta` consumes the log and produces a `epoch::Sealed` carrying the
 // resumable frontier and an opaque metadata payload. The binding root and the
 // committed run-extents are *derived views* of the `Sealed`, computed on demand
 // (D12), never stored. The seal is one-way: no path back to a log.
@@ -169,17 +169,17 @@ fn seal_yields_currency_with_derived_binding_root_and_extents() {
             log.append_leaf(p).await.unwrap();
         }
 
-        let attestation = pmt::Meta::new(b"tree-head-sig".to_vec());
+        let attestation = spine::Meta::new(b"tree-head-sig".to_vec());
         let sealed = log.seal_with_meta(attestation).await.unwrap();
 
         // The binding root for algorithm 0 is derived from the frontier on demand.
-        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
+        let hashers: [(u64, &dyn spine::Hasher); 1] = [(0, &H)];
         assert!(sealed.binding_root(0, &H, &hashers).unwrap().is_some());
         // The committed run-extents are the non-promoted frontier nodes (height >= 1).
         assert!(!sealed.run_extents().is_empty());
         // The opaque metadata channel carries the attestation verbatim.
         assert_eq!(
-            sealed.meta().map(pmt::Meta::as_bytes),
+            sealed.meta().map(spine::Meta::as_bytes),
             Some(b"tree-head-sig".as_slice())
         );
         // The seal is one-way: no unseal, no field mutator — enforced by the type.
@@ -191,7 +191,7 @@ fn seal_yields_currency_with_derived_binding_root_and_extents() {
 //       proof)
 //
 // `SnapshotProof::produce` packages the snapshot's frozen member roots with
-// a sequence of `pmt::LeafProof` claims. `verify` checks the binding tier
+// a sequence of `spine::LeafProof` claims. `verify` checks the binding tier
 // (member roots → trusted binding root) and the leaf tier (leaf proofs →
 // member root) in two composed steps — the leaf proof is the base case.
 // ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
         let binding_root = log.combined_root_at(0, n).await.unwrap();
 
         let sealed = log.seal().await.unwrap();
-        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
+        let hashers: [(u64, &dyn spine::Hasher); 1] = [(0, &H)];
 
         // Assemble the snapshot proof over the single claimed leaf.
         let proof = eml::SnapshotProof::produce(
@@ -229,7 +229,7 @@ fn snapshot_proof_verifies_leaf_against_snapshot() {
             vec![eml::ClaimedLeaf::new(0, leaf_proof)],
         );
 
-        let trusted = [pmt::TrustedBindingRoot {
+        let trusted = [epoch::TrustedBindingRoot {
             alg_id: 0,
             hasher: &H,
             root: &binding_root,
@@ -273,10 +273,10 @@ fn seal_emt_then_resume_eml_appends_forward() {
         // Append real leaves forward; the log continues from the committed
         // frontier. A resumed log is subtree-kind, so a real leaf is a
         // single-leaf subtree (its digest is the leaf hash).
-        log.append_subtree(&pmt::Subtree::Leaf(b"d".to_vec()))
+        log.append_subtree(&spine::Subtree::Leaf(b"d".to_vec()))
             .await
             .unwrap();
-        log.append_subtree(&pmt::Subtree::Leaf(b"e".to_vec()))
+        log.append_subtree(&spine::Subtree::Leaf(b"e".to_vec()))
             .await
             .unwrap();
         assert_eq!(log.count(), 5);
@@ -314,7 +314,7 @@ fn seal_eml_then_fill_emt_verifies_against_binding_root() {
 
         // Fill an EMT-kind tree from the real data; the rebuilt binding root is
         // verified against the committed one (rejection on mismatch is internal).
-        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
+        let hashers: [(u64, &dyn spine::Hasher); 1] = [(0, &H)];
         let filled = eml::fill(&sealed, 0, &H, &data, eml::FillKind::Emt, &hashers).unwrap();
         assert_eq!(filled.tree_size(), 6);
         // The verified member root equals the sealed member root.
@@ -345,7 +345,7 @@ fn trustless_fill_verify_without_a_signature() {
             log.append_leaf(leaf).await.unwrap();
         }
         let sealed = log.seal().await.unwrap();
-        let hashers: [(u64, &dyn pmt::Hasher); 1] = [(0, &H)];
+        let hashers: [(u64, &dyn spine::Hasher); 1] = [(0, &H)];
 
         // Genuine data verifies — the commitment is confirmed from data alone.
         assert!(eml::fill(&sealed, 0, &H, &data, eml::FillKind::Eml, &hashers).is_ok());

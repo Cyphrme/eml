@@ -401,9 +401,9 @@ version = "0.0.0"
 dependencies = [
  "eml",
  "epoch",
- "pmt",
  "sha2",
  "smol",
+ "spine",
 ]
 
 [[package]]
@@ -910,14 +910,6 @@ dependencies = [
  "atomic-waker",
  "fastrand",
  "futures-io",
-]
-
-[[package]]
-name = "pmt"
-version = "0.1.0"
-dependencies = [
- "epoch",
- "spine",
 ]
 
 [[package]]

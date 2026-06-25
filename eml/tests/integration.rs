@@ -1881,11 +1881,11 @@ fn test_coupling_proof_verify_validation() {
     // beside a 32-byte one) and an *empty* root into `combined_root` and asserted
     // the verifier accepted them. That asserted design-forbidden behavior: the
     // combined root concatenates member roots **raw, with no length prefix**
-    // (`pmt::combined_root`), so distinct member-root lists of unequal widths can
+    // (`epoch::combined_root`), so distinct member-root lists of unequal widths can
     // share a node preimage — an ambiguity that voids binding-root soundness. The
     // `Hasher` fixed-width contract now makes this explicit, and `nary_mr`
     // `debug_assert`s that a node's children share a width; the inclusion verifier
-    // (`pmt::reconstruct_inclusion_root`) already rejects any sibling whose length
+    // (`spine::reconstruct_inclusion_root`) already rejects any sibling whose length
     // differs from `digest_len`. So variable/empty-width member roots are a
     // contract violation, not a supported input — there is nothing to "accept".
     //
