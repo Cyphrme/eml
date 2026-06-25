@@ -1,7 +1,7 @@
 //! Fjall-backed persistence backend for the EML append-only library.
 //!
 //! Implements the library's generic `Storage` trait, so it serves any EML
-//! instantiation (cyphr-log, CT, …) rather than a specific one.
+//! instantiation (eml, etl, …) rather than a specific one.
 
 use std::path::Path;
 

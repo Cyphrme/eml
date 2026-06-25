@@ -1,18 +1,18 @@
 [package]
-name          = "ct-build"
+name          = "etl"
 version       = "0.1.0"
-description   = "CT build: EML at k=2, prefixed (RFC-9162) hashing, subtrees banned"
+description   = "Epoch Transparency Log: EML at k=2, prefixed (RFC-9162) hashing, subtrees banned"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 
 [lib]
-name = "ct_build"
+name = "etl"
 
 [dependencies]
 # The EML library instantiation; this crate fixes k=2 + prefixed Hasher over it.
-cyphr-log = { path = "../cyphr-log" }
+eml = { path = "../eml" }
 
 [dev-dependencies]
 sha2 = "0.10"

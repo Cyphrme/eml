@@ -338,36 +338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ct-build"
-version = "0.1.0"
-dependencies = [
- "cyphr-log",
- "sha2",
- "smol",
-]
-
-[[package]]
-name = "cyphr-log"
-version = "0.1.0"
-dependencies = [
- "big_o",
- "bigoish",
- "cpu-time",
- "epoch",
- "proptest",
- "sha2",
- "smol",
-]
-
-[[package]]
-name = "cyphr-tree"
-version = "0.1.0"
-dependencies = [
- "epoch",
- "sha2",
-]
-
-[[package]]
 name = "dashmap"
 version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -385,7 +355,7 @@ dependencies = [
 name = "difftest"
 version = "0.0.0"
 dependencies = [
- "cyphr-log",
+ "eml",
  "neml",
  "proptest",
  "sha2",
@@ -413,14 +383,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml"
+version = "0.1.0"
+dependencies = [
+ "big_o",
+ "bigoish",
+ "cpu-time",
+ "epoch",
+ "proptest",
+ "sha2",
+ "smol",
+]
+
+[[package]]
 name = "eml-examples"
 version = "0.0.0"
 dependencies = [
- "cyphr-log",
+ "eml",
  "epoch",
  "pmt",
  "sha2",
  "smol",
+]
+
+[[package]]
+name = "emt"
+version = "0.1.0"
+dependencies = [
+ "epoch",
+ "sha2",
 ]
 
 [[package]]
@@ -460,6 +451,15 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "etl"
+version = "0.1.0"
+dependencies = [
+ "eml",
+ "sha2",
+ "smol",
 ]
 
 [[package]]
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "neml"
-version = "0.1.0-baseline"
+version = "0.1.0"
 
 [[package]]
 name = "neml-storage-fjall"

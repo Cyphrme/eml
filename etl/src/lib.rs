@@ -1,4 +1,4 @@
-//! `ct_build` — Certificate Transparency build.
+//! `etl` — the Epoch Transparency Log: a Certificate Transparency build.
 //!
 //! EML instantiated at k=2, subtrees banned (flat-leaf only), with a
 //! **prefixed `Hasher`** that domain-separates leaf hashes from inner-node
@@ -28,7 +28,7 @@
 //! Subtree appends are not allowed in the CT build.  The log is created
 //! with [`new`], which fixes `LogKind::Flat`.
 
-pub use cyphr_log::*;
+pub use eml::*;
 
 /// CT build arity: binary (`k = 2`).
 pub const LOG_ARITY: u64 = 2;

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use cyphr_log::{
+use eml::{
     Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig, evaluate,
     verify_consistency, verify_inclusion,
 };
@@ -244,7 +244,7 @@ fn recursive_subtree_root(hasher: &dyn Hasher, leaves: &[Vec<u8>], k: usize) -> 
 }
 
 // Read leaf projection for given algorithm
-async fn project<S: cyphr_log::Storage>(
+async fn project<S: eml::Storage>(
     log: &NaryMerkleLog<S>,
     alg_id: u64,
     hasher: &dyn Hasher,
@@ -511,7 +511,7 @@ fn op_strategy(max_algs: u64) -> impl Strategy<Value = Op> {
     ]
 }
 
-async fn check_state_invariants<S: cyphr_log::Storage>(
+async fn check_state_invariants<S: eml::Storage>(
     log: &NaryMerkleLog<S>,
     frozen_roots: &BTreeMap<u64, Vec<u8>>,
     k: usize,
@@ -844,7 +844,7 @@ proptest! {
                 .collect();
             let tree_size = 1u64;
 
-            let proof = cyphr_log::CouplingProof {
+            let proof = eml::CouplingProof {
                 active_roots: active_roots.clone(),
                 alg_epochs: alg_epochs.clone(),
             };
@@ -854,9 +854,9 @@ proptest! {
             // genesis), so there is no coverage child: a single algorithm
             // promotes to its raw root, many fold under nary_mr — no predicate.
             let combined_root =
-                cyphr_log::combined_root(&hasher, &active_roots, &alg_epochs, tree_size, 2);
+                eml::combined_root(&hasher, &active_roots, &alg_epochs, tree_size, 2);
 
-            let config = cyphr_log::VerifierConfig::default();
+            let config = eml::VerifierConfig::default();
 
             // 1. Success case
             let verified = proof.verify(
@@ -874,7 +874,7 @@ proptest! {
             let mut tampered_active_roots = active_roots.clone();
             if !tampered_active_roots[target_idx].1.is_empty() {
                 tampered_active_roots[target_idx].1[0] ^= 0xFF;
-                let tampered_proof = cyphr_log::CouplingProof {
+                let tampered_proof = eml::CouplingProof {
                     active_roots: tampered_active_roots,
                     alg_epochs: alg_epochs.clone(),
                 };
@@ -940,7 +940,7 @@ proptest! {
             if tree_size >= 2 {
                 let mut substituted_epochs = alg_epochs.clone();
                 substituted_epochs[target_idx].1 = vec![(1, u64::MAX)];
-                let substituted_proof = cyphr_log::CouplingProof {
+                let substituted_proof = eml::CouplingProof {
                     active_roots: active_roots.clone(),
                     alg_epochs: substituted_epochs,
                 };

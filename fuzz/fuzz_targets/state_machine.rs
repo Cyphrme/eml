@@ -1,11 +1,12 @@
 #![no_main]
 
-use arbitrary::Arbitrary;
-use libfuzzer_sys::fuzz_target;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use cyphr_log::{AlgorithmMetas, Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+
+use arbitrary::Arbitrary;
+use eml::{AlgorithmMetas, Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use libfuzzer_sys::fuzz_target;
+use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
 // Faulty storage wrapper
@@ -55,11 +56,17 @@ impl Storage for FaultyStorage {
         if self.should_fail() {
             return Err(FuzzStorageError::Injected("store_leaf failed".to_string()));
         }
-        self.inner.store_leaf(index, data).await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .store_leaf(index, data)
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
-        self.inner.get_leaf(index).await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .get_leaf(index)
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn len(&self) -> Result<u64, Self::Error> {
@@ -76,7 +83,10 @@ impl Storage for FaultyStorage {
         if self.should_fail() {
             return Err(FuzzStorageError::Injected("store_node failed".to_string()));
         }
-        self.inner.store_node(alg_id, left, height, hash).await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .store_node(alg_id, left, height, hash)
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn get_node(
@@ -85,7 +95,10 @@ impl Storage for FaultyStorage {
         left: u64,
         height: u32,
     ) -> Result<Option<Vec<u8>>, Self::Error> {
-        self.inner.get_node(alg_id, left, height).await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .get_node(alg_id, left, height)
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn store_algorithm_meta(
@@ -94,21 +107,35 @@ impl Storage for FaultyStorage {
         epochs: &[(u64, u64)],
     ) -> Result<(), Self::Error> {
         if self.should_fail() {
-            return Err(FuzzStorageError::Injected("store_algorithm_meta failed".to_string()));
+            return Err(FuzzStorageError::Injected(
+                "store_algorithm_meta failed".to_string(),
+            ));
         }
-        self.inner.store_algorithm_meta(alg_id, epochs).await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .store_algorithm_meta(alg_id, epochs)
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
-        self.inner.load_algorithm_metas().await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .load_algorithm_metas()
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
-        self.inner.load_log_meta().await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .load_log_meta()
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner.load_checkpoint_roots().await.map_err(FuzzStorageError::Inner)
+        self.inner
+            .load_checkpoint_roots()
+            .await
+            .map_err(FuzzStorageError::Inner)
     }
 
     async fn write_batch(
@@ -143,6 +170,7 @@ impl Hasher for HasherA {
         h.update(data);
         h.finalize().to_vec()
     }
+
     fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01, 0x0A]);
@@ -151,12 +179,15 @@ impl Hasher for HasherA {
         }
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest([0x0A]).to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
     fn clone_box(&self) -> Box<dyn Hasher> {
         Box::new(HasherA)
     }
@@ -171,6 +202,7 @@ impl Hasher for HasherB {
         h.update(data);
         h.finalize().to_vec()
     }
+
     fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01, 0x0B]);
@@ -179,12 +211,15 @@ impl Hasher for HasherB {
         }
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest([0x0B]).to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
     fn clone_box(&self) -> Box<dyn Hasher> {
         Box::new(HasherB)
     }
@@ -199,6 +234,7 @@ impl Hasher for HasherC {
         h.update(data);
         h.finalize().to_vec()
     }
+
     fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         h.update([0x01, 0x0C]);
@@ -207,12 +243,15 @@ impl Hasher for HasherC {
         }
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest([0x0C]).to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
     fn clone_box(&self) -> Box<dyn Hasher> {
         Box::new(HasherC)
     }
@@ -245,7 +284,7 @@ fn mth(hasher: &dyn Hasher, leaves: &[Vec<u8>]) -> Vec<u8> {
             let left = mth(hasher, &leaves[..k]);
             let right = mth(hasher, &leaves[k..]);
             hasher.node(&[&left, &right])
-        }
+        },
     }
 }
 
@@ -281,12 +320,7 @@ fuzz_target!(|input: FuzzInput| {
         };
 
         // NaryMerkleLog::new registers algorithm 0 (HasherA) automatically.
-        let mut log = match NaryMerkleLog::new(
-            storage,
-            get_hasher(0),
-            TreeConfig::default(),
-        )
-        .await
+        let mut log = match NaryMerkleLog::new(storage, get_hasher(0), TreeConfig::default()).await
         {
             Ok(l) => l,
             Err(_) => return,
@@ -305,7 +339,7 @@ fuzz_target!(|input: FuzzInput| {
                         reference_leaves.push(data.clone());
                     }
                     res.map(|_| ())
-                }
+                },
                 FuzzCommand::AddAlgorithm { alg_id } => {
                     let id = *alg_id as u64;
                     if registered_algs.contains(&id) {
@@ -317,18 +351,18 @@ fuzz_target!(|input: FuzzInput| {
                         registered_algs.insert(id);
                     }
                     res
-                }
+                },
                 FuzzCommand::RemoveAlgorithm { alg_id } => {
                     let id = *alg_id as u64;
                     log.remove_algorithm(id).await
-                }
+                },
                 FuzzCommand::ResumeAlgorithm { alg_id } => {
                     let id = *alg_id as u64;
                     log.resume_algorithm(id).await
-                }
+                },
             };
 
-            if let Err(cyphr_log::Error::Storage(_)) = res {
+            if let Err(eml::Error::Storage(_)) = res {
                 // Write failure! Verify that the log is consistent.
                 inject_faults.store(false, Ordering::SeqCst);
                 let len = log.size();
@@ -352,9 +386,7 @@ fuzz_target!(|input: FuzzInput| {
 
                 let Some(alg_epochs) = epochs else { continue };
 
-                let is_active = alg_epochs
-                    .last()
-                    .is_some_and(|&(_, end)| end == u64::MAX);
+                let is_active = alg_epochs.last().is_some_and(|&(_, end)| end == u64::MAX);
 
                 let ts: u64 = if is_active {
                     global_size
@@ -372,9 +404,9 @@ fuzz_target!(|input: FuzzInput| {
                 let hasher = get_hasher(alg_id);
                 let mut projected = Vec::with_capacity(ts as usize);
                 for i in 0..ts {
-                    let active = alg_epochs.iter().any(|&(start, end)| {
-                        start <= i && (end == u64::MAX || i < end)
-                    });
+                    let active = alg_epochs
+                        .iter()
+                        .any(|&(start, end)| start <= i && (end == u64::MAX || i < end));
                     let h = if active {
                         hasher.leaf(&reference_leaves[i as usize])
                     } else {

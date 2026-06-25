@@ -12,6 +12,6 @@ path = "src/lib.rs"
 [dev-dependencies]
 pmt       = { path = "../pmt" }
 epoch     = { path = "../epoch" }
-cyphr-log = { path = "../cyphr-log" }
+eml       = { path = "../eml" }
 sha2      = "0.10"
 smol      = "2.0"

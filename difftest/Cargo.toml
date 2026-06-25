@@ -13,11 +13,11 @@ publish       = false
 path = "src/lib.rs"
 
 [dependencies]
-# The current side under audit: cyphr-log, the EML instantiation that succeeds
+# The current side under audit: eml, the EML instantiation that succeeds
 # the historical `neml`. It re-exports the full EML surface, so the harness
 # drives it through the same `NaryMerkleLog` / `TreeConfig` / `proof` paths the
 # baseline exposes.
-cyphr-log = { path = "../cyphr-log" }
+eml = { path = "../eml" }
 # The frozen baseline: a git worktree of the pre-campaign HEAD, materialized
 # OUTSIDE this workspace's directory tree (a sibling worktree). Cargo absorbs
 # any path dependency living *under* the workspace root as a workspace member,

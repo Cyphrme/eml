@@ -18,7 +18,7 @@
 //! the structural `Seal` to form the one commitment currency [`Sealed`].
 
 // The mutable tree's structural construction/mutation types, re-exported so an
-// instantiation (e.g. `cyphr-tree`) names them through `epoch` alongside
+// instantiation (e.g. `emt`) names them through `epoch` alongside
 // [`EpochTree`]. Aliased to avoid colliding with the combinator's own
 // `Error`/`Result` (the timeline/binding errors).
 use cmt::{Cmt, Config, Hasher, ProofStep};

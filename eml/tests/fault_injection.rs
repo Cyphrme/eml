@@ -1,8 +1,8 @@
-//! Fault injection crash-recovery tests for the cyphr log.
+//! Fault injection crash-recovery tests for the EML instantiation (eml).
 
 use std::sync::{Arc, Mutex};
 
-use cyphr_log::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use eml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -127,7 +127,7 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn load_algorithm_metas(&self) -> Result<cyphr_log::AlgorithmMetas, Self::Error> {
+    async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
         self.inner
             .load_algorithm_metas()
             .await
@@ -432,10 +432,7 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
         // 7. Try to resume again. It should fail with AlgorithmActive,
         // indicating it was successfully reactivated.
         let res = recovered_log.resume_algorithm(0).await;
-        assert!(matches!(
-            res.unwrap_err(),
-            cyphr_log::Error::AlgorithmActive(0)
-        ));
+        assert!(matches!(res.unwrap_err(), eml::Error::AlgorithmActive(0)));
 
         // Append leaf 4, which should hash the correct root of size 4!
         recovered_log.append_leaf(b"leaf4").await.unwrap();
@@ -539,8 +536,8 @@ fn test_v16_subtree_mode_tamper_detected() {
             .unwrap();
 
         // Append two subtrees so the height-1 parent exists.
-        let sub0 = cyphr_log::Subtree::Leaf(b"subtree-payload-0".to_vec());
-        let sub1 = cyphr_log::Subtree::Leaf(b"subtree-payload-1".to_vec());
+        let sub0 = eml::Subtree::Leaf(b"subtree-payload-0".to_vec());
+        let sub1 = eml::Subtree::Leaf(b"subtree-payload-1".to_vec());
         log.append_subtree(&sub0).await.unwrap();
         log.append_subtree(&sub1).await.unwrap();
 

@@ -13,8 +13,8 @@ arbitrary = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 smol = "2.0"
 
-[dependencies.cyphr-log]
-path = "../cyphr-log"
+[dependencies.eml]
+path = "../eml"
 
 # --- Fuzz targets ---
 

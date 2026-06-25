@@ -1,14 +1,14 @@
 [package]
-name          = "cyphr-log"
+name          = "eml"
 version       = "0.1.0"
-description   = "Cyphr's append-only log: the EML library instantiated at k=2, no prefix"
+description   = "Epoch Merkle Log: the EML library instantiated at k=2, no prefix"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 
 [lib]
-name = "cyphr_log"
+name = "eml"
 
 [dependencies]
 # The EML library is the epoch combinator over the CML single-algorithm engine;
