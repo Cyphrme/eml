@@ -31,11 +31,13 @@ pub const ARITY_RANGE: RangeInclusive<u64> = 2..=256;
 ///
 /// `items` must be non-empty. `merge` combines a group of `k` elements (or the
 /// final `2..=k` remainder) into one. For digest folds the caller passes
-/// `|chunk| nary_mr(hasher, ...)`.
+/// `|chunk| nary_mr(hasher, ...)`; for shape construction, `|chunk|
+/// BagNode::Bag(chunk.to_vec())` (cml) or `|chunk|
+/// ShapeNode::Inner(chunk.to_vec())` (cmt).
 ///
 /// This is the single implementation of the grouping loop shared by every
-/// frontier-fold site across the crates (the canonical copy lifted from
-/// `eml::filling::fold_components`).
+/// frontier-fold site across the crates: `cml::mountain::bag_shape`,
+/// `cmt::shape::build`, and `cmt::shape::rebalanced_bag`.
 ///
 /// # Panics
 ///

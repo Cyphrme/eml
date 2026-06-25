@@ -50,24 +50,18 @@ pub fn build(size: u64, k: u64) -> Option<ShapeNode> {
     }
 
     // Each frontier entry is a perfect k-ary subtree rooted at its left index.
-    let mut frontier: Vec<ShapeNode> = coords
+    let frontier: Vec<ShapeNode> = coords
         .iter()
         .map(|&(left, height)| perfect(left, height, k))
         .collect();
 
-    // Fold the frontier by repeatedly grouping the rightmost `k`, mirroring the
-    // spine's `grouping_steps`. When `2..=k` remain they merge into the root.
-    let k_usize = k as usize;
-    while frontier.len() > k_usize {
-        let split = frontier.len() - k_usize;
-        let group = frontier.split_off(split);
-        frontier.push(ShapeNode::Inner(group));
-    }
-    if frontier.len() == 1 {
-        Some(frontier.pop().expect("len checked == 1"))
-    } else {
-        Some(ShapeNode::Inner(frontier))
-    }
+    // Fold the frontier by repeatedly grouping the rightmost `k` via
+    // `fold_frontier` — the shared canonical grouping loop. A singleton frontier
+    // promotes to the subtree directly; otherwise the final group becomes the root
+    // inner node.
+    Some(fold_frontier(frontier, k as usize, |chunk| {
+        ShapeNode::Inner(chunk.to_vec())
+    }))
 }
 
 /// A perfect k-ary subtree of the given `height`, rooted so its leftmost leaf is
