@@ -73,6 +73,7 @@ assumptions appear only as explicit hypotheses (`¬NodeHashCollision`,
 
 set_option linter.style.emptyLine false
 set_option linter.unusedVariables false
+set_option linter.style.longLine false
 
 namespace NEML
 
@@ -146,7 +147,7 @@ def frontierGo (k left n : Nat) : List (Nat × Nat) :=
       frontierGo k (left + k ^ Nat.log k n) (n - k ^ Nat.log k n)
 termination_by n
 decreasing_by
-  push_neg at h
+  push Not at h
   have hcap : 0 < k ^ Nat.log k n := pow_pos (by omega) _
   omega
 
@@ -207,7 +208,7 @@ private theorem frontierGo_tiles (k : Nat) (hk : 2 ≤ k) :
         subst hn
         simp [Tiles]
     · next h =>
-        push_neg at h
+        push Not at h
         obtain ⟨hn0, _⟩ := h
         have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
         have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
@@ -239,7 +240,7 @@ private theorem frontierGo_left_ge (k : Nat) (hk : 2 ≤ k) :
     split at hmem
     · simp only [List.not_mem_nil] at hmem
     · next h =>
-        push_neg at h
+        push Not at h
         obtain ⟨hn0, _⟩ := h
         rw [List.mem_cons] at hmem
         have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
@@ -421,7 +422,7 @@ private theorem mergeTopCoordsN_scale (k : Nat) :
   | zero => intro cs; rfl
   | succ c ih =>
     intro cs
-    show mergeTopCoordsN k c (mergeTopCoords k (cs.map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)))) =
+    change mergeTopCoordsN k c (mergeTopCoords k (cs.map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)))) =
          (mergeTopCoordsN k c (mergeTopCoords k cs)).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1))
     rw [mergeTopCoords_scale]
     exact ih (mergeTopCoords k cs)
@@ -438,7 +439,7 @@ private theorem mergeTopCoords_group (k : Nat) (hk : 1 ≤ k) (P : List (Nat × 
   unfold mergeTopCoords
   rw [if_neg (by rw [List.length_append, hglen]; omega), hsub, List.drop_left]
   rw [show k = (k - 1) + 1 by omega, List.range_succ_eq_map, List.map_cons, List.head?_cons]
-  simp [hsub, List.take_left]
+  simp
 
 theorem frontier_append_consistent (k n : Nat) (hk : 2 ≤ k) :
     frontierForSizeT k (n + 1) =
@@ -498,7 +499,7 @@ theorem frontier_append_consistent (k n : Nat) (hk : 2 ≤ k) :
         unfold reductionCount
         rw [reductionCountGo, dif_neg (by rintro ⟨_, _, h⟩; exact hmod0 h)]
       rw [hrc0]
-      show frontierForSizeT k (n + 1) = frontierForSizeT k n ++ [(n, 0)]
+      change frontierForSizeT k (n + 1) = frontierForSizeT k n ++ [(n, 0)]
       exact frontierForSizeT_push k hk n hmod0
 
 /-- Grouping steps from frontier slot `fIdx` to the spine root: fold the
@@ -516,7 +517,7 @@ def groupingSteps (k len fIdx : Nat) : List (Nat × Nat) :=
       groupingSteps k (len - k + 1) fIdx
 termination_by len
 decreasing_by
-  all_goals (push_neg at h; omega)
+  all_goals (push Not at h; omega)
 
 /-- Base-k digit steps inside a perfect subtree of height `h`, low digit
     first (leaf → frontier-node root): `(offset mod k, k - 1)` per level. -/
@@ -579,13 +580,13 @@ private theorem groupingSteps_spec (k : Nat) (hk : 2 ≤ k) :
             exact ⟨by omega, hlt⟩
         · next hlen1 => simp only [List.not_mem_nil] at hmem
     · next hrec =>
-        push_neg at hrec
+        push Not at hrec
         obtain ⟨_, hlenk⟩ := hrec
         split at hmem
         · next hge =>
             rw [List.mem_cons] at hmem
             rcases hmem with rfl | hmem'
-            · exact ⟨by omega, by show fIdx - (len - k) < k; omega⟩
+            · exact ⟨by omega, by omega⟩
             · exact ih (len - k + 1) (by omega) (len - k) (by omega) pc hmem'
         · next hlt2 => exact ih (len - k + 1) (by omega) fIdx (by omega) pc hmem
 
@@ -646,7 +647,7 @@ theorem skeleton_no_promoted (k treeSize index : Nat) (skel : List (Nat × Nat))
           simpa using this
         obtain ⟨hg2, hg1⟩ := groupingSteps_spec k hk _ fIdx hfidxlt g hgmem
         rw [← hgeq]
-        exact ⟨by show 1 ≤ g.2 - 1; omega, by show g.1 ≤ g.2 - 1; omega⟩
+        exact ⟨by omega, by omega⟩
 
 /-! Executable sanity pins against `topology.rs` test vectors: definitional
     drift between this model and the Rust source breaks the build here, not
@@ -758,7 +759,7 @@ theorem Tiles_entry_bound (k : Nat) :
     rw [List.mem_cons] at hmem
     rcases hmem with rfl | hmem'
     · have hle := Tiles_le k rest (start + k ^ ph) stop htrest
-      show pl + k ^ ph ≤ stop
+      change pl + k ^ ph ≤ stop
       omega
     · exact ih (start + k ^ ph) stop htrest lh hmem'
 
@@ -786,7 +787,7 @@ theorem perfectRoot_stable (k : Nat) (cells extra : List Digest) :
   | zero =>
     intro left hle
     rw [pow_zero] at hle
-    show cells.getD left emptyHash = (cells ++ extra).getD left emptyHash
+    change cells.getD left emptyHash = (cells ++ extra).getD left emptyHash
     rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD,
       List.getElem?_append_left (by omega)]
   | succ n ih =>
@@ -858,7 +859,7 @@ private theorem simChain (k : Nat) (hk : 1 ≤ k) (cells : List Digest) :
     intro coords hvalid
     have hval' : ∀ j < c, IsBlockTop k (mergeTopCoordsN k j (mergeTopCoords k coords)) :=
       fun j hj => hvalid (j + 1) (by omega)
-    show mergeTopDN k c (mergeTopD k (coords.map (fun lh => perfectRoot k cells lh.1 lh.2)))
+    change mergeTopDN k c (mergeTopD k (coords.map (fun lh => perfectRoot k cells lh.1 lh.2)))
        = (mergeTopCoordsN k (c + 1) coords).map (fun lh => perfectRoot k cells lh.1 lh.2)
     rw [mergeTopD_sim k hk cells coords (hvalid 0 (by omega)),
       ih (mergeTopCoords k coords) hval']
@@ -873,7 +874,7 @@ private theorem IsBlockTop_scale (k : Nat) (Z : List (Nat × Nat)) (hZ : IsBlock
   rw [List.length_map, ← List.map_drop, hdrop, List.map_map]
   apply List.map_congr_left
   intro i _
-  show ((l + i * k ^ h) * k, h + 1) = (l * k + i * k ^ (h + 1), h + 1)
+  change ((l + i * k ^ h) * k, h + 1) = (l * k + i * k ^ (h + 1), h + 1)
   rw [Prod.mk.injEq, pow_succ]
   exact ⟨by ring, rfl⟩
 
@@ -988,7 +989,7 @@ theorem kary_bridge (k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
         (Tiles_entry_bound k (frontierForSizeT k cs.length) 0 cs.length
           (frontier_tiles k cs.length hk) lh hlh)
     have hc : perfectRoot k (cs ++ [c]) cs.length 0 = c := by
-      show (cs ++ [c]).getD cs.length emptyHash = c
+      change (cs ++ [c]).getD cs.length emptyHash = c
       rw [List.getD_eq_getElem?_getD, List.getElem?_append_right (by omega),
         show cs.length - cs.length = 0 from by omega]
       rfl
@@ -1012,7 +1013,7 @@ noncomputable def foldFrontierRoot (k : Nat) (stack : List Digest) : Digest :=
   else foldFrontierRoot k (mergeTopD k stack)
 termination_by stack.length
 decreasing_by
-  push_neg at h
+  push Not at h
   exact mergeTopD_length_lt k stack (by omega) h.2
 
 /-- The per-algorithm raw root over level-0 `cells` (flat: leaf hashes;
@@ -1144,7 +1145,7 @@ private theorem foldNary_append_last (a : Digest)
     foldNary a (p' ++ [s]) = applyStepN (foldNary a p') s := by
   simp only [foldNary, List.foldl_append, List.foldl_cons, List.foldl_nil]
 
-private theorem foldNary_unique_aux 
+private theorem foldNary_unique_aux
     (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     ∀ (n : Nat) (a b : Digest) (p q : List ProofStep),
       p.length = n → q.length = n →
@@ -1259,7 +1260,7 @@ noncomputable def honestGroupPath (k : Nat) (stack : List Digest)
       honestGroupPath k (mergeTopD k stack) fIdx
 termination_by stack.length
 decreasing_by
-  all_goals (push_neg at h; exact mergeTopD_length_lt k stack (by omega) h.2)
+  all_goals (push Not at h; exact mergeTopD_length_lt k stack (by omega) h.2)
 
 /-- The honest inclusion path for log position `index`: digit steps inside
     its frontier subtree, then grouping steps to the spine root. Mirrors
@@ -1286,7 +1287,7 @@ private theorem filter_ne_range_length (k p : Nat) (hp : p < k) :
     · rw [ih hpn]
       have hkeep : (([n] : List Nat).filter (fun i => i != p)).length = 1 := by
         have hb : (n != p) = true := by simp [bne_iff_ne]; omega
-        simp [List.filter_cons, hb]
+        simp [hb]
       omega
     · have hpeq : p = n := by omega
       subst hpeq
@@ -1298,7 +1299,7 @@ private theorem filter_ne_range_length (k p : Nat) (hp : p < k) :
           simp [bne_iff_ne]; omega
         rw [hself, List.length_range]
       have hdrop : (([p] : List Nat).filter (fun i => i != p)).length = 0 := by
-        simp [List.filter_cons]
+        simp
       omega
 
 /-- `digitSteps` as a closed-form map over levels. -/
@@ -1343,7 +1344,7 @@ private theorem honestGroupPath_shape (k : Nat) (hk : 2 ≤ k) :
         simp only [List.map_cons, List.map_nil, stepShape, List.length_eraseIdx_of_lt hlt]
       · simp only [if_neg h1, List.map_nil]
     · rw [honestGroupPath, dif_neg hbase, groupingSteps, dif_neg hbase]
-      push_neg at hbase
+      push Not at hbase
       obtain ⟨_, hgt⟩ := hbase
       have hml : (mergeTopD k stack).length = stack.length - k + 1 :=
         mergeTopD_length k stack (by omega)
@@ -1377,7 +1378,7 @@ theorem findFrontier_cover (k index : Nat) :
     by_cases hcond : pl ≤ index ∧ index < pl + k ^ ph
     · rw [if_pos hcond]; exact ⟨c, pl, ph, rfl⟩
     · rw [if_neg hcond]
-      push_neg at hcond
+      push Not at hcond
       have hpli : pl + k ^ ph ≤ index := hcond (by omega)
       exact ih (start + k ^ ph) stop (c + 1) htrest (by omega) hlt
 
@@ -1449,14 +1450,14 @@ private theorem filter_ne_range_eq_eraseIdx (k p : Nat) (hp : p < k) :
     rcases Nat.lt_or_ge p n with hpn | hpn
     · rw [ih hpn, List.eraseIdx_append_of_lt_length (by rw [List.length_range]; exact hpn)]
       have hb : (n != p) = true := by simp [bne_iff_ne]; omega
-      simp [List.filter_cons, hb]
+      simp [hb]
     · have hpeq : p = n := by omega
       subst hpeq
       have hf1 : (List.range p).filter (fun i => i != p) = List.range p := by
         apply List.filter_eq_self.mpr
         intro a ha; rw [List.mem_range] at ha; simp [bne_iff_ne]; omega
       rw [hf1, List.eraseIdx_append_of_length_le (by rw [List.length_range])]
-      simp [List.filter_cons]
+      simp
 
 private theorem insertAt_eraseIdx {α} (d : α) :
     ∀ (l : List α) (n : Nat), n < l.length →
@@ -1472,7 +1473,7 @@ private theorem insertAt_eraseIdx {α} (d : α) :
       cases xs <;> rfl
     | succ m =>
       simp only [List.eraseIdx_cons_succ, List.getD_cons_succ]
-      show x :: insertAt m (xs.getD m d) (xs.eraseIdx m) = x :: xs
+      change x :: insertAt m (xs.getD m d) (xs.eraseIdx m) = x :: xs
       rw [ih m (by simp only [List.length_cons] at hn; omega)]
 
 private theorem insertAt_filter_range {α} [Inhabited α] (φ : Nat → α) (k p : Nat)
@@ -1558,7 +1559,7 @@ private theorem honestGroupPath_folds (k : Nat) (hk : 2 ≤ k) :
         subst hf0
         simp [naryMr]
     · rw [honestGroupPath, dif_neg hbase, foldFrontierRoot, dif_neg hbase]
-      push_neg at hbase
+      push Not at hbase
       obtain ⟨_, hgt⟩ := hbase
       have hml : (mergeTopD k stack).length = stack.length - k + 1 :=
         mergeTopD_length k stack (by omega)
@@ -1772,8 +1773,8 @@ private theorem Tiles_covers (k : Nat) :
     by_cases hlt : i < start + k ^ ph
     · refine ⟨(pl, ph), ?_, ?_, ?_⟩
       · simp
-      · show pl ≤ i; omega
-      · show i < pl + k ^ ph; omega
+      · omega
+      · change i < pl + k ^ ph; omega
     · obtain ⟨c, hc, h1, h2⟩ := ih (start + k ^ ph) stop htrest i (by omega) hi
       exact ⟨c, List.mem_cons_of_mem _ hc, h1, h2⟩
 
@@ -1866,9 +1867,9 @@ theorem foldFrontierRoot_inj (k : Nat) (hk : 2 ≤ k)
       conv_rhs at heq => rw [foldFrontierRoot, dif_pos hby]
       -- heq : naryMr xs = naryMr ys
       exact naryMr_inj_eqlen xs ys (by omega) heq hH hN
-    · push_neg at hbase
-      have hbx : ¬(k < 2 ∨ xs.length ≤ k) := by push_neg; exact ⟨by omega, by omega⟩
-      have hby : ¬(k < 2 ∨ ys.length ≤ k) := by push_neg; exact ⟨by omega, by omega⟩
+    · push Not at hbase
+      have hbx : ¬(k < 2 ∨ xs.length ≤ k) := by push Not; exact ⟨by omega, by omega⟩
+      have hby : ¬(k < 2 ∨ ys.length ≤ k) := by push Not; exact ⟨by omega, by omega⟩
       rw [foldFrontierRoot, dif_neg hbx] at heq
       conv_rhs at heq => rw [foldFrontierRoot, dif_neg hby]
       have hmx : (mergeTopD k xs).length = n - k + 1 := by

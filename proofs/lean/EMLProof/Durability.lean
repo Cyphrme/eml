@@ -119,7 +119,7 @@ theorem frontierGo_aligned (k : Nat) (hk : 2 ≤ k) :
     split at hmem
     · simp only [List.not_mem_nil] at hmem
     · next h =>
-        push_neg at h
+        push Not at h
         obtain ⟨hn0, _⟩ := h
         rw [List.mem_cons] at hmem
         have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
@@ -148,7 +148,7 @@ theorem aligned_le_of_lt_top (m x y p : Nat) (hm : 0 < m)
   obtain ⟨a, ha⟩ := hx
   obtain ⟨b, hb⟩ := hy
   by_contra hlt
-  push_neg at hlt  -- x < y
+  push Not at hlt  -- x < y
   have hab : a < b := by
     rw [ha, hb] at hlt
     exact lt_of_mul_lt_mul_left hlt (Nat.zero_le _)

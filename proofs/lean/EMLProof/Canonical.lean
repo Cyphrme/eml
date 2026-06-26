@@ -62,7 +62,7 @@ namespace NEML
     evaluated children. Mirrors the node arms of `eval` exactly — including the
     **general same-value collapse** (a node all of whose children carry one
     value `v` folds to `v`; the all-null case is its dominant instance). -/
-noncomputable def combine (L : Nat) : List Digest → Digest
+noncomputable def combine (_L : Nat) : List Digest → Digest
   | [] => emptyHash
   | [d] => d
   | a :: b :: zs =>
@@ -99,12 +99,12 @@ theorem eval_node_combine (L : Nat) (children : List (NaryTree (List UInt8))) :
       obtain ⟨t, ht, rfl⟩ := hd
       simpa using hcol t ht
     · -- some two children differ ⇒ hash
-      push_neg at hcol
+      push Not at hcol
       obtain ⟨t, ht, htne⟩ := hcol
       rw [eval_node_hash L _ (by simp) ⟨t, ht, a, by simp, htne⟩]
       rw [hmap, combine_cons2, if_neg]
       rw [← hmap, List.all_eq_true]
-      push_neg
+      push Not
       refine ⟨eval L t, ?_, ?_⟩
       · rw [List.mem_map]; exact ⟨t, ht, rfl⟩
       · simpa using htne
@@ -350,7 +350,7 @@ theorem node_combine_form (L : Nat) (cs : List (NaryTree (List UInt8)))
     -- Not a collapse redex ⇒ two children differ ⇒ the hashing arm fires.
     have hne : ∃ t ∈ (a :: b :: rest), ∃ u ∈ (a :: b :: rest), eval L t ≠ eval L u := by
       by_contra hc
-      push_neg at hc
+      push Not at hc
       exact hnc.not_redex ⟨by simp, eval L a, fun c hc' => hc c hc' a (by simp)⟩
     exact eval_node_hash L _ (by simp) hne
 
