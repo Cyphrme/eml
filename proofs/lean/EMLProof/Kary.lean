@@ -293,7 +293,7 @@ private theorem frontierGo_scale (k : Nat) (hk : 2 ≤ k) :
 
 /-- Scale at the canonical origin: `frontierForSizeT k (a*k)` is the frontier of
     `a` with every span scaled and every height bumped. -/
-private theorem frontierForSizeT_scale (k : Nat) (hk : 2 ≤ k) (a : Nat) :
+theorem frontierForSizeT_scale (k : Nat) (hk : 2 ≤ k) (a : Nat) :
     frontierForSizeT k (a * k) =
       (frontierForSizeT k a).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) := by
   rw [frontierForSizeT, frontierForSizeT, frontierGo_scale k hk a 0 0]
@@ -355,7 +355,7 @@ private theorem frontierGo_push (k : Nat) (hk : 2 ≤ k) :
         show left + k ^ Nat.log k n + (n - k ^ Nat.log k n) = left + n by omega]
 
 /-- Canonical-origin push corollary. -/
-private theorem frontierForSizeT_push (k : Nat) (hk : 2 ≤ k) (m : Nat)
+theorem frontierForSizeT_push (k : Nat) (hk : 2 ≤ k) (m : Nat)
     (hmod : (m + 1) % k ≠ 0) :
     frontierForSizeT k (m + 1) = frontierForSizeT k m ++ [(m, 0)] := by
   have := frontierGo_push k hk m 0 hmod
@@ -364,7 +364,7 @@ private theorem frontierForSizeT_push (k : Nat) (hk : 2 ≤ k) (m : Nat)
 /-- **Digit decomposition (one base-`k` division step).** For `b < k`, the
     frontier of `a*k + b` is the scaled frontier of `a` followed by `b`
     height-0 leaves. `b = 0` is the scale lemma; the step is a push. -/
-private theorem frontier_divstep (k : Nat) (hk : 2 ≤ k) (a : Nat) :
+theorem frontier_divstep (k : Nat) (hk : 2 ≤ k) (a : Nat) :
     ∀ b, b < k → frontierForSizeT k (a * k + b) =
       (frontierForSizeT k a).map (fun lh : Nat × Nat => (lh.1 * k, lh.2 + 1)) ++
       (List.range b).map (fun i => (a * k + i, 0)) := by
@@ -1851,7 +1851,7 @@ private theorem naryMr_inj_eqlen (xs ys : List Digest)
     broke. Strong induction on the (shared) length: the merge schedule is
     length-determined, so each `mergeTopD` step stays aligned and inverts via
     `naryMr_inj_of_length`. -/
-private theorem foldFrontierRoot_inj (k : Nat) (hk : 2 ≤ k)
+theorem foldFrontierRoot_inj (k : Nat) (hk : 2 ≤ k)
     (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     ∀ (n : Nat) (xs ys : List Digest), xs.length = n → ys.length = n →
       foldFrontierRoot k xs = foldFrontierRoot k ys → xs = ys := by
