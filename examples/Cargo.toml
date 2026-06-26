@@ -9,9 +9,19 @@ publish       = false
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "bench_csv"
+path = "bench_csv.rs"
+
+[dependencies]
+eml      = { path = "../eml" }
+sha2     = "0.10"
+smol     = "2.0"
+cpu-time = "1"
+
 [dev-dependencies]
 spine      = { path = "../spine" }
 polydigest = { path = "../polydigest" }
 eml        = { path = "../eml" }
 sha2       = "0.10"
-smol      = "2.0"
+smol       = "2.0"
