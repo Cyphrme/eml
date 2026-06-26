@@ -226,7 +226,7 @@ fn measure_proof_sizes(sizes: &[usize]) -> String {
             log.consistency_proof(half, full)
                 .await
                 .unwrap()
-                .map_or(0, |p| p.path.len())
+                .map_or(0, |p| p.peak_path.len() + p.new_peaks.len())
         });
         eprintln!("  proof_sizes  n={n:>8}  inclusion={inc_steps}  consistency={con_steps}");
         out.push_str(&format!("{n},{inc_steps},{con_steps}\n"));

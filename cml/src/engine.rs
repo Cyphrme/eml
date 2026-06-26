@@ -488,7 +488,12 @@ pub async fn consistency_proof<R: NodeReader>(
         return Ok(None);
     }
 
-    let mut path = Vec::new();
+    // The boundary peak's inclusion path *within* its new mountain — from its own
+    // height up to the mountain peak. The bag from the peak to the root is not
+    // emitted: the verifier re-derives both roots by bagging `new_peaks`, and the
+    // older peaks that merged into the boundary mountain ride along as this path's
+    // left-siblings.
+    let mut peak_path = Vec::new();
     log_level_bisection_path_to_height(
         reader,
         view,
@@ -498,10 +503,10 @@ pub async fn consistency_proof<R: NodeReader>(
         boundary_left,
         boundary_height,
         arity,
-        &mut path,
+        &mut peak_path,
     )
     .await?;
-    path.reverse();
+    peak_path.reverse();
 
     let mut new_peaks = Vec::with_capacity(new_coords.len());
     for &(l, h) in &new_coords {
@@ -509,14 +514,30 @@ pub async fn consistency_proof<R: NodeReader>(
         new_peaks.push(hash);
     }
 
-    // The boundary node's mountain bags to the new root through the backward-bag,
-    // the same commitment cml's member root and inclusion proofs use.
-    let bag = bag_path(&new_peaks, f_idx, view.hasher.as_ref(), arity);
-    path.extend(bag);
+    // Producer/verifier lockstep: the emitted path must match the boundary
+    // mountain's slice of the canonical skeleton the verifier pins against — the
+    // climb steps at heights `[boundary_height, new_height)`.
+    debug_assert!(
+        mountain_skeleton(k, new_size, boundary_left).is_some_and(|skeleton| {
+            let (bh, nh) = (boundary_height as usize, height as usize);
+            skeleton.len() >= nh
+                && skeleton[bh..nh].len() == peak_path.len()
+                && peak_path
+                    .iter()
+                    .zip(&skeleton[bh..nh])
+                    .all(|(step, shape)| {
+                        step.position == shape.position
+                            && step.siblings.len() == shape.sibling_count
+                    })
+        }),
+        "generated consistency peak_path must match the canonical mountain skeleton"
+    );
 
     Ok(Some(crate::consistency::ConsistencyProof {
-        start_hash,
-        path,
+        boundary_hash: start_hash,
+        peak_path,
+        new_peaks,
+        split_index: f_idx,
     }))
 }
 
