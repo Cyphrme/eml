@@ -1,5 +1,7 @@
 import EMLProof.Kary
 
+set_option linter.style.longLine false
+
 /-!
 # K-ary consistency-verifier soundness (V9 follow-on d)
 
@@ -132,7 +134,7 @@ private theorem frontierGo_aligned (k : Nat) (hk : 2 ≤ k) :
     split at hmem
     · simp only [List.not_mem_nil] at hmem
     · next h =>
-        push_neg at h
+        push Not at h
         obtain ⟨hn0, _⟩ := h
         rw [List.mem_cons] at hmem
         have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
@@ -166,7 +168,7 @@ private theorem frontierGo_slot_height (k : Nat) (hk : 2 ≤ k) :
     split at hmem
     · simp only [List.not_mem_nil] at hmem
     · next h =>
-        push_neg at h
+        push Not at h
         obtain ⟨hn0, _⟩ := h
         rw [List.mem_cons] at hmem
         have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
@@ -440,7 +442,7 @@ private theorem frontier_block (k : Nat) (hk : 2 ≤ k) :
     split at hmem
     · simp at hmem
     · next h =>
-      push_neg at h
+      push Not at h
       obtain ⟨hn0, _⟩ := h
       set L := Nat.log k n with hL
       have hcap : k ^ L ≤ n := Nat.pow_log_le_self k hn0
@@ -490,7 +492,7 @@ private theorem frontier_block (k : Nat) (hk : 2 ≤ k) :
               rw [← hL', hL'eq] at h; exact h
             have hdigit : off / k ^ L % k + 1 < k := by
               by_contra hc
-              push_neg at hc
+              push Not at hc
               have hmk : off / k ^ L % k = k - 1 := by
                 have := Nat.mod_lt (off / k ^ L) (show 0 < k by omega); omega
               rw [hmodoff, hmk, pow_succ'] at hfit
@@ -526,7 +528,7 @@ private theorem frontierGo_left_ge' (k : Nat) (hk : 2 ≤ k) :
     split at hmem
     · simp at hmem
     · next h =>
-      push_neg at h
+      push Not at h
       obtain ⟨hn0, _⟩ := h
       have hcap : 0 < k ^ Nat.log k n := pow_pos (by omega) _
       rw [List.mem_cons] at hmem
@@ -556,7 +558,7 @@ private theorem frontier_agree (k : Nat) (hk : 2 ≤ k) :
     set L := Nat.log k newN with hL
     have hcap : k ^ L ≤ newN := Nat.pow_log_le_self k hnew0
     have hcappos : 0 < k ^ L := pow_pos (by omega) L
-    rw [frontierGo, dif_neg (by push_neg; exact ⟨by omega, by omega⟩)] at hslot
+    rw [frontierGo, dif_neg (by push Not; exact ⟨by omega, by omega⟩)] at hslot
     rw [List.mem_cons] at hslot
     rcases hslot with heq | hmem
     · -- slot is the first tile: sl = off, no tile lies left of sl
@@ -581,10 +583,10 @@ private theorem frontier_agree (k : Nat) (hk : 2 ≤ k) :
       -- unfold both first tiles (both (off, L)) and strip them
       have hfO : frontierGo k off oldN
           = (off, Nat.log k oldN) :: frontierGo k (off + k ^ Nat.log k oldN) (oldN - k ^ Nat.log k oldN) := by
-        rw [frontierGo, dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+        rw [frontierGo, dif_neg (by push Not; exact ⟨by omega, by omega⟩)]
       have hfN : frontierGo k off newN
           = (off, L) :: frontierGo k (off + k ^ L) (newN - k ^ L) := by
-        rw [frontierGo, dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+        rw [frontierGo, dif_neg (by push Not; exact ⟨by omega, by omega⟩)]
       rw [hfO, hfN, hlogold, List.filter_cons_of_pos (by simp [hofflt]),
         List.filter_cons_of_pos (by simp [hofflt])]
       congr 1
@@ -605,14 +607,14 @@ private theorem filter_ne_range_eq_eraseIdx' (k p : Nat) (hp : p < k) :
     rcases Nat.lt_or_ge p n with hpn | hpn
     · rw [ih hpn, List.eraseIdx_append_of_lt_length (by rw [List.length_range]; exact hpn)]
       have hb : (n != p) = true := by simp [bne_iff_ne]; omega
-      simp [List.filter_cons, hb]
+      simp [hb]
     · have hpeq : p = n := by omega
       subst hpeq
       have hf1 : (List.range p).filter (fun i => i != p) = List.range p := by
         apply List.filter_eq_self.mpr
         intro a ha; rw [List.mem_range] at ha; simp [bne_iff_ne]; omega
       rw [hf1, List.eraseIdx_append_of_length_le (by rw [List.length_range])]
-      simp [List.filter_cons]
+      simp
 
 /-- The honest digit step's `i`-th sibling (for `i` below the path digit) is the
     genuine perfect root of the `i`-th child of the level block. -/
@@ -892,7 +894,7 @@ private theorem frontierGo_split (k : Nat) (hk : 2 ≤ k) (sl : Nat) :
     have hunfold : frontierGo k off n
         = (off, Nat.log k n) :: frontierGo k (off + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
       conv_lhs => rw [frontierGo]
-      rw [dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+      rw [dif_neg (by push Not; exact ⟨by omega, by omega⟩)]
     by_cases hoffsl : off = sl
     · subst hoffsl
       have hfilt : (frontierGo k off n).filter (fun c => decide (c.1 < off)) = [] := by
@@ -934,12 +936,12 @@ private theorem frontierGo_shift (k : Nat) (hk : 2 ≤ k) :
           = (c + off, Nat.log k n)
               :: frontierGo k (c + off + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
         conv_lhs => rw [frontierGo]
-        rw [dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+        rw [dif_neg (by push Not; exact ⟨by omega, by omega⟩)]
       have hunfoldR : frontierGo k off n
           = (off, Nat.log k n)
               :: frontierGo k (off + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
         conv_lhs => rw [frontierGo]
-        rw [dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+        rw [dif_neg (by push Not; exact ⟨by omega, by omega⟩)]
       rw [hunfoldL, hunfoldR, List.map_cons]
       congr 1
       rw [show c + off + k ^ Nat.log k n = c + (off + k ^ Nat.log k n) from by omega]
@@ -985,7 +987,7 @@ private theorem frontierGo_min_height (k : Nat) (hk : 2 ≤ k) (d : Nat) :
     split at hmem
     · simp at hmem
     · next h =>
-      push_neg at h
+      push Not at h
       obtain ⟨hn0, _⟩ := h
       have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k (by omega)
       have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
@@ -1280,7 +1282,7 @@ private theorem honest_oldpeaks_eq (k : Nat) (hk : 2 ≤ k) (cells : List Digest
         have h := frontierGo_shift k hk ((m + 1) * k ^ bh) sl 0
         simpa [frontierForSizeT] using h
       rw [hshift, frontier_scale_pow k hk bh (m + 1), frontierForSizeT_push k hk m hmk]
-      simp only [List.map_append, List.map_map, List.map_cons, List.map_nil, Function.comp]
+      simp only [List.map_append, List.map_map, List.map_cons, List.map_nil]
       congr 1
       rw [Nat.zero_add, halign]
     rw [hsplit, h2a, show 0 + oldSize - sl = oldSize - sl from by omega, ← hi,
