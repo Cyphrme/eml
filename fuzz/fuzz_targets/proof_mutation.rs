@@ -119,13 +119,7 @@ fuzz_target!(|input: Input| {
 
                     // Mutated proof MUST NOT verify.
                     assert!(
-                        !verify_inclusion(
-                            &FuzzHasher,
-                            &leaf_hash,
-                            &skeleton,
-                            &mutated.path,
-                            &root
-                        ),
+                        !verify_inclusion(&FuzzHasher, &leaf_hash, &skeleton, &mutated.path, &root),
                         "mutated inclusion proof falsely verified!"
                     );
                 }

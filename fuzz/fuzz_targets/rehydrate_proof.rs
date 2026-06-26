@@ -71,8 +71,7 @@ fuzz_target!(|input: Input| {
     // The skeleton is the log's concrete topology for the (arbitrary) trusted
     // position; an invalid position yields an empty skeleton so the verifier
     // still runs (and must not panic). Result is discarded.
-    let skeleton =
-        mountain_skeleton(input.arity, input.tree_size, input.index).unwrap_or_default();
+    let skeleton = mountain_skeleton(input.arity, input.tree_size, input.index).unwrap_or_default();
     // Must not panic — result is discarded.
     let _ = reconstruct_inclusion_root(&FuzzHasher, &input.leaf_hash, &skeleton, &path);
 });
