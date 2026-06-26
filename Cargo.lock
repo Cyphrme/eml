@@ -389,6 +389,7 @@ dependencies = [
 name = "eml-examples"
 version = "0.0.0"
 dependencies = [
+ "cpu-time",
  "eml",
  "polydigest",
  "sha2",
