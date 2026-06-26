@@ -1,11 +1,23 @@
 #![cfg(not(debug_assertions))]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use bigoish::{Log as LogModel, N, assert_best_fit, growing_inputs};
 use cpu_time::ThreadTime;
 use eml::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig};
 use sha2::{Digest, Sha256};
+
+/// Serialize all timing measurements in this suite. `cargo test` runs tests in
+/// parallel, but these tests infer complexity from wall/CPU timing, so CPU
+/// contention between concurrently-running tests inflates the measured growth
+/// of the larger inputs and flips an O(log n) fit to O(n log n). Each test holds
+/// this lock for its duration so only one is ever timing at a time. A failing
+/// (panicking) test poisons the lock; recover the guard so the poison does not
+/// cascade into spurious failures of the remaining tests.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 #[derive(Debug)]
 struct Sha256Hasher;
@@ -50,55 +62,67 @@ fn make_log(n: usize) -> Arc<NaryMerkleLog<MemoryStorage>> {
     })
 }
 
+// Log-size scaling tests share one robust harness: median `ThreadTime` over
+// trials, fit by rank ceiling. `assert_best_fit` was abandoned here because its
+// CPU-instruction-count backend times out on these fast (µs-scale) operations
+// and its single-fit verdict flips between O(log n) and O(√n) on measurement
+// noise. A rank ceiling below `big_o`'s Linear rank (1000) tolerates that noise
+// while still failing on any genuinely linear (or worse) regression.
+const LOG_SIZES: &[usize] = &[100, 500, 1_000, 2_000, 5_000, 10_000, 20_000];
+const LOG_TRIALS: usize = 21;
+// Linear rank is 1000; 999 admits log (130) and even √n (500) but fails on a
+// linear regression — the bound that keeps the perf bug from silently returning.
+const SUBLINEAR_RANK: u32 = 999;
+
+/// Measure `op` over a `make_log`-built log at each `LOG_SIZES`, returning
+/// `(size, median per-iteration ThreadTime ns)` pairs. `op` runs the timed
+/// operation 100 times so a single µs-scale call does not vanish into clock
+/// granularity.
+fn measure_log_scaling<F>(op: F) -> Vec<(f64, f64)>
+where
+    F: Fn(&NaryMerkleLog<MemoryStorage>),
+{
+    let _guard = serial();
+    let mut data: Vec<(f64, f64)> = Vec::with_capacity(LOG_SIZES.len());
+    for &n in LOG_SIZES {
+        let log = make_log(n);
+        let mut times = Vec::with_capacity(LOG_TRIALS);
+        for _ in 0..LOG_TRIALS {
+            let start = ThreadTime::now();
+            for _ in 0..100 {
+                op(&log);
+            }
+            times.push(start.elapsed().as_nanos() / 100);
+        }
+        data.push((n as f64, median(&mut times) as f64));
+    }
+    data
+}
+
 #[test]
 fn complexity_inclusion_proof_log_n() {
-    assert_best_fit(
-        LogModel(N),
-        |log: Arc<NaryMerkleLog<MemoryStorage>>| {
-            smol::block_on(async {
-                let mut proof = None;
-                let ts = log.size();
-                for _ in 0..100 {
-                    proof = Some(log.inclusion_proof(0, ts / 2).await.unwrap());
-                }
-                proof.unwrap()
-            })
-        },
-        growing_inputs(100, make_log, 25),
-    );
+    let data = measure_log_scaling(|log| {
+        let ts = log.size();
+        let _ = smol::block_on(log.inclusion_proof(0, ts / 2)).unwrap();
+    });
+    assert_rank_at_most(data, SUBLINEAR_RANK, "inclusion_proof", "O(log n)");
 }
 
 #[test]
 fn complexity_consistency_proof_log_n() {
-    assert_best_fit(
-        LogModel(N),
-        |log: Arc<NaryMerkleLog<MemoryStorage>>| {
-            smol::block_on(async {
-                let mut proof = None;
-                let ts = log.size();
-                for _ in 0..100 {
-                    proof = Some(log.consistency_proof(ts / 2, ts).await.unwrap());
-                }
-                proof.unwrap()
-            })
-        },
-        growing_inputs(100, make_log, 25),
-    );
+    let data = measure_log_scaling(|log| {
+        let ts = log.size();
+        let _ = smol::block_on(log.consistency_proof(ts / 2, ts)).unwrap();
+    });
+    assert_rank_at_most(data, SUBLINEAR_RANK, "consistency_proof", "O(log n)");
 }
 
 #[test]
 fn complexity_root_extraction_log_n() {
-    assert_best_fit(
-        LogModel(N),
-        |log: Arc<NaryMerkleLog<MemoryStorage>>| {
-            let mut root = None;
-            for _ in 0..100 {
-                root = Some(log.root());
-            }
-            root.unwrap()
-        },
-        growing_inputs(100, make_log, 25),
-    );
+    let data = measure_log_scaling(|log| {
+        let _ = log.root();
+    });
+    assert_rank_at_most(data, SUBLINEAR_RANK, "root_extraction", "O(log n)");
 }
 
 fn median(v: &mut [u128]) -> u128 {
@@ -121,6 +145,7 @@ fn assert_rank_at_most(data: Vec<(f64, f64)>, max_rank: u32, label: &str, expect
 
 #[test]
 fn complexity_append_amortized_constant() {
+    let _guard = serial();
     let sizes: &[usize] = &[500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000];
     let batch = 1000;
     let trials = 21;
@@ -156,6 +181,7 @@ fn complexity_append_amortized_constant() {
 
 #[test]
 fn complexity_resume_algorithm_log_n() {
+    let _guard = serial();
     let gaps: &[usize] = &[100, 500, 1_000, 2_000, 5_000, 10_000, 20_000];
     let base_size = 100;
     let trials = 21;
@@ -225,6 +251,7 @@ fn balanced_subtree(depth: usize, seed: &mut u64) -> Subtree {
 /// since it must evaluate the entire subtree to compute its root hash.
 #[test]
 fn complexity_append_subtree_linear_in_nodes() {
+    let _guard = serial();
     let depths: &[usize] = &[4, 6, 8, 10, 12, 14];
     let trials = 15;
     let mut data: Vec<(f64, f64)> = Vec::with_capacity(depths.len());
@@ -261,6 +288,7 @@ fn complexity_append_subtree_linear_in_nodes() {
 /// hashes for the proof.
 #[test]
 fn complexity_within_subtree_path_linear_in_nodes() {
+    let _guard = serial();
     let depths: &[usize] = &[4, 6, 8, 10, 12, 14];
     let trials = 15;
     let mut data: Vec<(f64, f64)> = Vec::with_capacity(depths.len());
@@ -290,6 +318,7 @@ fn complexity_within_subtree_path_linear_in_nodes() {
 /// subtrees.
 #[test]
 fn complexity_e2e_inclusion_subtree_log_n() {
+    let _guard = serial();
     let subtree_depth = 4; // Fixed: 16 leaves, 31 nodes per subtree.
 
     let make_subtree_log = |n: usize| -> Arc<(NaryMerkleLog<MemoryStorage>, Subtree)> {

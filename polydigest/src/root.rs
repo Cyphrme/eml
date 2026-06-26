@@ -62,48 +62,76 @@ pub struct NullRun {
 /// active set — and therefore `eps` in canonical form — is recoverable as the
 /// complement. Committing these runs commits the identical activity the epoch
 /// intervals carry.
+///
+/// The inactive set is computed **interval-wise** — the complement of the active
+/// epochs, derived by merging them and taking the gaps within `[0, tree_size)` —
+/// not by scanning each position. Cost is `O(#epochs · log #epochs)` plus the
+/// per-gap block decomposition, so the fully-active canonical form `[(0, MAX)]`
+/// early-outs to an empty vector and the binding root folds in `O(log n)`.
 #[must_use]
 pub fn null_runs_for_alg(eps: &[(u64, u64)], tree_size: u64, arity: u64) -> Vec<NullRun> {
-    // Collect the maximal contiguous inactive intervals (the complement of the
-    // active epochs within [0, tree_size)).
-    let active_at = |i: u64| eps.iter().any(|&(s, e)| s <= i && i < e);
-    let mut runs = Vec::new();
-    let mut i = 0u64;
-    while i < tree_size {
-        if active_at(i) {
-            i += 1;
-            continue;
+    // Normalize the active epochs into a sorted, disjoint cover of [0, tree_size):
+    // clip each interval to the tree, drop empties, then merge overlaps. The gaps
+    // between the merged actives are the maximal contiguous inactive spans —
+    // identical to those a position-by-position scan would find, but without
+    // touching every position. `eps` may be unsorted or overlapping (callers and
+    // adversarial proofs present arbitrary slices), which the merge tolerates.
+    let mut active: Vec<(u64, u64)> = eps
+        .iter()
+        .filter_map(|&(s, e)| {
+            let s = s.min(tree_size);
+            let e = e.min(tree_size);
+            (s < e).then_some((s, e))
+        })
+        .collect();
+    active.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(active.len());
+    for (s, e) in active {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
         }
-        // [i, j) is a maximal inactive gap.
-        let mut j = i;
-        while j < tree_size && !active_at(j) {
-            j += 1;
-        }
-        // Greedy aligned-block decomposition of [i, j): at each position emit
-        // the largest aligned k-ary block that fits and stays inside the gap.
-        let mut left = i;
-        while left < j {
-            let mut height = 0u32;
-            // Grow the block while it stays aligned at `left` and within `[i, j)`.
-            loop {
-                let next_h = height + 1;
-                let span = match arity.checked_pow(next_h) {
-                    Some(s) => s,
-                    None => break,
-                };
-                // Aligned at `left` (left % span == 0) and fits within the gap.
-                if left % span == 0 && left + span <= j {
-                    height = next_h;
-                } else {
-                    break;
-                }
-            }
-            runs.push(NullRun { left, height });
-            left += arity.pow(height);
-        }
-        i = j;
     }
+
+    // Walk the inactive gaps (the complement of `merged` within [0, tree_size))
+    // and decompose each into the canonical null runs.
+    let mut runs = Vec::new();
+    let mut cursor = 0u64;
+    for (s, e) in merged {
+        decompose_inactive_gap(cursor, s, arity, &mut runs);
+        cursor = e;
+    }
+    decompose_inactive_gap(cursor, tree_size, arity, &mut runs);
     runs
+}
+
+/// Greedy aligned-block decomposition of the inactive gap `[left_bound, right)`:
+/// at each position emit the largest aligned k-ary block that fits and stays
+/// inside the gap, then advance. This is the same greedy decomposition
+/// [`spine::frontier_for_size`] applies to a whole tree, here applied to one
+/// gap; it reproduces the original per-position scan's inner loop exactly, so
+/// the emitted runs are byte-identical.
+fn decompose_inactive_gap(left_bound: u64, right: u64, arity: u64, runs: &mut Vec<NullRun>) {
+    let mut left = left_bound;
+    while left < right {
+        let mut height = 0u32;
+        // Grow the block while it stays aligned at `left` and within `[left_bound, right)`.
+        loop {
+            let next_h = height + 1;
+            let span = match arity.checked_pow(next_h) {
+                Some(s) => s,
+                None => break,
+            };
+            // Aligned at `left` (left % span == 0) and fits within the gap.
+            if left % span == 0 && left + span <= right {
+                height = next_h;
+            } else {
+                break;
+            }
+        }
+        runs.push(NullRun { left, height });
+        left += arity.pow(height);
+    }
 }
 
 /// All algorithms' null collapse runs at `(tree_size, arity)`, derived from the
@@ -849,5 +877,105 @@ mod tests {
         let triv = vec![(0u64, vec![(0u64, MAX)])];
         assert!(null_runs_are_trivial(&triv, 8, 2));
         assert!(!null_runs_are_trivial(&eps, 8, 2));
+    }
+
+    /// Reference oracle: the original position-by-position null-run computation.
+    /// `null_runs_for_alg` feeds the binding-root preimage and every committed
+    /// root, so any rewrite must be **byte-identical** to this scan. This is the
+    /// independent definition the equivalence property checks against — kept
+    /// inline so the property is its own byte-identity proof, not a tautology
+    /// against the production code.
+    fn null_runs_by_scan(eps: &[(u64, u64)], tree_size: u64, arity: u64) -> Vec<NullRun> {
+        let active_at = |i: u64| eps.iter().any(|&(s, e)| s <= i && i < e);
+        let mut runs = Vec::new();
+        let mut i = 0u64;
+        while i < tree_size {
+            if active_at(i) {
+                i += 1;
+                continue;
+            }
+            let mut j = i;
+            while j < tree_size && !active_at(j) {
+                j += 1;
+            }
+            let mut left = i;
+            while left < j {
+                let mut height = 0u32;
+                loop {
+                    let next_h = height + 1;
+                    let span = match arity.checked_pow(next_h) {
+                        Some(s) => s,
+                        None => break,
+                    };
+                    if left % span == 0 && left + span <= j {
+                        height = next_h;
+                    } else {
+                        break;
+                    }
+                }
+                runs.push(NullRun { left, height });
+                left += arity.pow(height);
+            }
+            i = j;
+        }
+        runs
+    }
+
+    /// Byte-identity proof for the interval-wise `null_runs_for_alg`: across
+    /// random epoch sets, tree sizes, and arities `k ∈ 2..=8`, the production
+    /// function must equal the reference position-by-position scan exactly.
+    ///
+    /// `null_runs_for_alg` is a canonical function of `(eps, tree_size, arity)`
+    /// whose output is the binding-root preimage; a rewrite that diverges on any
+    /// input silently changes every committed root. Random epoch sets include
+    /// unsorted, overlapping, empty, and out-of-bounds intervals — the function
+    /// must agree with the scan on those too, since callers (and adversarial
+    /// proptests) may present arbitrary epoch slices.
+    #[test]
+    fn null_runs_interval_wise_equals_position_scan() {
+        // Inline xorshift64 PRNG: a deterministic broad sweep with no added
+        // dependency. Seed fixed so failures are reproducible.
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        for _ in 0..50_000 {
+            // Small tree sizes keep the scan oracle cheap while still exercising
+            // multi-level aligned blocks (up to k^3 for k=2..8).
+            let tree_size = next() % 130;
+            let arity = 2 + next() % 7; // k ∈ 2..=8
+            let n_eps = (next() % 5) as usize; // 0..=4 intervals, incl. empty set
+
+            let mut eps: Vec<(u64, u64)> = Vec::with_capacity(n_eps);
+            for _ in 0..n_eps {
+                // Bias one in eight toward the open epoch end (u64::MAX) to cover
+                // the fully-active / open-tail canonical forms.
+                let start = next() % (tree_size + 1);
+                let end = if next() % 8 == 0 {
+                    MAX
+                } else {
+                    // Allow end < start (degenerate/empty) and end > tree_size
+                    // (out of bounds): the scan ignores both, so the rewrite must.
+                    next() % (tree_size + 2)
+                };
+                eps.push((start, end));
+            }
+
+            let scanned = null_runs_by_scan(&eps, tree_size, arity);
+            let computed = null_runs_for_alg(&eps, tree_size, arity);
+            assert_eq!(
+                computed, scanned,
+                "interval-wise null_runs_for_alg diverged from position scan: eps={eps:?} \
+                 tree_size={tree_size} arity={arity}"
+            );
+        }
+
+        // Explicit early-out witness: the fully-active canonical form yields no
+        // runs (the O(1) path root() relies on).
+        assert!(null_runs_for_alg(&[(0, MAX)], 1_000_000, 2).is_empty());
     }
 }
