@@ -53,4 +53,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "durability_mutation"
+path = "fuzz_targets/durability_mutation.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
