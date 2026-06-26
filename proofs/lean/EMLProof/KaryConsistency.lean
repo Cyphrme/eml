@@ -269,122 +269,6 @@ private theorem digitSteps_drop (k : Nat) :
     · rw [Nat.div_div_eq_div_mul, ← pow_succ']
     · omega
 
-/-! ## The coordinate→digest map of `reconstruct_consistency_roots` -/
-
-/-- A coordinate `(left, height)` → digest map, as `reconstruct_consistency_roots`
-    builds it (`consistency.rs:652`, a `HashMap<(u64, u32), Vec<u8>>`). -/
-abbrev CMap := (Nat × Nat) → Option Digest
-
-/-- The empty map. -/
-def cmEmpty : CMap := fun _ => none
-
-/-- Functional `map.insert(coord, digest)` (last write wins). -/
-def cmInsert (m : CMap) (c : Nat × Nat) (d : Digest) : CMap :=
-  fun c' => if c' = c then some d else m c'
-
-/-- Record one bisection step's siblings (`consistency.rs:683-698`). The path node
-    sits at `(curLeft, ch)`; its parent at `(curLeft - position·k^ch, ch+1)`.
-    Sibling `j` (`0 ≤ j < k-1`) is the child at horizontal offset
-    `j·k^ch` (left of the path node) or `(j+1)·k^ch` (right of it), recorded at
-    its own coordinate, height `ch`. -/
-noncomputable def recordBisectSibs (k : Nat) (m : CMap) (curLeft ch : Nat) (s : ProofStep) : CMap :=
-  let cap := k ^ ch
-  let parentLeft := curLeft - s.position * cap
-  (List.range s.siblings.length).foldl
-    (fun mm j =>
-      let cLeft := if j < s.position then parentLeft + j * cap else parentLeft + j * cap + cap
-      cmInsert mm (cLeft, ch) (s.siblings.getD j emptyHash)) m
-
-/-- The bisection phase (`consistency.rs:661-708`): trace `start_hash`'s coordinate up
-    `bisection_steps` levels, recording each step's siblings. Tracks only the
-    coordinate (`curLeft, ch`) — the running digest is recovered separately by
-    `foldNary`; sibling *coordinates* need no digest state. -/
-noncomputable def cmBisect (k : Nat) : List ProofStep → Nat → Nat → CMap → CMap
-  | [], _, _, m => m
-  | s :: rest, curLeft, ch, m =>
-      cmBisect k rest (curLeft - s.position * k ^ ch) (ch + 1) (recordBisectSibs k m curLeft ch s)
-
-/-- Record one merge step's siblings (`consistency.rs:754-772` and `815-826`): a
-    window `nodes` of frontier coordinates with the target at local index `pos`;
-    the other `nodes.length - 1` entries are recorded from `s.siblings`
-    (sibling index shifted past the target, mirroring
-    `if j < step.position { j } else { j - 1 }`). -/
-noncomputable def recordMergeSibs (m : CMap) (nodes : List (Nat × Nat)) (pos : Nat) (s : ProofStep) : CMap :=
-  (List.range nodes.length).foldl
-    (fun mm j =>
-      if j = pos then mm
-      else
-        let sibIdx := if j < s.position then j else j - 1
-        cmInsert mm (nodes.getD j (0, 0)) (s.siblings.getD sibIdx emptyHash)) m
-
-/-- One coordinate-merge length step: `mergeTopCoords` strictly shrinks a list
-    longer than `k` (for `k ≥ 2`). -/
-theorem mergeTopCoords_length_lt (k : Nat) (coords : List (Nat × Nat))
-    (hk : 2 ≤ k) (hlen : k < coords.length) :
-    (mergeTopCoords k coords).length < coords.length := by
-  unfold mergeTopCoords
-  rw [if_neg (by omega)]
-  cases hd : (coords.drop (coords.length - k)).head? with
-  | none =>
-      exfalso
-      have : (coords.drop (coords.length - k)).length = k := by
-        rw [List.length_drop]; omega
-      rw [List.head?_eq_none_iff] at hd
-      rw [hd] at this; simp at this; omega
-  | some lh =>
-      obtain ⟨l, h⟩ := lh
-      simp only [List.length_append, List.length_take, List.length_cons, List.length_nil]
-      omega
-
-/-- The dynamic-merge phase (`consistency.rs:710-836`): fold the new frontier by
-    repeatedly merging the rightmost `k`, recording the siblings of every merge
-    the target participates in (window merges consume a path step; coordinate
-    merges that skip the target do not), then the final root merge. Records
-    sibling coordinates into the map. -/
-noncomputable def cmMergeGo (k : Nat) (frontier : List (Nat × Nat)) (targetIdx : Nat)
-    (path : List ProofStep) (m : CMap) : CMap :=
-    if h : k < 2 ∨ frontier.length ≤ k then
-      if 1 < frontier.length then
-        match path with
-        | [] => m
-        | s :: _ => recordMergeSibs m frontier targetIdx s
-      else m
-    else
-      let split := frontier.length - k
-      if targetIdx ≥ split then
-        match path with
-        | [] => m
-        | s :: rest =>
-            cmMergeGo k (mergeTopCoords k frontier) split rest
-              (recordMergeSibs m (frontier.drop split) (targetIdx - split) s)
-      else
-        cmMergeGo k (mergeTopCoords k frontier) targetIdx path m
-termination_by frontier.length
-decreasing_by
-  all_goals (push_neg at h; exact mergeTopCoords_length_lt k frontier (by omega) h.2)
-
-/-- One-step unfolding of `cmMergeGo` (the generated equation, with `let`
-    inlined), used to rewrite a single merge step. -/
-private theorem cmMergeGo_unfold (k : Nat) (frontier : List (Nat × Nat)) (targetIdx : Nat)
-    (path : List ProofStep) (m : CMap) :
-    cmMergeGo k frontier targetIdx path m =
-      if h : k < 2 ∨ frontier.length ≤ k then
-        (if 1 < frontier.length then
-          match path with
-          | [] => m
-          | s :: _ => recordMergeSibs m frontier targetIdx s
-        else m)
-      else
-        (if targetIdx ≥ frontier.length - k then
-          match path with
-          | [] => m
-          | s :: rest =>
-              cmMergeGo k (mergeTopCoords k frontier) (frontier.length - k) rest
-                (recordMergeSibs m (frontier.drop (frontier.length - k))
-                  (targetIdx - (frontier.length - k)) s)
-        else cmMergeGo k (mergeTopCoords k frontier) targetIdx path m) := by
-  rw [cmMergeGo.eq_def]
-
 /-- `getD` into the left part of an append. -/
 private theorem getD_append_lt {α} (l₁ l₂ : List α) (d : α) (i : Nat) (h : i < l₁.length) :
     (l₁ ++ l₂).getD i d = l₁.getD i d := by
@@ -400,102 +284,7 @@ private theorem getD_take_lt {α} (l : List α) (d : α) (n i : Nat) (h : i < n)
     (l.take n).getD i d = l.getD i d := by
   rw [List.getD_eq_getElem?_getD, List.getElem?_take_of_lt h, List.getD_eq_getElem?_getD]
 
-/-- The full coordinate→digest map after a consistency reconstruction: the
-    boundary coordinate seeded with `start_hash` (`consistency.rs:654`), then the
-    bisection and merge phases. -/
-noncomputable def consistencyMap (k oldSize newSize : Nat) (startHash : Digest)
-    (path : List ProofStep) : CMap :=
-  match (frontierForSizeT k oldSize).getLast? with
-  | none => cmEmpty
-  | some (bl, bh) =>
-    match findFrontier k bl (frontierForSizeT k newSize) 0 with
-    | none => cmEmpty
-    | some (fIdx, _sl, sh) =>
-        let bisSteps := sh - bh
-        let m0 := cmInsert cmEmpty (bl, bh) startHash
-        let m1 := cmBisect k (path.take bisSteps) bl bh m0
-        cmMergeGo k (frontierForSizeT k newSize) fIdx (path.drop bisSteps) m1
 
-/-! ## The verifier model -/
-
-/-- The list of old-frontier digests read back from the map (`consistency.rs:842-847`):
-    `None` if any old-frontier coordinate is absent (the algorithm aborts). -/
-noncomputable def consistencyOldHashes (k oldSize newSize : Nat) (startHash : Digest)
-    (path : List ProofStep) : Option (List Digest) :=
-  (frontierForSizeT k oldSize).mapM (consistencyMap k oldSize newSize startHash path)
-
-/-- `reconstruct_consistency_roots` (`consistency.rs:593`), modeled functionally:
-    the old root is the `foldFrontierRoot` over the old frontier's digests read
-    from the map (`consistency.rs:849-867`); the new root is the running boundary
-    digest folded through the whole path (`foldNary start_hash path`), which is
-    exactly the merge phase's `computed_new_root` (`consistency.rs:870`). Returns
-    `none` exactly when the map read-back fails. -/
-noncomputable def reconstructConsistencyRoots (k oldSize newSize : Nat)
-    (startHash : Digest) (path : List ProofStep) : Option (Digest × Digest) :=
-  match consistencyOldHashes k oldSize newSize startHash path with
-  | none => none
-  | some hs => some (foldFrontierRoot k hs, foldNary startHash path)
-
-/-- The consistency-proof skeleton pinned by `reconstruct_consistency_roots`'s
-    structural guards: `sh - bh` bisection steps (each `k - 1` siblings, position
-    the base-`k` digit of the boundary subtree's offset in its new slot,
-    `consistency.rs:667-675`) then the grouping steps from that slot to the spine root
-    (`consistency.rs:739-836`). The boundary subtree root is a pure log-topology node,
-    so — unlike inclusion — there is **no** unconstrained within-subtree prefix:
-    the whole path is shape-pinned. -/
-def consistencySkeleton (k oldSize newSize : Nat) : Option (List (Nat × Nat)) :=
-  if k < 2 then none
-  else match (frontierForSizeT k oldSize).getLast? with
-    | none => none
-    | some (bl, bh) =>
-      match findFrontier k bl (frontierForSizeT k newSize) 0 with
-      | none => none
-      | some (fIdx, sl, sh) =>
-        if bh ≤ sh then
-          some (digitSteps k ((bl - sl) / k ^ bh) (sh - bh) ++
-            (groupingSteps k (frontierForSizeT k newSize).length fIdx).map
-              (fun pc => (pc.1, pc.2 - 1)))
-        else none
-
-/-- `verify_consistency`'s structural acceptance (`consistency.rs:647-840`): the path's
-    per-step shape matches the consistency skeleton exactly (full match — no free
-    prefix). The k-ary analog of `StructureOK`, minus the existential depth. -/
-def StructureConsistencyOK (k oldSize newSize : Nat) (path : List ProofStep) : Prop :=
-  ∃ skel, consistencySkeleton k oldSize newSize = some skel ∧ path.map stepShape = skel
-
-/-- The accept relation of `verify_consistency`, minus DoS bounds: size guards,
-    skeleton pinning, canonical well-formedness (zero-sibling steps rejected,
-    insert position in range — `consistency.rs:617-625,667-670`), and the dual-root
-    match `reconstruct_consistency_roots(..) == some (oldRoot, newRoot)`
-    (`consistency.rs:107`). -/
-def AcceptsConsistency (k oldSize newSize : Nat) (startHash : Digest)
-    (path : List ProofStep) (oldRoot newRoot : Digest) : Prop :=
-  2 ≤ k ∧ 0 < oldSize ∧ oldSize < newSize ∧
-  StructureConsistencyOK k oldSize newSize path ∧
-  WellFormedSteps path ∧
-  reconstructConsistencyRoots k oldSize newSize startHash path = some (oldRoot, newRoot)
-
-/-! ## The honest prover (non-vacuity witness) -/
-
-/-- The honest `start_hash`: the genuine root of the boundary subtree — the
-    rightmost (last) perfect subtree of the old frontier. -/
-noncomputable def honestStartHash (k : Nat) (cells : List Digest)
-    (oldSize : Nat) : Digest :=
-  match (frontierForSizeT k oldSize).getLast? with
-  | none => emptyHash
-  | some (bl, bh) => perfectRoot k cells bl bh
-
-/-- The honest consistency path: the inclusion path of the last old leaf
-    (`index = oldSize - 1`) in the current tree, taken from the boundary
-    subtree's height upward (dropping the `bh` lower digit steps that fold the
-    leaf up to the boundary subtree root — which `start_hash` already is). -/
-noncomputable def honestConsistencyPath (k : Nat) (cells : List Digest)
-    (oldSize : Nat) : List ProofStep :=
-  match (frontierForSizeT k oldSize).getLast? with
-  | none => []
-  | some (_bl, bh) => (honestInclusionPath k cells (oldSize - 1)).drop bh
-
-/-! ## Honest new-root reconstruction -/
 
 /-- **Boundary/slot setup for an honest prefix.** Packages the geometric facts
     every honest-construction proof reuses: the boundary coordinate `(bl, bh)`
@@ -564,379 +353,6 @@ private theorem boundary_slot (k : Nat) (hk : 2 ≤ k) (cells : List Digest) (ol
     rw [hofs]; omega
   exact ⟨bl, bh, fIdx, sl, sh, hlast, hspan, hff, hff2, hbhsh, hsle, hdiveq, halign⟩
 
-/-- **The honest consistency path reconstructs the genuine new root.**
-    Folding the honest boundary-subtree root (`start_hash`) through the honest
-    consistency path yields `karyRoot cells`. The path is the suffix, from the
-    boundary height up, of the inclusion path of the last old leaf
-    (`oldSize - 1`): `honest_path_folds` folds that leaf to the root, and the
-    dropped lower `bh` digit steps fold the leaf up to the boundary subtree root
-    (`digitFold`), which `start_hash` is. The boundary lands in a new-frontier
-    slot of height `≥ bh` (`newslot_height_ge`), shared with `oldSize - 1`
-    (`findFrontier_unique`), and the boundary's aligned position pins the
-    `bh`-level ancestor of `oldSize - 1` to `bl`. -/
-private theorem honest_consistency_newroot (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
-    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
-    foldNary (honestStartHash k cells oldSize) (honestConsistencyPath k cells oldSize)
-      = karyRoot k cells := by
-  obtain ⟨bl, bh, fIdx, sl, sh, hlast, hspan, _hff, hff2, hbhsh, hsle, _hdiveq, halign⟩ :=
-    boundary_slot k hk cells oldSize hold hnew
-  have hk0 : 0 < k ^ bh := pow_pos (by omega) bh
-  -- unfold the honest start hash and path
-  simp only [honestStartHash, honestConsistencyPath, hlast]
-  -- honest inclusion path through the shared slot
-  have hincl : honestInclusionPath k cells (oldSize - 1)
-      = honestDigitPath k cells sl (oldSize - 1 - sl) sh
-        ++ honestGroupPath k (buildStackCells k cells) fIdx := by
-    simp only [honestInclusionPath, hff2]
-  set leaf := cells.getD (oldSize - 1) emptyHash with hleaf
-  have hfull := honest_path_folds k hk cells (oldSize - 1) (by omega)
-  -- the dropped lower bh steps fold the leaf to the boundary subtree root
-  have htakefold : foldNary leaf
-      ((honestInclusionPath k cells (oldSize - 1)).take bh) = perfectRoot k cells bl bh := by
-    rw [hincl]
-    have hdlen : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).length = sh := by
-      rw [honestDigitPath, List.length_map, List.length_range]
-    rw [List.take_append_of_le_length (by rw [hdlen]; exact hbhsh)]
-    have htk : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).take bh
-        = honestDigitPath k cells sl (oldSize - 1 - sl) bh := by
-      rw [honestDigitPath, honestDigitPath, ← List.map_take, List.take_range, Nat.min_eq_left hbhsh]
-    rw [htk]
-    have hdf := digitFold k hk cells sl bh (oldSize - 1 - sl)
-    rw [show sl + (oldSize - 1 - sl) = oldSize - 1 from by omega, halign] at hdf
-    rw [hleaf]; exact hdf
-  -- assemble via the take/drop split of the honest fold
-  have hsplit : foldNary leaf (honestInclusionPath k cells (oldSize - 1))
-      = foldNary (foldNary leaf ((honestInclusionPath k cells (oldSize - 1)).take bh))
-          ((honestInclusionPath k cells (oldSize - 1)).drop bh) := by
-    rw [foldNary, foldNary, foldNary, ← List.foldl_append, List.take_append_drop]
-  rw [← hfull, hsplit, htakefold]
-
-/-- **The honest consistency path has the pinned skeleton shape.** Its per-step
-    shape equals `consistencySkeleton`. The honest path is the inclusion path of
-    the last old leaf dropped to the boundary height; its shape is therefore the
-    inclusion skeleton dropped by `bh`, whose bisection digit steps coincide with
-    the consistency skeleton's (`digitSteps_drop` plus the agreeing digit offset)
-    and whose grouping steps are identical. -/
-private theorem honest_consistency_shape (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
-    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
-    StructureConsistencyOK k oldSize cells.length (honestConsistencyPath k cells oldSize) := by
-  obtain ⟨bl, bh, fIdx, sl, sh, hlast, hspan, hff, hff2, hbhsh, hsle, hdiveq, _halign⟩ :=
-    boundary_slot k hk cells oldSize hold hnew
-  obtain ⟨⟨skel, hskel, hmap⟩, _hwf⟩ := honest_path_shape k hk cells (oldSize - 1) (by omega)
-  set G := (groupingSteps k (frontierForSizeT k cells.length).length fIdx).map
-    (fun pc => (pc.1, pc.2 - 1)) with hG
-  have hsk : inclusionSkeleton k cells.length (oldSize - 1)
-      = some (digitSteps k (oldSize - 1 - sl) sh ++ G) := by
-    rw [inclusionSkeleton, if_neg (show ¬ k < 2 by omega)]
-    simp only [hff2, hG]
-  have hskelval : skel = digitSteps k (oldSize - 1 - sl) sh ++ G :=
-    Option.some.inj (hskel.symm.trans hsk)
-  have hcskel : consistencySkeleton k oldSize cells.length
-      = some (digitSteps k ((bl - sl) / k ^ bh) (sh - bh) ++ G) := by
-    rw [consistencySkeleton, if_neg (show ¬ k < 2 by omega)]
-    simp only [hlast, hff, hbhsh, if_true, hG]
-  have hdslen : (digitSteps k (oldSize - 1 - sl) sh).length = sh := by
-    rw [digitSteps_eq_map, List.length_map, List.length_range]
-  refine ⟨digitSteps k ((bl - sl) / k ^ bh) (sh - bh) ++ G, hcskel, ?_⟩
-  simp only [honestConsistencyPath, hlast]
-  rw [List.map_drop, hmap, hskelval,
-    List.drop_append_of_le_length (by rw [hdslen]; exact hbhsh),
-    digitSteps_drop k bh sh (oldSize - 1 - sl) hbhsh, hdiveq]
-
-/-- `mapM` over the `Option` monad succeeds with the elementwise-mapped list when
-    every element maps to `some (g c)`. The lift that turns the pointwise
-    coordinate read-back into the whole-frontier read-back. -/
-private theorem mapM_option_some {α β} (g : α → β) :
-    ∀ (l : List α) (f : α → Option β), (∀ c ∈ l, f c = some (g c)) →
-      l.mapM f = some (l.map g) := by
-  intro l
-  induction l with
-  | nil => intro f _; rfl
-  | cons x xs ih =>
-    intro f h
-    rw [List.mapM_cons, h x (List.mem_cons_self ..),
-      ih f (fun c hc => h c (List.mem_cons_of_mem _ hc))]
-    rfl
-
-/-- A `foldl` of map-updating steps that each leave coordinate `c` untouched
-    leaves `c` untouched overall. The pointwise core under both
-    `recordBisectSibs` and `recordMergeSibs` (folds of conditional `cmInsert`). -/
-private theorem cmInsert_foldl_pointwise {β} (c : Nat × Nat) :
-    ∀ (js : List β) (step : CMap → β → CMap) (m : CMap),
-      (∀ j ∈ js, ∀ mm : CMap, step mm j c = mm c) →
-      (js.foldl step m) c = m c := by
-  intro js
-  induction js with
-  | nil => intro step m _; rfl
-  | cons x xs ih =>
-    intro step m h
-    rw [List.foldl_cons, ih step (step m x) (fun j hj mm => h j (List.mem_cons_of_mem _ hj) mm),
-      h x (List.mem_cons_self ..) m]
-
-/-- Reading a `cmInsert` at a coordinate other than the inserted one is the old
-    value. -/
-private theorem cmInsert_ne (m : CMap) (key c : Nat × Nat) (d : Digest) (h : c ≠ key) :
-    cmInsert m key d c = m c := by
-  simp only [cmInsert, if_neg h]
-
-/-- **Reading a uniquely-written key.** In a `foldl` of conditional `cmInsert`,
-    if `x` is the only un-skipped element whose key equals `key x`, then reading
-    `key x` afterward yields `val x` (no later step overwrites it). The dual of
-    `cmInsert_foldl_pointwise`, used to extract a recorded sibling's value. -/
-private theorem foldl_cmInsert_hits {β} (P : β → Prop) [DecidablePred P]
-    (key : β → Nat × Nat) (val : β → Digest) (x : β) :
-    ∀ (js : List β) (m : CMap),
-      js.Nodup → x ∈ js → ¬ P x →
-      (∀ y ∈ js, ¬ P y → key y = key x → y = x) →
-      (js.foldl (fun mm z => if P z then mm else cmInsert mm (key z) (val z)) m) (key x)
-        = some (val x) := by
-  intro js
-  induction js with
-  | nil => intro m _ hx _ _; simp at hx
-  | cons z zs ih =>
-    intro m hnd hx hPx huniq
-    rw [List.nodup_cons] at hnd
-    obtain ⟨hznotin, hndzs⟩ := hnd
-    rw [List.foldl_cons]
-    by_cases hzx : z = x
-    · subst hzx
-      simp only [if_neg hPx]
-      rw [cmInsert_foldl_pointwise (key z)]
-      · simp [cmInsert]
-      · intro y hy mm
-        by_cases hPy : P y
-        · simp only [if_pos hPy]
-        · simp only [if_neg hPy]
-          apply cmInsert_ne
-          intro hkey
-          exact hznotin (huniq y (List.mem_cons_of_mem _ hy) hPy hkey.symm ▸ hy)
-    · have hxzs : x ∈ zs := by
-        rcases List.mem_cons.mp hx with h | h
-        · exact absurd h.symm hzx
-        · exact h
-      refine ih (if P z then m else cmInsert m (key z) (val z)) hndzs hxzs hPx ?_
-      intro y hy hPy hkey
-      exact huniq y (List.mem_cons_of_mem _ hy) hPy hkey
-
-/-- `recordMergeSibs` leaves `c` untouched when `c` differs from every recorded
-    (non-target) window coordinate. -/
-private theorem recordMergeSibs_avoids (m : CMap) (nodes : List (Nat × Nat))
-    (pos : Nat) (s : ProofStep) (c : Nat × Nat)
-    (h : ∀ j, j < nodes.length → j ≠ pos → c ≠ nodes.getD j (0, 0)) :
-    recordMergeSibs m nodes pos s c = m c := by
-  rw [recordMergeSibs]
-  apply cmInsert_foldl_pointwise
-  intro j hj mm
-  rw [List.mem_range] at hj
-  by_cases hjp : j = pos
-  · simp only [if_pos hjp]
-  · simp only [if_neg hjp]
-    exact cmInsert_ne mm _ c _ (h j hj hjp)
-
-/-- Skip-free variant of `foldl_cmInsert_hits` (every step inserts). -/
-private theorem foldl_cmInsert_hits' {β} (key : β → Nat × Nat) (val : β → Digest) (x : β) :
-    ∀ (js : List β) (m : CMap),
-      js.Nodup → x ∈ js → (∀ y ∈ js, key y = key x → y = x) →
-      (js.foldl (fun mm z => cmInsert mm (key z) (val z)) m) (key x) = some (val x) := by
-  intro js m hnd hx huniq
-  have := foldl_cmInsert_hits (fun _ : β => False) key val x js m hnd hx (by simp)
-    (fun y hy _ hkey => huniq y hy hkey)
-  simpa using this
-
-/-- `recordBisectSibs` records each sibling at its child coordinate (height `ch`):
-    reading the `j0`-th child's coordinate returns the `j0`-th recorded sibling. -/
-private theorem recordBisectSibs_hits (k : Nat) (hk : 2 ≤ k) (m : CMap) (curLeft ch : Nat)
-    (s : ProofStep) (j0 : Nat) (hj0 : j0 < s.siblings.length) :
-    recordBisectSibs k m curLeft ch s
-        ((if j0 < s.position then curLeft - s.position * k ^ ch + j0 * k ^ ch
-          else curLeft - s.position * k ^ ch + j0 * k ^ ch + k ^ ch), ch)
-      = some (s.siblings.getD j0 emptyHash) := by
-  rw [recordBisectSibs]
-  have hcap : 0 < k ^ ch := pow_pos (by omega) ch
-  exact foldl_cmInsert_hits'
-    (fun j => ((if j < s.position then curLeft - s.position * k ^ ch + j * k ^ ch
-                else curLeft - s.position * k ^ ch + j * k ^ ch + k ^ ch), ch))
-    (fun j => s.siblings.getD j emptyHash) j0 (List.range s.siblings.length) m
-    List.nodup_range (List.mem_range.mpr hj0)
-    (fun y _ hkey => by
-      simp only [Prod.mk.injEq] at hkey
-      have h1 := hkey.1
-      have key1 : ∀ a : Nat,
-          (if a < s.position then curLeft - s.position * k ^ ch + a * k ^ ch
-            else curLeft - s.position * k ^ ch + a * k ^ ch + k ^ ch)
-          = curLeft - s.position * k ^ ch + (if a < s.position then a else a + 1) * k ^ ch := by
-        intro a
-        by_cases ha : a < s.position
-        · rw [if_pos ha, if_pos ha]
-        · rw [if_neg ha, if_neg ha, add_mul, one_mul]; omega
-      rw [key1, key1] at h1
-      have h2 : (if y < s.position then y else y + 1) * k ^ ch
-          = (if j0 < s.position then j0 else j0 + 1) * k ^ ch := by omega
-      have h3 := Nat.eq_of_mul_eq_mul_right hcap h2
-      rcases Nat.lt_or_ge y s.position with hy | hy <;>
-        rcases Nat.lt_or_ge j0 s.position with hj | hj
-      · rw [if_pos hy, if_pos hj] at h3; omega
-      · rw [if_pos hy, if_neg (by omega)] at h3; omega
-      · rw [if_neg (by omega), if_pos hj] at h3; omega
-      · rw [if_neg (by omega), if_neg (by omega)] at h3; omega)
-
-/-- `recordBisectSibs` only writes height-`ch` coordinates. -/
-private theorem recordBisectSibs_preserves (k : Nat) (m : CMap) (curLeft ch : Nat)
-    (s : ProofStep) (c : Nat × Nat) (h : c.2 ≠ ch) :
-    recordBisectSibs k m curLeft ch s c = m c := by
-  rw [recordBisectSibs]
-  apply cmInsert_foldl_pointwise
-  intro j _ mm
-  apply cmInsert_ne
-  intro hcq
-  exact h (by rw [hcq])
-
-/-- `recordBisectSibs` never overwrites the path node `(curLeft, ch)` itself:
-    every recorded sibling sits at a different left coordinate. -/
-private theorem recordBisectSibs_preserves_node (k : Nat) (hk : 2 ≤ k) (m : CMap)
-    (curLeft ch : Nat) (s : ProofStep) (hpos : s.position * k ^ ch ≤ curLeft) :
-    recordBisectSibs k m curLeft ch s (curLeft, ch) = m (curLeft, ch) := by
-  rw [recordBisectSibs]
-  apply cmInsert_foldl_pointwise
-  intro j _ mm
-  apply cmInsert_ne
-  intro hcq
-  rw [Prod.mk.injEq] at hcq
-  obtain ⟨h1, _⟩ := hcq
-  have hcap : 0 < k ^ ch := pow_pos (by omega) ch
-  by_cases hjp : j < s.position
-  · simp only [if_pos hjp] at h1
-    have hlt : j * k ^ ch < s.position * k ^ ch := (Nat.mul_lt_mul_right hcap).mpr hjp
-    omega
-  · simp only [if_neg hjp] at h1
-    have hge : s.position * k ^ ch ≤ j * k ^ ch := Nat.mul_le_mul_right (k ^ ch) (by omega)
-    omega
-
-/-- The bisection phase leaves coordinates below the current level untouched:
-    each step records at its own (rising) level. -/
-private theorem cmBisect_preserves_below (k : Nat) :
-    ∀ (path : List ProofStep) (curLeft ch : Nat) (m : CMap) (c : Nat × Nat),
-      c.2 < ch → cmBisect k path curLeft ch m c = m c := by
-  intro path
-  induction path with
-  | nil => intro curLeft ch m c _; rfl
-  | cons s rest ih =>
-    intro curLeft ch m c h
-    rw [cmBisect, ih _ (ch + 1) _ c (by omega),
-      recordBisectSibs_preserves k m curLeft ch s c (by omega)]
-
-/-- `recordMergeSibs` records the sibling digest at a window coordinate whose
-    position is distinct from every other window coordinate. -/
-private theorem recordMergeSibs_hits (m : CMap) (nodes : List (Nat × Nat)) (pos : Nat)
-    (s : ProofStep) (j0 : Nat) (hj0 : j0 < nodes.length) (hjp : j0 ≠ pos)
-    (hdist : ∀ j, j < nodes.length → nodes.getD j (0, 0) = nodes.getD j0 (0, 0) → j = j0) :
-    recordMergeSibs m nodes pos s (nodes.getD j0 (0, 0))
-      = some (s.siblings.getD (if j0 < s.position then j0 else j0 - 1) emptyHash) := by
-  rw [recordMergeSibs]
-  exact foldl_cmInsert_hits (fun j => j = pos) (fun j => nodes.getD j (0, 0))
-    (fun j => s.siblings.getD (if j < s.position then j else j - 1) emptyHash) j0
-    (List.range nodes.length) m List.nodup_range (List.mem_range.mpr hj0) hjp
-    (fun y hy _ hkey => hdist y (List.mem_range.mp hy) hkey)
-
-/-- **The merge phase never writes inside the target slot.** Every coordinate
-    `cmMergeGo` records is a non-target window coordinate, whose left lies outside
-    the half-open interval `[a, b)` as long as that holds for every non-target
-    coordinate of the input list (an invariant preserved by the coordinate
-    merge, since a merged node inherits its leftmost child's left). So any
-    coordinate whose left is in `[a, b)` keeps its incoming value. -/
-private theorem cmMergeGo_avoids (k a b : Nat) (hk : 2 ≤ k) :
-    ∀ (n : Nat) (coords : List (Nat × Nat)) (tgt : Nat) (path : List ProofStep) (m : CMap),
-      coords.length = n → tgt < coords.length →
-      (∀ i, i < coords.length → i ≠ tgt →
-        ¬ (a ≤ (coords.getD i (0, 0)).1 ∧ (coords.getD i (0, 0)).1 < b)) →
-      ∀ c, a ≤ c.1 → c.1 < b → cmMergeGo k coords tgt path m c = m c := by
-  intro n
-  induction n using Nat.strong_induction_on with
-  | _ n ih =>
-    intro coords tgt path m hn htgt hP2 c hca hcb
-    have hcin : a ≤ c.1 ∧ c.1 < b := ⟨hca, hcb⟩
-    -- c differs from every non-target coordinate of `coords`
-    have hcne : ∀ i, i < coords.length → i ≠ tgt → c ≠ coords.getD i (0, 0) := by
-      intro i hi hit heq
-      exact hP2 i hi hit (by rw [← heq]; exact hcin)
-    rw [cmMergeGo_unfold]
-    by_cases hbase : k < 2 ∨ coords.length ≤ k
-    · rw [dif_pos hbase]
-      by_cases h1 : 1 < coords.length
-      · rw [if_pos h1]
-        cases path with
-        | nil => rfl
-        | cons s rest =>
-            apply recordMergeSibs_avoids
-            intro j hj hjt
-            exact hcne j hj hjt
-      · rw [if_neg h1]
-    · rw [dif_neg hbase]
-      push_neg at hbase
-      obtain ⟨_, hgt⟩ := hbase
-      -- the coordinate merge: drop the last `k`, append their parent
-      have hmergedhead : mergeTopCoords k coords
-          = coords.take (coords.length - k)
-            ++ [((coords.getD (coords.length - k) (0, 0)).1,
-                 (coords.getD (coords.length - k) (0, 0)).2 + 1)] := by
-        rw [mergeTopCoords, if_neg (by omega)]
-        have hhd : (coords.drop (coords.length - k)).head?
-            = some (coords.getD (coords.length - k) (0, 0)) := by
-          rw [List.head?_eq_getElem?, List.getElem?_drop, Nat.add_zero,
-            List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega), Option.getD_some]
-        rw [hhd]
-      have hmlen : (mergeTopCoords k coords).length = coords.length - k + 1 := by
-        rw [hmergedhead, List.length_append, List.length_take, List.length_cons,
-          List.length_nil, Nat.min_eq_left (by omega)]
-      have htakelen : (coords.take (coords.length - k)).length = coords.length - k := by
-        rw [List.length_take, Nat.min_eq_left (by omega)]
-      -- prefix coordinates unchanged
-      have hmleft : ∀ i, i < coords.length - k →
-          (mergeTopCoords k coords).getD i (0, 0) = coords.getD i (0, 0) := by
-        intro i hi
-        rw [hmergedhead, getD_append_lt _ _ _ _ (by rw [htakelen]; exact hi), getD_take_lt _ _ _ _ hi]
-      -- merged coordinate inherits its leftmost child's left
-      have hmlast : ((mergeTopCoords k coords).getD (coords.length - k) (0, 0)).1
-          = (coords.getD (coords.length - k) (0, 0)).1 := by
-        rw [hmergedhead, getD_append_ge _ _ _ _ (by rw [htakelen]),
-          htakelen, Nat.sub_self, List.getD_cons_zero]
-      by_cases hge : tgt ≥ coords.length - k
-      · rw [if_pos hge]
-        cases path with
-        | nil => rfl
-        | cons s rest =>
-            have hrec : recordMergeSibs m (coords.drop (coords.length - k))
-                (tgt - (coords.length - k)) s c = m c := by
-              apply recordMergeSibs_avoids
-              intro j hj hjt
-              rw [List.length_drop] at hj
-              have hidx : (coords.drop (coords.length - k)).getD j (0, 0)
-                  = coords.getD ((coords.length - k) + j) (0, 0) := by
-                rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop]
-              rw [hidx]
-              apply hcne ((coords.length - k) + j) (by omega)
-              omega
-            have hP2' : ∀ i, i < (mergeTopCoords k coords).length → i ≠ coords.length - k →
-                ¬ (a ≤ ((mergeTopCoords k coords).getD i (0, 0)).1 ∧
-                   ((mergeTopCoords k coords).getD i (0, 0)).1 < b) := by
-              intro i hi hik
-              rw [hmleft i (by rw [hmlen] at hi; omega)]
-              exact hP2 i (by rw [hmlen] at hi; omega) (by omega)
-            exact (ih (mergeTopCoords k coords).length (by omega) (mergeTopCoords k coords)
-              (coords.length - k) rest (recordMergeSibs m (coords.drop (coords.length - k))
-                (tgt - (coords.length - k)) s) rfl (by rw [hmlen]; omega) hP2' c hca hcb).trans hrec
-      · rw [if_neg hge]
-        have hP2' : ∀ i, i < (mergeTopCoords k coords).length → i ≠ tgt →
-            ¬ (a ≤ ((mergeTopCoords k coords).getD i (0, 0)).1 ∧
-               ((mergeTopCoords k coords).getD i (0, 0)).1 < b) := by
-          intro i hi hit
-          rw [hmlen] at hi
-          by_cases hlt : i < coords.length - k
-          · rw [hmleft i hlt]; exact hP2 i (by omega) hit
-          · have hieq : i = coords.length - k := by omega
-            rw [hieq, hmlast]; exact hP2 (coords.length - k) (by omega) (by omega)
-        exact ih (mergeTopCoords k coords).length (by omega) (mergeTopCoords k coords)
-          tgt path m rfl (by rw [hmlen]; omega) hP2' c hca hcb
 
 /-- A `Tiles` decomposition splits around any interior tile: the prefix tiles
     `[start, mid)`, the tile starts at `mid`, and the suffix tiles
@@ -1178,192 +594,6 @@ private theorem frontier_agree (k : Nat) (hk : 2 ≤ k) :
       exact ih (newN - k ^ L) (by omega) (off + k ^ L) (oldN - k ^ L) sl sh hdvd' hmem
         (by omega) (by omega) (by omega)
 
-/-- Reading a list below an erased index is unaffected. -/
-private theorem getD_eraseIdx_lt {α} [Inhabited α] (l : List α) (d : α) (n i : Nat) (h : i < n) :
-    (l.eraseIdx n).getD i d = l.getD i d := by
-  rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_eraseIdx,
-    if_pos h]
-
-/-- **The merge phase records every slot left of the target.** Folding the honest
-    grouping path of the digest stack `digests = coords.map perfectRoot` (on the
-    target prefix) records, at every coordinate strictly left of the target slot,
-    that slot's genuine perfect root. The target's lineage absorbs the left slots
-    one window at a time, each pristine (never previously merged), so its recorded
-    digest is still its original perfect root; later windows never overwrite it
-    (coordinates are strictly left-ordered). -/
-private theorem cmMergeGo_left_cover (k : Nat) (hk : 2 ≤ k) (cells : List Digest) :
-    ∀ (n : Nat) (coords : List (Nat × Nat)) (digests : List Digest) (tgt : Nat) (m : CMap),
-      coords.length = n → digests.length = coords.length → tgt < coords.length →
-      (∀ a b, a < coords.length → b < coords.length → a < b →
-        (coords.getD a (0, 0)).1 < (coords.getD b (0, 0)).1) →
-      (∀ i, i < tgt → digests.getD i emptyHash
-        = perfectRoot k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2) →
-      ∀ i, i < tgt →
-        (cmMergeGo k coords tgt (honestGroupPath k digests tgt) m) (coords.getD i (0, 0))
-          = some (perfectRoot k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2) := by
-  intro n
-  induction n using Nat.strong_induction_on with
-  | _ n ih =>
-    intro coords digests tgt m hn hdl htgt hsorted hJ i hi
-    have hlen2 : 1 < coords.length := by omega
-    have hdistinct : ∀ a b, a < coords.length → b < coords.length →
-        coords.getD a (0, 0) = coords.getD b (0, 0) → a = b := by
-      intro a b ha hb heq
-      rcases Nat.lt_trichotomy a b with h | h | h
-      · exact absurd (heq ▸ hsorted a b ha hb h) (lt_irrefl _)
-      · exact h
-      · exact absurd (heq ▸ hsorted b a hb ha h) (lt_irrefl _)
-    rw [cmMergeGo_unfold]
-    by_cases hbase : k < 2 ∨ coords.length ≤ k
-    · rw [dif_pos hbase, if_pos hlen2]
-      set step : ProofStep := { position := tgt, siblings := digests.eraseIdx tgt } with hstep_def
-      have hgp : honestGroupPath k digests tgt = [step] := by
-        rw [honestGroupPath, dif_pos (by rw [hdl]; exact hbase), if_pos (by rw [hdl]; exact hlen2),
-          hstep_def]
-      rw [hgp]
-      show recordMergeSibs m coords tgt step (coords.getD i (0, 0))
-        = some (perfectRoot k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2)
-      rw [recordMergeSibs_hits m coords tgt step i (by omega) (by omega)
-        (fun j hj hjk => hdistinct j i hj (by omega) hjk), hstep_def]
-      simp only [if_pos hi]
-      rw [getD_eraseIdx_lt digests emptyHash tgt i hi, hJ i hi]
-    · rw [dif_neg hbase]
-      push_neg at hbase
-      obtain ⟨_, hgt⟩ := hbase
-      have hgtd : k < digests.length := by rw [hdl]; exact hgt
-      -- coordinate-merge shape facts
-      have htakelen : (coords.take (coords.length - k)).length = coords.length - k := by
-        rw [List.length_take, Nat.min_eq_left (by omega)]
-      have hmergedhead : mergeTopCoords k coords
-          = coords.take (coords.length - k)
-            ++ [((coords.getD (coords.length - k) (0, 0)).1,
-                 (coords.getD (coords.length - k) (0, 0)).2 + 1)] := by
-        rw [mergeTopCoords, if_neg (by omega)]
-        have hhd : (coords.drop (coords.length - k)).head?
-            = some (coords.getD (coords.length - k) (0, 0)) := by
-          rw [List.head?_eq_getElem?, List.getElem?_drop, Nat.add_zero,
-            List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega), Option.getD_some]
-        rw [hhd]
-      have hmlen : (mergeTopCoords k coords).length = coords.length - k + 1 := by
-        rw [hmergedhead, List.length_append, List.length_take, List.length_cons,
-          List.length_nil, Nat.min_eq_left (by omega)]
-      have hcleft : ∀ j, j < coords.length - k →
-          (mergeTopCoords k coords).getD j (0, 0) = coords.getD j (0, 0) := by
-        intro j hj
-        rw [hmergedhead, getD_append_lt _ _ _ _ (by rw [htakelen]; exact hj), getD_take_lt _ _ _ _ hj]
-      have hclast : ((mergeTopCoords k coords).getD (coords.length - k) (0, 0)).1
-          = (coords.getD (coords.length - k) (0, 0)).1 := by
-        rw [hmergedhead, getD_append_ge _ _ _ _ (by rw [htakelen]),
-          htakelen, Nat.sub_self, List.getD_cons_zero]
-      have hdleft : ∀ j, j < coords.length - k →
-          (mergeTopD k digests).getD j emptyHash = digests.getD j emptyHash := by
-        intro j hj
-        rw [mergeTopD, if_neg (by omega), getD_append_lt _ _ _ _
-          (by rw [List.length_take, Nat.min_eq_left (by omega)]; rw [hdl]; exact hj),
-          getD_take_lt _ _ _ _ (by rw [hdl]; exact hj)]
-      have hdll : (mergeTopD k digests).length = (mergeTopCoords k coords).length := by
-        rw [hmlen, mergeTopD, if_neg (by omega), List.length_append, List.length_take,
-          List.length_cons, List.length_nil, Nat.min_eq_left (by omega), hdl]
-      -- sorted is preserved
-      have hsorted' : ∀ a b, a < (mergeTopCoords k coords).length →
-          b < (mergeTopCoords k coords).length → a < b →
-          ((mergeTopCoords k coords).getD a (0, 0)).1 < ((mergeTopCoords k coords).getD b (0, 0)).1 := by
-        intro a b ha hb hab
-        rw [hmlen] at ha hb
-        by_cases hbs : b < coords.length - k
-        · rw [hcleft a (by omega), hcleft b hbs]; exact hsorted a b (by omega) (by omega) hab
-        · have hbe : b = coords.length - k := by omega
-          rw [hcleft a (by omega), hbe, hclast]
-          exact hsorted a (coords.length - k) (by omega) (by omega) (by omega)
-      by_cases hge : tgt ≥ coords.length - k
-      · rw [if_pos hge]
-        set headStep : ProofStep :=
-          { position := tgt - (coords.length - k),
-            siblings := (digests.drop (coords.length - k)).eraseIdx (tgt - (coords.length - k)) }
-          with hhead
-        have hgp : honestGroupPath k digests tgt
-            = headStep :: honestGroupPath k (mergeTopD k digests) (coords.length - k) := by
-          rw [honestGroupPath, dif_neg (by push_neg; exact ⟨by omega, by omega⟩),
-            if_pos (by rw [hdl]; exact hge)]
-          rw [hhead, hdl]
-        rw [hgp]
-        set m' := recordMergeSibs m (coords.drop (coords.length - k))
-          (tgt - (coords.length - k)) headStep with hm'
-        -- the recursion's invariants
-        have hJ' : ∀ j, j < coords.length - k →
-            (mergeTopD k digests).getD j emptyHash
-              = perfectRoot k cells ((mergeTopCoords k coords).getD j (0, 0)).1
-                  ((mergeTopCoords k coords).getD j (0, 0)).2 := by
-          intro j hj
-          rw [hdleft j hj, hcleft j hj]; exact hJ j (by omega)
-        by_cases hisplit : i < coords.length - k
-        · rw [← hcleft i hisplit]
-          exact ih (mergeTopCoords k coords).length (by rw [hmlen]; omega) (mergeTopCoords k coords)
-            (mergeTopD k digests) (coords.length - k) m' rfl hdll (by rw [hmlen]; omega)
-            hsorted' hJ' i hisplit
-        · -- split ≤ i < tgt: coords[i] is recorded in m' and survives the recursion
-          have hidx : coords.getD i (0, 0)
-              = (coords.drop (coords.length - k)).getD (i - (coords.length - k)) (0, 0) := by
-            rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop,
-              show (coords.length - k) + (i - (coords.length - k)) = i from by omega]
-          have hsurv : (cmMergeGo k (mergeTopCoords k coords) (coords.length - k)
-              (honestGroupPath k (mergeTopD k digests) (coords.length - k)) m')
-              (coords.getD i (0, 0))
-              = m' (coords.getD i (0, 0)) := by
-            apply cmMergeGo_avoids k (coords.getD i (0, 0)).1 ((coords.getD i (0, 0)).1 + 1) hk
-              (mergeTopCoords k coords).length (mergeTopCoords k coords) (coords.length - k)
-              _ m' rfl (by rw [hmlen]; omega) _ _ (by omega) (by omega)
-            intro j hj hjk
-            rw [hmlen] at hj
-            rw [hcleft j (by omega)]
-            rintro ⟨hle, _⟩
-            have := hsorted j i (by omega) (by omega) (by omega)
-            omega
-          show cmMergeGo k (mergeTopCoords k coords) (coords.length - k)
-              (honestGroupPath k (mergeTopD k digests) (coords.length - k)) m'
-              (coords.getD i (0, 0))
-            = some (perfectRoot k cells (coords.getD i (0, 0)).1 (coords.getD i (0, 0)).2)
-          have hdist : ∀ j, j < (coords.drop (coords.length - k)).length →
-              (coords.drop (coords.length - k)).getD j (0, 0)
-                = (coords.drop (coords.length - k)).getD (i - (coords.length - k)) (0, 0) →
-              j = i - (coords.length - k) := by
-            intro j hj hjk
-            rw [List.length_drop] at hj
-            have hg1 : (coords.drop (coords.length - k)).getD j (0, 0)
-                = coords.getD ((coords.length - k) + j) (0, 0) := by
-              rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop]
-            have hg2 : (coords.drop (coords.length - k)).getD (i - (coords.length - k)) (0, 0)
-                = coords.getD i (0, 0) := by
-              rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop,
-                show (coords.length - k) + (i - (coords.length - k)) = i from by omega]
-            rw [hg1, hg2] at hjk
-            have := hdistinct ((coords.length - k) + j) i (by omega) (by omega) hjk
-            omega
-          have hm'val : m' (coords.getD i (0, 0)) = some (digests.getD i emptyHash) := by
-            rw [hm', hidx, recordMergeSibs_hits m (coords.drop (coords.length - k))
-              (tgt - (coords.length - k)) headStep (i - (coords.length - k))
-              (by rw [List.length_drop]; omega) (by omega) hdist, hhead]
-            simp only [if_pos (show i - (coords.length - k) < tgt - (coords.length - k) from by omega)]
-            rw [getD_eraseIdx_lt _ emptyHash _ _ (by omega)]
-            congr 1
-            rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_drop,
-              show (coords.length - k) + (i - (coords.length - k)) = i from by omega]
-          rw [hsurv, hm'val, hJ i hi]
-      · rw [if_neg hge]
-        have hgp : honestGroupPath k digests tgt
-            = honestGroupPath k (mergeTopD k digests) tgt := by
-          rw [honestGroupPath, dif_neg (by push_neg; exact ⟨by omega, by omega⟩),
-            if_neg (by rw [hdl]; exact hge)]
-        rw [hgp, ← hcleft i (by omega)]
-        have hJ' : ∀ j, j < tgt →
-            (mergeTopD k digests).getD j emptyHash
-              = perfectRoot k cells ((mergeTopCoords k coords).getD j (0, 0)).1
-                  ((mergeTopCoords k coords).getD j (0, 0)).2 := by
-          intro j hj
-          rw [hdleft j (by omega), hcleft j (by omega)]; exact hJ j hj
-        exact ih (mergeTopCoords k coords).length (by rw [hmlen]; omega) (mergeTopCoords k coords)
-          (mergeTopD k digests) tgt m rfl hdll (by rw [hmlen]; omega)
-          hsorted' hJ' i hi
 
 /-- Removing the single matching element from `range k` is `eraseIdx` at it. -/
 private theorem filter_ne_range_eq_eraseIdx' (k p : Nat) (hp : p < k) :
@@ -1396,72 +626,6 @@ private theorem honest_digit_sibling (k : Nat) (hk : 2 ≤ k) (cells : List Dige
     List.getElem?_eraseIdx, if_pos hi, List.getElem?_range (by omega)]
   rfl
 
-/-- **The bisection phase records every left sibling with its perfect root.**
-    Starting from the boundary coordinate's ancestor at level `ch`, folding the
-    honest digit steps records, at every coordinate that is a child to the left of
-    the path node at some level `level ∈ [ch, sh)`, that child subtree's genuine
-    perfect root. The recording happens at `level`; lower steps never reach it and
-    higher steps record at higher levels, so it survives. -/
-private theorem cmBisect_covers (k : Nat) (hk : 2 ≤ k) (cells : List Digest) (sl offset sh : Nat) :
-    ∀ (d ch curLeft : Nat) (m : CMap),
-      ch + d = sh → curLeft = sl + offset / k ^ ch * k ^ ch →
-      ∀ (level i : Nat), ch ≤ level → level < sh → i < offset / k ^ level % k →
-        (cmBisect k ((honestDigitPath k cells sl offset sh).drop ch) curLeft ch m)
-            (sl + offset / k ^ (level + 1) * k ^ (level + 1) + i * k ^ level, level)
-          = some (perfectRoot k cells
-              (sl + offset / k ^ (level + 1) * k ^ (level + 1) + i * k ^ level) level) := by
-  intro d
-  induction d with
-  | zero => intro ch curLeft m hd _ level i hcl hlt _; omega
-  | succ d ih =>
-    intro ch curLeft m hd hcurLeft level i hcl hlt hi
-    have hchlt : ch < sh := by omega
-    have hcap : 0 < k ^ ch := pow_pos (by omega) ch
-    have hdig : offset / k ^ ch % k < k := Nat.mod_lt _ (by omega)
-    -- name the head step at level ch
-    set s : ProofStep :=
-      { position := offset / k ^ ch % k,
-        siblings := ((List.range k).filter (fun x => x != offset / k ^ ch % k)).map
-          fun x => perfectRoot k cells (sl + (offset / k ^ (ch + 1) * k + x) * k ^ ch) ch }
-      with hs
-    have hstep : (honestDigitPath k cells sl offset sh).drop ch
-        = s :: (honestDigitPath k cells sl offset sh).drop (ch + 1) := by
-      rw [hs]
-      unfold honestDigitPath
-      rw [← List.map_drop, ← List.map_drop,
-        List.drop_eq_getElem_cons (by rw [List.length_range]; exact hchlt), List.map_cons,
-        List.getElem_range]
-    have hspos : s.position = offset / k ^ ch % k := by rw [hs]
-    rw [hstep, cmBisect]
-    -- the recursion's new anchor is the level-(ch+1) ancestor
-    have hnext : curLeft - s.position * k ^ ch = sl + offset / k ^ (ch + 1) * k ^ (ch + 1) := by
-      rw [hspos, hcurLeft]
-      have hpow : k ^ (ch + 1) = k ^ ch * k := pow_succ k ch
-      have hdm : offset / k ^ ch = offset / k ^ (ch + 1) * k + offset / k ^ ch % k := by
-        rw [show offset / k ^ (ch + 1) = offset / k ^ ch / k from by rw [hpow, Nat.div_div_eq_div_mul]]
-        exact (Nat.div_add_mod' (offset / k ^ ch) k).symm
-      have hACB : offset / k ^ ch * k ^ ch
-          = offset / k ^ (ch + 1) * k ^ (ch + 1) + offset / k ^ ch % k * k ^ ch := by
-        conv_lhs => rw [hdm]
-        rw [add_mul, hpow]; ring
-      omega
-    rcases Nat.lt_or_ge ch level with hlvl | hlvl
-    · -- target is at a higher level: this step misses it, recurse
-      exact ih (ch + 1) _ _ (by omega) hnext level i (by omega) hlt hi
-    · -- target is at this level: record it now, it survives the recursion
-      have hleq : level = ch := by omega
-      subst hleq
-      rw [cmBisect_preserves_below k _ _ (level + 1) _ _ (by simp only []; omega)]
-      have hslen : s.siblings.length = k - 1 := by
-        rw [hs, List.length_map, filter_ne_range_eq_eraseIdx' k _ hdig,
-          List.length_eraseIdx_of_lt (by rw [List.length_range]; exact hdig), List.length_range]
-      have hhit := recordBisectSibs_hits k hk m curLeft level s i (by rw [hslen]; omega)
-      rw [hspos, if_pos hi, hnext] at hhit
-      rw [hhit]
-      congr 1
-      rw [hs, honest_digit_sibling k hk cells sl offset level i hi]
-      congr 1
-      rw [pow_succ]; ring
 
 /-- Tiles are strictly ordered by left coordinate. -/
 private theorem Tiles_strict_mono (k : Nat) (hk : 2 ≤ k) :
@@ -1492,247 +656,661 @@ private theorem Tiles_strict_mono (k : Nat) (hk : 2 ≤ k) :
       exact ih (start + k ^ ph) stop htrest a' b' (by omega)
         (by simp only [List.length_cons] at hb; omega)
 
-/-- **Coordinate-coverage core.** For an honest consistency proof the verifier's
-    coordinate map reads back, at every old-frontier coordinate, that subtree's
-    genuine `perfectRoot`: the boundary is `start_hash = perfectRoot (bl, bh)`,
-    the bisection siblings are the perfect roots flanking the boundary path
-    inside its slot, and the merge siblings are the perfect roots of the
-    new-frontier slots left of it — together exactly the old frontier. This is
-    the remaining inductive obligation over `cmBisect` / `cmMergeGo`. -/
-private theorem honest_oldroot_coverage (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+
+/-! ## The verifier model — MMR-native (inclusion of the boundary peak + peak bag)
+
+`reconstruct_consistency_roots` (`cml/src/consistency.rs`) no longer carries a
+bisection trace and coordinate map: it lifts the old tree's last peak
+(`boundary_hash`) through `peak_path` to the new frontier slot it merged into
+(`new_peaks[split_index]`), bags the given `new_peaks` to the new root, and bags
+`new_peaks[..split_index] ++ merged-left-siblings ++ [boundary_hash]` to the old
+root. The merged-left-siblings are the older peaks that fused into the boundary
+mountain — the `peak_path` left-siblings, gathered highest-mountain first. -/
+
+/-- The merged-in left-siblings gathered from the climb `path` in reverse
+    (highest mountain first), each step contributing `siblings[..position]` —
+    `reconstruct_consistency_roots`'s `peak_path.iter().rev()` gather (Rust caps
+    the take at `siblings.len()`; `List.take` caps definitionally). -/
+def mergedLeftSibs (path : List ProofStep) : List Digest :=
+  path.reverse.flatMap (fun s => s.siblings.take s.position)
+
+/-- `reconstruct_consistency_roots`, modeled functionally on the shipped
+    MMR-native shape. Structural guards (split slot, height, new-frontier
+    length) are decidable and gate the result here; the inclusion digest check
+    (`recovered == new_peaks[split_index]`) is carried as a separate clause of
+    `AcceptsConsistency` (digests have no `DecidableEq`), mirroring how the old
+    model factored the dual-root match. -/
+noncomputable def reconstructConsistencyRoots (k oldSize newSize : Nat)
+    (boundaryHash : Digest) (newPeaks : List Digest) (splitIndex : Nat)
+    (peakPath : List ProofStep) : Option (Digest × Digest) :=
+  match (frontierForSizeT k oldSize).getLast? with
+  | none => none
+  | some (bl, bh) =>
+    match findFrontier k bl (frontierForSizeT k newSize) 0 with
+    | none => none
+    | some (fIdx, _sl, sh) =>
+      if splitIndex = fIdx ∧ bh ≤ sh ∧
+         newPeaks.length = (frontierForSizeT k newSize).length ∧
+         splitIndex < newPeaks.length then
+        some (foldFrontierRoot k
+                (newPeaks.take splitIndex ++ mergedLeftSibs peakPath ++ [boundaryHash]),
+              foldFrontierRoot k newPeaks)
+      else none
+
+/-- The consistency-proof climb skeleton pinned by `reconstruct_consistency_roots`:
+    the `sh - bh` digit steps lifting the boundary subtree (height `bh`) to its
+    new-frontier mountain peak (height `sh`). The bag steps above the peak are no
+    longer part of the proof — the peaks are given as `new_peaks`. -/
+def consistencySkeleton (k oldSize newSize : Nat) : Option (List (Nat × Nat)) :=
+  if k < 2 then none
+  else match (frontierForSizeT k oldSize).getLast? with
+    | none => none
+    | some (bl, bh) =>
+      match findFrontier k bl (frontierForSizeT k newSize) 0 with
+      | none => none
+      | some (_fIdx, sl, sh) =>
+        if bh ≤ sh then some (digitSteps k ((bl - sl) / k ^ bh) (sh - bh)) else none
+
+/-- The peak path's per-step shape matches the climb skeleton exactly. -/
+def StructureConsistencyOK (k oldSize newSize : Nat) (path : List ProofStep) : Prop :=
+  ∃ skel, consistencySkeleton k oldSize newSize = some skel ∧ path.map stepShape = skel
+
+/-- The accept relation of `verify_consistency`, minus DoS bounds: size guards,
+    climb-skeleton pinning, canonical well-formedness, the inclusion check
+    (`foldNary boundaryHash peakPath = new_peaks[splitIndex]`), and the dual-root
+    match `reconstruct_consistency_roots(..) = some (oldRoot, newRoot)`. -/
+def AcceptsConsistency (k oldSize newSize : Nat) (boundaryHash : Digest)
+    (peakPath : List ProofStep) (newPeaks : List Digest) (splitIndex : Nat)
+    (oldRoot newRoot : Digest) : Prop :=
+  2 ≤ k ∧ 0 < oldSize ∧ oldSize < newSize ∧
+  StructureConsistencyOK k oldSize newSize peakPath ∧
+  WellFormedSteps peakPath ∧
+  foldNary boundaryHash peakPath = newPeaks.getD splitIndex emptyHash ∧
+  reconstructConsistencyRoots k oldSize newSize boundaryHash newPeaks splitIndex peakPath
+    = some (oldRoot, newRoot)
+
+/-! ## The honest prover (non-vacuity witness) -/
+
+/-- The honest `boundary_hash`: the genuine root of the boundary subtree. -/
+noncomputable def honestBoundaryHash (k : Nat) (cells : List Digest)
+    (oldSize : Nat) : Digest :=
+  match (frontierForSizeT k oldSize).getLast? with
+  | none => emptyHash
+  | some (bl, bh) => perfectRoot k cells bl bh
+
+/-- The honest `new_peaks`: the genuine perfect roots of the new frontier. -/
+noncomputable def honestNewPeaks (k : Nat) (cells : List Digest) : List Digest :=
+  (frontierForSizeT k cells.length).map (fun c => perfectRoot k cells c.1 c.2)
+
+/-- The honest `split_index`: the new-frontier slot the boundary merged into. -/
+noncomputable def honestSplitIndex (k : Nat) (cells : List Digest)
+    (oldSize : Nat) : Nat :=
+  match (frontierForSizeT k oldSize).getLast? with
+  | none => 0
+  | some (bl, _bh) =>
+    match findFrontier k bl (frontierForSizeT k cells.length) 0 with
+    | none => 0
+    | some (fIdx, _sl, _sh) => fIdx
+
+/-- The honest `peak_path`: the climb of the boundary subtree to its new-frontier
+    peak — the digit path of the last old leaf inside the slot, from the boundary
+    height `bh` up to the slot height `sh`. -/
+noncomputable def honestPeakPath (k : Nat) (cells : List Digest)
+    (oldSize : Nat) : List ProofStep :=
+  match (frontierForSizeT k oldSize).getLast? with
+  | none => []
+  | some (bl, bh) =>
+    match findFrontier k bl (frontierForSizeT k cells.length) 0 with
+    | none => []
+    | some (_fIdx, sl, sh) => (honestDigitPath k cells sl (oldSize - 1 - sl) sh).drop bh
+
+/-! ## Honest climb fold and shape -/
+
+/-- **The honest climb folds the boundary peak to the new-frontier peak.**
+    `foldNary (perfectRoot bl bh) climb = perfectRoot sl sh`: the climb is the
+    upper portion (heights `[bh, sh)`) of the slot's digit path, which folds the
+    last old leaf to the slot peak (`digitFold`); its lower `bh` steps fold the
+    leaf to the boundary peak (which `boundary_hash` is). -/
+private theorem honest_climb_fold (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
-    consistencyOldHashes k oldSize cells.length (honestStartHash k cells oldSize)
-        (honestConsistencyPath k cells oldSize)
-      = some ((frontierForSizeT k oldSize).map (fun c => perfectRoot k cells c.1 c.2)) := by
+    foldNary (honestBoundaryHash k cells oldSize) (honestPeakPath k cells oldSize)
+      = (honestNewPeaks k cells).getD (honestSplitIndex k cells oldSize) emptyHash := by
   obtain ⟨bl, bh, fIdx, sl, sh, hlast, hspan, hff, hff2, hbhsh, hsle, hdiveq, halign⟩ :=
     boundary_slot k hk cells oldSize hold hnew
-  -- the honest consistency path splits into the upper digit steps and the group path
+  obtain ⟨hgetN, hsleN, _hbltN⟩ :=
+    findFrontier_spec k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
+  obtain ⟨_hget2, hsle2, hblt2⟩ :=
+    findFrontier_spec k (oldSize - 1) (frontierForSizeT k cells.length) 0 fIdx sl sh hff2
+  simp only [Nat.sub_zero] at hgetN
+  set off := oldSize - 1 - sl with hoff
+  have hoffsh : off < k ^ sh := by omega
+  have hk0 : 0 < k ^ bh := pow_pos (by omega) bh
+  -- target peak value
+  have hpeakval : (honestNewPeaks k cells).getD fIdx emptyHash = perfectRoot k cells sl sh := by
+    rw [honestNewPeaks, List.getD_eq_getElem?_getD, List.getElem?_map, hgetN]
+    rfl
+  simp only [honestBoundaryHash, honestPeakPath, honestSplitIndex, hlast, hff, hpeakval]
+  set leaf := cells.getD (oldSize - 1) emptyHash with hleaf
+  -- full digit path folds leaf to slot peak
+  have hfullfold : foldNary leaf (honestDigitPath k cells sl off sh) = perfectRoot k cells sl sh := by
+    have h := digitFold k hk cells sl sh off
+    rw [show sl + off = oldSize - 1 from by omega, ← hleaf,
+      Nat.div_eq_of_lt hoffsh, Nat.zero_mul, Nat.add_zero] at h
+    exact h
+  -- lower bh steps fold leaf to boundary peak
+  have htakefold : foldNary leaf ((honestDigitPath k cells sl off sh).take bh)
+      = perfectRoot k cells bl bh := by
+    have htk : (honestDigitPath k cells sl off sh).take bh = honestDigitPath k cells sl off bh := by
+      rw [honestDigitPath, honestDigitPath, ← List.map_take, List.take_range, Nat.min_eq_left hbhsh]
+    rw [htk]
+    have h := digitFold k hk cells sl bh off
+    rw [show sl + off = oldSize - 1 from by omega, ← hleaf, halign] at h
+    exact h
+  -- split full fold at bh
+  have hsplit : foldNary leaf (honestDigitPath k cells sl off sh)
+      = foldNary (foldNary leaf ((honestDigitPath k cells sl off sh).take bh))
+          ((honestDigitPath k cells sl off sh).drop bh) := by
+    rw [foldNary, foldNary, foldNary, ← List.foldl_append, List.take_append_drop]
+  rw [hsplit, htakefold] at hfullfold
+  exact hfullfold
+
+/-- **The honest climb has the pinned skeleton shape.** -/
+private theorem honest_consistency_shape (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
+    StructureConsistencyOK k oldSize cells.length (honestPeakPath k cells oldSize) := by
+  obtain ⟨bl, bh, fIdx, sl, sh, hlast, hspan, hff, hff2, hbhsh, hsle, hdiveq, _halign⟩ :=
+    boundary_slot k hk cells oldSize hold hnew
+  obtain ⟨⟨skel, hskel, hmap⟩, _hwf⟩ := honest_path_shape k hk cells (oldSize - 1) (by omega)
+  set G := (groupingSteps k (frontierForSizeT k cells.length).length fIdx).map
+    (fun pc => (pc.1, pc.2 - 1)) with hG
+  have hsk : inclusionSkeleton k cells.length (oldSize - 1)
+      = some (digitSteps k (oldSize - 1 - sl) sh ++ G) := by
+    rw [inclusionSkeleton, if_neg (show ¬ k < 2 by omega)]
+    simp only [hff2, hG]
+  have hskelval : skel = digitSteps k (oldSize - 1 - sl) sh ++ G :=
+    Option.some.inj (hskel.symm.trans hsk)
+  -- the honest inclusion path's digit prefix maps to digitSteps
   have hincl : honestInclusionPath k cells (oldSize - 1)
       = honestDigitPath k cells sl (oldSize - 1 - sl) sh
         ++ honestGroupPath k (buildStackCells k cells) fIdx := by
     simp only [honestInclusionPath, hff2]
-  have hdlen : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).length = sh := by
+  have hdlen : (digitSteps k (oldSize - 1 - sl) sh).length = sh := by
+    rw [digitSteps_eq_map, List.length_map, List.length_range]
+  have hddlen : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).length = sh := by
     rw [honestDigitPath, List.length_map, List.length_range]
-  set D := honestDigitPath k cells sl (oldSize - 1 - sl) sh with hD
-  set G := honestGroupPath k (buildStackCells k cells) fIdx with hG
-  have hcpath : honestConsistencyPath k cells oldSize = D.drop bh ++ G := by
-    simp only [honestConsistencyPath, hlast]
-    rw [hincl, List.drop_append_of_le_length (by rw [hdlen]; exact hbhsh)]
-  have hD'len : (D.drop bh).length = sh - bh := by rw [List.length_drop, hdlen]
-  rw [consistencyOldHashes]
-  apply mapM_option_some
-  intro c hc
-  -- unfold the honest consistency map to its bisection/merge composition
-  simp only [consistencyMap, honestStartHash, hlast, hff, hcpath]
-  rw [List.take_left' hD'len, List.drop_left' hD'len]
-  set m0 := cmInsert cmEmpty (bl, bh) (perfectRoot k cells bl bh) with hm0
-  set m1 := cmBisect k (D.drop bh) bl bh m0 with hm1
-  set M := cmMergeGo k (frontierForSizeT k cells.length) fIdx G m1 with hM
-  show M c = some (perfectRoot k cells c.1 c.2)
-  -- new-frontier slot data: membership, ordering, slot-interval avoidance
+  have hmapsplit : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).map stepShape
+      = digitSteps k (oldSize - 1 - sl) sh := by
+    rw [hincl, List.map_append, hskelval] at hmap
+    have hlenmatch : ((honestDigitPath k cells sl (oldSize - 1 - sl) sh).map stepShape).length
+        = (digitSteps k (oldSize - 1 - sl) sh).length := by
+      rw [List.length_map, hddlen, hdlen]
+    exact (List.append_inj hmap hlenmatch).1
+  have hcskel : consistencySkeleton k oldSize cells.length
+      = some (digitSteps k ((bl - sl) / k ^ bh) (sh - bh)) := by
+    rw [consistencySkeleton, if_neg (show ¬ k < 2 by omega)]
+    simp only [hlast, hff, hbhsh, if_true]
+  refine ⟨digitSteps k ((bl - sl) / k ^ bh) (sh - bh), hcskel, ?_⟩
+  simp only [honestPeakPath, hlast, hff]
+  rw [List.map_drop, hmapsplit, digitSteps_drop k bh sh (oldSize - 1 - sl) hbhsh, hdiveq]
+
+/-- The honest climb is well-formed (a sub-portion of the honest inclusion path). -/
+private theorem honest_peakpath_wf (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
+    WellFormedSteps (honestPeakPath k cells oldSize) := by
+  obtain ⟨bl, bh, fIdx, sl, sh, hlast, _hspan, hff, hff2, _hbhsh, _hsle, _hdiveq, _halign⟩ :=
+    boundary_slot k hk cells oldSize hold hnew
+  obtain ⟨_, hwf⟩ := honest_path_shape k hk cells (oldSize - 1) (by omega)
+  have hincl : honestInclusionPath k cells (oldSize - 1)
+      = honestDigitPath k cells sl (oldSize - 1 - sl) sh
+        ++ honestGroupPath k (buildStackCells k cells) fIdx := by
+    simp only [honestInclusionPath, hff2]
+  intro s hs
+  simp only [honestPeakPath, hlast, hff] at hs
+  apply hwf s
+  rw [hincl]
+  exact List.mem_append_left _ (List.mem_of_mem_drop hs)
+
+/-! ## The honest old-peak decomposition (the increment-proof correctness core) -/
+
+/-- **Frontier split at a tile-start.** A greedy frontier splits at any tile
+    start `sl` it contains: the tiles left of `sl` (its prefix, since the
+    decomposition is left-sorted) followed by the standalone greedy frontier of
+    the remaining `[sl, off+n)` region. The recursion reaches `sl` exactly
+    because `sl` is a member tile start. -/
+private theorem frontierGo_split (k : Nat) (hk : 2 ≤ k) (sl : Nat) :
+    ∀ (n off x : Nat), (sl, x) ∈ frontierGo k off n → off ≤ sl →
+      frontierGo k off n
+        = (frontierGo k off n).filter (fun c => decide (c.1 < sl))
+          ++ frontierGo k sl (off + n - sl) := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro off x hmem hoff
+    have hn0 : n ≠ 0 := by rintro rfl; simp [frontierGo] at hmem
+    have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k hn0
+    have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+    have hunfold : frontierGo k off n
+        = (off, Nat.log k n) :: frontierGo k (off + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
+      conv_lhs => rw [frontierGo]
+      rw [dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+    by_cases hoffsl : off = sl
+    · subst hoffsl
+      have hfilt : (frontierGo k off n).filter (fun c => decide (c.1 < off)) = [] := by
+        apply List.filter_eq_nil_iff.mpr
+        intro c hc
+        simp only [decide_eq_true_eq, not_lt]
+        exact frontierGo_left_ge' k hk n off c hc
+      rw [hfilt, List.nil_append]
+      congr 1
+      omega
+    · have hofflt : off < sl := by omega
+      rw [hunfold, List.mem_cons] at hmem
+      have hmem' : (sl, x) ∈ frontierGo k (off + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
+        rcases hmem with heq | h
+        · rw [Prod.mk.injEq] at heq; omega
+        · exact h
+      have hge : off + k ^ Nat.log k n ≤ sl :=
+        frontierGo_left_ge' k hk (n - k ^ Nat.log k n) (off + k ^ Nat.log k n) (sl, x) hmem'
+      have hih := ih (n - k ^ Nat.log k n) (by omega) (off + k ^ Nat.log k n) x hmem' hge
+      rw [show (off + k ^ Nat.log k n) + (n - k ^ Nat.log k n) - sl = off + n - sl from by omega]
+        at hih
+      rw [hunfold, List.filter_cons_of_pos (by simp only [decide_eq_true_eq]; exact hofflt),
+        List.cons_append, ← hih]
+
+/-- **Frontier offset shift.** Translating the decomposition origin by `c`
+    translates every tile's left coordinate by `c`, leaving heights fixed. -/
+private theorem frontierGo_shift (k : Nat) (hk : 2 ≤ k) :
+    ∀ (n c off : Nat),
+      frontierGo k (c + off) n = (frontierGo k off n).map (fun lh => (c + lh.1, lh.2)) := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro c off
+    rcases Nat.eq_zero_or_pos n with hn0 | hnpos
+    · subst hn0; simp [frontierGo]
+    · have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k (by omega)
+      have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+      have hunfoldL : frontierGo k (c + off) n
+          = (c + off, Nat.log k n)
+              :: frontierGo k (c + off + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
+        conv_lhs => rw [frontierGo]
+        rw [dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+      have hunfoldR : frontierGo k off n
+          = (off, Nat.log k n)
+              :: frontierGo k (off + k ^ Nat.log k n) (n - k ^ Nat.log k n) := by
+        conv_lhs => rw [frontierGo]
+        rw [dif_neg (by push_neg; exact ⟨by omega, by omega⟩)]
+      rw [hunfoldL, hunfoldR, List.map_cons]
+      congr 1
+      rw [show c + off + k ^ Nat.log k n = c + (off + k ^ Nat.log k n) from by omega]
+      exact ih (n - k ^ Nat.log k n) (by omega) c (off + k ^ Nat.log k n)
+
+/-- **Iterated scale.** Multiplying the leaf count by `k ^ d` raises every tile
+    by `d` levels and scales its span by `k ^ d`. The `d`-fold iterate of
+    `frontierForSizeT_scale`. -/
+private theorem frontier_scale_pow (k : Nat) (hk : 2 ≤ k) :
+    ∀ (d a : Nat),
+      frontierForSizeT k (a * k ^ d)
+        = (frontierForSizeT k a).map (fun lh => (lh.1 * k ^ d, lh.2 + d)) := by
+  intro d
+  induction d with
+  | zero =>
+    intro a
+    simp only [pow_zero, Nat.mul_one, Nat.add_zero]
+    conv_lhs => rw [← List.map_id (frontierForSizeT k a)]
+    apply List.map_congr_left
+    intro lh _
+    rfl
+  | succ d ih =>
+    intro a
+    have he : a * k ^ (d + 1) = (a * k ^ d) * k := by rw [pow_succ]; ring
+    rw [he, frontierForSizeT_scale k hk (a * k ^ d), ih a, List.map_map]
+    apply List.map_congr_left
+    intro lh _
+    simp only [Function.comp_apply, Prod.mk.injEq]
+    refine ⟨?_, ?_⟩
+    · rw [pow_succ]; ring
+    · omega
+
+/-- **Minimum tile height under divisibility.** If `k ^ d ∣ n` then every tile of
+    the decomposition of `[off, off+n)` has height at least `d`: the low `d`
+    digits of `n` are zero, so greedy never emits a tile shorter than `k ^ d`. -/
+private theorem frontierGo_min_height (k : Nat) (hk : 2 ≤ k) (d : Nat) :
+    ∀ (n off : Nat), k ^ d ∣ n → ∀ lh ∈ frontierGo k off n, d ≤ lh.2 := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    intro off hdvd lh hmem
+    rw [frontierGo] at hmem
+    split at hmem
+    · simp at hmem
+    · next h =>
+      push_neg at h
+      obtain ⟨hn0, _⟩ := h
+      have hcap : k ^ Nat.log k n ≤ n := Nat.pow_log_le_self k (by omega)
+      have hcappos : 0 < k ^ Nat.log k n := pow_pos (by omega) _
+      have hkd : k ^ d ≤ n := Nat.le_of_dvd (by omega) hdvd
+      have hdle : d ≤ Nat.log k n := Nat.le_log_of_pow_le (by omega) hkd
+      rw [List.mem_cons] at hmem
+      rcases hmem with rfl | hmem'
+      · exact hdle
+      · have hdvd' : k ^ d ∣ (n - k ^ Nat.log k n) :=
+          Nat.dvd_sub hdvd (pow_dvd_pow k hdle)
+        exact ih (n - k ^ Nat.log k n) (by omega) (off + k ^ Nat.log k n) hdvd' lh hmem'
+
+/-- **Climb left-siblings rebuild the in-slot frontier.** The left-child
+    coordinates gathered along the digit climb of the last leaf (offset `off`
+    inside its height-`sh` slot at `sl`), from level `p` upward, are exactly the
+    `k^p`-scaled, `sl`-shifted frontier of `off / k ^ p`. Each climb level peels
+    the low base-`k` digit of `off / k ^ p` as a suffix, mirroring
+    `frontier_divstep`'s recursion (`off < k ^ sh`, so the top levels vanish). -/
+private theorem climb_coords_eq (k : Nat) (hk : 2 ≤ k) (sl sh off : Nat)
+    (hoff : off < k ^ sh) :
+    ∀ p, p ≤ sh →
+      (((List.range sh).drop p).reverse.flatMap
+        (fun j => (List.range (off / k ^ j % k)).map
+          (fun i => (sl + (off / k ^ (j + 1) * k + i) * k ^ j, j))))
+        = (frontierForSizeT k (off / k ^ p)).map (fun lh => (sl + lh.1 * k ^ p, lh.2 + p)) := by
+  suffices H : ∀ d p, p + d = sh →
+      (((List.range sh).drop p).reverse.flatMap
+        (fun j => (List.range (off / k ^ j % k)).map
+          (fun i => (sl + (off / k ^ (j + 1) * k + i) * k ^ j, j))))
+        = (frontierForSizeT k (off / k ^ p)).map (fun lh => (sl + lh.1 * k ^ p, lh.2 + p)) by
+    intro p hp; exact H (sh - p) p (by omega)
+  intro d
+  induction d with
+  | zero =>
+    intro p hp
+    have hpsh : p = sh := by omega
+    rw [List.drop_eq_nil_of_le (by rw [List.length_range]; omega)]
+    simp only [List.reverse_nil, List.flatMap_nil]
+    have h0 : off / k ^ p = 0 := Nat.div_eq_of_lt (by rw [hpsh]; exact hoff)
+    rw [h0]
+    simp [frontierForSizeT, frontierGo]
+  | succ d ih =>
+    intro p hp
+    have hplt : p < sh := by omega
+    have hdrop : (List.range sh).drop p = p :: (List.range sh).drop (p + 1) := by
+      rw [List.drop_eq_getElem_cons (by rw [List.length_range]; exact hplt)]
+      congr 1
+      simp [List.getElem_range]
+    rw [hdrop, List.reverse_cons, List.flatMap_append]
+    simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+    rw [ih (p + 1) (by omega)]
+    -- digit decomposition off/k^p = (off/k^(p+1))*k + off/k^p%k
+    have hb : off / k ^ p % k < k := Nat.mod_lt _ (by omega)
+    have hdec : off / k ^ p = off / k ^ (p + 1) * k + off / k ^ p % k := by
+      conv_lhs => rw [← Nat.div_add_mod (off / k ^ p) k]
+      rw [show off / k ^ p / k = off / k ^ (p + 1) from by rw [pow_succ, Nat.div_div_eq_div_mul]]
+      ring
+    conv_rhs => rw [hdec, frontier_divstep k hk (off / k ^ (p + 1)) (off / k ^ p % k) hb,
+        List.map_append]
+    congr 1
+    · rw [List.map_map]
+      apply List.map_congr_left
+      intro lh _
+      simp only [Function.comp_apply, Prod.mk.injEq]
+      exact ⟨by rw [pow_succ]; ring, by omega⟩
+    · rw [List.map_map]
+      apply List.map_congr_left
+      intro i _
+      simp only [Function.comp_apply, Nat.zero_add]
+
+/-- Taking the `p` lowest of `range k` with element `p` removed leaves `range p`:
+    those are children `0 .. p-1`, all kept since they differ from `p`. -/
+private theorem filter_ne_range_take (k p : Nat) (hp : p < k) :
+    ((List.range k).filter (fun i => i != p)).take p = List.range p := by
+  rw [filter_ne_range_eq_eraseIdx' k p hp,
+    List.take_eraseIdx_eq_take_of_le (List.range k) p p (le_refl p),
+    List.take_range, Nat.min_eq_left (le_of_lt hp)]
+
+/-- **A sorted frontier's `< sl` tiles are exactly its `fIdx`-prefix.** With the
+    slot `(sl, sh)` at index `fIdx`, every earlier tile ends at or before `sl`
+    (strict monotonicity) and every later tile starts at or after `sl + k^sh`, so
+    filtering on `· < sl` keeps precisely `take fIdx`. -/
+private theorem Tiles_filter_lt_eq_take (k : Nat) (hk : 2 ≤ k)
+    (coords : List (Nat × Nat)) (start stop fIdx sl sh : Nat)
+    (htiles : Tiles k start coords stop) (hget : coords[fIdx]? = some (sl, sh)) :
+    coords.filter (fun c => decide (c.1 < sl)) = coords.take fIdx := by
+  have hflt : fIdx < coords.length := by
+    rw [List.getElem?_eq_some_iff] at hget; obtain ⟨h, _⟩ := hget; exact h
+  have hdecomp : coords = coords.take fIdx ++ (sl, sh) :: coords.drop (fIdx + 1) := by
+    conv_lhs => rw [← List.take_append_drop fIdx coords, List.drop_eq_getElem_cons hflt]
+    rw [List.getElem?_eq_getElem hflt] at hget
+    rw [Option.some.injEq] at hget
+    rw [hget]
+  obtain ⟨mid, hpre, htileeq, hpost⟩ :=
+    Tiles_split k (coords.take fIdx) (sl, sh) (coords.drop (fIdx + 1)) start stop
+      (hdecomp ▸ htiles)
+  simp only at htileeq
+  subst htileeq
+  conv_lhs => rw [hdecomp]
+  rw [List.filter_append]
+  have h1 : (coords.take fIdx).filter (fun c => decide (c.1 < sl)) = coords.take fIdx := by
+    apply List.filter_eq_self.mpr
+    intro c hc
+    simp only [decide_eq_true_eq]
+    have hb := Tiles_entry_bound k (coords.take fIdx) start sl hpre c hc
+    have hpos : 0 < k ^ c.2 := pow_pos (by omega) _
+    omega
+  have h2 : ((sl, sh) :: coords.drop (fIdx + 1)).filter (fun c => decide (c.1 < sl)) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro c hc
+    simp only [decide_eq_true_eq, not_lt]
+    rw [List.mem_cons] at hc
+    rcases hc with rfl | hc'
+    · exact le_refl sl
+    · have hge := Tiles_left_ge k (coords.drop (fIdx + 1)) (sl + k ^ sh) stop hpost c hc'
+      have hpos : 0 < k ^ sh := pow_pos (by omega) _
+      omega
+  rw [h1, h2, List.append_nil]
+
+/-- **Step 1 of the old-peak identity.** The climb's gathered left-siblings are
+    the perfect roots of the climb's left-child coordinates: each level's
+    `siblings.take position` keeps children `0 .. position-1`. -/
+private theorem mergedLeftSibs_honest (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (sl off sh bh : Nat) :
+    mergedLeftSibs ((honestDigitPath k cells sl off sh).drop bh)
+      = (((List.range sh).drop bh).reverse.flatMap
+          (fun j => (List.range (off / k ^ j % k)).map
+            (fun i => (sl + (off / k ^ (j + 1) * k + i) * k ^ j, j)))).map
+          (fun c => perfectRoot k cells c.1 c.2) := by
+  unfold mergedLeftSibs honestDigitPath
+  rw [← List.map_drop, ← List.map_reverse, List.flatMap_map]
+  conv_rhs => rw [List.map_flatMap]
+  congr 1
+  funext j
+  dsimp only
+  rw [← List.map_take, filter_ne_range_take k (off / k ^ j % k) (Nat.mod_lt _ (by omega)),
+    List.map_map]
+  apply List.map_congr_left
+  intro i _
+  rfl
+
+/-- **KEY: the honest old peaks rebuild the old frontier.** The reconstructed old
+    peaks — the new peaks left of the boundary mountain, the merged-in
+    left-siblings of the climb, and the boundary peak — are exactly the old
+    frontier's perfect roots, in frontier order. This is the MMR increment-proof
+    correctness identity.
+
+    The proof reduces to a coordinate-list identity, then maps `perfectRoot`
+    over both sides:
+    `FN.take fIdx ++ climbLeftCoords ++ [(bl,bh)] = FO` (FN = new frontier,
+    FO = old frontier). The new peaks left of the slot equal the old tiles `< sl`
+    (`frontier_agree` + `Tiles_filter_lt_eq_take`); the climb's left-children plus
+    the boundary equal the in-slot frontier `frontierGo k sl (oldSize - sl)` via a
+    shift + iterated scale + single push (`(m+1)%k ≠ 0` since `bh` is the lowest
+    nonzero digit), with `climb_coords_eq` aligning the climb digit recursion to
+    `frontier_divstep`. `frontierGo_split` glues the prefix to the in-slot part. -/
+private theorem honest_oldpeaks_eq (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length)
+    (bl bh fIdx sl sh : Nat)
+    (hlast : (frontierForSizeT k oldSize).getLast? = some (bl, bh))
+    (hff : findFrontier k bl (frontierForSizeT k cells.length) 0 = some (fIdx, sl, sh)) :
+    (honestNewPeaks k cells).take fIdx
+        ++ mergedLeftSibs (honestPeakPath k cells oldSize)
+        ++ [perfectRoot k cells bl bh]
+      = (frontierForSizeT k oldSize).map (fun c => perfectRoot k cells c.1 c.2) := by
+  obtain ⟨bl₀, bh₀, fIdx₀, sl₀, sh₀, hlast₀, hspan, hff₀, hff2, hbhsh, hsle, hdiveq, halign⟩ :=
+    boundary_slot k hk cells oldSize hold hnew
+  obtain ⟨hbl, hbh⟩ : bl = bl₀ ∧ bh = bh₀ := by
+    have h := hlast.symm.trans hlast₀
+    simp only [Option.some.injEq, Prod.mk.injEq] at h; exact h
+  subst hbl hbh
+  obtain ⟨hfi, hsl, hsh⟩ : fIdx = fIdx₀ ∧ sl = sl₀ ∧ sh = sh₀ := by
+    have h := hff.symm.trans hff₀
+    simp only [Option.some.injEq, Prod.mk.injEq] at h; exact ⟨h.1, h.2.1, h.2.2⟩
+  subst hfi hsl hsh
+  set off := oldSize - 1 - sl with hoffdef
+  set m := off / k ^ bh with hmdef
+  have hk0 : 0 < k ^ bh := pow_pos (by omega) bh
+  -- slot membership and bounds
   obtain ⟨hgetN, hsleN, hbltN⟩ :=
     findFrontier_spec k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
   simp only [Nat.sub_zero] at hgetN
-  have htilesN := frontier_tiles k cells.length hk
-  have hfIlt : fIdx < (frontierForSizeT k cells.length).length := by
-    simpa using findFrontier_slot_lt k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
-  have hP2 : ∀ i, i < (frontierForSizeT k cells.length).length → i ≠ fIdx →
-      ¬ (sl ≤ ((frontierForSizeT k cells.length).getD i (0, 0)).1 ∧
-         ((frontierForSizeT k cells.length).getD i (0, 0)).1 < sl + k ^ sh) :=
-    Tiles_slot_avoids k hk (frontierForSizeT k cells.length) 0 cells.length fIdx sl sh htilesN hgetN
-  -- boundary is the last old tile: split it off
-  obtain ⟨pre, hpre⟩ := List.getLast?_eq_some_iff.mp hlast
-  obtain ⟨mid, hTpre, hmideq, _⟩ :=
-    Tiles_split k pre (bl, bh) [] 0 oldSize (hpre ▸ frontier_tiles k oldSize hk)
-  simp only at hmideq; subst hmideq
-  have hk0 : 0 < k ^ bh := pow_pos (by omega) bh
-  rcases List.mem_append.mp (hpre ▸ hc) with hcpre | hcbnd
-  · -- c is an interior old tile: c.1 + k^c.2 ≤ bl
-    have hcb : c.1 + k ^ c.2 ≤ bl := Tiles_entry_bound k pre 0 bl hTpre c hcpre
-    have hcpos : 0 < k ^ c.2 := pow_pos (by omega) c.2
-    by_cases hcsl : c.1 < sl
-    · -- left of the slot: supplied by the merge phase
-      have hagree := frontier_agree k hk cells.length 0 oldSize sl sh (by simp)
-        (List.mem_of_getElem? hgetN) (Nat.zero_le _) (by omega) (le_of_lt hnew)
-      have hcfilt : c ∈ (frontierGo k 0 cells.length).filter (fun x => decide (x.1 < sl)) := by
-        rw [← hagree, List.mem_filter]; exact ⟨hc, by simp [hcsl]⟩
-      have hcmemN : c ∈ frontierForSizeT k cells.length := List.mem_of_mem_filter hcfilt
-      obtain ⟨i, hilt, hieq⟩ := List.mem_iff_getElem.mp hcmemN
-      have hidx : (frontierForSizeT k cells.length).getD i (0, 0) = c := by
-        rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hilt, Option.getD_some, hieq]
-      have hslval : ((frontierForSizeT k cells.length).getD fIdx (0, 0)).1 = sl := by
-        rw [List.getD_eq_getElem?_getD, hgetN, Option.getD_some]
-      have hilt' : i < fIdx := by
-        by_contra hge
-        push_neg at hge
-        rcases Nat.lt_or_eq_of_le hge with hlt | heq
-        · have hmono := Tiles_strict_mono k hk _ 0 cells.length htilesN fIdx i hlt hilt
-          rw [hslval, hidx] at hmono
+  have hmemN : (sl, sh) ∈ frontierForSizeT k cells.length :=
+    List.mem_of_getElem? (by simpa using hgetN)
+  have hslalign : k ^ sh ∣ sl :=
+    frontierGo_aligned k hk cells.length 0 (by simp) (sl, sh) hmemN
+  obtain ⟨_hget2, hsle2, hblt2⟩ :=
+    findFrontier_spec k (oldSize - 1) (frontierForSizeT k cells.length) 0 fIdx sl sh hff2
+  have hoff_lt : off < k ^ sh := by rw [hoffdef]; omega
+  -- climbLeftCoords abbreviation
+  set CLC := (((List.range sh).drop bh).reverse.flatMap
+    (fun j => (List.range (off / k ^ j % k)).map
+      (fun i => (sl + (off / k ^ (j + 1) * k + i) * k ^ j, j)))) with hCLC
+  -- (m+1) % k ≠ 0: bh is the lowest nonzero digit of oldSize
+  have hbmemFO : (bl, bh) ∈ frontierForSizeT k oldSize := List.mem_of_getLast? hlast
+  have hnotdvd : ¬ k ^ (bh + 1) ∣ oldSize := by
+    intro hd
+    have := frontierGo_min_height k hk (bh + 1) oldSize 0 hd (bl, bh) hbmemFO
+    simp only at this; omega
+  have hmk : (m + 1) % k ≠ 0 := by
+    rcases Nat.eq_zero_or_pos m with hm0 | hmpos
+    · rw [hm0]; simp [Nat.mod_eq_of_lt (show 1 < k by omega)]
+    · have hshgt : bh < sh := by
+        rcases Nat.lt_or_eq_of_le hbhsh with h | h
+        · exact h
+        · exfalso
+          have hpoweq : k ^ sh = k ^ bh := by rw [h]
+          have hge : k ^ bh ≤ m * k ^ bh := Nat.le_mul_of_pos_left (k ^ bh) (by omega)
           omega
-        · rw [heq, hidx] at hslval
-          omega
-      have hbridge := kary_bridge k hk cells
-      have hJ : ∀ i, i < fIdx → (buildStackCells k cells).getD i emptyHash
-          = perfectRoot k cells ((frontierForSizeT k cells.length).getD i (0, 0)).1
-              ((frontierForSizeT k cells.length).getD i (0, 0)).2 := by
-        intro j hj
-        have hjlt : j < (frontierForSizeT k cells.length).length := by omega
-        rw [hbridge, List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_eq_getElem hjlt,
-          List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hjlt]
-        rfl
-      have hsortedN : ∀ a b, a < (frontierForSizeT k cells.length).length →
-          b < (frontierForSizeT k cells.length).length → a < b →
-          ((frontierForSizeT k cells.length).getD a (0, 0)).1
-            < ((frontierForSizeT k cells.length).getD b (0, 0)).1 :=
-        fun a b _ hb hab => Tiles_strict_mono k hk _ 0 cells.length htilesN a b hab hb
-      have hcov := cmMergeGo_left_cover k hk cells (frontierForSizeT k cells.length).length
-        (frontierForSizeT k cells.length) (buildStackCells k cells) fIdx m1 rfl
-        (by rw [hbridge, List.length_map]) hfIlt hsortedN hJ i hilt'
-      rw [hidx] at hcov
-      have hlen' : (frontierForSizeT k cells.length).length = (buildStackCells k cells).length := by
-        rw [hbridge, List.length_map]
-      rw [hM]
-      rw [show G = honestGroupPath k (buildStackCells k cells) fIdx from hG] at *
-      exact hcov
-    · -- inside the slot, left of the boundary: supplied by the bisection phase
-      push_neg at hcsl
-      have hcbl : c.1 < bl := by omega
-      have hchsh : c.2 < sh := by
-        have : k ^ c.2 < k ^ sh := by
-          calc k ^ c.2 ≤ bl - c.1 := by omega
-            _ ≤ bl - sl := by omega
-            _ < k ^ sh := by omega
-        exact (Nat.pow_lt_pow_iff_right (by omega)).mp this
-      have hbhch : bh ≤ c.2 := by
-        have hge : k ^ bh ≤ oldSize - c.1 := by omega
-        have hsh := frontierGo_slot_height k hk oldSize 0 c.1 c.2 hc
-        simp only [Nat.zero_add] at hsh
-        rw [hsh]; exact Nat.le_log_of_pow_le (by omega) hge
-      -- the merge phase preserves the slot interval, reducing to the bisection map
-      have hMm1 : M c = m1 c := by
-        rw [hM]
-        exact cmMergeGo_avoids k sl (sl + k ^ sh) hk (frontierForSizeT k cells.length).length
-          (frontierForSizeT k cells.length) fIdx G m1 rfl hfIlt hP2 c (by omega) (by omega)
-      -- geometry: c is a left sibling of the path at level c.2
-      have haligncl : k ^ c.2 ∣ c.1 := frontierGo_aligned k hk oldSize 0 (by simp) c hc
-      have halignsl : k ^ (c.2 + 1) ∣ sl := by
-        have : k ^ sh ∣ sl := frontierGo_aligned k hk cells.length 0 (by simp)
-          (sl, sh) (List.mem_of_getElem? hgetN)
-        exact dvd_trans (pow_dvd_pow k (by omega)) this
-      have hblock := frontier_block k hk oldSize 0 (by simp)
-        (by simp only [Nat.zero_mod, Nat.zero_add];
-            exact le_of_lt (Nat.lt_pow_succ_log_self (by omega) oldSize))
-        c.1 c.2 hc
-      simp only [Nat.zero_add] at hblock
-      -- normalise to (c.1 - sl) and offset = oldSize - 1 - sl
-      set offset := oldSize - 1 - sl with hoff
-      have hcsldvd : k ^ c.2 ∣ c.1 - sl :=
-        Nat.dvd_sub haligncl (dvd_trans (pow_dvd_pow k (by omega))
-          (frontierGo_aligned k hk cells.length 0 (by simp) (sl, sh) (List.mem_of_getElem? hgetN)))
-      obtain ⟨q, hq⟩ := hcsldvd
-      rw [Nat.mul_comm] at hq
-      have hsldvd1 : k ^ (c.2 + 1) ∣ sl := halignsl
-      obtain ⟨t, ht⟩ := hsldvd1
-      -- block condition descended to (c.1 - sl)/k^(c.2+1) = offset/k^(c.2+1)
-      have hp2 : k ^ (c.2 + 1) = k ^ c.2 * k := by rw [pow_succ]
-      have hQ : (c.1 - sl) / k ^ (c.2 + 1) = offset / k ^ (c.2 + 1) := by
-        have e1 : c.1 = k ^ (c.2 + 1) * t + (c.1 - sl) := by rw [← ht]; omega
-        have e2 : oldSize - 1 = k ^ (c.2 + 1) * t + offset := by rw [← ht]; omega
-        rw [e1, e2, Nat.mul_add_div (pow_pos (by omega) _), Nat.mul_add_div (pow_pos (by omega) _)]
-          at hblock
+      have hsldvd : k ^ (bh + 1) ∣ sl := dvd_trans (pow_dvd_pow k (by omega)) hslalign
+      intro hzero
+      have hkdvd : k ∣ (m + 1) := Nat.dvd_of_mod_eq_zero hzero
+      apply hnotdvd
+      have hos' : oldSize = sl + (m + 1) * k ^ bh := by
+        have hexp : (m + 1) * k ^ bh = m * k ^ bh + k ^ bh := by ring
         omega
-      -- i := the child index; q = (offset/k^(c.2+1))*k + i
-      have hqk : q / k = offset / k ^ (c.2 + 1) := by
-        have hqd : (c.1 - sl) / k ^ (c.2 + 1) = q / k := by
-          rw [hq, hp2, Nat.mul_comm q (k ^ c.2),
-            Nat.mul_div_mul_left q k (pow_pos (by omega) c.2)]
-        rw [← hqd]; exact hQ
-      set i := q % k with hi
-      have hqdecomp : q = offset / k ^ (c.2 + 1) * k + i := by
-        rw [hi, ← hqk]; exact (Nat.div_add_mod' q k).symm
-      have hc1form : c.1 = sl + offset / k ^ (c.2 + 1) * k ^ (c.2 + 1) + i * k ^ c.2 := by
-        have : c.1 - sl = q * k ^ c.2 := hq
-        rw [hqdecomp] at this
-        have hexp : (offset / k ^ (c.2 + 1) * k + i) * k ^ c.2
-            = offset / k ^ (c.2 + 1) * k ^ (c.2 + 1) + i * k ^ c.2 := by
-          rw [hp2]; ring
+      rw [hos']
+      apply Nat.dvd_add hsldvd
+      rw [pow_succ]
+      obtain ⟨c, hc⟩ := hkdvd
+      exact ⟨c, by rw [hc]; ring⟩
+  -- the coordinate identity D
+  have hD : (frontierForSizeT k cells.length).take fIdx ++ CLC ++ [(bl, bh)]
+      = frontierForSizeT k oldSize := by
+    -- (2a): old tiles < sl equal the new fIdx-prefix
+    have hagree : (frontierForSizeT k oldSize).filter (fun c => decide (c.1 < sl))
+        = (frontierForSizeT k cells.length).filter (fun c => decide (c.1 < sl)) :=
+      frontier_agree k hk cells.length 0 oldSize sl sh (by simp) hmemN (Nat.zero_le _)
+        (by omega) (le_of_lt hnew)
+    have hftake : (frontierForSizeT k cells.length).filter (fun c => decide (c.1 < sl))
+        = (frontierForSizeT k cells.length).take fIdx :=
+      Tiles_filter_lt_eq_take k hk (frontierForSizeT k cells.length) 0 cells.length fIdx sl sh
+        (frontier_tiles k cells.length hk) hgetN
+    have h2a : (frontierForSizeT k oldSize).filter (fun c => decide (c.1 < sl))
+        = (frontierForSizeT k cells.length).take fIdx := by rw [hagree, hftake]
+    -- Tiles-prefix: the new fIdx-prefix tiles [0, sl)
+    have hflt : fIdx < (frontierForSizeT k cells.length).length := by
+      rw [List.getElem?_eq_some_iff] at hgetN; obtain ⟨h, _⟩ := hgetN; exact h
+    have hdecompN : frontierForSizeT k cells.length
+        = (frontierForSizeT k cells.length).take fIdx
+          ++ (sl, sh) :: (frontierForSizeT k cells.length).drop (fIdx + 1) := by
+      conv_lhs =>
+        rw [← List.take_append_drop fIdx (frontierForSizeT k cells.length),
+          List.drop_eq_getElem_cons hflt]
+      rw [List.getElem?_eq_getElem hflt, Option.some.injEq] at hgetN
+      rw [hgetN]
+    obtain ⟨mid, hpreN, htileeqN, _hpostN⟩ :=
+      Tiles_split k ((frontierForSizeT k cells.length).take fIdx) (sl, sh)
+        ((frontierForSizeT k cells.length).drop (fIdx + 1)) 0 cells.length
+        (hdecompN ▸ frontier_tiles k cells.length hk)
+    simp only at htileeqN
+    subst htileeqN
+    have hPtiles : Tiles k 0 ((frontierForSizeT k cells.length).take fIdx) sl := hpreN
+    -- membership of (sl, _) in the old frontier
+    have hsllt : sl < oldSize := by omega
+    obtain ⟨fI', l', h', hffO⟩ :=
+      findFrontier_cover k sl (frontierForSizeT k oldSize) 0 oldSize 0
+        (frontier_tiles k oldSize hk) (Nat.zero_le _) hsllt
+    obtain ⟨hgetO, hsleO, hbltO⟩ :=
+      findFrontier_spec k sl (frontierForSizeT k oldSize) 0 fI' l' h' hffO
+    simp only [Nat.sub_zero] at hgetO
+    have hmemO : (l', h') ∈ frontierForSizeT k oldSize :=
+      List.mem_of_getElem? (by simpa using hgetO)
+    have hl'sl : l' = sl := by
+      by_contra hne
+      have hl'lt : l' < sl := lt_of_le_of_ne hsleO hne
+      have hin : (l', h') ∈ (frontierForSizeT k oldSize).filter (fun c => decide (c.1 < sl)) := by
+        rw [List.mem_filter]; exact ⟨hmemO, by simp only [decide_eq_true_eq]; exact hl'lt⟩
+      rw [h2a] at hin
+      have hb := Tiles_entry_bound k ((frontierForSizeT k cells.length).take fIdx) 0 sl hPtiles
+        (l', h') hin
+      simp only at hb
+      have hpos : 0 < k ^ h' := pow_pos (by omega) _
+      omega
+    -- split the old frontier at sl
+    have hsplit : frontierForSizeT k oldSize
+        = (frontierForSizeT k oldSize).filter (fun c => decide (c.1 < sl))
+          ++ frontierGo k sl (0 + oldSize - sl) :=
+      frontierGo_split k hk sl oldSize 0 h' (hl'sl ▸ hmemO) (Nat.zero_le _)
+    -- (i): the climb's left-children plus the boundary are the in-slot frontier
+    have hclc : CLC = (frontierForSizeT k m).map (fun lh => (sl + lh.1 * k ^ bh, lh.2 + bh)) := by
+      rw [hCLC, hmdef]
+      exact climb_coords_eq k hk sl sh off hoff_lt bh hbhsh
+    have hi : CLC ++ [(bl, bh)] = frontierGo k sl (oldSize - sl) := by
+      rw [hclc]
+      have hos : oldSize - sl = (m + 1) * k ^ bh := by
+        have hexp : (m + 1) * k ^ bh = m * k ^ bh + k ^ bh := by ring
         omega
-      -- i is below the path digit at level c.2
-      have hilt : i < offset / k ^ c.2 % k := by
-        have hqlt : q < offset / k ^ c.2 := by
-          have hq1 : (q + 1) * k ^ c.2 ≤ offset := by
-            have hqq : c.1 - sl = q * k ^ c.2 := hq
-            have hexp : (q + 1) * k ^ c.2 = q * k ^ c.2 + k ^ c.2 := by ring
-            omega
-          have := (Nat.le_div_iff_mul_le hcpos).mpr hq1
-          omega
-        have hoff_decomp : offset / k ^ c.2 = offset / k ^ (c.2 + 1) * k + offset / k ^ c.2 % k := by
-          conv_lhs => rw [← Nat.div_add_mod' (offset / k ^ c.2) k]
-          rw [show offset / k ^ c.2 / k = offset / k ^ (c.2 + 1) from by
-            rw [hp2, Nat.div_div_eq_div_mul]]
-        omega
-      -- the bisection map records c with its perfect root
-      rw [hMm1, hm1]
-      have key := cmBisect_covers k hk cells sl offset sh (sh - bh) bh bl m0
-        (by omega) halign.symm c.2 i hbhch hchsh hilt
-      rw [show c = (c.1, c.2) from rfl, hc1form]
-      exact key
-  · -- c is the boundary tile: read straight from the seed
-    rw [List.mem_singleton] at hcbnd; subst hcbnd
-    have hMm1 : M (bl, bh) = m1 (bl, bh) := by
-      rw [hM]
-      exact cmMergeGo_avoids k sl (sl + k ^ sh) hk (frontierForSizeT k cells.length).length
-        (frontierForSizeT k cells.length) fIdx G m1 rfl hfIlt hP2 (bl, bh) (by exact hsle)
-        (by exact hbltN)
-    have hm1m0 : m1 (bl, bh) = m0 (bl, bh) := by
-      rw [hm1, hD]
-      cases hdb : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).drop bh with
-      | nil => rfl
-      | cons s rest =>
-        rw [cmBisect, cmBisect_preserves_below k rest _ (bh + 1) _ (bl, bh) (by simp)]
-        apply recordBisectSibs_preserves_node k hk m0 bl bh s
-        -- s.position * k^bh ≤ bl
-        have hshgt : bh < sh := by
-          rcases Nat.lt_or_ge bh sh with h | h
-          · exact h
-          · exfalso; have hnil : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).drop bh = [] := by
-              rw [List.drop_eq_nil_iff, hdlen]; omega
-            rw [hnil] at hdb; simp at hdb
-        have hd : (honestDigitPath k cells sl (oldSize - 1 - sl) sh).drop bh
-            = { position := (oldSize - 1 - sl) / k ^ bh % k,
-                siblings := ((List.range k).filter (fun x => x != (oldSize - 1 - sl) / k ^ bh % k)).map
-                  fun x => perfectRoot k cells
-                    (sl + ((oldSize - 1 - sl) / k ^ (bh + 1) * k + x) * k ^ bh) bh }
-              :: (honestDigitPath k cells sl (oldSize - 1 - sl) sh).drop (bh + 1) := by
-          unfold honestDigitPath
-          rw [← List.map_drop, ← List.map_drop,
-            List.drop_eq_getElem_cons (by rw [List.length_range]; exact hshgt),
-            List.map_cons, List.getElem_range]
-        rw [hd] at hdb
-        injection hdb with hs_eq _
-        have hspos : s.position = (oldSize - 1 - sl) / k ^ bh % k := by rw [← hs_eq]
-        rw [hspos]
-        calc (oldSize - 1 - sl) / k ^ bh % k * k ^ bh
-            ≤ (oldSize - 1 - sl) / k ^ bh * k ^ bh := by
-              exact Nat.mul_le_mul_right (k ^ bh) (Nat.mod_le _ _)
-          _ = bl - sl := by omega
-          _ ≤ bl := by omega
-    rw [hMm1, hm1m0, hm0]
-    simp [cmInsert]
+      rw [hos]
+      have hshift : frontierGo k sl ((m + 1) * k ^ bh)
+          = (frontierForSizeT k ((m + 1) * k ^ bh)).map (fun lh => (sl + lh.1, lh.2)) := by
+        have h := frontierGo_shift k hk ((m + 1) * k ^ bh) sl 0
+        simpa [frontierForSizeT] using h
+      rw [hshift, frontier_scale_pow k hk bh (m + 1), frontierForSizeT_push k hk m hmk]
+      simp only [List.map_append, List.map_map, List.map_cons, List.map_nil, Function.comp]
+      congr 1
+      rw [Nat.zero_add, halign]
+    rw [hsplit, h2a, show 0 + oldSize - sl = oldSize - sl from by omega, ← hi,
+      List.append_assoc]
+  -- assemble: map perfectRoot over D
+  have hHNP : (honestNewPeaks k cells).take fIdx
+      = ((frontierForSizeT k cells.length).take fIdx).map (fun c => perfectRoot k cells c.1 c.2) := by
+    rw [honestNewPeaks, ← List.map_take]
+  have hMLS : mergedLeftSibs (honestPeakPath k cells oldSize)
+      = CLC.map (fun c => perfectRoot k cells c.1 c.2) := by
+    have hpp : honestPeakPath k cells oldSize = (honestDigitPath k cells sl off sh).drop bh := by
+      simp only [honestPeakPath, hlast, hff, hoffdef]
+    rw [hpp, hCLC]
+    exact mergedLeftSibs_honest k hk cells sl off sh bh
+  rw [hHNP, hMLS,
+    show [perfectRoot k cells bl bh]
+      = [(bl, bh)].map (fun c => perfectRoot k cells c.1 c.2) from rfl,
+    ← List.map_append, ← List.map_append, hD]
 
-/-- **The honest old-root read-back yields the genuine prefix root.** Folding
-    the perfect roots the coordinate map records (`honest_oldroot_coverage`) with
-    the frontier grouping gives `karyRoot` of the size-`oldSize` prefix: by
-    `kary_bridge` on `cells.take oldSize`, that prefix's root is the same fold of
-    the same perfect roots (`perfectRoot` only reads in-range cells, so taking
-    the prefix does not change them). -/
-private theorem honest_oldroot_readback (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
-    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
-    ∃ hs, consistencyOldHashes k oldSize cells.length (honestStartHash k cells oldSize)
-        (honestConsistencyPath k cells oldSize) = some hs ∧
-      foldFrontierRoot k hs = karyRoot k (cells.take oldSize) := by
-  refine ⟨(frontierForSizeT k oldSize).map (fun c => perfectRoot k cells c.1 c.2),
-    honest_oldroot_coverage k hk cells oldSize hold hnew, ?_⟩
+/-- **The honest old-root read-back yields the genuine prefix root.** -/
+private theorem honest_oldpeaks_bag (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
+    (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length)
+    (bl bh fIdx sl sh : Nat)
+    (hlast : (frontierForSizeT k oldSize).getLast? = some (bl, bh))
+    (hff : findFrontier k bl (frontierForSizeT k cells.length) 0 = some (fIdx, sl, sh)) :
+    foldFrontierRoot k ((honestNewPeaks k cells).take fIdx
+        ++ mergedLeftSibs (honestPeakPath k cells oldSize)
+        ++ [perfectRoot k cells bl bh])
+      = karyRoot k (cells.take oldSize) := by
+  rw [honest_oldpeaks_eq k hk cells oldSize hold hnew bl bh fIdx sl sh hlast hff]
   rw [karyRoot, kary_bridge k hk (cells.take oldSize)]
   have hlen : (cells.take oldSize).length = oldSize := by rw [List.length_take]; omega
   rw [hlen]
@@ -1748,141 +1326,111 @@ private theorem honest_oldroot_readback (k : Nat) (hk : 2 ≤ k) (cells : List D
 
 /-! ## The theorems -/
 
-/-- **Non-vacuity: honest consistency proofs verify.** The honest boundary-root
-    `start_hash` and honest path are accepted against the genuine current root
-    `karyRoot cells`, reconstructing the genuine prefix root
-    `karyRoot (cells.take oldSize)`. So `AcceptsConsistency` is satisfiable for
-    every valid `(cells, oldSize)`, and the soundness theorem below quantifies
-    over a provably non-empty accept set — mirroring how `kary_completeness`
-    guards `kary_inclusion_soundness`.
-
-    *Strategy:* `start_hash = perfectRoot (bl, bh)` is the digest the last old
-    leaf reaches after `bh` digit steps (`digitFold`); the dropped honest path
-    therefore folds it to `karyRoot cells` by `honest_path_folds` +
-    `List.foldl` append decomposition. The shape matches `consistencySkeleton`
-    (the dropped portion of `honest_path_shape`). The old-root read-back equals
-    `karyRoot (cells.take oldSize)` because every old-frontier coordinate is
-    recorded with its genuine `perfectRoot` and `foldFrontierRoot` over them is
-    `karyRoot` of the prefix (`kary_bridge` on `cells.take oldSize`). -/
+/-- **Non-vacuity: honest consistency proofs verify.** -/
 theorem consistency_completeness (k : Nat) (hk : 2 ≤ k) (cells : List Digest)
     (oldSize : Nat) (hold : 0 < oldSize) (hnew : oldSize < cells.length) :
     AcceptsConsistency k oldSize cells.length
-      (honestStartHash k cells oldSize) (honestConsistencyPath k cells oldSize)
+      (honestBoundaryHash k cells oldSize) (honestPeakPath k cells oldSize)
+      (honestNewPeaks k cells) (honestSplitIndex k cells oldSize)
       (karyRoot k (cells.take oldSize)) (karyRoot k cells) := by
-  refine ⟨hk, hold, hnew, honest_consistency_shape k hk cells oldSize hold hnew, ?_, ?_⟩
-  · -- WellFormedSteps: the honest consistency path is a suffix of the honest
-    -- inclusion path, which is well-formed
-    obtain ⟨_, hwf⟩ := honest_path_shape k hk cells (oldSize - 1) (by omega)
-    obtain ⟨bl, bh, _, _, _, hlast, _⟩ := boundary_slot k hk cells oldSize hold hnew
-    intro s hs
-    simp only [honestConsistencyPath, hlast] at hs
-    exact hwf s (List.mem_of_mem_drop hs)
-  · -- dual-root reconstruction
-    obtain ⟨hs, hhs, hfold⟩ := honest_oldroot_readback k hk cells oldSize hold hnew
-    simp only [reconstructConsistencyRoots, hhs]
-    rw [hfold, honest_consistency_newroot k hk cells oldSize hold hnew]
+  obtain ⟨bl, bh, fIdx, sl, sh, hlast, hspan, hff, hff2, hbhsh, hsle, hdiveq, halign⟩ :=
+    boundary_slot k hk cells oldSize hold hnew
+  obtain ⟨hgetN, _, _⟩ :=
+    findFrontier_spec k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
+  simp only [Nat.sub_zero] at hgetN
+  have hfIlt : fIdx < (frontierForSizeT k cells.length).length := by
+    rw [List.getElem?_eq_some_iff] at hgetN; obtain ⟨h, _⟩ := hgetN; exact h
+  have hsplit : honestSplitIndex k cells oldSize = fIdx := by
+    simp only [honestSplitIndex, hlast, hff]
+  have hbhash : honestBoundaryHash k cells oldSize = perfectRoot k cells bl bh := by
+    simp only [honestBoundaryHash, hlast]
+  have hnplen : (honestNewPeaks k cells).length = (frontierForSizeT k cells.length).length := by
+    rw [honestNewPeaks, List.length_map]
+  have hnewbag : foldFrontierRoot k (honestNewPeaks k cells) = karyRoot k cells := by
+    rw [honestNewPeaks, ← kary_bridge k hk cells, karyRoot]
+  refine ⟨hk, hold, hnew, honest_consistency_shape k hk cells oldSize hold hnew,
+    honest_peakpath_wf k hk cells oldSize hold hnew,
+    honest_climb_fold k hk cells oldSize hold hnew, ?_⟩
+  -- reconstruct = some (karyRoot take, karyRoot cells)
+  simp only [reconstructConsistencyRoots, hlast, hff]
+  rw [if_pos ⟨hsplit, hbhsh, hnplen, by rw [hsplit, hnplen]; exact hfIlt⟩]
+  rw [hsplit, hbhash, hnewbag,
+    honest_oldpeaks_bag k hk cells oldSize hold hnew bl bh fIdx sl sh hlast hff]
 
-/-- **Consistency-verifier soundness: accept ⇒ genuine append-only prefix.**
-    If `verify_consistency` accepts `(start_hash, path, oldRoot)` against the
-    honest current root `karyRoot cells` (`newSize = cells.length`), then the
-    reconstructed `oldRoot` is forced to be the genuine root of the size-`oldSize`
-    prefix `cells.take oldSize` — modulo `NodeHashCollision` / `CollapseAmbiguity`.
-
-    This is the V9 tamper-evidence statement for the consistency verifier: there
-    is no `(start_hash, path)` making the verifier accept a `oldRoot` that
-    disagrees with the true history of the genuine current tree. Combined with
-    `consistency_completeness` (the accept set is non-empty), the verifier
-    accepts an `oldRoot` **iff** it is the true prefix root.
-
-    *Strategy (completeness + uniqueness — no new induction):* the path
-    shape-matches `consistencySkeleton`; so does the honest path
-    (`consistency_completeness`'s shape obligation). Both fold `start_hash` /
-    the honest boundary root to `karyRoot cells`. `foldNary_unique_of_shape`
-    forces `start_hash` to the genuine boundary root and `path` to the honest
-    path; the old-root read-back is then `karyRoot (cells.take oldSize)` by the
-    completeness computation. -/
+/-- **Consistency-verifier soundness: accept ⇒ genuine append-only prefix.** -/
 theorem consistency_soundness (k : Nat) (cells : List Digest)
-    (oldSize : Nat) (startHash oldRoot : Digest) (path : List ProofStep)
-    (hacc : AcceptsConsistency k oldSize cells.length startHash path oldRoot
-      (karyRoot k cells))
+    (oldSize : Nat) (boundaryHash oldRoot : Digest) (peakPath : List ProofStep)
+    (newPeaks : List Digest) (splitIndex : Nat)
+    (hacc : AcceptsConsistency k oldSize cells.length boundaryHash peakPath newPeaks splitIndex
+      oldRoot (karyRoot k cells))
     (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     oldRoot = karyRoot k (cells.take oldSize) := by
-  obtain ⟨hk, hold, holdnew, hstruct, hwf, hrec⟩ := hacc
-  obtain ⟨skel, hcsk, hpsh⟩ := hstruct
-  obtain ⟨skel', hcsk', hpsh'⟩ := honest_consistency_shape k hk cells oldSize hold holdnew
-  have hskeq : skel = skel' := Option.some.inj (hcsk.symm.trans hcsk')
-  have hshapes : path.map stepShape
-      = (honestConsistencyPath k cells oldSize).map stepShape := by
-    rw [hpsh, hskeq, ← hpsh']
-  have hwf_honest : WellFormedSteps (honestConsistencyPath k cells oldSize) := by
-    obtain ⟨_, hwfI⟩ := honest_path_shape k hk cells (oldSize - 1) (by omega)
-    obtain ⟨bl, bh, _, _, _, hlast, _⟩ := boundary_slot k hk cells oldSize hold holdnew
-    intro s hs
-    simp only [honestConsistencyPath, hlast] at hs
-    exact hwfI s (List.mem_of_mem_drop hs)
-  have hnewfold := honest_consistency_newroot k hk cells oldSize hold holdnew
-  obtain ⟨hsh, hoph, hfoldh⟩ := honest_oldroot_readback k hk cells oldSize hold holdnew
-  unfold reconstructConsistencyRoots at hrec
+  obtain ⟨hk, hold, holdnew, hstruct, hwf, hincl, hrec⟩ := hacc
+  obtain ⟨bl, bh, fIdx, sl, sh, hlast, hspan, hff, hff2, hbhsh, hsle, hdiveq, halign⟩ :=
+    boundary_slot k hk cells oldSize hold holdnew
+  obtain ⟨hgetN, _, _⟩ :=
+    findFrontier_spec k bl (frontierForSizeT k cells.length) 0 fIdx sl sh hff
+  simp only [Nat.sub_zero] at hgetN
+  have hfIlt : fIdx < (frontierForSizeT k cells.length).length := by
+    rw [List.getElem?_eq_some_iff] at hgetN; obtain ⟨h, _⟩ := hgetN; exact h
+  -- unfold reconstruct: extract guards and root values
+  simp only [reconstructConsistencyRoots, hlast, hff] at hrec
   split at hrec
-  · simp at hrec
-  · next hsp hop =>
+  · next hcond =>
+    obtain ⟨hsplitEq, _, hnplen, _⟩ := hcond
     simp only [Option.some.injEq, Prod.mk.injEq] at hrec
     obtain ⟨hoR, hnR⟩ := hrec
-    have hfeq : foldNary startHash path
-        = foldNary (honestStartHash k cells oldSize)
-            (honestConsistencyPath k cells oldSize) := by rw [hnR, hnewfold]
-    obtain ⟨hstart, hpatheq⟩ := foldNary_unique_of_shape startHash
-      (honestStartHash k cells oldSize) path (honestConsistencyPath k cells oldSize)
-      hshapes hwf hwf_honest hfeq hH hN
-    rw [hstart, hpatheq, hoph] at hop
-    have hsphs : hsp = hsh := (Option.some.inj hop).symm
-    rw [← hoR, hsphs]
-    exact hfoldh
+    -- pin newPeaks to the honest peaks via foldFrontierRoot injectivity
+    have hnplen' : newPeaks.length = (honestNewPeaks k cells).length := by
+      rw [honestNewPeaks, List.length_map, hnplen]
+    have hnewbag : foldFrontierRoot k (honestNewPeaks k cells) = karyRoot k cells := by
+      rw [honestNewPeaks, ← kary_bridge k hk cells, karyRoot]
+    have hpeaks : newPeaks = honestNewPeaks k cells :=
+      foldFrontierRoot_inj k hk hH hN newPeaks.length newPeaks (honestNewPeaks k cells)
+        rfl hnplen'.symm (by rw [hnR, hnewbag])
+    -- the slot peak value
+    have hslotpeak : newPeaks.getD splitIndex emptyHash = perfectRoot k cells sl sh := by
+      rw [hpeaks, hsplitEq, honestNewPeaks, List.getD_eq_getElem?_getD, List.getElem?_map, hgetN]
+      rfl
+    -- inclusion equation drives the climb uniqueness
+    have hclimbfold := honest_climb_fold k hk cells oldSize hold holdnew
+    have hsplitH : honestSplitIndex k cells oldSize = fIdx := by
+      simp only [honestSplitIndex, hlast, hff]
+    have hbhash : honestBoundaryHash k cells oldSize = perfectRoot k cells bl bh := by
+      simp only [honestBoundaryHash, hlast]
+    have hhpeak : (honestNewPeaks k cells).getD fIdx emptyHash = perfectRoot k cells sl sh := by
+      rw [honestNewPeaks, List.getD_eq_getElem?_getD, List.getElem?_map, hgetN]; rfl
+    rw [hsplitH, hbhash, hhpeak] at hclimbfold
+    have hfeq : foldNary boundaryHash peakPath
+        = foldNary (perfectRoot k cells bl bh) (honestPeakPath k cells oldSize) := by
+      rw [hincl, hslotpeak]; exact hclimbfold.symm
+    -- shapes agree (both equal the climb skeleton)
+    obtain ⟨skel, hcsk, hpsh⟩ := hstruct
+    obtain ⟨skel', hcsk', hpsh'⟩ := honest_consistency_shape k hk cells oldSize hold holdnew
+    have hshapes : peakPath.map stepShape
+        = (honestPeakPath k cells oldSize).map stepShape := by
+      have hskeq : skel = skel' := Option.some.inj (hcsk.symm.trans hcsk')
+      rw [hpsh, hskeq, ← hpsh']
+    obtain ⟨hb_eq, hp_eq⟩ := foldNary_unique_of_shape boundaryHash (perfectRoot k cells bl bh)
+      peakPath (honestPeakPath k cells oldSize) hshapes hwf
+      (honest_peakpath_wf k hk cells oldSize hold holdnew) hfeq hH hN
+    -- old peaks are now fully pinned to the honest ones
+    rw [← hoR, hpeaks, hsplitEq, hp_eq, hb_eq,
+      honest_oldpeaks_bag k hk cells oldSize hold holdnew bl bh fIdx sl sh hlast hff]
+  · exact absurd hrec (by simp)
 
-/-! ### `karyRoot` injectivity
-
-The bag canonical-uniqueness lemma `karyRoot_inj_of_length` and its supporting
-injectivity cluster (`Tiles_covers`, `perfectRoot_inj`, `naryMr_inj_eqlen`,
-`foldFrontierRoot_inj`) now live in `EMLProof.Kary` — they are pure structural
-injectivity about `karyRoot`/`perfectRoot`/`foldFrontierRoot`/`naryMr`, shared by
-both this consistency layer (for the dual append-only theorem) and the
-durability/mountain layer (the "no size prefix" discharge). Consumed from the
-spine here. -/
-
-/-- **Dual soundness: accept between two honest roots ⇒ data-level append-only.**
-    If `verify_consistency` accepts a proof between the honest root of `oldCells`
-    and the honest root of `newCells`, then `oldCells` is a genuine prefix of
-    `newCells` — the append-only relation at the cell-sequence level, modulo
-    `NodeHashCollision` / `CollapseAmbiguity`.
-
-    This is the dual of `consistency_soundness`: that theorem fixes the honest
-    *new* tree and binds the reconstructed `oldRoot` to the prefix root; this one
-    fixes the honest *old* tree as well and concludes that the accepted new tree
-    genuinely *extends* it (`oldCells <+: newCells`). The two together are the
-    complete tamper-evidence story — an accepted consistency proof between honest
-    roots witnesses, at the data level, that the new log was formed by appending
-    to the old one.
-
-    The pure existential dual ("∃ extension whose root is `newRoot`") is *not*
-    stated, because it is not faithfully recoverable: a consistency proof carries
-    perfect-subtree *roots* for the appended range, never the individual new
-    cells, so no leaf-level extension can be reconstructed from an arbitrary
-    accepting proof. The two-honest-tree prefix relation is the faithful dual.
-
-    *Strategy:* `consistency_soundness` (with `cells := newCells`) gives
-    `karyRoot oldCells = karyRoot (newCells.take oldCells.length)`; both lists
-    have length `oldCells.length`, so `karyRoot_inj_of_length` yields
-    `oldCells = newCells.take oldCells.length`, i.e. `oldCells <+: newCells`. -/
+/-- **Dual soundness: accept between two honest roots ⇒ data-level append-only.** -/
 theorem consistency_append_only (k : Nat) (oldCells newCells : List Digest)
-    (startHash : Digest) (path : List ProofStep)
-    (hacc : AcceptsConsistency k oldCells.length newCells.length startHash path
-      (karyRoot k oldCells) (karyRoot k newCells))
+    (boundaryHash : Digest) (peakPath : List ProofStep)
+    (newPeaks : List Digest) (splitIndex : Nat)
+    (hacc : AcceptsConsistency k oldCells.length newCells.length boundaryHash peakPath
+      newPeaks splitIndex (karyRoot k oldCells) (karyRoot k newCells))
     (hH : ¬NodeHashCollision) (hN : ¬CollapseAmbiguity) :
     oldCells <+: newCells := by
   have hk : 2 ≤ k := hacc.1
   have hsize : oldCells.length < newCells.length := hacc.2.2.1
-  have hsound := consistency_soundness k newCells oldCells.length startHash
-    (karyRoot k oldCells) path hacc hH hN
+  have hsound := consistency_soundness k newCells oldCells.length boundaryHash
+    (karyRoot k oldCells) peakPath newPeaks splitIndex hacc hH hN
   have hlen : oldCells.length = (newCells.take oldCells.length).length := by
     rw [List.length_take]; omega
   have heqcells := karyRoot_inj_of_length k hk oldCells (newCells.take oldCells.length)
@@ -1890,10 +1438,7 @@ theorem consistency_append_only (k : Nat) (oldCells newCells : List Digest)
   rw [heqcells]
   exact List.take_prefix oldCells.length newCells
 
-/-- The append-only prefix the soundness conclusion is about: `cells.take
-    oldSize` is a genuine prefix of the current `cells`, with
-    `oldSize < cells.length`. Definitional, recorded to make the prefix
-    relation explicit at the statement surface. -/
+/-- The append-only prefix the soundness conclusion is about. -/
 theorem consistency_prefix_relation (cells : List Digest) (oldSize : Nat)
     (h : oldSize < cells.length) :
     (cells.take oldSize) <+: cells ∧ oldSize < cells.length :=
