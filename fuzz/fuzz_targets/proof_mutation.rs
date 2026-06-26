@@ -155,8 +155,10 @@ fuzz_target!(|input: Input| {
                     mid,
                     tree_size,
                     ARITY,
-                    &con_proof.start_hash,
-                    &con_proof.path,
+                    &con_proof.boundary_hash,
+                    &con_proof.peak_path,
+                    &con_proof.new_peaks,
+                    con_proof.split_index,
                     &old_root,
                     &root,
                 ),
@@ -164,10 +166,10 @@ fuzz_target!(|input: Input| {
             );
 
             // Mutate one bit in the consistency proof path (if non-empty).
-            if !con_proof.path.is_empty() {
+            if !con_proof.peak_path.is_empty() {
                 let mut mutated = con_proof.clone();
-                let path_idx = (input.mutate_path_idx as usize) % mutated.path.len();
-                let step = &mut mutated.path[path_idx];
+                let path_idx = (input.mutate_path_idx as usize) % mutated.peak_path.len();
+                let step = &mut mutated.peak_path[path_idx];
                 if !step.siblings.is_empty() {
                     let sib_idx = (input.mutate_sibling_idx as usize) % step.siblings.len();
                     let sib = &mut step.siblings[sib_idx];
@@ -182,8 +184,10 @@ fuzz_target!(|input: Input| {
                                 mid,
                                 tree_size,
                                 ARITY,
-                                &mutated.start_hash,
-                                &mutated.path,
+                                &mutated.boundary_hash,
+                                &mutated.peak_path,
+                                &mutated.new_peaks,
+                                mutated.split_index,
                                 &old_root,
                                 &root,
                             ),

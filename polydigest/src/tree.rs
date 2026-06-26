@@ -1576,8 +1576,10 @@ impl<S: Storage> NaryMerkleLog<S> {
                                 old_alg_size,
                                 new_alg_size,
                                 self.config.arity,
-                                &proof.start_hash,
-                                &proof.path,
+                                &proof.boundary_hash,
+                                &proof.peak_path,
+                                &proof.new_peaks,
+                                proof.split_index,
                                 &old_root,
                                 &new_root,
                             ) {

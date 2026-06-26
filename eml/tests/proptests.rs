@@ -406,8 +406,10 @@ proptest! {
                     old_size,
                     ts,
                     k as u64,
-                    &proof.start_hash,
-                    &proof.path,
+                    &proof.boundary_hash,
+                    &proof.peak_path,
+                    &proof.new_peaks,
+                    proof.split_index,
                     &old_root,
                     &new_root
                 ),
@@ -564,8 +566,10 @@ async fn check_state_invariants<S: eml::Storage>(
                     old_size,
                     tree_size,
                     k as u64,
-                    &proof.start_hash,
-                    &proof.path,
+                    &proof.boundary_hash,
+                    &proof.peak_path,
+                    &proof.new_peaks,
+                    proof.split_index,
                     &old_root,
                     &incremental
                 ));

@@ -279,8 +279,10 @@ fn test_inclusion_and_consistency_proofs_simple() {
             2,
             4,
             2,
-            &cons_proof.start_hash,
-            &cons_proof.path,
+            &cons_proof.boundary_hash,
+            &cons_proof.peak_path,
+            &cons_proof.new_peaks,
+            cons_proof.split_index,
             &old_root,
             &root
         ));
@@ -346,8 +348,10 @@ fn test_inclusion_and_consistency_proofs_various_arities() {
                         old_size,
                         size,
                         k as u64,
-                        &cons_proof.start_hash,
-                        &cons_proof.path,
+                        &cons_proof.boundary_hash,
+                        &cons_proof.peak_path,
+                        &cons_proof.new_peaks,
+                        cons_proof.split_index,
                         &old_root,
                         &root,
                     ) {
@@ -875,8 +879,10 @@ fn test_subtree_consistency_proofs() {
                             old_size,
                             size,
                             k as u64,
-                            &cons_proof.start_hash,
-                            &cons_proof.path,
+                            &cons_proof.boundary_hash,
+                            &cons_proof.peak_path,
+                            &cons_proof.new_peaks,
+                            cons_proof.split_index,
                             &old_root,
                             &root,
                         ),
@@ -1187,8 +1193,10 @@ fn test_multi_algorithm_subtree_proofs() {
             1,
             2,
             2,
-            &cons0.start_hash,
-            &cons0.path,
+            &cons0.boundary_hash,
+            &cons0.peak_path,
+            &cons0.new_peaks,
+            cons0.split_index,
             &old_root0,
             &root0
         ));
@@ -1247,46 +1255,58 @@ fn test_proof_error_edge_cases() {
         ));
 
         let empty_cons_proof = eml::ConsistencyProof {
-            start_hash: vec![0; 32],
-            path: Vec::new(),
+            boundary_hash: vec![0; 32],
+            peak_path: Vec::new(),
+            new_peaks: Vec::new(),
+            split_index: 0,
         };
         assert!(!eml::verify_consistency(
             &Sha256Hasher,
             0,
             2,
             2,
-            &empty_cons_proof.start_hash,
-            &empty_cons_proof.path,
+            &empty_cons_proof.boundary_hash,
+            &empty_cons_proof.peak_path,
+            &empty_cons_proof.new_peaks,
+            empty_cons_proof.split_index,
             &[0; 32],
             &[0; 32]
         ));
 
         let empty_cons_proof_invalid_sizes = eml::ConsistencyProof {
-            start_hash: vec![0; 32],
-            path: Vec::new(),
+            boundary_hash: vec![0; 32],
+            peak_path: Vec::new(),
+            new_peaks: Vec::new(),
+            split_index: 0,
         };
         assert!(!eml::verify_consistency(
             &Sha256Hasher,
             2,
             2,
             2,
-            &empty_cons_proof_invalid_sizes.start_hash,
-            &empty_cons_proof_invalid_sizes.path,
+            &empty_cons_proof_invalid_sizes.boundary_hash,
+            &empty_cons_proof_invalid_sizes.peak_path,
+            &empty_cons_proof_invalid_sizes.new_peaks,
+            empty_cons_proof_invalid_sizes.split_index,
             &[0; 32],
             &[0; 32]
         ));
 
         let empty_cons_proof_invalid_arity = eml::ConsistencyProof {
-            start_hash: vec![0; 32],
-            path: Vec::new(),
+            boundary_hash: vec![0; 32],
+            peak_path: Vec::new(),
+            new_peaks: Vec::new(),
+            split_index: 0,
         };
         assert!(!eml::verify_consistency(
             &Sha256Hasher,
             1,
             2,
             1,
-            &empty_cons_proof_invalid_arity.start_hash,
-            &empty_cons_proof_invalid_arity.path,
+            &empty_cons_proof_invalid_arity.boundary_hash,
+            &empty_cons_proof_invalid_arity.peak_path,
+            &empty_cons_proof_invalid_arity.new_peaks,
+            empty_cons_proof_invalid_arity.split_index,
             &[0; 32],
             &[0; 32]
         ));
@@ -1381,8 +1401,10 @@ fn test_power_of_k_boundaries() {
                 3,
                 9,
                 3,
-                &proof_3_9.start_hash,
-                &proof_3_9.path,
+                &proof_3_9.boundary_hash,
+                &proof_3_9.peak_path,
+                &proof_3_9.new_peaks,
+                proof_3_9.split_index,
                 &root_3,
                 &root_9
             ));
@@ -1394,8 +1416,10 @@ fn test_power_of_k_boundaries() {
                 9,
                 27,
                 3,
-                &proof_9_27.start_hash,
-                &proof_9_27.path,
+                &proof_9_27.boundary_hash,
+                &proof_9_27.peak_path,
+                &proof_9_27.new_peaks,
+                proof_9_27.split_index,
                 &root_9,
                 &root_27
             ));
@@ -1486,8 +1510,10 @@ fn test_power_of_k_boundaries() {
                 4,
                 16,
                 4,
-                &proof_4_16.start_hash,
-                &proof_4_16.path,
+                &proof_4_16.boundary_hash,
+                &proof_4_16.peak_path,
+                &proof_4_16.new_peaks,
+                proof_4_16.split_index,
                 &root_4,
                 &root_16
             ));
@@ -1499,8 +1525,10 @@ fn test_power_of_k_boundaries() {
                 16,
                 64,
                 4,
-                &proof_16_64.start_hash,
-                &proof_16_64.path,
+                &proof_16_64.boundary_hash,
+                &proof_16_64.peak_path,
+                &proof_16_64.new_peaks,
+                proof_16_64.split_index,
                 &root_16,
                 &root_64
             ));
@@ -2111,8 +2139,10 @@ fn test_verify_consistency_with_coupling() {
             1,
             2,
             2,
-            &consistency_proof.start_hash,
-            &consistency_proof.path,
+            &consistency_proof.boundary_hash,
+            &consistency_proof.peak_path,
+            &consistency_proof.new_peaks,
+            consistency_proof.split_index,
             &coupling_a,
             &coupling_b,
             &combined_a,
@@ -2128,22 +2158,26 @@ fn test_verify_consistency_with_coupling() {
 #[test]
 fn test_consistency_proof_overflow_panic() {
     let proof = eml::ConsistencyProof {
-        start_hash: vec![0; 32],
-        path: vec![
+        boundary_hash: vec![0; 32],
+        peak_path: vec![
             eml::ProofStep {
                 siblings: vec![vec![0; 32]; 4],
                 position: 4,
             };
             62
         ],
+        new_peaks: vec![vec![0; 32]],
+        split_index: 0,
     };
     let ok = eml::verify_consistency(
         &Sha256Hasher,
         1,
         1 << 62,
         2,
-        &proof.start_hash,
-        &proof.path,
+        &proof.boundary_hash,
+        &proof.peak_path,
+        &proof.new_peaks,
+        proof.split_index,
         &[0; 32],
         &[0; 32],
     );
@@ -2153,22 +2187,26 @@ fn test_consistency_proof_overflow_panic() {
 #[test]
 fn test_consistency_proof_huge_siblings_dos() {
     let proof = eml::ConsistencyProof {
-        start_hash: vec![0; 32],
-        path: vec![
+        boundary_hash: vec![0; 32],
+        peak_path: vec![
             eml::ProofStep {
                 siblings: vec![vec![0; 32]; 100_000],
                 position: 0,
             };
             1
         ],
+        new_peaks: vec![vec![0; 32]],
+        split_index: 0,
     };
     let ok = eml::verify_consistency(
         &Sha256Hasher,
         1,
         2,
         2,
-        &proof.start_hash,
-        &proof.path,
+        &proof.boundary_hash,
+        &proof.peak_path,
+        &proof.new_peaks,
+        proof.split_index,
         &[0; 32],
         &[0; 32],
     );
@@ -2176,22 +2214,26 @@ fn test_consistency_proof_huge_siblings_dos() {
 
     // Path length > 256
     let proof_huge_path = eml::ConsistencyProof {
-        start_hash: vec![0; 32],
-        path: vec![
+        boundary_hash: vec![0; 32],
+        peak_path: vec![
             eml::ProofStep {
                 siblings: vec![vec![0; 32]],
                 position: 0,
             };
             257
         ],
+        new_peaks: vec![vec![0; 32]],
+        split_index: 0,
     };
     let ok = eml::verify_consistency(
         &Sha256Hasher,
         1,
         2,
         2,
-        &proof_huge_path.start_hash,
-        &proof_huge_path.path,
+        &proof_huge_path.boundary_hash,
+        &proof_huge_path.peak_path,
+        &proof_huge_path.new_peaks,
+        proof_huge_path.split_index,
         &[0; 32],
         &[0; 32],
     );
@@ -2199,16 +2241,20 @@ fn test_consistency_proof_huge_siblings_dos() {
 
     // Invalid log arity < 2 (e.g. 1)
     let proof_invalid_arity_low = eml::ConsistencyProof {
-        start_hash: vec![0; 32],
-        path: Vec::new(),
+        boundary_hash: vec![0; 32],
+        peak_path: Vec::new(),
+        new_peaks: Vec::new(),
+        split_index: 0,
     };
     let ok = eml::verify_consistency(
         &Sha256Hasher,
         1,
         2,
         1,
-        &proof_invalid_arity_low.start_hash,
-        &proof_invalid_arity_low.path,
+        &proof_invalid_arity_low.boundary_hash,
+        &proof_invalid_arity_low.peak_path,
+        &proof_invalid_arity_low.new_peaks,
+        proof_invalid_arity_low.split_index,
         &[0; 32],
         &[0; 32],
     );
@@ -2216,16 +2262,20 @@ fn test_consistency_proof_huge_siblings_dos() {
 
     // Invalid log arity > 256
     let proof_invalid_arity_high = eml::ConsistencyProof {
-        start_hash: vec![0; 32],
-        path: Vec::new(),
+        boundary_hash: vec![0; 32],
+        peak_path: Vec::new(),
+        new_peaks: Vec::new(),
+        split_index: 0,
     };
     let ok = eml::verify_consistency(
         &Sha256Hasher,
         1,
         2,
         257,
-        &proof_invalid_arity_high.start_hash,
-        &proof_invalid_arity_high.path,
+        &proof_invalid_arity_high.boundary_hash,
+        &proof_invalid_arity_high.peak_path,
+        &proof_invalid_arity_high.new_peaks,
+        proof_invalid_arity_high.split_index,
         &[0; 32],
         &[0; 32],
     );
@@ -2794,8 +2844,10 @@ fn test_boundary_sizes_and_high_arities() {
                             old_size,
                             size,
                             k,
-                            &proof.start_hash,
-                            &proof.path,
+                            &proof.boundary_hash,
+                            &proof.peak_path,
+                            &proof.new_peaks,
+                            proof.split_index,
                             &old_root,
                             &root
                         ),
@@ -3099,7 +3151,8 @@ fn test_reduction_count_overflow() {
 fn test_reconstruct_index_oom_dos() {
     // Large arity must be rejected without OOMing or panicking
     let large_k = 1u64 << 32;
-    let res = eml::reconstruct_consistency_roots(&Sha256Hasher, 1, 2, large_k, &[0; 32], &[]);
+    let res =
+        eml::reconstruct_consistency_roots(&Sha256Hasher, 1, 2, large_k, &[0; 32], &[], &[], 0);
     assert_eq!(res, None);
 }
 

@@ -54,15 +54,17 @@ struct Input {
     old_size: u64,
     new_size: u64,
     arity: u64,
-    start_hash: Vec<u8>,
-    path: Vec<FuzzStep>,
+    boundary_hash: Vec<u8>,
+    peak_path: Vec<FuzzStep>,
+    new_peaks: Vec<Vec<u8>>,
+    split_index: usize,
     old_root: Vec<u8>,
     new_root: Vec<u8>,
 }
 
 fuzz_target!(|input: Input| {
-    let path: Vec<ProofStep> = input
-        .path
+    let peak_path: Vec<ProofStep> = input
+        .peak_path
         .into_iter()
         .map(|s| ProofStep {
             siblings: s.siblings,
@@ -74,8 +76,10 @@ fuzz_target!(|input: Input| {
         input.old_size,
         input.new_size,
         input.arity,
-        &input.start_hash,
-        &path,
+        &input.boundary_hash,
+        &peak_path,
+        &input.new_peaks,
+        input.split_index,
         &input.old_root,
         &input.new_root,
     );

@@ -259,9 +259,8 @@ fn descend_bag(node: &BagNode, target: usize, out: &mut Vec<SkeletonStep>) -> bo
 
 /// Whether `node` covers peak index `target`.
 ///
-/// Shared by `mountain` (bag descent) and `consistency` (bag-path collection);
-/// defined once here to avoid duplication.
-pub(crate) fn covers_peak(node: &BagNode, target: usize) -> bool {
+/// Used by the bag-shape descent in both [`descend_bag`] and [`descend_bag_path`].
+fn covers_peak(node: &BagNode, target: usize) -> bool {
     match node {
         BagNode::Peak(f_idx) => *f_idx == target,
         BagNode::Bag(children) => children.iter().any(|c| covers_peak(c, target)),
