@@ -1,23 +1,30 @@
+//! Complexity-scaling regression tests.
+//!
+//! These tests infer asymptotic complexity from measured runtimes, so they
+//! REQUIRE true serial execution:
+//!
+//! ```text
+//! cargo test --release -p eml --test complexity -- --test-threads=1
+//! ```
+//!
+//! (See `eml/tests/check_complexity.sh`.) Without it, `cargo test`'s default
+//! parallelism runs sibling tests concurrently: even while one test holds its
+//! timing loop, another test's `make_log` *setup* runs on a sibling thread and
+//! contends for CPU, inflating the measured growth of the larger inputs enough
+//! to flip an O(log n) fit to O(n log n). A mutex around the timing loops alone
+//! does NOT fix this — the contending work is the setup outside any timed
+//! section — so the whole suite must run one test at a time.
+//!
+//! The release profile is also required: the tests are gated on
+//! `not(debug_assertions)`, so a debug `cargo test` compiles them to nothing.
+
 #![cfg(not(debug_assertions))]
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use cpu_time::ThreadTime;
 use eml::{Hasher, MemoryStorage, NaryMerkleLog, TreeConfig};
 use sha2::{Digest, Sha256};
-
-/// Serialize all timing measurements in this suite. `cargo test` runs tests in
-/// parallel, but these tests infer complexity from wall/CPU timing, so CPU
-/// contention between concurrently-running tests inflates the measured growth
-/// of the larger inputs and flips an O(log n) fit to O(n log n). Each test holds
-/// this lock for its duration so only one is ever timing at a time. A failing
-/// (panicking) test poisons the lock; recover the guard so the poison does not
-/// cascade into spurious failures of the remaining tests.
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
-}
 
 #[derive(Debug)]
 struct Sha256Hasher;
@@ -62,39 +69,60 @@ fn make_log(n: usize) -> Arc<NaryMerkleLog<MemoryStorage>> {
     })
 }
 
-// Log-size scaling tests share one robust harness: median `ThreadTime` over
-// trials, fit by rank ceiling. `assert_best_fit` was abandoned here because its
-// CPU-instruction-count backend times out on these fast (µs-scale) operations
-// and its single-fit verdict flips between O(log n) and O(√n) on measurement
-// noise. A rank ceiling below `big_o`'s Linear rank (1000) tolerates that noise
-// while still failing on any genuinely linear (or worse) regression.
-const LOG_SIZES: &[usize] = &[100, 500, 1_000, 2_000, 5_000, 10_000, 20_000];
+// Log-size scaling tests share one robust harness: the minimum `ThreadTime`
+// over trials at each size (see `measure_log_scaling`), bounded by the measured
+// growth ratio across the size range (`assert_growth_bounded`). `assert_best_
+// fit` was abandoned here: its CPU-instruction-count backend times out on these
+// fast (µs-scale) operations, and on a near-flat O(log n) curve its single best-
+// fit verdict lands arbitrarily among the low-rank models — intermittently
+// calling a near-zero-slope Linear the "best fit" even single-threaded. The
+// growth ratio sidesteps the classifier: it asserts the one property that
+// actually separates sub-linear from linear.
+//
+// The size range spans three orders of magnitude on purpose. An O(log n)
+// operation grows only ~2x across it (the measured ratios are 1.4–1.9x), so its
+// curve is nearly flat — distinguishable from linear *only* when n ranges
+// widely enough that a true O(n) regression would blow up by ~1000x. Over a
+// narrow range the flat log curve is within timing noise of a shallow linear
+// fit; the wide range gives the growth ratio the leverage to keep the real
+// O(log n) impls flat while still catching any linear regression.
+const LOG_SIZES: &[usize] = &[1_000, 10_000, 50_000, 100_000, 500_000, 1_000_000];
 const LOG_TRIALS: usize = 21;
-// Linear rank is 1000; 999 admits log (130) and even √n (500) but fails on a
-// linear regression — the bound that keeps the perf bug from silently returning.
-const SUBLINEAR_RANK: u32 = 999;
+/// Inner repetitions per timed sample, so a sub-µs op (`root()`) clears
+/// `ThreadTime`'s clock granularity instead of rounding to zero.
+const LOG_REPS: u128 = 100;
+/// Max allowed slowest/fastest time ratio across the (1000x) size range. The
+/// real O(log n) impls measure 1.4–1.9x; a linear regression would be ~1000x.
+/// 4x leaves generous headroom for timing noise yet catches linear by ~250x.
+const SUBLINEAR_GROWTH: f64 = 4.0;
 
 /// Measure `op` over a `make_log`-built log at each `LOG_SIZES`, returning
-/// `(size, median per-iteration ThreadTime ns)` pairs. `op` runs the timed
-/// operation 100 times so a single µs-scale call does not vanish into clock
-/// granularity.
+/// `(size, minimum per-iteration ThreadTime ns)` pairs. `op` runs the timed
+/// operation `LOG_REPS` times per sample so a single sub-µs call does not vanish
+/// into clock granularity.
+///
+/// The estimator is the **minimum** across trials, not the median: timing noise
+/// is one-sided — scheduler preemption and cache effects only ever *add* time —
+/// so the fastest trial is the closest estimate of the true compute cost and
+/// the most robust to transient machine load. A median still rides background
+/// load up and occasionally fits a higher-rank model even single-threaded; the
+/// minimum does not.
 fn measure_log_scaling<F>(op: F) -> Vec<(f64, f64)>
 where
     F: Fn(&NaryMerkleLog<MemoryStorage>),
 {
-    let _guard = serial();
     let mut data: Vec<(f64, f64)> = Vec::with_capacity(LOG_SIZES.len());
     for &n in LOG_SIZES {
         let log = make_log(n);
-        let mut times = Vec::with_capacity(LOG_TRIALS);
+        let mut best = u128::MAX;
         for _ in 0..LOG_TRIALS {
             let start = ThreadTime::now();
-            for _ in 0..100 {
+            for _ in 0..LOG_REPS {
                 op(&log);
             }
-            times.push(start.elapsed().as_nanos() / 100);
+            best = best.min(start.elapsed().as_nanos() / LOG_REPS);
         }
-        data.push((n as f64, median(&mut times) as f64));
+        data.push((n as f64, best as f64));
     }
     data
 }
@@ -105,7 +133,7 @@ fn complexity_inclusion_proof_log_n() {
         let ts = log.size();
         let _ = smol::block_on(log.inclusion_proof(0, ts / 2)).unwrap();
     });
-    assert_rank_at_most(data, SUBLINEAR_RANK, "inclusion_proof", "O(log n)");
+    assert_growth_bounded(&data, SUBLINEAR_GROWTH, "inclusion_proof");
 }
 
 #[test]
@@ -114,7 +142,7 @@ fn complexity_consistency_proof_log_n() {
         let ts = log.size();
         let _ = smol::block_on(log.consistency_proof(ts / 2, ts)).unwrap();
     });
-    assert_rank_at_most(data, SUBLINEAR_RANK, "consistency_proof", "O(log n)");
+    assert_growth_bounded(&data, SUBLINEAR_GROWTH, "consistency_proof");
 }
 
 #[test]
@@ -122,7 +150,7 @@ fn complexity_root_extraction_log_n() {
     let data = measure_log_scaling(|log| {
         let _ = log.root();
     });
-    assert_rank_at_most(data, SUBLINEAR_RANK, "root_extraction", "O(log n)");
+    assert_growth_bounded(&data, SUBLINEAR_GROWTH, "root_extraction");
 }
 
 fn median(v: &mut [u128]) -> u128 {
@@ -143,9 +171,31 @@ fn assert_rank_at_most(data: Vec<(f64, f64)>, max_rank: u32, label: &str, expect
     );
 }
 
+/// Assert measured times grow by at most `max_factor` across the whole size
+/// range (slowest / fastest). For an operation whose true growth is so shallow
+/// it sits below the timing-noise floor, the measured curve is flat and model-
+/// fitting (`assert_rank_at_most`) is unreliable — but bounded growth across a
+/// 1000x size increase is exactly the property that separates sub-linear from
+/// linear: a linear regression would grow ~1000x and fail, an O(log n) impl
+/// grows by a small constant.
+fn assert_growth_bounded(data: &[(f64, f64)], max_factor: f64, label: &str) {
+    let times: Vec<f64> = data.iter().map(|&(_, t)| t).collect();
+    let min = times.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = times.iter().copied().fold(0.0_f64, f64::max);
+    assert!(
+        min > 0.0,
+        "{label}: measured a zero time (clock too coarse)"
+    );
+    let factor = max / min;
+    assert!(
+        factor <= max_factor,
+        "{label} should be sub-linear, but slowest/fastest = {factor:.1}x across the size range \
+         (max allowed {max_factor:.1}x); data = {data:?}",
+    );
+}
+
 #[test]
 fn complexity_append_amortized_constant() {
-    let _guard = serial();
     let sizes: &[usize] = &[500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000];
     let batch = 1000;
     let trials = 21;
@@ -181,7 +231,6 @@ fn complexity_append_amortized_constant() {
 
 #[test]
 fn complexity_resume_algorithm_log_n() {
-    let _guard = serial();
     let gaps: &[usize] = &[100, 500, 1_000, 2_000, 5_000, 10_000, 20_000];
     let base_size = 100;
     let trials = 21;
@@ -251,7 +300,6 @@ fn balanced_subtree(depth: usize, seed: &mut u64) -> Subtree {
 /// since it must evaluate the entire subtree to compute its root hash.
 #[test]
 fn complexity_append_subtree_linear_in_nodes() {
-    let _guard = serial();
     let depths: &[usize] = &[4, 6, 8, 10, 12, 14];
     let trials = 15;
     let mut data: Vec<(f64, f64)> = Vec::with_capacity(depths.len());
@@ -288,7 +336,6 @@ fn complexity_append_subtree_linear_in_nodes() {
 /// hashes for the proof.
 #[test]
 fn complexity_within_subtree_path_linear_in_nodes() {
-    let _guard = serial();
     let depths: &[usize] = &[4, 6, 8, 10, 12, 14];
     let trials = 15;
     let mut data: Vec<(f64, f64)> = Vec::with_capacity(depths.len());
@@ -318,7 +365,6 @@ fn complexity_within_subtree_path_linear_in_nodes() {
 /// subtrees.
 #[test]
 fn complexity_e2e_inclusion_subtree_log_n() {
-    let _guard = serial();
     let subtree_depth = 4; // Fixed: 16 leaves, 31 nodes per subtree.
 
     let make_subtree_log = |n: usize| -> Arc<(NaryMerkleLog<MemoryStorage>, Subtree)> {
