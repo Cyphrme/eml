@@ -1,12 +1,12 @@
 [package]
-name          = "storage-fjall"
+name          = "polydigest-storage-fjall"
 version       = "0.1.0"
 description   = "Fjall-backed storage backend for the EML append-only library"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
-documentation = "https://docs.rs/storage-fjall"
+documentation = "https://docs.rs/polydigest-storage-fjall"
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true

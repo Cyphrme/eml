@@ -1,12 +1,12 @@
 [package]
-name          = "spine"
+name          = "merkle-spine"
 version       = "0.1.0"
 description   = "Merkle Spine — the structural core: canonicalization (collapse + promotion), the proof spine, inclusion and leaf proofs, and the general structural Seal. Epoch-free."
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
-documentation = "https://docs.rs/spine"
+documentation = "https://docs.rs/merkle-spine"
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true

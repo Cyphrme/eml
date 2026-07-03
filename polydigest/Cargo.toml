@@ -17,13 +17,13 @@ categories.workspace = true
 # depends on the spine (the structural facet, the binding-root fold), CML (the
 # append-only per-algorithm engine), and CMT (the mutable single-algorithm tree
 # it lifts as `polydigest(cmt)`).
-spine = { version = "0.1", path = "../spine" }
-cml = { version = "0.1", path = "../cml" }
-cmt = { version = "0.1", path = "../cmt" }
+spine = { version = "0.1", path = "../spine", package = "merkle-spine" }
+cml = { version = "0.1", path = "../cml", package = "canonical-ml" }
+cmt = { version = "0.1", path = "../cmt", package = "canonical-mt" }
 
 [dev-dependencies]
 sha2 = "0.10"
 smol = "2.0"
-spine = { version = "0.1", path = "../spine" }
-cml = { version = "0.1", path = "../cml" }
-cmt = { version = "0.1", path = "../cmt" }
+spine = { version = "0.1", path = "../spine", package = "merkle-spine" }
+cml = { version = "0.1", path = "../cml", package = "canonical-ml" }
+cmt = { version = "0.1", path = "../cmt", package = "canonical-mt" }

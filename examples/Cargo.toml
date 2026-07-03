@@ -20,7 +20,7 @@ smol     = "2.0"
 cpu-time = "1"
 
 [dev-dependencies]
-spine      = { path = "../spine" }
+spine = { path = "../spine", package = "merkle-spine" }
 polydigest = { path = "../polydigest" }
 eml        = { path = "../eml" }
 sha2       = "0.10"
