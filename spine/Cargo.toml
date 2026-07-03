@@ -14,5 +14,8 @@ categories.workspace = true
 [dependencies]
 # Zero external dependencies. Hash operations injected via the Hasher trait.
 
+[lib]
+name = "spine"
+
 [dev-dependencies]
 sha2 = "0.10"

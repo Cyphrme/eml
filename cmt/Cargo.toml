@@ -11,6 +11,9 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "cmt"
+
 [dependencies]
 # The structural core; cmt is the single-algorithm mutable tree over it.
 # Epoch-free (no binding root, no timeline): those are the `polydigest` combinator's.

@@ -12,6 +12,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [lib]
+name = "storage_fjall"
 doctest = false
 
 [dependencies]

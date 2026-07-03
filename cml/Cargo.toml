@@ -11,6 +11,9 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "cml"
+
 [dependencies]
 # CML is the single-algorithm engine over the structural spine; it depends on it
 # alone — no epoch symbol crosses this boundary.
