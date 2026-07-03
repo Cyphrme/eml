@@ -40,6 +40,10 @@ pub enum FjallStorageError {
     /// Serialized epoch data is malformed or corrupted.
     #[error("Epoch metadata corruption: {0}")]
     MetadataCorruption(String),
+
+    /// The supplied keyspace-scoping prefix is invalid.
+    #[error("invalid keyspace prefix: {0:?}")]
+    InvalidPrefix(String),
 }
 
 /// A production-grade EML storage backend backed by a Fjall database.
@@ -83,6 +87,65 @@ impl FjallStorage {
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         let metadata = db
             .keyspace("eml_metadata", KeyspaceCreateOptions::default)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+
+        Ok(Self {
+            db,
+            leaves,
+            nodes,
+            metadata,
+        })
+    }
+
+    /// Initialize storage keyspaces under a caller-supplied scope, using an
+    /// existing, shared Fjall database.
+    ///
+    /// [`Self::with_database`] opens fixed keyspace names
+    /// (`eml_leaves`/`eml_nodes`/`eml_metadata`), so two [`FjallStorage`]
+    /// instances sharing one physical [`Database`] would read and write the
+    /// same keyspaces. That's fine for content-addressed data, but EML's
+    /// leaf/node keys are positional (leaf index; alg_id+left+height), so
+    /// two unrelated logical logs' "leaf 0" would collide at the identical
+    /// key. This constructor opens `{prefix}_eml_leaves` /
+    /// `{prefix}_eml_nodes` / `{prefix}_eml_metadata` instead, so distinct
+    /// prefixes give each logical log (e.g. each Cyphr principal) its own
+    /// isolated triplet within the same database.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FjallStorageError::InvalidPrefix`] if `prefix` is empty,
+    /// contains characters outside fjall's documented keyspace-name charset
+    /// (alphanumeric, `_`, `-`, `.`, `#`, `$`), or would produce a keyspace
+    /// name exceeding fjall's 255-byte limit. Returns
+    /// [`FjallStorageError::Database`] if the underlying keyspaces fail to
+    /// open.
+    pub fn with_database_scoped(db: Database, prefix: &str) -> Result<Self, FjallStorageError> {
+        if prefix.is_empty()
+            || !prefix
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '#' | '$'))
+        {
+            return Err(FjallStorageError::InvalidPrefix(prefix.to_string()));
+        }
+
+        let leaves_name = format!("{prefix}_eml_leaves");
+        let nodes_name = format!("{prefix}_eml_nodes");
+        let metadata_name = format!("{prefix}_eml_metadata");
+
+        // metadata_name is always the longest of the three suffixes, so
+        // bounding it bounds the other two.
+        if metadata_name.len() > 255 {
+            return Err(FjallStorageError::InvalidPrefix(prefix.to_string()));
+        }
+
+        let leaves = db
+            .keyspace(&leaves_name, KeyspaceCreateOptions::default)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+        let nodes = db
+            .keyspace(&nodes_name, KeyspaceCreateOptions::default)
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+        let metadata = db
+            .keyspace(&metadata_name, KeyspaceCreateOptions::default)
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
 
         Ok(Self {

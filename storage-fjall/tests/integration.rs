@@ -163,6 +163,56 @@ fn test_fjall_metadata_corruption() {
 // here was testing the unsound behaviour we eliminated; it is removed.
 
 #[test]
+fn test_fjall_storage_scoped_prefix_isolation() {
+    smol::block_on(async {
+        let dir = tempdir().unwrap();
+        let db = fjall::Database::builder(dir.path()).open().unwrap();
+
+        let mut tenant_a = FjallStorage::with_database_scoped(db.clone(), "tenant_a").unwrap();
+        let mut tenant_b = FjallStorage::with_database_scoped(db, "tenant_b").unwrap();
+
+        // Same positional keys (leaf index 0, node (alg_id=1, left=2, height=3),
+        // alg_id 7) written through two independently-scoped instances sharing
+        // one physical database must not collide.
+        tenant_a.store_leaf(0, b"a-leaf-0").await.unwrap();
+        tenant_b.store_leaf(0, b"b-leaf-0").await.unwrap();
+        assert_eq!(tenant_a.get_leaf(0).await.unwrap(), b"a-leaf-0");
+        assert_eq!(tenant_b.get_leaf(0).await.unwrap(), b"b-leaf-0");
+
+        tenant_a.store_node(1, 2, 3, b"a-node").await.unwrap();
+        tenant_b.store_node(1, 2, 3, b"b-node").await.unwrap();
+        assert_eq!(
+            tenant_a.get_node(1, 2, 3).await.unwrap().unwrap(),
+            b"a-node"
+        );
+        assert_eq!(
+            tenant_b.get_node(1, 2, 3).await.unwrap().unwrap(),
+            b"b-node"
+        );
+
+        let epochs_a = vec![(0, 5)];
+        let epochs_b = vec![(10, 20)];
+        tenant_a.store_algorithm_meta(7, &epochs_a).await.unwrap();
+        tenant_b.store_algorithm_meta(7, &epochs_b).await.unwrap();
+        assert_eq!(
+            tenant_a.load_algorithm_metas().await.unwrap(),
+            vec![(7, epochs_a)]
+        );
+        assert_eq!(
+            tenant_b.load_algorithm_metas().await.unwrap(),
+            vec![(7, epochs_b)]
+        );
+    });
+}
+
+#[test]
+fn test_fjall_storage_scoped_prefix_rejects_empty() {
+    let dir = tempdir().unwrap();
+    let db = fjall::Database::builder(dir.path()).open().unwrap();
+    assert!(FjallStorage::with_database_scoped(db, "").is_err());
+}
+
+#[test]
 fn test_fjall_out_of_order_and_sparse() {
     smol::block_on(async {
         let dir = tempdir().unwrap();
