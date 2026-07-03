@@ -69,7 +69,12 @@ impl FjallStorage {
     }
 
     /// Initialize storage keyspaces using an existing, shared Fjall database.
-    pub(crate) fn with_database(db: Database) -> Result<Self, FjallStorageError> {
+    ///
+    /// Lets a caller that owns its own [`Database`] (e.g. to share one
+    /// physical database — one WAL, atomic cross-keyspace batches — with
+    /// other partitions it manages) hand it to this storage backend instead
+    /// of having [`Self::open`] create a dedicated one.
+    pub fn with_database(db: Database) -> Result<Self, FjallStorageError> {
         let leaves = db
             .keyspace("eml_leaves", KeyspaceCreateOptions::default)
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
