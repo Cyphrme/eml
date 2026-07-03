@@ -6,6 +6,7 @@ edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
+documentation = "https://docs.rs/polydigest"
 
 [dependencies]
 # The polydigest combinator lifts the structural spine across N algorithms by

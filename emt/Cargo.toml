@@ -6,6 +6,7 @@ edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
+documentation = "https://docs.rs/emt"
 
 [dependencies]
 # The EMT instantiation = polydigest(cmt)@k2. The mutable structural tree (cmt)
