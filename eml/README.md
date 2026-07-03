@@ -24,15 +24,15 @@ The re-exported driver still accepts any arity for callers that need a different
 ## Place in the layered model
 
 ```
-spine → cml → polydigest → EML  (this crate: polydigest(cml) @ k=2, no prefix, subtrees ok)
+merkle-spine → canonical-ml → polydigest → EML  (this: polydigest(canonical-ml) @ k=2)
 ```
 
 Compare the sibling instantiation:
 
-- **EMT** (`emt`) — the mutable peer, `polydigest(cmt)` @ `k = 2`.
+- **EMT** (`emt`) — the mutable peer, `polydigest(canonical-mt)` @ `k = 2`.
 
 ## Further reading
 
 - `polydigest` — the combinator EML instantiates.
-- `cml` — the single-algorithm append-only engine underneath.
+- `canonical-ml` — the single-algorithm append-only engine underneath.
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.

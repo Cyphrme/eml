@@ -17,58 +17,59 @@ instantiations.
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L4 — EML / EMT — the instantiations (where "Epoch" lives)           eml/emt  │
-│   EML = polydigest(CML) @ k=2, arbitrary subtrees — the general-purpose log    │
-│   EMT = polydigest(CMT) @ k=2 — the mutable peer                               │
+│   EML = polydigest(canonical-ml) @ k=2, arbitrary subtrees               │
+│   EMT = polydigest(canonical-mt) @ k=2 — the mutable peer               │
 └───────────────────────────────┬────────────────────────────────────────────────┘
                                  │  instantiate at k=2
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L3 — the combinator                                             polydigest    │
-│   lifts a CML or CMT across N algorithms over ONE shared data substrate:        │
+│   lifts canonical-ml or canonical-mt across N algorithms over one substrate:   │
 │   activation timeline · null-run-extents · binding root · binding proof         │
 └───────────────────────────────┬────────────────────────────────────────────────┘
               ┌──────────────────┴───────────────────┐
 ┌─────────────▼──────────────────┐      ┌─────────────▼──────────────────┐
-│ L2 — CML (Canonical Merkle Log) │      │ L2 — CMT (Canonical Merkle Tree)│
+│ L2 — canonical-ml              │      │ L2 — canonical-mt              │
+│  Canonical Merkle Log           │      │  Canonical Merkle Tree          │
 │  append-only, single-algorithm  │      │  mutable, single-algorithm      │
-│  frontier carry · consistency   │ cml  │  set / get; no consistency  cmt │
+│  frontier carry · consistency   │      │  set / get; path-recompute      │
 │  seal → Snapshot · filling base │      │  per-node multi-hash add        │
 └─────────────┬──────────────────┘      └─────────────┬──────────────────┘
               └──────────────────┬───────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ L1 — Merkle Spine — the structural core; the proof payoff            spine    │
-│   canonicalization (collapse + promotion) · the proof spine · the Hasher seam  │
-│   inclusion · leaf proof · the general structural Seal · opaque metadata       │
+│ L1 — Merkle Spine — the structural core; the proof payoff      merkle-spine   │
+│   canonicalization (collapse + promotion) · proof spine · Hasher seam         │
+│   inclusion · leaf proof · general structural Seal · opaque metadata          │
 │   depends on nothing · epoch-free                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Merkle Spine** (`spine`) is the abstract structural core: canonicalization, the
+**Merkle Spine** (`merkle-spine`) is the abstract structural core: canonicalization, the
 proof spine, the `Hasher` seam, inclusion and leaf proofs, the general structural
 `Seal`, and an opaque metadata channel. It is **epoch-free** and depends on
 nothing. The structural uniqueness theorem is the central proof payoff.
 
-**CML** (`cml`) and **CMT** (`cmt`) are the two single-algorithm engineering
-libraries over the Spine. CML — Canonical Merkle Log — is append-only: it owns the
-frontier carry, append-only-prefix consistency proofs, and the structural snapshot.
-CMT — Canonical Merkle Tree — is the mutable peer: `set` / `get` and per-node
-multi-hash, but no frontier and so no consistency proofs. Both are `k`-generic and
-epoch-free; neither depends on the other. The one currency they exchange is the
-spine's `Seal`.
+**canonical-ml** (Canonical Merkle Log) and **canonical-mt** (Canonical Merkle Tree) 
+are the two single-algorithm engineering libraries over the Spine. canonical-ml 
+is append-only: it owns the frontier carry, append-only-prefix consistency proofs, 
+and the structural snapshot. canonical-mt is the mutable peer: `set` / `get` and 
+per-node multi-hash, but no frontier and so no consistency proofs. Both are 
+`k`-generic and epoch-free; neither depends on the other. The one currency they 
+exchange is the spine's `Seal`.
 
-**`polydigest`** is the combinator that lifts a CML or CMT across **N algorithms
-over one shared data substrate**. It is *not* a composition of independent logs —
-that would duplicate the data and raise per-algorithm cost. The leaf entries live
-once; each algorithm is a frontier / hash-view over them, so its only per-algorithm
-cost is its own hashing. The combinator adds the three concepts the structural core
-deliberately omits: the **activation timeline** (which algorithm is live where),
-the **null-run-extents** (the one logical count, for cross-tree alignment), and the
-**binding root** (the atomic multi-tree commitment).
+**`polydigest`** is the combinator that lifts canonical-ml or canonical-mt across 
+**N algorithms over one shared data substrate**. It is *not* a composition of 
+independent logs — that would duplicate the data and raise per-algorithm cost. The 
+leaf entries live once; each algorithm is a frontier / hash-view over them, so its 
+only per-algorithm cost is its own hashing. The combinator adds the three concepts 
+the structural core deliberately omits: the **activation timeline** (which algorithm 
+is live where), the **null-run-extents** (the one logical count, for cross-tree 
+alignment), and the **binding root** (the atomic multi-tree commitment).
 
 **EML / EMT** (`eml` / `emt`) are the concrete instantiations, fixed at arity
-`k = 2`. **EML** — the Epoch Merkle Log, `polydigest(CML)` — is the general-purpose
-append-only log. **EMT** — the Epoch Merkle Tree, `polydigest(CMT)` — is the mutable
-peer. `k = 2` is a sane default, not an opinion: binary spine traversal is cheaply
-logarithmic.
+`k = 2`. **EML** — the Epoch Merkle Log, `polydigest(canonical-ml)` — is the 
+general-purpose append-only log. **EMT** — the Epoch Merkle Tree, `polydigest(canonical-mt)` 
+— is the mutable peer. `k = 2` is a sane default, not an opinion: binary spine 
+traversal is cheaply logarithmic.
 
 The library is **de-branded**. The deliverable is the crates; the instantiations
 are thin. A consumer composes its own application structures over EML/EMT — for

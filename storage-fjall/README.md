@@ -31,11 +31,11 @@ let storage = FjallStorage::with_database(db, "leaves")?;
 ## Place in the stack
 
 ```
-spine → cml → polydigest → EML
-                ↓
-           Storage trait
-                ↓
-         storage-fjall  (this crate: Fjall backend)
+merkle-spine → canonical-ml → polydigest → EML
+                                  ↓
+                           Storage trait
+                                  ↓
+         polydigest-storage-fjall (this crate: Fjall backend)
 ```
 
 ## Further reading

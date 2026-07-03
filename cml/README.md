@@ -1,9 +1,9 @@
-# cml — Canonical Merkle Log
+# canonical-ml — Canonical Merkle Log
 
-**Tier L2 — a single-algorithm canonical library.** `cml` is the **append-only**
-engine over the structural Merkle Spine (`spine`). It is the append-only peer of the
-mutable `cmt` tree; both build on `spine` and neither depends on the other. The one
-currency they exchange is the spine's general structural `spine::Seal`.
+**Tier L2 — a single-algorithm canonical library.** canonical-ml is the **append-only**
+engine over the structural Merkle Spine (`merkle-spine`). It is the append-only peer of the
+mutable canonical-mt tree; both build on `merkle-spine` and neither depends on the other. 
+The one currency they exchange is the spine's general structural `Seal`.
 
 ## Role
 
@@ -33,20 +33,20 @@ a CML seal produces is the general `spine::Seal`; the epoch facet over it is
 ## Place in the layered model
 
 ```
-spine  ◄── the structural core
+merkle-spine  ◄── the structural core
   │
-  ├── cml  ◄── this crate (append-only)
-  └── cmt      (mutable)
+  ├── canonical-ml  ◄── this crate (append-only)
+  └── canonical-mt      (mutable)
         │
-      polydigest (the combinator: polydigest(cml) is the EML)
+      polydigest (the combinator that lifts both; polydigest(canonical-ml) is EML)
         │
       EML / EMT / ETL  (k=2 instantiations)
 ```
 
 ## Further reading
 
-- `spine` — the structural core this library builds on.
-- `cmt` — the mutable peer; both exchange `spine::Seal`.
-- `polydigest` — the combinator that lifts `cml` to `polydigest(cml)` (the EML) with the
+- `merkle-spine` — the structural core this library builds on.
+- `canonical-mt` — the mutable peer; both exchange `Seal`.
+- `polydigest` — the combinator that lifts canonical-ml to EML with the
   activation timeline and binding root.
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.

@@ -1,9 +1,9 @@
 # emt — Epoch Merkle Tree
 
 **Tier L4 — an instantiation.** EMT is the general-purpose **mutable** tree: the
-`polydigest` combinator over the single-algorithm `cmt` engine — `polydigest(cmt)` —
-instantiated at arity **`k = 2`**, with no prefix. It is the mutable peer of the
-append-only `eml` log.
+`polydigest` combinator over the single-algorithm canonical-mt engine — 
+`polydigest(canonical-mt)` — instantiated at arity **`k = 2`**, with no prefix. 
+It is the mutable peer of the append-only `eml` log.
 
 ## Role
 
@@ -33,15 +33,15 @@ the outer mutable tree.
 ## Place in the layered model
 
 ```
-spine → cmt → polydigest → EMT  (this crate: polydigest(cmt) @ k=2, no prefix)
+merkle-spine → canonical-mt → polydigest → EMT  (this: polydigest(canonical-mt) @ k=2)
 ```
 
 Compare the sibling instantiation:
 
-- **EML** (`eml`) — the append-only peer, `polydigest(cml)` @ `k = 2`.
+- **EML** (`eml`) — the append-only peer, `polydigest(canonical-ml)` @ `k = 2`.
 
 ## Further reading
 
 - `polydigest` — the combinator EMT instantiates.
-- `cmt` — the single-algorithm mutable engine underneath.
+- `canonical-mt` — the single-algorithm mutable engine underneath.
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.

@@ -43,19 +43,19 @@ substrate. The spine names no epoch concept.
 ## Place in the layered model
 
 ```
-spine  ◄── the structural core (this crate)
+merkle-spine  ◄── the structural core (this crate)
   │
-  ├── cml   (append-only, single-algorithm)
-  └── cmt   (mutable, single-algorithm)
+  ├── canonical-ml (append-only, single-algorithm)
+  └── canonical-mt (mutable, single-algorithm)
         │
-      polydigest (the combinator: polydigest(cml) / polydigest(cmt))
+      polydigest (the combinator: polydigest over both)
         │
       EML / EMT / ETL  (k=2 instantiations)
 ```
 
 ## Further reading
 
-- `cml` / `cmt` — the single-algorithm canonical libraries over this core.
+- `canonical-ml` / `canonical-mt` — the single-algorithm canonical libraries over this core.
 - `polydigest` — the combinator that adds the multi-algorithm dimension.
 - [`../docs/architecture.md`](../docs/architecture.md) — the full design.
 - `proofs/lean/` — the machine-checked structural theorems.

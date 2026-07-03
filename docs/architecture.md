@@ -1,12 +1,12 @@
 # Architecture
 
 This document describes the architecture of the repository: a **four-tier stack**
-of library crates — the structural **Merkle Spine**, the two single-algorithm
-canonical libraries **CML** and **CMT**, the **`polydigest`** combinator that lifts
-them across algorithms, and the concrete **EML / EMT** instantiations. It is the
-durable reference the crate documentation and the README point back to. Every
-architectural claim here is checkable against the source; the relevant paths are
-cited inline.
+of library crates — the structural **Merkle Spine** (`merkle-spine`), the two 
+single-algorithm canonical libraries **canonical-ml** and **canonical-mt**, the 
+**`polydigest`** combinator that lifts them across algorithms, and the concrete 
+**EML / EMT** instantiations. It is the durable reference the crate documentation 
+and the README point back to. Every architectural claim here is checkable against 
+the source; the relevant paths are cited inline.
 
 ## The four tiers
 
@@ -18,36 +18,37 @@ same way — the abstract core changes least, the instantiations most.
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L4 — EML / EMT — the instantiations ("Epoch" lives here)            eml/emt  │
-│   EML = polydigest(CML) @ k=2, arbitrary subtrees · EMT = polydigest(CMT) @ k=2 │
+│   EML = polydigest(canonical-ml) @ k=2 · EMT = polydigest(canonical-mt) @ k=2 │
 └───────────────────────────────┬────────────────────────────────────────────────┘
                                  │  instantiate at k=2
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ L3 — `polydigest` — the combinator (multi-hash, epochs)        polydigest     │
-│   lifts a CML or CMT across N algorithms over ONE shared data substrate         │
+│   lifts canonical-ml/canonical-mt across N algorithms over shared substrate    │
 │   activation timeline · null-run-extents · binding root · binding proof         │
 └───────────────────────────────┬────────────────────────────────────────────────┘
               ┌──────────────────┴───────────────────┐
 ┌─────────────▼──────────────────┐      ┌─────────────▼──────────────────┐
-│ L2 — CML  (append-only)     cml │      │ L2 — CMT  (mutable)         cmt │
-│  frontier carry · consistency   │◄seal─│  set / get; path-recompute      │
-│  seal → Snapshot · filling base │      │  per-node multi-hash add        │
+│ L2 — canonical-ml  (append-only)   │  │ L2 — canonical-mt  (mutable)    │
+│  frontier carry · consistency       │  │  set / get; path-recompute      │
+│  seal → Snapshot · filling base     │  │  per-node multi-hash add        │
 └─────────────┬──────────────────┘      └─────────────┬──────────────────┘
               └──────────────────┬───────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ L1 — Merkle Spine — the structural core; the proof payoff           spine     │
-│   canonicalization (collapse + promotion) · the proof spine · the Hasher seam  │
-│   inclusion · leaf proof · the general structural Seal · opaque metadata       │
+│ L1 — Merkle Spine (merkle-spine) — the structural core             spine     │
+│   canonicalization (collapse + promotion) · proof spine · Hasher seam         │
+│   inclusion · leaf proof · general structural Seal · opaque metadata          │
 │   depends on nothing · epoch-free                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
-  seal stack (one-way):   CMT ──► Seal (general lattice) ──► CML ──► Snapshot
-  combinator:   polydigest(CML) / polydigest(CMT) over one shared data substrate
+  seal stack (one-way):   canonical-mt ──► Seal ──► canonical-ml ──► Snapshot
+  combinator:   polydigest(canonical-ml) / polydigest(canonical-mt)
   embedding:    any tree's root ──► an opaque leaf in any other tree
 ```
 
-CML and CMT depend only on the Spine, never on each other; the one currency they
-exchange is the spine's `Seal` (`spine/src/seal.rs`). `polydigest` depends on CML/CMT.
-EML/EMT depend on `polydigest`. No tier carries an application concept.
+canonical-ml and canonical-mt depend only on the Merkle Spine, never on each other; 
+the one currency they exchange is the spine's `Seal` (`merkle-spine/src/seal.rs`). 
+`polydigest` depends on canonical-ml/canonical-mt. EML/EMT depend on `polydigest`. 
+No tier carries an application concept.
 
 ## Layer 1 — the Merkle Spine, the structural core
 
