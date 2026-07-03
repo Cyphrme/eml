@@ -14,10 +14,13 @@ documentation = "https://docs.rs/polydigest"
 # depends on the spine (the structural facet, the binding-root fold), CML (the
 # append-only per-algorithm engine), and CMT (the mutable single-algorithm tree
 # it lifts as `polydigest(cmt)`).
-spine = { path = "../spine" }
-cml = { path = "../cml" }
-cmt = { path = "../cmt" }
+spine = { version = "0.1", path = "../spine" }
+cml = { version = "0.1", path = "../cml" }
+cmt = { version = "0.1", path = "../cmt" }
 
 [dev-dependencies]
 sha2 = "0.10"
 smol = "2.0"
+spine = { version = "0.1", path = "../spine" }
+cml = { version = "0.1", path = "../cml" }
+cmt = { version = "0.1", path = "../cmt" }

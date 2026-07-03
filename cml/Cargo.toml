@@ -11,10 +11,10 @@ documentation = "https://docs.rs/cml"
 [dependencies]
 # CML is the single-algorithm engine over the structural spine; it depends on it
 # alone — no epoch symbol crosses this boundary.
-spine = { path = "../spine" }
+spine = { version = "0.1", path = "../spine" }
 
 [dev-dependencies]
 sha2 = "0.10"
 smol = "2.0"
 proptest = "1"
-spine = { path = "../spine" }
+spine = { version = "0.1", path = "../spine" }

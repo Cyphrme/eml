@@ -11,6 +11,6 @@ documentation = "https://docs.rs/emt"
 [dependencies]
 # The EMT instantiation = polydigest(cmt)@k2. The mutable structural tree (cmt)
 # lifted by the polydigest combinator (binding root + combined currency).
-polydigest = { path = "../polydigest" }
+polydigest = { version = "0.1", path = "../polydigest" }
 # The concrete hash this instantiation fixes (unprefixed SHA-256).
 sha2 = "0.10"
