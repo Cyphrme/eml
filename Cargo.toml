@@ -10,3 +10,8 @@ members = [
     "storage-fjall",
     "examples",
 ]
+
+[workspace.package]
+authors = ["Timothy DeHerrera <tim@nrdxp.dev>"]
+keywords = ["merkle", "proof", "log", "tree", "cryptography"]
+categories = ["algorithms", "cryptography", "data-structures"]

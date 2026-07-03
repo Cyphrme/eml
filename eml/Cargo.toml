@@ -1,12 +1,15 @@
 [package]
 name          = "eml"
-version       = "0.3.0"
+version       = "0.11.0"
 description   = "Epoch Merkle Log: the EML library instantiated at k=2, no prefix"
 edition       = "2024"
 rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 documentation = "https://docs.rs/eml"
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [lib]
 name = "eml"

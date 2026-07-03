@@ -7,6 +7,9 @@ rust-version  = "1.85"
 license-file  = "../LICENSE"
 repository    = "https://github.com/Cyphrme/eml"
 documentation = "https://docs.rs/spine"
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 # Zero external dependencies. Hash operations injected via the Hasher trait.
