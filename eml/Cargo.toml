@@ -1,6 +1,6 @@
 [package]
 name          = "eml"
-version       = "0.11.0"
+version       = "0.12.0"
 description   = "Epoch Merkle Log: the EML library instantiated at k=2, no prefix"
 edition       = "2024"
 rust-version  = "1.85"
