@@ -9,13 +9,33 @@
 //! prefix-form for durable witnesses. Conformance is anchored by the Lean corpus
 //! and the durability property tests, not a byte-equality oracle.
 //!
-//! The full EML surface is re-exported, so a consumer reaches the library
-//! through `eml::*`. The instantiation's only opinion is the arity: the
-//! [`config`] preset and [`new`]/[`from_storage`] constructors fix `k = 2`,
-//! while the re-exported [`NaryMerkleLog`] still accepts any [`TreeConfig`] for
-//! callers that need a different arity.
+//! [`polydigest`]'s append-only surface is re-exported, so a consumer reaches
+//! the library through `eml::*` (plus the [`storage`] module path). The
+//! combinator's mutable-tree peer -- `EpochTree`, its `CmtConfig`/`CmtError`/
+//! `CmtResult`, and the cmt rebalanced-tree topology -- is deliberately not
+//! re-exported here: that facade is the separate `emt` crate, not `eml`. The
+//! instantiation's only opinion is the arity: the [`config`] preset and
+//! [`new`]/[`from_storage`] constructors fix `k = 2`, while the re-exported
+//! [`NaryMerkleLog`] still accepts any [`TreeConfig`] for callers that need a
+//! different arity.
 
-pub use polydigest::*;
+pub use polydigest::{
+    AlgorithmMetas, AuditPayload, BindingProof, BoundSnapshot, ClaimedLeaf, ConsistencyProof,
+    CouplingProof, Epochs, FillError, FillKind, FilledTree, Hasher, InclusionProof, LeafProof,
+    LogError, LogKind, LogResult, MemoryStorage, Meta, NaryMerkleLog, NullRun, ProofStep,
+    RunExtent, Seal, Sealed, SkeletonStep, SnapshotProof, Storage, Subtree, TreeConfig,
+    TrustedBindingRoot, VerifierConfig, all_null_runs, bag_peaks, combined_root,
+    committed_active_algs, committed_active_at, constant_time_eq, count_leaves, evaluate, fill,
+    frontier_for_size, hasher, mountain_skeleton, mr, nary_mr, null_digest,
+    null_runs_are_trivial, null_runs_for_alg, reconstruct_consistency_roots,
+    reconstruct_inclusion_root, reduction_count, serialize_null_runs, subtree, topology,
+    validate_committed_epochs, verify_consistency, verify_consistency_with_coupling,
+    verify_epoch_evolution, verify_inactivity_with_coupling, verify_inclusion,
+    verify_inclusion_path_structure, verify_inclusion_with_coupling, within_subtree_path,
+};
+// A module path (not just its flat items) so `eml::storage::X` resolves --
+// eml's own integration tests reach `MemoryStorageError` that way.
+pub use polydigest::storage;
 // The combinator driver's storage-parameterised error/result are the EML
 // library's public `Error`/`Result` (the combinator also has a distinct,
 // non-parameterised snapshot `Error`, not re-exported under this name).
