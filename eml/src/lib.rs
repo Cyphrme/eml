@@ -10,14 +10,14 @@
 //! and the durability property tests, not a byte-equality oracle.
 //!
 //! [`polydigest`]'s append-only surface is re-exported, so a consumer reaches
-//! the library through `eml::*` (plus the [`storage`] module path). The
-//! combinator's mutable-tree peer -- `EpochTree`, its `CmtConfig`/`CmtError`/
-//! `CmtResult`, and the cmt rebalanced-tree topology -- is deliberately not
-//! re-exported here: that facade is the separate `emt` crate, not `eml`. The
-//! instantiation's only opinion is the arity: the [`config`] preset and
-//! [`new`]/[`from_storage`] constructors fix `k = 2`, while the re-exported
-//! [`NaryMerkleLog`] still accepts any [`TreeConfig`] for callers that need a
-//! different arity.
+//! the library through `eml::*` (plus the [`storage`] and [`proof`] module
+//! paths). The combinator's mutable-tree peer -- `EpochTree`, its
+//! `CmtConfig`/`CmtError`/`CmtResult`, and the cmt rebalanced-tree topology --
+//! is deliberately not re-exported here: that facade is the separate `emt`
+//! crate, not `eml`. The instantiation's only opinion is the arity: the
+//! [`config`] preset and [`new`]/[`from_storage`] constructors fix `k = 2`,
+//! while the re-exported [`NaryMerkleLog`] still accepts any [`TreeConfig`]
+//! for callers that need a different arity.
 
 pub use polydigest::{
     AlgorithmMetas, AuditPayload, BindingProof, BoundSnapshot, ClaimedLeaf, ConsistencyProof,
@@ -33,8 +33,11 @@ pub use polydigest::{
     verify_epoch_evolution, verify_inactivity_with_coupling, verify_inclusion,
     verify_inclusion_path_structure, verify_inclusion_with_coupling, within_subtree_path,
 };
-// A module path (not just its flat items) so `eml::storage::X` resolves --
-// eml's own integration tests reach `MemoryStorageError` that way.
+// Module paths (not just their flat items) so `eml::storage::X` and
+// `eml::proof::X` resolve: eml's own integration tests reach
+// `storage::MemoryStorageError` that way, and polydigest documents
+// `eml::proof::*` as the supported path to its append-only proof surface.
+pub use polydigest::proof;
 pub use polydigest::storage;
 // The combinator driver's storage-parameterised error/result are the EML
 // library's public `Error`/`Result` (the combinator also has a distinct,
