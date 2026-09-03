@@ -413,6 +413,20 @@ protocol that does need one (a currency needs "unspent *anywhere*") has
 left the record layer and must buy network agreement. The classification
 makes that purchase explicit instead of accidental.
 
+**Remark 5.6 (certifying the derived index).** Class D's committed
+index is kept honest *transitionally*, never by reconciliation. Three
+requirements make staleness unreachable rather than detected: (i) the
+keyed tree's shape is a pure function of its key set, so each key set
+has exactly one root; (ii) that root is committed beside the log root;
+(iii) each append's certificate carries the non-membership proof of the
+new key against the previous root plus the insertion path yielding the
+new one — `O(log u)` per key, `u` the live key count. Under (i)–(iii)
+the maintenance proof and the uniqueness check are the same object — a
+verifier never pays for them separately — and a published root that
+disagrees with derivation is an attributable violation, not a drifted
+cache. Requirement (i) is load-bearing: an insertion-order-dependent
+tree admits two honest roots for one key set, and attribution collapses.
+
 ### §6. The Monotone Boundary
 
 **Definition 6.1 (monotone property).** A property `P` of commitments is
