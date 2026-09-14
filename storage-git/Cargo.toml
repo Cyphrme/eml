@@ -1,0 +1,42 @@
+[package]
+# Named `storage-git` (not `polydigest-storage-git`, unlike its sibling
+# `polydigest-storage-fjall`) so `cargo test -p storage-git` -- the
+# evaluator this crate's own dispatch names -- resolves; the sibling's own
+# `-p storage-fjall` does not resolve today for the identical reason
+# (package name vs. directory name already diverge there), so this is a
+# deliberate, evaluator-driven departure from that naming convention rather
+# than an oversight.
+name          = "storage-git"
+version       = "0.1.0"
+description   = "Git-backed storage backend for the EML append-only library"
+edition       = "2024"
+rust-version  = "1.85"
+license-file  = "../LICENSE"
+repository    = "https://github.com/Cyphrme/eml"
+documentation = "https://docs.rs/storage-git"
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "storage_git"
+doctest = false
+
+[dependencies]
+# The Storage trait is the polydigest combinator's; this backend implements it.
+polydigest = { version = "0.1", path = "../polydigest" }
+# Structural primitives (frontier decomposition, arity range) shared with the
+# rest of the log stack -- already a transitive dependency via polydigest, so
+# depending on it directly names no new layer.
+spine      = { package = "merkle-spine", path = "../spine" }
+gix        = { version = "=0.87.1", features = ["sha256"] }
+thiserror  = "2"
+
+[dev-dependencies]
+# Reference behavior (AlgView::epochs_at/active_range, get_node_hash) that
+# this crate's property tests check the git layout against.
+cml       = { package = "canonical-ml", path = "../cml" }
+sha2      = "0.10"
+tempfile  = "3"
+smol      = "2"
+proptest  = "1"

@@ -8,6 +8,7 @@ members = [
     "cmt",
     "emt",
     "storage-fjall",
+    "storage-git",
     "examples",
 ]
 
