@@ -32,12 +32,21 @@ pub(crate) fn peak_object_id(
     target: usize,
 ) -> Result<ObjectId, Error> {
     let (_, height) = coords[target];
-    let q = coords[..target].iter().filter(|&&(_, h)| h == height).count();
-    let peaks_id = gitutil::find_entry(repo, tree_id, "peaks")?.ok_or_else(|| corrupt("C(n) missing peaks/"))?;
+    let q = coords[..target]
+        .iter()
+        .filter(|&&(_, h)| h == height)
+        .count();
+    let peaks_id = gitutil::find_entry(repo, tree_id, "peaks")?
+        .ok_or_else(|| corrupt("C(n) missing peaks/"))?;
     let group_id = gitutil::find_entry(repo, peaks_id, &hex2(u64::from(height)))?
         .ok_or_else(|| corrupt(format!("missing peaks/{}", hex2(u64::from(height)))))?;
-    gitutil::find_entry(repo, group_id, &hex2(q as u64))?
-        .ok_or_else(|| corrupt(format!("missing peaks/{}/{}", hex2(u64::from(height)), hex2(q as u64))))
+    gitutil::find_entry(repo, group_id, &hex2(q as u64))?.ok_or_else(|| {
+        corrupt(format!(
+            "missing peaks/{}/{}",
+            hex2(u64::from(height)),
+            hex2(q as u64)
+        ))
+    })
 }
 
 /// Descend from a peak at `(peak_left, peak_height)` down to
@@ -93,15 +102,24 @@ pub(crate) fn get_leaf(
         return Err(Error::NotFound(format!("leaf index {index} (size {size})")));
     }
     let coords = frontier_for_size(size, arity);
-    let target = covering_peak(&coords, arity, index, 0)
-        .ok_or_else(|| corrupt(format!("no frontier peak covers leaf index {index} at size {size}")))?;
+    let target = covering_peak(&coords, arity, index, 0).ok_or_else(|| {
+        corrupt(format!(
+            "no frontier peak covers leaf index {index} at size {size}"
+        ))
+    })?;
     let (peak_left, peak_height) = coords[target];
     let peak_id = peak_object_id(repo, tree_id, &coords, target)?;
-    let node_id = descend(repo, arity, peak_left, peak_height, peak_id, index, 0)?
-        .ok_or_else(|| Error::NotFound(format!("leaf {index} is not materialized (opaque ancestor)")))?;
+    let node_id =
+        descend(repo, arity, peak_left, peak_height, peak_id, index, 0)?.ok_or_else(|| {
+            Error::NotFound(format!(
+                "leaf {index} is not materialized (opaque ancestor)"
+            ))
+        })?;
     match gitutil::find_entry(repo, node_id, "leaf")? {
         Some(blob_id) => gitutil::read_blob(repo, blob_id),
-        None => Err(Error::NotFound(format!("leaf {index} was never given (no leaf blob)"))),
+        None => Err(Error::NotFound(format!(
+            "leaf {index} was never given (no leaf blob)"
+        ))),
     }
 }
 
@@ -144,8 +162,12 @@ pub(crate) fn load_algorithm_metas(
     };
     let mut out = Vec::new();
     for e in gitutil::read_tree(repo, epochs_id)? {
-        let alg = crate::layout::parse_hex16(&e.filename.to_string())
-            .ok_or_else(|| corrupt(format!("epochs/ entry {} is not a hex(alg_id,16) name", e.filename)))?;
+        let alg = crate::layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
+            corrupt(format!(
+                "epochs/ entry {} is not a hex(alg_id,16) name",
+                e.filename
+            ))
+        })?;
         let bytes = gitutil::read_blob(repo, e.oid)?;
         out.push((alg, crate::layout::decode_epochs(&bytes)?));
     }
@@ -162,8 +184,12 @@ pub(crate) fn load_checkpoint_roots(
     };
     let mut out = Vec::new();
     for e in gitutil::read_tree(repo, roots_id)? {
-        let alg = crate::layout::parse_hex16(&e.filename.to_string())
-            .ok_or_else(|| corrupt(format!("roots/ entry {} is not a hex(alg_id,16) name", e.filename)))?;
+        let alg = crate::layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
+            corrupt(format!(
+                "roots/ entry {} is not a hex(alg_id,16) name",
+                e.filename
+            ))
+        })?;
         out.push((alg, gitutil::read_blob(repo, e.oid)?));
     }
     Ok(out)

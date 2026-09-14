@@ -24,7 +24,10 @@ fn arb_ops() -> impl Strategy<Value = Vec<Op>> {
     let add = (0u64..4).prop_map(Op::Add);
     let remove = (0u64..4).prop_map(Op::Remove);
     let resume = (0u64..4).prop_map(Op::Resume);
-    prop::collection::vec(prop_oneof![5 => leaf, 1 => add, 1 => remove, 1 => resume], 1..30)
+    prop::collection::vec(
+        prop_oneof![5 => leaf, 1 => add, 1 => remove, 1 => resume],
+        1..30,
+    )
 }
 
 async fn apply<S: Storage>(log: &mut NaryMerkleLog<S>, op: &Op)
@@ -57,9 +60,13 @@ async fn run(ops: &[Op], arity: u64) {
     let mut git_log = NaryMerkleLog::new(git_storage, Box::new(WideHasher), TreeConfig { arity })
         .await
         .unwrap();
-    let mut mem_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(WideHasher), TreeConfig { arity })
-        .await
-        .unwrap();
+    let mut mem_log = NaryMerkleLog::new(
+        MemoryStorage::new(),
+        Box::new(WideHasher),
+        TreeConfig { arity },
+    )
+    .await
+    .unwrap();
 
     for op in ops {
         apply(&mut git_log, op).await;
@@ -81,8 +88,9 @@ async fn run(ops: &[Op], arity: u64) {
 
     // Reload parity (SG9/SG13/SG20): a fresh `from_storage` over each
     // backend must reconstruct the same roots.
-    let git_hashers: Vec<(u64, Box<dyn polydigest::Hasher>)> =
-        (0u64..4).map(|id| (id, Box::new(WideHasher) as Box<dyn polydigest::Hasher>)).collect();
+    let git_hashers: Vec<(u64, Box<dyn polydigest::Hasher>)> = (0u64..4)
+        .map(|id| (id, Box::new(WideHasher) as Box<dyn polydigest::Hasher>))
+        .collect();
     let git_hashers: Vec<_> = git_hashers
         .into_iter()
         .filter(|(id, _)| git_log.root_for(*id).is_ok())
@@ -94,12 +102,14 @@ async fn run(ops: &[Op], arity: u64) {
 
     let git_storage = git_log.into_storage();
     let mem_storage = mem_log.into_storage();
-    let reopened_git = NaryMerkleLog::from_storage_with_config(git_storage, git_hashers, TreeConfig { arity })
-        .await
-        .unwrap();
-    let reopened_mem = NaryMerkleLog::from_storage_with_config(mem_storage, mem_hashers, TreeConfig { arity })
-        .await
-        .unwrap();
+    let reopened_git =
+        NaryMerkleLog::from_storage_with_config(git_storage, git_hashers, TreeConfig { arity })
+            .await
+            .unwrap();
+    let reopened_mem =
+        NaryMerkleLog::from_storage_with_config(mem_storage, mem_hashers, TreeConfig { arity })
+            .await
+            .unwrap();
     assert_eq!(reopened_git.size(), reopened_mem.size());
     for alg_id in 0u64..4 {
         assert_eq!(

@@ -17,22 +17,37 @@ use storage_git::GitStorage;
 
 async fn run<H: Hasher + Clone + 'static>(hasher: H, hash_kind: HashKind, arity: u64) {
     let (_dir, repo) = init_repo(hash_kind);
-    assert_eq!(repo.to_thread_local().object_hash(), hash_kind, "repo must actually use the requested format");
+    assert_eq!(
+        repo.to_thread_local().object_hash(),
+        hash_kind,
+        "repo must actually use the requested format"
+    );
 
     let git_storage = GitStorage::new(repo, "refs/eml/storage/param/staging", arity).unwrap();
-    let mut git_log = NaryMerkleLog::new(git_storage, Box::new(hasher.clone()), TreeConfig { arity })
-        .await
-        .unwrap();
-    let mut mem_log = NaryMerkleLog::new(MemoryStorage::new(), Box::new(hasher.clone()), TreeConfig { arity })
-        .await
-        .unwrap();
+    let mut git_log =
+        NaryMerkleLog::new(git_storage, Box::new(hasher.clone()), TreeConfig { arity })
+            .await
+            .unwrap();
+    let mut mem_log = NaryMerkleLog::new(
+        MemoryStorage::new(),
+        Box::new(hasher.clone()),
+        TreeConfig { arity },
+    )
+    .await
+    .unwrap();
 
     for i in 0u8..23 {
         git_log.append_leaf(&[i, i, i]).await.unwrap();
         mem_log.append_leaf(&[i, i, i]).await.unwrap();
     }
-    git_log.add_algorithm(1, Box::new(hasher.clone())).await.unwrap();
-    mem_log.add_algorithm(1, Box::new(hasher.clone())).await.unwrap();
+    git_log
+        .add_algorithm(1, Box::new(hasher.clone()))
+        .await
+        .unwrap();
+    mem_log
+        .add_algorithm(1, Box::new(hasher.clone()))
+        .await
+        .unwrap();
     for i in 23u8..31 {
         git_log.append_leaf(&[i, i, i]).await.unwrap();
         mem_log.append_leaf(&[i, i, i]).await.unwrap();
@@ -40,7 +55,10 @@ async fn run<H: Hasher + Clone + 'static>(hasher: H, hash_kind: HashKind, arity:
 
     assert_eq!(git_log.size(), mem_log.size());
     for alg_id in [0u64, 1] {
-        assert_eq!(git_log.root_for(alg_id).unwrap(), mem_log.root_for(alg_id).unwrap());
+        assert_eq!(
+            git_log.root_for(alg_id).unwrap(),
+            mem_log.root_for(alg_id).unwrap()
+        );
     }
     for i in 0..git_log.size() {
         assert_eq!(

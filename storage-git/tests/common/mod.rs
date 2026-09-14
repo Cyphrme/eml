@@ -18,8 +18,9 @@ pub fn init_repo(hash: HashKind) -> (TempDir, ThreadSafeRepository) {
         object_hash: Some(hash),
         ..Default::default()
     };
-    let repo = ThreadSafeRepository::init_opts(dir.path(), CreateKind::Bare, opts, Default::default())
-        .expect("init bare repository");
+    let repo =
+        ThreadSafeRepository::init_opts(dir.path(), CreateKind::Bare, opts, Default::default())
+            .expect("init bare repository");
     (dir, repo)
 }
 
@@ -35,6 +36,7 @@ impl Hasher for WideHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
     fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         for c in children {
@@ -42,12 +44,15 @@ impl Hasher for WideHasher {
         }
         h.finalize().to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"").to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data).to_vec()
     }
+
     fn clone_box(&self) -> Box<dyn Hasher> {
         Box::new(WideHasher)
     }
@@ -64,6 +69,7 @@ impl Hasher for NarrowHasher {
     fn leaf(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data)[..8].to_vec()
     }
+
     fn node(&self, children: &[&[u8]]) -> Vec<u8> {
         let mut h = Sha256::new();
         for c in children {
@@ -71,12 +77,15 @@ impl Hasher for NarrowHasher {
         }
         h.finalize()[..8].to_vec()
     }
+
     fn empty(&self) -> Vec<u8> {
         Sha256::digest(b"")[..8].to_vec()
     }
+
     fn hash(&self, data: &[u8]) -> Vec<u8> {
         Sha256::digest(data)[..8].to_vec()
     }
+
     fn clone_box(&self) -> Box<dyn Hasher> {
         Box::new(NarrowHasher)
     }

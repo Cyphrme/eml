@@ -48,10 +48,12 @@ fn sg20_tree_at_matches_fresh_rebuild() {
 
             // Independent from-genesis rebuild to exactly size m.
             let (_dir2, repo2) = init_repo(HashKind::Sha1);
-            let storage2 = GitStorage::new(repo2.clone(), "refs/eml/storage/fresh/staging", 2).unwrap();
-            let mut log2 = NaryMerkleLog::new(storage2, Box::new(WideHasher), TreeConfig { arity: 2 })
-                .await
-                .unwrap();
+            let storage2 =
+                GitStorage::new(repo2.clone(), "refs/eml/storage/fresh/staging", 2).unwrap();
+            let mut log2 =
+                NaryMerkleLog::new(storage2, Box::new(WideHasher), TreeConfig { arity: 2 })
+                    .await
+                    .unwrap();
             for i in 0..m as u8 {
                 log2.append_leaf(&[i]).await.unwrap();
             }
@@ -61,7 +63,11 @@ fn sg20_tree_at_matches_fresh_rebuild() {
             let local2 = repo2.to_thread_local();
             let hist_entries = read_entries(&local, historical);
             let fresh_entries = read_entries(&local2, fresh);
-            assert_eq!(named(&hist_entries, "meta"), named(&fresh_entries, "meta"), "meta mismatch at m={m}");
+            assert_eq!(
+                named(&hist_entries, "meta"),
+                named(&fresh_entries, "meta"),
+                "meta mismatch at m={m}"
+            );
             assert_eq!(
                 named(&hist_entries, "epochs"),
                 named(&fresh_entries, "epochs"),
@@ -96,12 +102,28 @@ fn tree_at_historical_roots_is_documented_empty() {
         let past = git_storage.tree_at(1).unwrap();
         let past_entries = read_entries(&local, past);
         let roots_id = named(&past_entries, "roots");
-        assert!(local.find_tree(roots_id).unwrap().decode().unwrap().entries.is_empty());
+        assert!(
+            local
+                .find_tree(roots_id)
+                .unwrap()
+                .decode()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
 
         let live = git_storage.tree_at(2).unwrap();
         let live_entries = read_entries(&local, live);
         let live_roots_id = named(&live_entries, "roots");
-        assert!(!local.find_tree(live_roots_id).unwrap().decode().unwrap().entries.is_empty());
+        assert!(
+            !local
+                .find_tree(live_roots_id)
+                .unwrap()
+                .decode()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
     });
 }
 
@@ -134,7 +156,10 @@ fn sg21_open_at_durable_witness_parity() {
             let view = git_storage.open_at(tree).unwrap();
             for (idx, expected) in leaves.iter().enumerate() {
                 let actual = view.get_leaf(idx as u64).await.unwrap();
-                assert_eq!(&actual, expected, "leaf {idx} at historical size {size} diverged");
+                assert_eq!(
+                    &actual, expected,
+                    "leaf {idx} at historical size {size} diverged"
+                );
             }
         }
     });

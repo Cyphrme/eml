@@ -30,23 +30,39 @@ fn write_batch_refreshes_an_unchanged_epochs_blob() {
         log.append_leaf(b"one").await.unwrap();
 
         let local = repo.to_thread_local();
-        let tree = local.find_reference("refs/eml/storage/gc/staging").unwrap().target().id().to_owned();
+        let tree = local
+            .find_reference("refs/eml/storage/gc/staging")
+            .unwrap()
+            .target()
+            .id()
+            .to_owned();
         let epochs_group = find(&local, tree, "epochs");
         let epochs_blob = find(&local, epochs_group, &storage_git_hex16(0));
         let path = loose_path(dir.path(), epochs_blob);
         assert!(path.is_file());
 
         let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-        std::fs::File::open(&path).unwrap().set_modified(long_ago).unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
         let mtime_before = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(mtime_before, long_ago);
 
         log.append_leaf(b"two").await.unwrap();
 
-        let tree2 = local.find_reference("refs/eml/storage/gc/staging").unwrap().target().id().to_owned();
+        let tree2 = local
+            .find_reference("refs/eml/storage/gc/staging")
+            .unwrap()
+            .target()
+            .id()
+            .to_owned();
         let epochs_group2 = find(&local, tree2, "epochs");
         let epochs_blob2 = find(&local, epochs_group2, &storage_git_hex16(0));
-        assert_eq!(epochs_blob, epochs_blob2, "epochs blob content must be unchanged");
+        assert_eq!(
+            epochs_blob, epochs_blob2,
+            "epochs blob content must be unchanged"
+        );
 
         let mtime_after = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert!(

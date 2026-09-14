@@ -9,45 +9,35 @@
 //!
 //! # Departures from the spec's literal text
 //!
-//! 1. **Arity is a constructor parameter, not trait-carried.** `Storage`
-//!    never passes `k`; the checkpoint tree's layout (§2) is parametric in
-//!    it throughout. [`GitStorage::new`] takes `arity` explicitly and
-//!    persists it in `meta` (SG12); reopening against a tree whose stored
+//! 1. **Arity is a constructor parameter, not trait-carried.** `Storage` never passes `k`; the
+//!    checkpoint tree's layout (§2) is parametric in it throughout. [`GitStorage::new`] takes
+//!    `arity` explicitly and persists it in `meta` (SG12); reopening against a tree whose stored
 //!    arity disagrees is rejected as [`GitStorageError::InvalidArity`].
-//! 2. **Standalone `store_leaf`/`store_node` require in-order coordinates,
-//!    and never complete a merge on their own.** Unlike `storage-fjall`'s
-//!    sparse-friendly flat keyspace, this layer's positional layout is
-//!    built on aligned blocks sealed in order (SG8); a standalone
-//!    `store_leaf(index, _)` is accepted only at `index == len()`, matching
-//!    the same append-only assumption `MemoryStorage` already makes via its
-//!    own `debug_assert_eq!`. Further, because neither standalone method
-//!    carries a hasher, if `index` would complete a `k`-ary merge (a carry
-//!    reduction), this layer has no digest to seal the merged parent with
-//!    and the write fails with `Corruption` -- `polydigest` never actually
-//!    calls either method standalone for a count-changing append (it always
-//!    goes through `write_batch`, which carries the combinator's own
-//!    computed node digests alongside the leaf); this limitation is only
-//!    reachable by a caller driving the trait directly, bypassing the
-//!    combinator.
-//! 3. **`get_node`/`tree_at` are scoped to peaks and materialized
-//!    descendants.** A node sealed opaque (§2.6) that has since been folded
-//!    into a taller peak carries no `hex(c,2)` children (SG4/SG10 forbid
-//!    it), so nothing beneath a superseded opaque peak is addressable once
-//!    it stops being the frontier's own peak; `get_node` answers `Ok(None)`
-//!    and `tree_at` returns a reconstruction error for such a coordinate
-//!    rather than fabricating a value. This affects subtree-kind/resumed
-//!    logs at historical, already-subsumed coordinates; a flat log is never
-//!    affected, since every one of its nodes is materialized all the way to
-//!    its leaves. See `src/read.rs` and `src/historical.rs` for the full
-//!    argument.
-//! 4. **`tree_at(n)` for `n < len()` needs a registered hasher to fold
-//!    `roots/` correctly.** A past member root needs the algorithm's hash
-//!    fold over its historical frontier peaks; [`GitStorage::register_hasher`]
-//!    lets a caller supply that fold (an opaque `spine::Hasher` trait
-//!    object, keyed by the same opaque `alg_id` every other method already
-//!    uses -- SG26 names no algorithm regardless). An algorithm active at
-//!    `n` with no hasher registered omits its `roots/` entry rather than
-//!    fabricating or erroring -- opt-out per algorithm, not the crate's
+//! 2. **Standalone `store_leaf`/`store_node` require in-order coordinates, and never complete a
+//!    merge on their own.** Unlike `storage-fjall`'s sparse-friendly flat keyspace, this layer's
+//!    positional layout is built on aligned blocks sealed in order (SG8); a standalone
+//!    `store_leaf(index, _)` is accepted only at `index == len()`, matching the same append-only
+//!    assumption `MemoryStorage` already makes via its own `debug_assert_eq!`. Further, because
+//!    neither standalone method carries a hasher, if `index` would complete a `k`-ary merge (a
+//!    carry reduction), this layer has no digest to seal the merged parent with and the write fails
+//!    with `Corruption` -- `polydigest` never actually calls either method standalone for a
+//!    count-changing append (it always goes through `write_batch`, which carries the combinator's
+//!    own computed node digests alongside the leaf); this limitation is only reachable by a caller
+//!    driving the trait directly, bypassing the combinator.
+//! 3. **`get_node`/`tree_at` are scoped to peaks and materialized descendants.** A node sealed
+//!    opaque (§2.6) that has since been folded into a taller peak carries no `hex(c,2)` children
+//!    (SG4/SG10 forbid it), so nothing beneath a superseded opaque peak is addressable once it
+//!    stops being the frontier's own peak; `get_node` answers `Ok(None)` and `tree_at` returns a
+//!    reconstruction error for such a coordinate rather than fabricating a value. This affects
+//!    subtree-kind/resumed logs at historical, already-subsumed coordinates; a flat log is never
+//!    affected, since every one of its nodes is materialized all the way to its leaves. See
+//!    `src/read.rs` and `src/historical.rs` for the full argument.
+//! 4. **`tree_at(n)` for `n < len()` needs a registered hasher to fold `roots/` correctly.** A past
+//!    member root needs the algorithm's hash fold over its historical frontier peaks;
+//!    [`GitStorage::register_hasher`] lets a caller supply that fold (an opaque `spine::Hasher`
+//!    trait object, keyed by the same opaque `alg_id` every other method already uses -- SG26 names
+//!    no algorithm regardless). An algorithm active at `n` with no hasher registered omits its
+//!    `roots/` entry rather than fabricating or erroring -- opt-out per algorithm, not the crate's
 //!    former unconditional departure. See `src/historical.rs`.
 
 mod build;
@@ -60,14 +50,12 @@ mod read;
 use std::collections::HashMap;
 use std::path::Path;
 
+pub use error::GitStorageError;
 use gix::ObjectId;
-use gix::refs::FullName;
-use gix::refs::Target;
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit};
+use gix::refs::{FullName, Target};
 use polydigest::{AlgorithmMetas, Storage};
 use spine::Hasher;
-
-pub use error::GitStorageError;
 
 /// A `polydigest::Storage` backend over a git object database.
 ///
@@ -138,9 +126,13 @@ impl GitStorage {
         {
             None => (None, 0, 0),
             Some(mut r) => {
-                let tree_id = r.peel_to_id().map_err(|e| GitStorageError::Git(e.to_string()))?.detach();
-                let meta_id = gitutil::find_entry(&local, tree_id, "meta")?
-                    .ok_or_else(|| GitStorageError::Corruption("staging ref's tree has no meta".into()))?;
+                let tree_id = r
+                    .peel_to_id()
+                    .map_err(|e| GitStorageError::Git(e.to_string()))?
+                    .detach();
+                let meta_id = gitutil::find_entry(&local, tree_id, "meta")?.ok_or_else(|| {
+                    GitStorageError::Corruption("staging ref's tree has no meta".into())
+                })?;
                 let bytes = gitutil::read_blob(&local, meta_id)?;
                 let (stored_arity, count, kind_byte) = layout::decode_meta(&bytes)?;
                 if stored_arity != arity {
@@ -183,9 +175,13 @@ impl GitStorage {
     /// # Errors
     ///
     /// Propagates a `gix` open failure, or anything [`Self::new`] returns.
-    pub fn open(path: &Path, staging_ref: impl AsRef<str>, arity: u64) -> Result<Self, GitStorageError> {
-        let repo =
-            gix::ThreadSafeRepository::open(path).map_err(|e| GitStorageError::Git(e.to_string()))?;
+    pub fn open(
+        path: &Path,
+        staging_ref: impl AsRef<str>,
+        arity: u64,
+    ) -> Result<Self, GitStorageError> {
+        let repo = gix::ThreadSafeRepository::open(path)
+            .map_err(|e| GitStorageError::Git(e.to_string()))?;
         Self::new(repo, staging_ref, arity)
     }
 
@@ -287,13 +283,21 @@ impl Storage for GitStorage {
                 self.count
             )));
         }
-        self.write_batch(&[(index, data)], &[], &[], Some((index + 1, self.kind_byte)), &[])
-            .await
+        self.write_batch(
+            &[(index, data)],
+            &[],
+            &[],
+            Some((index + 1, self.kind_byte)),
+            &[],
+        )
+        .await
     }
 
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         let Some(tree) = self.observed_tip else {
-            return Err(GitStorageError::NotFound(format!("leaf index {index} (empty store)")));
+            return Err(GitStorageError::NotFound(format!(
+                "leaf index {index} (empty store)"
+            )));
         };
         let repo = self.thread_local();
         read::get_leaf(&repo, tree, self.arity, self.count, index)
@@ -303,11 +307,23 @@ impl Storage for GitStorage {
         Ok(self.count)
     }
 
-    async fn store_node(&mut self, alg_id: u64, left: u64, height: u32, hash: &[u8]) -> Result<(), Self::Error> {
-        self.write_batch(&[], &[(alg_id, left, height, hash)], &[], None, &[]).await
+    async fn store_node(
+        &mut self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+        hash: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.write_batch(&[], &[(alg_id, left, height, hash)], &[], None, &[])
+            .await
     }
 
-    async fn get_node(&self, alg_id: u64, left: u64, height: u32) -> Result<Option<Vec<u8>>, Self::Error> {
+    async fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
         let Some(tree) = self.observed_tip else {
             return Ok(None);
         };
@@ -315,8 +331,13 @@ impl Storage for GitStorage {
         read::get_node(&repo, tree, self.arity, self.count, alg_id, left, height)
     }
 
-    async fn store_algorithm_meta(&mut self, alg_id: u64, epochs: &[(u64, u64)]) -> Result<(), Self::Error> {
-        self.write_batch(&[], &[], &[(alg_id, epochs)], None, &[]).await
+    async fn store_algorithm_meta(
+        &mut self,
+        alg_id: u64,
+        epochs: &[(u64, u64)],
+    ) -> Result<(), Self::Error> {
+        self.write_batch(&[], &[], &[(alg_id, epochs)], None, &[])
+            .await
     }
 
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
@@ -408,9 +429,16 @@ impl GitReadOnlyView {
     /// # Errors
     ///
     /// Propagates a decode/corruption error.
-    pub async fn get_node(&self, alg_id: u64, left: u64, height: u32) -> Result<Option<Vec<u8>>, GitStorageError> {
+    pub async fn get_node(
+        &self,
+        alg_id: u64,
+        left: u64,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, GitStorageError> {
         let repo = self.repo.to_thread_local();
-        read::get_node(&repo, self.tree, self.arity, self.size, alg_id, left, height)
+        read::get_node(
+            &repo, self.tree, self.arity, self.size, alg_id, left, height,
+        )
     }
 
     /// Load every registered algorithm's epoch history as projected onto

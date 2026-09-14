@@ -4,8 +4,8 @@
 //! position-lookup and tree-assembly code needs.
 
 use gix::bstr::BString;
-use gix::objs::tree::EntryKind;
-use gix::objs::{Kind, Tree, Write as _, WriteTo as _, tree::Entry};
+use gix::objs::tree::{Entry, EntryKind};
+use gix::objs::{Kind, Tree, Write as _, WriteTo as _};
 
 use crate::error::GitStorageError as Error;
 
@@ -56,7 +56,10 @@ pub(crate) fn write_blob(repo: &gix::Repository, data: &[u8]) -> Result<gix::Obj
 /// Build and write a tree object from `entries` (SG22 write path). Entries
 /// are sorted by git's canonical tree order (SG7) unconditionally — `gix`
 /// only `debug_assert!`s pre-sorted order and never sorts for us.
-pub(crate) fn write_tree(repo: &gix::Repository, mut entries: Vec<Entry>) -> Result<gix::ObjectId, Error> {
+pub(crate) fn write_tree(
+    repo: &gix::Repository,
+    mut entries: Vec<Entry>,
+) -> Result<gix::ObjectId, Error> {
     entries.sort();
     let tree = Tree { entries };
     let mut buf = Vec::new();
@@ -73,7 +76,10 @@ pub(crate) struct DecodedEntry {
 }
 
 /// Read and decode a tree object's entries.
-pub(crate) fn read_tree(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec<DecodedEntry>, Error> {
+pub(crate) fn read_tree(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+) -> Result<Vec<DecodedEntry>, Error> {
     let tree = repo.find_tree(id).map_err(git_err)?;
     let decoded = tree.decode().map_err(git_err)?;
     Ok(decoded
@@ -161,7 +167,10 @@ mod tests {
         assert!(path.is_file());
 
         let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-        std::fs::File::open(&path).unwrap().set_modified(long_ago).unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
         let mtime_before = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(mtime_before, long_ago);
 
@@ -201,7 +210,10 @@ mod tests {
         let id_unsorted = write_tree(&local, unsorted.clone()).unwrap();
         let id_reversed = write_tree(&local, reversed).unwrap();
         let id_sorted = write_tree(&local, already_sorted).unwrap();
-        assert_eq!(id_unsorted, id_sorted, "write_tree must sort regardless of input order");
+        assert_eq!(
+            id_unsorted, id_sorted,
+            "write_tree must sort regardless of input order"
+        );
         assert_eq!(id_reversed, id_sorted);
 
         // A naive write that skips the sort either panics on gix's own
@@ -217,10 +229,14 @@ mod tests {
             naive_buf
         });
         match naive {
-            Err(_) => {}, // gix's debug_assert! caught it first -- expected under debug assertions.
+            Err(_) => {}, /* gix's debug_assert! caught it first -- expected under debug */
+            // assertions.
             Ok(naive_buf) => {
                 let naive_id = write_object(&local, Kind::Tree, &naive_buf).unwrap();
-                assert_ne!(naive_id, id_sorted, "the unsorted serialization must differ from the sorted one");
+                assert_ne!(
+                    naive_id, id_sorted,
+                    "the unsorted serialization must differ from the sorted one"
+                );
             },
         }
     }
@@ -246,6 +262,9 @@ mod tests {
 
         let id2 = write_blob(&local, bytes).unwrap();
         assert_eq!(id1, id2);
-        assert!(path.is_file(), "a later write of the same content must heal the gap");
+        assert!(
+            path.is_file(),
+            "a later write of the same content must heal the gap"
+        );
     }
 }

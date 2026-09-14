@@ -71,12 +71,20 @@ pub(crate) fn apply_write(
     let leaf_map: HashMap<u64, &[u8]> = input.leaves.iter().map(|&(i, d)| (i, d)).collect();
     let mut node_map: NodeMap<'_> = HashMap::new();
     for &(alg, left, height, hash) in input.nodes {
-        node_map.entry((left, height)).or_default().push((alg, hash));
+        node_map
+            .entry((left, height))
+            .or_default()
+            .push((alg, hash));
     }
 
-    let (epochs_tree, active_algs) = build_epochs(repo, old_tree, input.algorithm_metas, new_count)?;
+    let (epochs_tree, active_algs) =
+        build_epochs(repo, old_tree, input.algorithm_metas, new_count)?;
     let roots_tree = build_roots(repo, old_tree, input.checkpoint_roots, &active_algs)?;
-    let batch = BatchInputs { leaf_map: &leaf_map, node_map: &node_map, first_write };
+    let batch = BatchInputs {
+        leaf_map: &leaf_map,
+        node_map: &node_map,
+        first_write,
+    };
     let peaks_tree = build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, new_count, new_kind))?;
@@ -121,7 +129,9 @@ fn build_epochs(
                 epochs.to_vec()
             } else {
                 let blob = read_named_blob(repo, old_tree, "epochs", alg_id)?.ok_or_else(|| {
-                    corrupt(format!("algorithm {alg_id} registered but epochs/ blob missing"))
+                    corrupt(format!(
+                        "algorithm {alg_id} registered but epochs/ blob missing"
+                    ))
                 })?;
                 layout::decode_epochs(&blob)?
             };
@@ -157,7 +167,11 @@ fn build_roots(
 
     let mut entries = Vec::with_capacity(roots.len());
     for (alg_id, bytes) in &roots {
-        entries.push(entry(EntryKind::Blob, hex16(*alg_id), gitutil::write_blob(repo, bytes)?));
+        entries.push(entry(
+            EntryKind::Blob,
+            hex16(*alg_id),
+            gitutil::write_blob(repo, bytes)?,
+        ));
     }
     gitutil::write_tree(repo, entries)
 }
@@ -274,16 +288,32 @@ fn would_materialize(
 /// `existing` again reflects this same instance's own prior writes, so
 /// carrying it forward (e.g. `resume_algorithm` adding a digest to an
 /// already-materialized leaf) is safe and required for `get_leaf` parity.
-fn resolve_node(repo: &gix::Repository, k: u64, left: u64, height: u32, ctx: &ResolveCtx<'_>) -> Result<Resolved, Error> {
-    let ResolveCtx { leaf_map, node_map, old_index, first_write } = *ctx;
+fn resolve_node(
+    repo: &gix::Repository,
+    k: u64,
+    left: u64,
+    height: u32,
+    ctx: &ResolveCtx<'_>,
+) -> Result<Resolved, Error> {
+    let ResolveCtx {
+        leaf_map,
+        node_map,
+        old_index,
+        first_write,
+    } = *ctx;
     if !is_touched(left, height, leaf_map, node_map) {
-        return old_index
-            .get(&(left, height))
-            .copied()
-            .ok_or_else(|| corrupt(format!("no data for coordinate (left={left}, height={height})")));
+        return old_index.get(&(left, height)).copied().ok_or_else(|| {
+            corrupt(format!(
+                "no data for coordinate (left={left}, height={height})"
+            ))
+        });
     }
 
-    let existing = if first_write { None } else { old_index.get(&(left, height)).copied() };
+    let existing = if first_write {
+        None
+    } else {
+        old_index.get(&(left, height)).copied()
+    };
 
     let mut digest_map: HashMap<u64, Vec<u8>> = match existing {
         Some(r) => read_digest_map(repo, r.id)?,
@@ -296,7 +326,11 @@ fn resolve_node(repo: &gix::Repository, k: u64, left: u64, height: u32, ctx: &Re
     }
     let mut digest_entries = Vec::with_capacity(digest_map.len());
     for (alg, bytes) in &digest_map {
-        digest_entries.push(entry(EntryKind::Blob, hex16(*alg), gitutil::write_blob(repo, bytes)?));
+        digest_entries.push(entry(
+            EntryKind::Blob,
+            hex16(*alg),
+            gitutil::write_blob(repo, bytes)?,
+        ));
     }
     let digest_tree = gitutil::write_tree(repo, digest_entries)?;
     let mut top = vec![entry(EntryKind::Tree, "digest", digest_tree)];
@@ -305,12 +339,20 @@ fn resolve_node(repo: &gix::Repository, k: u64, left: u64, height: u32, ctx: &Re
         let leaf_bytes: Option<Vec<u8>> = if let Some(&data) = leaf_map.get(&left) {
             Some(data.to_vec())
         } else if let Some(r) = existing {
-            if r.materialized { read_leaf_blob(repo, r.id)? } else { None }
+            if r.materialized {
+                read_leaf_blob(repo, r.id)?
+            } else {
+                None
+            }
         } else {
             None
         };
         if let Some(bytes) = &leaf_bytes {
-            top.push(entry(EntryKind::Blob, "leaf", gitutil::write_blob(repo, bytes)?));
+            top.push(entry(
+                EntryKind::Blob,
+                "leaf",
+                gitutil::write_blob(repo, bytes)?,
+            ));
         }
         leaf_bytes.is_some()
     } else if let Some(r) = existing {
@@ -356,8 +398,8 @@ fn index_old_peaks(
     if old_coords.is_empty() {
         return Ok(HashMap::new());
     }
-    let peaks_id =
-        gitutil::find_entry(repo, old_tree, "peaks")?.ok_or_else(|| corrupt("C(n) missing peaks/"))?;
+    let peaks_id = gitutil::find_entry(repo, old_tree, "peaks")?
+        .ok_or_else(|| corrupt("C(n) missing peaks/"))?;
 
     let mut by_height: HashMap<u32, Vec<u64>> = HashMap::new();
     for &(left, height) in old_coords {
@@ -370,17 +412,32 @@ fn index_old_peaks(
         let group_id = gitutil::find_entry(repo, peaks_id, &hex2(u64::from(height)))?
             .ok_or_else(|| corrupt(format!("missing peaks/{}", hex2(u64::from(height)))))?;
         for (q, left) in lefts.into_iter().enumerate() {
-            let node_id = gitutil::find_entry(repo, group_id, &hex2(q as u64))?.ok_or_else(|| {
-                corrupt(format!("missing peaks/{}/{}", hex2(u64::from(height)), hex2(q as u64)))
-            })?;
+            let node_id =
+                gitutil::find_entry(repo, group_id, &hex2(q as u64))?.ok_or_else(|| {
+                    corrupt(format!(
+                        "missing peaks/{}/{}",
+                        hex2(u64::from(height)),
+                        hex2(q as u64)
+                    ))
+                })?;
             let materialized = node_is_materialized(repo, node_id, height)?;
-            out.insert((left, height), Resolved { id: node_id, materialized });
+            out.insert(
+                (left, height),
+                Resolved {
+                    id: node_id,
+                    materialized,
+                },
+            );
         }
     }
     Ok(out)
 }
 
-fn node_is_materialized(repo: &gix::Repository, node_id: ObjectId, height: u32) -> Result<bool, Error> {
+fn node_is_materialized(
+    repo: &gix::Repository,
+    node_id: ObjectId,
+    height: u32,
+) -> Result<bool, Error> {
     let entries = gitutil::read_tree(repo, node_id)?;
     if height == 0 {
         Ok(entries.iter().any(|e| e.filename == "leaf"))
@@ -389,14 +446,21 @@ fn node_is_materialized(repo: &gix::Repository, node_id: ObjectId, height: u32) 
     }
 }
 
-fn read_digest_map(repo: &gix::Repository, node_id: ObjectId) -> Result<HashMap<u64, Vec<u8>>, Error> {
+fn read_digest_map(
+    repo: &gix::Repository,
+    node_id: ObjectId,
+) -> Result<HashMap<u64, Vec<u8>>, Error> {
     let Some(digest_id) = gitutil::find_entry(repo, node_id, "digest")? else {
         return Ok(HashMap::new());
     };
     let mut map = HashMap::new();
     for e in gitutil::read_tree(repo, digest_id)? {
-        let alg = layout::parse_hex16(&e.filename.to_string())
-            .ok_or_else(|| corrupt(format!("digest/ entry {} is not a hex(alg_id,16) name", e.filename)))?;
+        let alg = layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
+            corrupt(format!(
+                "digest/ entry {} is not a hex(alg_id,16) name",
+                e.filename
+            ))
+        })?;
         map.insert(alg, gitutil::read_blob(repo, e.oid)?);
     }
     Ok(map)
@@ -416,8 +480,12 @@ fn list_epoch_algorithms(repo: &gix::Repository, tree: ObjectId) -> Result<Vec<u
     gitutil::read_tree(repo, epochs_id)?
         .into_iter()
         .map(|e| {
-            layout::parse_hex16(&e.filename.to_string())
-                .ok_or_else(|| corrupt(format!("epochs/ entry {} is not a hex(alg_id,16) name", e.filename)))
+            layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
+                corrupt(format!(
+                    "epochs/ entry {} is not a hex(alg_id,16) name",
+                    e.filename
+                ))
+            })
         })
         .collect()
 }
@@ -438,14 +506,22 @@ fn read_named_blob(
     }
 }
 
-fn read_named_map(repo: &gix::Repository, tree: ObjectId, section: &str) -> Result<HashMap<u64, Vec<u8>>, Error> {
+fn read_named_map(
+    repo: &gix::Repository,
+    tree: ObjectId,
+    section: &str,
+) -> Result<HashMap<u64, Vec<u8>>, Error> {
     let Some(section_id) = gitutil::find_entry(repo, tree, section)? else {
         return Ok(HashMap::new());
     };
     let mut map = HashMap::new();
     for e in gitutil::read_tree(repo, section_id)? {
-        let alg = layout::parse_hex16(&e.filename.to_string())
-            .ok_or_else(|| corrupt(format!("{section}/ entry {} is not a hex(alg_id,16) name", e.filename)))?;
+        let alg = layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
+            corrupt(format!(
+                "{section}/ entry {} is not a hex(alg_id,16) name",
+                e.filename
+            ))
+        })?;
         map.insert(alg, gitutil::read_blob(repo, e.oid)?);
     }
     Ok(map)

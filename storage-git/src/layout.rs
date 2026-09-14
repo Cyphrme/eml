@@ -126,7 +126,9 @@ pub fn epochs_at(history: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
 /// Whether the epoch timeline's last entry is active (open) at `size`.
 #[must_use]
 pub fn is_active_at(epochs_at_size: &[(u64, u64)]) -> bool {
-    epochs_at_size.last().is_some_and(|&(_, end)| end == u64::MAX)
+    epochs_at_size
+        .last()
+        .is_some_and(|&(_, end)| end == u64::MAX)
 }
 
 #[cfg(test)]
@@ -142,15 +144,19 @@ mod tests {
         fn leaf(&self, _: &[u8]) -> Vec<u8> {
             vec![0; 4]
         }
+
         fn node(&self, _: &[&[u8]]) -> Vec<u8> {
             vec![0; 4]
         }
+
         fn empty(&self) -> Vec<u8> {
             vec![0; 4]
         }
+
         fn hash(&self, _: &[u8]) -> Vec<u8> {
             vec![0; 4]
         }
+
         fn clone_box(&self) -> Box<dyn cml::Hasher> {
             Box::new(NullHasher)
         }
@@ -243,7 +249,8 @@ mod tests {
         for name in ["meta", "epochs", "roots", "peaks", "leaf", "digest"] {
             assert!(
                 !name.bytes().all(|b| b.is_ascii_hexdigit()),
-                "{name:?} is all-hex and could collide with a hex(alg_id,16)/hex(j,2)/hex(q,2)/hex(c,2) sibling"
+                "{name:?} is all-hex and could collide with a \
+                 hex(alg_id,16)/hex(j,2)/hex(q,2)/hex(c,2) sibling"
             );
         }
     }

@@ -8,7 +8,10 @@ use gix::objs::tree::EntryKind;
 use polydigest::{NaryMerkleLog, TreeConfig};
 use storage_git::GitStorage;
 
-fn read_entries(repo: &gix::Repository, id: gix::ObjectId) -> Vec<(String, gix::ObjectId, EntryKind)> {
+fn read_entries(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+) -> Vec<(String, gix::ObjectId, EntryKind)> {
     let tree = repo.find_tree(id).unwrap();
     let decoded = tree.decode().unwrap();
     decoded
@@ -36,7 +39,10 @@ fn sg1_four_top_level_entries_always_present() {
         // well-formed empty state.
         let tree0 = storage.tree_at(0).unwrap();
         let local = repo.to_thread_local();
-        let mut names: Vec<String> = read_entries(&local, tree0).into_iter().map(|(n, ..)| n).collect();
+        let mut names: Vec<String> = read_entries(&local, tree0)
+            .into_iter()
+            .map(|(n, ..)| n)
+            .collect();
         names.sort();
         assert_eq!(names, vec!["epochs", "meta", "peaks", "roots"]);
 
@@ -47,7 +53,10 @@ fn sg1_four_top_level_entries_always_present() {
         log.append_leaf(b"a").await.unwrap();
         storage = log.into_storage();
         let tree1 = checkpoint_tree(&repo, "refs/eml/storage/t/staging");
-        let mut names1: Vec<String> = read_entries(&local, tree1).into_iter().map(|(n, ..)| n).collect();
+        let mut names1: Vec<String> = read_entries(&local, tree1)
+            .into_iter()
+            .map(|(n, ..)| n)
+            .collect();
         names1.sort();
         assert_eq!(names1, vec!["epochs", "meta", "peaks", "roots"]);
         let _ = storage;
@@ -77,7 +86,10 @@ fn sg4_sg10_materialized_vs_opaque_leaf_node() {
         let node_id = find(&local, group_id, "00");
         let entries = read_entries(&local, node_id);
         let names: Vec<&str> = entries.iter().map(|(n, ..)| n.as_str()).collect();
-        assert!(names.contains(&"leaf"), "materialized leaf node must carry `leaf`");
+        assert!(
+            names.contains(&"leaf"),
+            "materialized leaf node must carry `leaf`"
+        );
         assert!(names.contains(&"digest"), "every node carries `digest/`");
         let leaf_id = find(&local, node_id, "leaf");
         assert_eq!(local.find_blob(leaf_id).unwrap().data, b"flat-leaf");
@@ -102,8 +114,15 @@ fn sg4_sg10_materialized_vs_opaque_leaf_node() {
         let node_id = find(&local, group_id, "00");
         let entries = read_entries(&local, node_id);
         let names: Vec<&str> = entries.iter().map(|(n, ..)| n.as_str()).collect();
-        assert!(!names.contains(&"leaf"), "opaque node must not carry `leaf`");
-        assert_eq!(names, vec!["digest"], "opaque node carries digest/ only (SG4)");
+        assert!(
+            !names.contains(&"leaf"),
+            "opaque node must not carry `leaf`"
+        );
+        assert_eq!(
+            names,
+            vec!["digest"],
+            "opaque node carries digest/ only (SG4)"
+        );
     });
 }
 
@@ -157,7 +176,9 @@ fn sg12_sg16_golden_bytes() {
         let mut log = NaryMerkleLog::new(storage, Box::new(WideHasher), TreeConfig { arity: 3 })
             .await
             .unwrap();
-        log.append_leaf(b"hello world, byte for byte").await.unwrap();
+        log.append_leaf(b"hello world, byte for byte")
+            .await
+            .unwrap();
         let _ = log.into_storage();
 
         let local = repo.to_thread_local();
@@ -166,7 +187,11 @@ fn sg12_sg16_golden_bytes() {
         let meta_bytes = local.find_blob(meta_id).unwrap().data.clone();
         assert_eq!(meta_bytes.len(), 12);
         assert_eq!(meta_bytes[0], 0x01, "version byte");
-        assert_eq!(u16::from_be_bytes([meta_bytes[1], meta_bytes[2]]), 3, "arity");
+        assert_eq!(
+            u16::from_be_bytes([meta_bytes[1], meta_bytes[2]]),
+            3,
+            "arity"
+        );
         assert_eq!(
             u64::from_be_bytes(meta_bytes[3..11].try_into().unwrap()),
             1,
@@ -194,9 +219,10 @@ fn sg9_purity_under_reordering() {
         let (_dir, repo_a) = init_repo(HashKind::Sha1);
         let staging_a = "refs/eml/storage/a/staging";
         let storage_a = GitStorage::new(repo_a.clone(), staging_a, 2).unwrap();
-        let mut log_a = NaryMerkleLog::new(storage_a, Box::new(WideHasher), TreeConfig { arity: 2 })
-            .await
-            .unwrap();
+        let mut log_a =
+            NaryMerkleLog::new(storage_a, Box::new(WideHasher), TreeConfig { arity: 2 })
+                .await
+                .unwrap();
         log_a.add_algorithm(7, Box::new(WideHasher)).await.unwrap();
         log_a.add_algorithm(9, Box::new(WideHasher)).await.unwrap();
         log_a.append_leaf(b"x").await.unwrap();
@@ -205,9 +231,10 @@ fn sg9_purity_under_reordering() {
         let (_dir, repo_b) = init_repo(HashKind::Sha1);
         let staging_b = "refs/eml/storage/b/staging";
         let storage_b = GitStorage::new(repo_b.clone(), staging_b, 2).unwrap();
-        let mut log_b = NaryMerkleLog::new(storage_b, Box::new(WideHasher), TreeConfig { arity: 2 })
-            .await
-            .unwrap();
+        let mut log_b =
+            NaryMerkleLog::new(storage_b, Box::new(WideHasher), TreeConfig { arity: 2 })
+                .await
+                .unwrap();
         // Same two algorithms, reversed registration order.
         log_b.add_algorithm(9, Box::new(WideHasher)).await.unwrap();
         log_b.add_algorithm(7, Box::new(WideHasher)).await.unwrap();
@@ -216,7 +243,10 @@ fn sg9_purity_under_reordering() {
 
         let tree_a = checkpoint_tree(&repo_a, staging_a);
         let tree_b = checkpoint_tree(&repo_b, staging_b);
-        assert_eq!(tree_a, tree_b, "reordered-but-equivalent state must yield identical C(n)");
+        assert_eq!(
+            tree_a, tree_b,
+            "reordered-but-equivalent state must yield identical C(n)"
+        );
     });
 }
 

@@ -49,13 +49,26 @@ fn sg19_stale_writer_gets_tip_moved_and_ref_is_unmoved() {
         writer_a.store_leaf(1, b"a1").await.unwrap();
 
         let local = repo.to_thread_local();
-        let tip_after_a = local.find_reference(STAGING).unwrap().target().id().to_owned();
+        let tip_after_a = local
+            .find_reference(STAGING)
+            .unwrap()
+            .target()
+            .id()
+            .to_owned();
 
         let result = writer_b.store_leaf(1, b"b1-conflicting").await;
         assert!(result.is_err(), "stale writer's CAS must fail");
-        assert!(result.unwrap_err().is_tip_moved(), "failure must be the distinguished tip-moved variant");
+        assert!(
+            result.unwrap_err().is_tip_moved(),
+            "failure must be the distinguished tip-moved variant"
+        );
 
-        let tip_after_failed_b = local.find_reference(STAGING).unwrap().target().id().to_owned();
+        let tip_after_failed_b = local
+            .find_reference(STAGING)
+            .unwrap()
+            .target()
+            .id()
+            .to_owned();
         assert_eq!(
             tip_after_a, tip_after_failed_b,
             "a failed compare-and-swap must never move the ref (SG19/SG25)"
