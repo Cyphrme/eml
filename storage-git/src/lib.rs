@@ -89,6 +89,18 @@ pub struct GitStorage {
     /// `roots/` entry (§4.3, SG20). Empty by default -- this crate never
     /// assumes or requires one (SG26).
     hashers: HashMap<u64, Box<dyn Hasher>>,
+    /// Whether this instance has itself completed a successful
+    /// `write_batch` (SG10/SG11): a node this batch touches that also
+    /// existed under whatever tree this instance's staging ref happened to
+    /// point at *before this instance ever wrote to it* must not inherit
+    /// that prior occupant's materialization -- that prior tree may belong
+    /// to a different, superseded provenance (`NaryMerkleLog::resume`
+    /// reprovisioning a seal onto a ref that still holds an earlier
+    /// instance's materialized objects). From this instance's own second
+    /// write onward, `existing` reflects writes this same instance
+    /// performed, so carrying it forward is safe again. See
+    /// `src/build.rs::resolve_node`.
+    has_written: bool,
 }
 
 impl GitStorage {
@@ -148,6 +160,7 @@ impl GitStorage {
             count,
             kind_byte,
             hashers: HashMap::new(),
+            has_written: false,
         })
     }
 
@@ -342,11 +355,21 @@ impl Storage for GitStorage {
             log_meta,
             checkpoint_roots,
         };
-        let applied = build::apply_write(&repo, self.arity, self.observed_tip, self.count, self.kind_byte, &input)?;
+        let first_write = !self.has_written;
+        let applied = build::apply_write(
+            &repo,
+            self.arity,
+            self.observed_tip,
+            self.count,
+            self.kind_byte,
+            first_write,
+            &input,
+        )?;
         self.cas(&repo, applied.tree_id)?;
         self.observed_tip = Some(applied.tree_id);
         self.count = applied.count;
         self.kind_byte = applied.kind_byte;
+        self.has_written = true;
         Ok(())
     }
 }

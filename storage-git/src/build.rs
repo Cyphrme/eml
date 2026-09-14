@@ -62,6 +62,7 @@ pub(crate) fn apply_write(
     old_tree: Option<ObjectId>,
     old_count: u64,
     old_kind: u8,
+    first_write: bool,
     input: &WriteInputs<'_>,
 ) -> Result<Applied, Error> {
     let new_count = input.log_meta.map_or(old_count, |(n, _)| n);
@@ -75,7 +76,8 @@ pub(crate) fn apply_write(
 
     let (epochs_tree, active_algs) = build_epochs(repo, old_tree, input.algorithm_metas, new_count)?;
     let roots_tree = build_roots(repo, old_tree, input.checkpoint_roots, &active_algs)?;
-    let peaks_tree = build_peaks(repo, arity, old_tree, old_count, new_count, &leaf_map, &node_map)?;
+    let batch = BatchInputs { leaf_map: &leaf_map, node_map: &node_map, first_write };
+    let peaks_tree = build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, new_count, new_kind))?;
     let top = vec![
@@ -160,6 +162,28 @@ fn build_roots(
     gitutil::write_tree(repo, entries)
 }
 
+/// This batch's own raw inputs `build_peaks`/`resolve_node` need, bundled
+/// only to stay under clippy's too-many-arguments threshold -- every field
+/// is exactly one of `WriteInputs`' own borrows or the `first_write`
+/// provenance flag [`resolve_node`]'s doc comment explains, never a
+/// separate concept.
+struct BatchInputs<'a> {
+    leaf_map: &'a HashMap<u64, &'a [u8]>,
+    node_map: &'a NodeMap<'a>,
+    first_write: bool,
+}
+
+/// [`BatchInputs`] plus the coordinate index of `old_tree`'s own peaks --
+/// everything [`resolve_node`]'s recursion needs, bundled for the same
+/// too-many-arguments reason.
+#[derive(Clone, Copy)]
+struct ResolveCtx<'a> {
+    leaf_map: &'a HashMap<u64, &'a [u8]>,
+    node_map: &'a NodeMap<'a>,
+    old_index: &'a HashMap<(u64, u32), Resolved>,
+    first_write: bool,
+}
+
 /// Build `peaks/` (§2.1, SG1-SG2): the frontier at `new_count`, each peak
 /// either reused unchanged from `old_tree` or freshly resolved.
 fn build_peaks(
@@ -168,11 +192,16 @@ fn build_peaks(
     old_tree: Option<ObjectId>,
     old_count: u64,
     new_count: u64,
-    leaf_map: &HashMap<u64, &[u8]>,
-    node_map: &NodeMap<'_>,
+    batch: &BatchInputs<'_>,
 ) -> Result<ObjectId, Error> {
     let old_coords = frontier_for_size(old_count, arity);
     let old_index = index_old_peaks(repo, old_tree, &old_coords)?;
+    let ctx = ResolveCtx {
+        leaf_map: batch.leaf_map,
+        node_map: batch.node_map,
+        old_index: &old_index,
+        first_write: batch.first_write,
+    };
 
     let new_coords = frontier_for_size(new_count, arity);
     let mut by_height: HashMap<u32, Vec<u64>> = HashMap::new();
@@ -185,7 +214,7 @@ fn build_peaks(
         lefts.sort_unstable();
         let mut group = Vec::with_capacity(lefts.len());
         for (q, left) in lefts.into_iter().enumerate() {
-            let resolved = resolve_node(repo, arity, left, height, leaf_map, node_map, &old_index)?;
+            let resolved = resolve_node(repo, arity, left, height, &ctx)?;
             group.push(entry(EntryKind::Tree, hex2(q as u64), resolved.id));
         }
         let group_tree = gitutil::write_tree(repo, group)?;
@@ -227,15 +256,26 @@ fn would_materialize(
 }
 
 /// Resolve (reusing or freshly building) the node at `(left, height)`.
-fn resolve_node(
-    repo: &gix::Repository,
-    k: u64,
-    left: u64,
-    height: u32,
-    leaf_map: &HashMap<u64, &[u8]>,
-    node_map: &NodeMap<'_>,
-    old_index: &HashMap<(u64, u32), Resolved>,
-) -> Result<Resolved, Error> {
+///
+/// `first_write` is `true` only for this `GitStorage` instance's own first
+/// successful `write_batch` (SG10/SG11): on that write, a *touched*
+/// coordinate's prior occupant (if any) is not this instance's own -- it
+/// belongs to whatever the staging ref happened to point at before this
+/// instance ever wrote to it, which may be a superseded provenance
+/// (`NaryMerkleLog::resume` reprovisioning a seal onto a ref an earlier,
+/// now-obsolete instance already materialized). `existing` is therefore
+/// forced to `None` for a touched coordinate on that one write, so
+/// materialization and `digest/` are derived solely from what *this batch*
+/// supplies, never carried forward from an unrelated occupant -- exactly
+/// SG10's "digest/ only, no leaf, no children ... whatever object
+/// previously existed at that coordinate". An *untouched* coordinate is
+/// unaffected (the `is_touched` short-circuit above reuses it by object id
+/// regardless, per SG18a); from this instance's second write onward,
+/// `existing` again reflects this same instance's own prior writes, so
+/// carrying it forward (e.g. `resume_algorithm` adding a digest to an
+/// already-materialized leaf) is safe and required for `get_leaf` parity.
+fn resolve_node(repo: &gix::Repository, k: u64, left: u64, height: u32, ctx: &ResolveCtx<'_>) -> Result<Resolved, Error> {
+    let ResolveCtx { leaf_map, node_map, old_index, first_write } = *ctx;
     if !is_touched(left, height, leaf_map, node_map) {
         return old_index
             .get(&(left, height))
@@ -243,7 +283,7 @@ fn resolve_node(
             .ok_or_else(|| corrupt(format!("no data for coordinate (left={left}, height={height})")));
     }
 
-    let existing = old_index.get(&(left, height)).copied();
+    let existing = if first_write { None } else { old_index.get(&(left, height)).copied() };
 
     let mut digest_map: HashMap<u64, Vec<u8>> = match existing {
         Some(r) => read_digest_map(repo, r.id)?,
@@ -292,7 +332,7 @@ fn resolve_node(
         if materialize {
             for c in 0..k {
                 let child_left = left + c * span;
-                let child = resolve_node(repo, k, child_left, height - 1, leaf_map, node_map, old_index)?;
+                let child = resolve_node(repo, k, child_left, height - 1, ctx)?;
                 top.push(entry(EntryKind::Tree, hex2(c), child.id));
             }
         }
