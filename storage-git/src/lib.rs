@@ -40,10 +40,15 @@
 //!    affected, since every one of its nodes is materialized all the way to
 //!    its leaves. See `src/read.rs` and `src/historical.rs` for the full
 //!    argument.
-//! 4. **`tree_at(n)` for `n < len()` reconstructs `roots/` as empty.** A
-//!    past member root needs the algorithm's hash fold over its historical
-//!    frontier, which this layer cannot recompute without a `spine::Hasher`
-//!    it deliberately never links against (SG26). See `src/historical.rs`.
+//! 4. **`tree_at(n)` for `n < len()` needs a registered hasher to fold
+//!    `roots/` correctly.** A past member root needs the algorithm's hash
+//!    fold over its historical frontier peaks; [`GitStorage::register_hasher`]
+//!    lets a caller supply that fold (an opaque `spine::Hasher` trait
+//!    object, keyed by the same opaque `alg_id` every other method already
+//!    uses -- SG26 names no algorithm regardless). An algorithm active at
+//!    `n` with no hasher registered omits its `roots/` entry rather than
+//!    fabricating or erroring -- opt-out per algorithm, not the crate's
+//!    former unconditional departure. See `src/historical.rs`.
 
 mod build;
 mod error;
@@ -52,6 +57,7 @@ mod historical;
 mod layout;
 mod read;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use gix::ObjectId;
@@ -59,6 +65,7 @@ use gix::refs::FullName;
 use gix::refs::Target;
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit};
 use polydigest::{AlgorithmMetas, Storage};
+use spine::Hasher;
 
 pub use error::GitStorageError;
 
@@ -77,6 +84,11 @@ pub struct GitStorage {
     observed_tip: Option<ObjectId>,
     count: u64,
     kind_byte: u8,
+    /// Per-algorithm hash folds registered via [`Self::register_hasher`],
+    /// consulted only by [`Self::tree_at`] to reconstruct a historical
+    /// `roots/` entry (§4.3, SG20). Empty by default -- this crate never
+    /// assumes or requires one (SG26).
+    hashers: HashMap<u64, Box<dyn Hasher>>,
 }
 
 impl GitStorage {
@@ -135,7 +147,21 @@ impl GitStorage {
             observed_tip,
             count,
             kind_byte,
+            hashers: HashMap::new(),
         })
+    }
+
+    /// Register `hasher` as `alg_id`'s fold, for [`Self::tree_at`]'s
+    /// historical `roots/` reconstruction only (§4.3, SG20 amendment).
+    ///
+    /// Names no algorithm to this crate (SG26): `hasher` is an opaque
+    /// `spine::Hasher` trait object the caller owns and chooses, keyed by
+    /// the same opaque `alg_id` every other method already treats it as.
+    /// A `tree_at(n)` call for an algorithm active at `n` with no hasher
+    /// registered here simply omits that algorithm's
+    /// `roots/hex(alg_id,16)` entry rather than fabricating or erroring.
+    pub fn register_hasher(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) {
+        self.hashers.insert(alg_id, hasher);
     }
 
     /// Open a `storage-git` instance against the repository at `path`
@@ -171,7 +197,15 @@ impl GitStorage {
                 return Ok(id);
             }
         }
-        historical::reconstruct(&repo, self.arity, self.observed_tip, self.count, self.kind_byte, n)
+        historical::reconstruct(
+            &repo,
+            self.arity,
+            self.observed_tip,
+            self.count,
+            self.kind_byte,
+            n,
+            &self.hashers,
+        )
     }
 
     /// A read-only view over an arbitrary checkpoint tree (§4.4, SG21),

@@ -415,6 +415,51 @@ returning its id. `tree_at` MUST NOT move the staging ref. *Checked by:
 property test — `tree_at(n)` for a range of past `n` MUST match a
 from-genesis rebuild's `C(n)` for the same log state.*
 
+**Amendment — `roots/` reconstruction and `register_hasher`.** A
+historical `roots/hex(alg_id,16)` entry (§3.3, SG14) is a per-algorithm
+*member root*: the peak-bagging fold (`cml::mountain::bag_peaks`, the same
+fold `cml::engine::compute_root` uses to produce the live root this layer
+stores verbatim via `checkpoint_roots`) over that algorithm's frontier peak
+digests as they stood at `n`. Unlike `meta`/`epochs`/`peaks`, this fold is
+not recoverable from stored bytes alone — folding more than one peak digest
+into one root is a hash operation this layer does not otherwise perform,
+so reconstructing it needs the algorithm's own hash fold, not merely its
+already-stored digests. This does not relax SG26: the fold runs under a
+`spine::Hasher` **trait object** the caller registers per `alg_id` via
+`GitStorage::register_hasher(alg_id, Box<dyn Hasher>)` — an addition
+alongside `tree_at`/`open_at` — never a hash algorithm this crate names,
+links against by concrete type, or assumes a digest width for; the
+interface is exactly the opaque, caller-supplied shape SG26 already
+requires everywhere else. A `tree_at(n)` call reconstructs `roots/hex(alg_id,16)`
+correctly for every algorithm with a hasher registered this way, and
+**omits** the entry for an algorithm active at `n` with no hasher
+registered, rather than fabricating or erroring — an explicit, per-algorithm
+opt-out of SG14's "MUST carry an entry for every algorithm active at `n`"
+in the one case this layer cannot compute the value, never a silent
+violation of it. At `n = 0` the frontier is empty by construction (no item
+has ever been appended), so no algorithm's root has ever actually been
+computed by the combinator regardless of registration; `roots/` at `n = 0`
+is always the empty tree, matching the checkpoint tree this layer itself
+writes when an algorithm is first registered (§4, SG18: a registration
+alone never supplies `checkpoint_roots`). *Checked by: property test —
+`tree_at(n)` for a range of past `n`, with every registered algorithm's
+hasher supplied, MUST be byte-identical to the checkpoint tree actually
+written at size `n`, including `roots/`.*
+
+The rejected alternative — persisting each root as it is computed, rather
+than folding it back from stored peaks on demand — does not compose with
+SG9/SG18: a `write_batch` carry can seal several sizes' worth of internal
+merges in one call (SG18's frontier carry, §2.4), and most of the
+intermediate sizes it passes through are never themselves written as a
+standalone `C(m)` object at all (only the batch's final size is). A
+size-indexed root history would therefore need to persist a value for
+sizes this layer never otherwise materializes as anything, which is a new,
+unbounded, size-indexed structure outside §2.1's fixed four-entry schema —
+exactly the "size-indexed root history" §2.5 already names as something
+this layer's object model has no room for. Folding on demand from data
+this layer already reconstructs needs no such structure and costs nothing
+when a caller never calls `tree_at` for a historical `n`.
+
 ### 4.4 `open_at(tree)` — an addition beyond the trait
 
 **[SG21]** `open_at(tree: ObjectId) -> Result<impl ReadOnlyView, Error>` MUST

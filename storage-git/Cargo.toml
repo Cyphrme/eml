@@ -29,13 +29,19 @@ polydigest = { version = "0.1", path = "../polydigest" }
 # rest of the log stack -- already a transitive dependency via polydigest, so
 # depending on it directly names no new layer.
 spine      = { package = "merkle-spine", path = "../spine" }
+# `cml::mountain::bag_peaks` is the peak-bagging fold `tree_at`'s historical
+# reconstruction needs to recompute a superseded `roots/` entry (§4.3, SG20)
+# under a caller-registered `spine::Hasher` -- the same fold
+# `NaryMerkleLog`/`cml::engine::compute_root` uses to produce the live root
+# this layer stores verbatim via `checkpoint_roots`. `cml` depends on
+# `spine` alone (no epoch/application concept crosses this boundary), so
+# this is a foundational-math dependency, not the checkpoint library or an
+# application concern §8 excludes.
+cml        = { package = "canonical-ml", path = "../cml" }
 gix        = { version = "=0.87.1", features = ["sha256"] }
 thiserror  = "2"
 
 [dev-dependencies]
-# Reference behavior (AlgView::epochs_at/active_range, get_node_hash) that
-# this crate's property tests check the git layout against.
-cml       = { package = "canonical-ml", path = "../cml" }
 sha2      = "0.10"
 tempfile  = "3"
 smol      = "2"
