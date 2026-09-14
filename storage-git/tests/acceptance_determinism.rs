@@ -1,16 +1,11 @@
 //! Acceptance tests guarding purity under reopen, corruption-freedom after
-//! reopen, and digest/child retention on a touched node -- the properties
-//! the merge gate found `storage-git`'s opacity fix broke (GB44 in
-//! `.ledger/state/2026-09-14-the-git-backend-in-three-layers.md`, resolving
-//! the SG10/SG11 conflict the gate deposit at
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-merge-gate.md`
-//! names as SGG10/SGG11).
+//! reopen, and digest/child retention on a touched node.
 //!
-//! Written from `docs/specs/storage-git.md` (SG9-SG11, SG18, SG25) and the
-//! two ledger documents above, against `storage-git`'s public API alone
-//! (`GitStorage`, `GitStorageError`) plus `polydigest`'s combinator surface.
-//! Not derived from `storage-git`'s private modules (`build.rs`,
-//! `historical.rs`, ...) or from its existing test suite.
+//! Written from `docs/specs/storage-git.md` (SG9-SG11, SG18, SG25), against
+//! `storage-git`'s public API alone (`GitStorage`, `GitStorageError`) plus
+//! `polydigest`'s combinator surface. Not derived from `storage-git`'s
+//! private modules (`build.rs`, `historical.rs`, ...) or from its existing
+//! test suite.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
@@ -33,8 +28,10 @@ fn hasher() -> FixtureHasher {
 }
 
 /// One legal step of a randomized operation sequence over a flat log:
-/// append, add/remove/resume an algorithm -- exactly the mix GB44's SGG10
-/// probe interleaves ("append a0 leaves, add_algorithm(1), append a1,
+/// append, add/remove/resume an algorithm -- interleaving appends with an
+/// algorithm added, removed, then resumed is exactly the shape that
+/// exercises a resumed algorithm revisiting already-sealed, multi-algorithm
+/// coordinates ("append a0 leaves, add_algorithm(1), append a1,
 /// remove_algorithm(1), append a2, then resume_algorithm(1) and one more
 /// append").
 #[derive(Debug, Clone)]
@@ -56,12 +53,11 @@ enum RawOp {
     Resume(u64),
 }
 
-// Weighted so an Add/Remove/Resume cycle on the same algorithm id -- the
-// shape SGG10/SGG11 need -- shows up often within a short sequence, rather
-// than being crowded out by plain appends. The reopen flag is chosen
-// per-variant (not independently of it): `resume_algorithm` is the one op
-// that revisits already-sealed, multi-algorithm coordinates (SGG11's own
-// account of the cause), so a reopen immediately before *it* is what
+// Weighted so an Add/Remove/Resume cycle on the same algorithm id shows up
+// often within a short sequence, rather than being crowded out by plain
+// appends. The reopen flag is chosen per-variant (not independently of
+// it): `resume_algorithm` is the one op that revisits already-sealed,
+// multi-algorithm coordinates, so a reopen immediately before *it* is what
 // actually exercises the divergence -- a reopen before a plain append or
 // an epoch-only add/remove touches nothing pre-existing and proves
 // nothing. Skewing reopen-before-resume high keeps that combination from
@@ -202,11 +198,10 @@ async fn run_writer(
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
-    /// **SG9 purity, under GB44.** A continuous writer and a writer that
-    /// reopens through `from_storage_with_config` at arbitrary points, run
-    /// over the identical operation sequence, must end at byte-identical
-    /// staging tips and identical `tree_at(n)` for every `n`. The gate found
-    /// 111 of 125 sequences of exactly this shape diverge (SGG10).
+    /// **SG9 purity.** A continuous writer and a writer that reopens
+    /// through `from_storage_with_config` at arbitrary points, run over the
+    /// identical operation sequence, must end at byte-identical staging
+    /// tips and identical `tree_at(n)` for every `n`.
     #[test]
     fn purity_under_reopen_matches_continuous_writer(
         raw in prop::collection::vec(raw_step_strategy(), 3..14)
@@ -257,13 +252,13 @@ proptest! {
 
 }
 
-/// **No corruption after reopen (GB44 / SGG11).** The gate's own minimal
-/// repro: reopening once before `resume_algorithm`, then reopening a
-/// SECOND time afterward, must succeed cleanly -- never
-/// `LogError::CorruptedMetadata`. SGG11 shows the loss surfaces exactly on
-/// this second reopen, not on the resume that introduced it, so a test
-/// that only reopens once (as `purity_under_reopen_matches_continuous_writer`
-/// above already does, incidentally) cannot exercise this specific claim.
+/// **No corruption after reopen.** A minimal repro: reopening once before
+/// `resume_algorithm`, then reopening a SECOND time afterward, must succeed
+/// cleanly -- never `LogError::CorruptedMetadata`. The loss this guards
+/// against surfaces exactly on this second reopen, not on the resume that
+/// introduced it, so a test that only reopens once (as
+/// `purity_under_reopen_matches_continuous_writer` above already does,
+/// incidentally) cannot exercise this specific claim.
 #[test]
 fn reopen_after_resume_on_a_reopened_log_stays_clean() {
     let result: Result<(), String> = smol::block_on(async {
@@ -279,7 +274,7 @@ fn reopen_after_resume_on_a_reopened_log_stays_clean() {
             .await
             .map_err(|e| format!("new: {e:?}"))?;
 
-        // a0 = 0, a1 = 1, a2 = 1 -- SGG11's smallest divergent case.
+        // a0 = 0, a1 = 1, a2 = 1 -- the smallest divergent case this guards.
         log.add_algorithm(1, Box::new(hasher()))
             .await
             .map_err(|e| format!("add_algorithm(1): {e:?}"))?;
@@ -319,8 +314,8 @@ fn reopen_after_resume_on_a_reopened_log_stays_clean() {
         let final_count = reopened.count();
         drop(reopened);
 
-        // Second reopen, after resume_algorithm -- this is where SGG11
-        // says the loss surfaces.
+        // Second reopen, after resume_algorithm -- this is where the loss
+        // this test guards against would surface.
         let repo3 = support::reopen_repo(dir.path());
         let mut storage3 =
             GitStorage::new(repo3, staging_ref, ARITY).map_err(|e| format!("reopen 2: {e}"))?;
@@ -356,11 +351,11 @@ fn reopen_after_resume_on_a_reopened_log_stays_clean() {
     }
 }
 
-/// **A touched node keeps its stored digests (SG3/SG10/SG11, GB44).** After
+/// **A touched node keeps its stored digests (SG3/SG10/SG11).** After
 /// `resume_algorithm` on a reopened log, every algorithm's digest
 /// previously stored at a frontier node is still present, and a
-/// materialized node keeps its children. This is GB44's/SGG11's own
-/// smallest divergent case: arity 2, algorithm 0 baseline, algorithm 1
+/// materialized node keeps its children. This is the smallest divergent
+/// case this guards against: arity 2, algorithm 0 baseline, algorithm 1
 /// added then removed before a leaf each, reopened, then resumed.
 #[test]
 fn resume_algorithm_on_reopened_log_keeps_prior_digests_and_children() {
@@ -377,7 +372,7 @@ fn resume_algorithm_on_reopened_log_keeps_prior_digests_and_children() {
             .await
             .map_err(|e| format!("new: {e:?}"))?;
 
-        // a0 = 0, a1 = 1, a2 = 1 -- SGG11's smallest divergent case.
+        // a0 = 0, a1 = 1, a2 = 1 -- the smallest divergent case this guards.
         log.add_algorithm(1, Box::new(hasher()))
             .await
             .map_err(|e| format!("add_algorithm(1): {e:?}"))?;
@@ -393,7 +388,7 @@ fn resume_algorithm_on_reopened_log_keeps_prior_digests_and_children() {
         drop(log);
 
         // Reopen through polydigest's from-storage path before resuming --
-        // exactly the provenance boundary GB44 rules opacity must survive.
+        // exactly the provenance boundary opacity must survive.
         let repo2 = support::reopen_repo(dir.path());
         let mut storage2 =
             GitStorage::new(repo2, staging_ref, ARITY).map_err(|e| format!("reopen: {e}"))?;

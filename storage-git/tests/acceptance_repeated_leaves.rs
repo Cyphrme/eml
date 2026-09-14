@@ -34,8 +34,10 @@ async fn check_tree_at_matches_written_history(leaves: &[u8], staging: &str) -> 
     let mut log = new_log(&repo, staging, ARITY, hasher()).await;
     let local = repo.to_thread_local();
 
-    let mut written_at =
-        vec![support::ref_target(&local, staging).ok_or_else(|| "no checkpoint at size 0".to_string())?];
+    let mut written_at = vec![
+        support::ref_target(&local, staging)
+            .ok_or_else(|| "no checkpoint at size 0".to_string())?,
+    ];
     for &b in leaves {
         log.append_leaf(&[b])
             .await

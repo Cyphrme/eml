@@ -1,16 +1,12 @@
 //! Acceptance tests guarding `tree_at`'s historical `roots/` reconstruction
-//! against a missing or wrong hasher (SG14, SG20's amendment, and GB44's
-//! resolution in `.ledger/state/2026-09-14-the-git-backend-in-three-layers.md`,
-//! closing SGG12 from the merge gate at
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-merge-gate.md`).
+//! against a missing or wrong hasher (SG14, SG20's amendment).
 //!
 //! Written from `docs/specs/storage-git.md` alone, against `storage-git`'s
 //! public API (`GitStorage`, `GitStorageError`). Not derived from
 //! `storage-git`'s private modules (`historical.rs`, ...) or from its
 //! existing test suite -- including not reusing that suite's fixture
 //! module's `new_log` helper, which registers a hasher unconditionally and
-//! so cannot exercise the "no hasher registered" path these tests check
-//! (the merge gate's own SGG13 finding).
+//! so cannot exercise the "no hasher registered" path these tests check.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
@@ -73,7 +69,7 @@ impl Hasher for WrongFunctionHasher {
 }
 
 /// **`tree_at` with no hasher registered for an algorithm active at `n`
-/// (SG20's amendment, GB44).** It MUST return an error naming that
+/// (SG20's amendment).** It MUST return an error naming that
 /// algorithm, for every historical `n` the algorithm is active at. It MUST
 /// NEVER return `Ok`.
 #[test]
@@ -114,8 +110,8 @@ fn tree_at_without_registered_hasher_names_the_missing_algorithm() {
                 Ok(id) => {
                     return Err(format!(
                         "tree_at({n}) returned Ok({id}) with no hasher registered for algorithm \
-                         {NAMED_ALG}, active at every appended n -- SG20's amendment and GB44 \
-                         both require an error naming the algorithm, never Ok"
+                         {NAMED_ALG}, active at every appended n -- SG20's amendment requires an \
+                         error naming the algorithm, never Ok"
                     ));
                 },
                 Err(e) => {
@@ -138,7 +134,7 @@ fn tree_at_without_registered_hasher_names_the_missing_algorithm() {
 }
 
 /// **`tree_at` rejects a hasher that does not reproduce the stored current
-/// root, before any historical root is trusted (SG20's amendment, GB44).**
+/// root, before any historical root is trusted (SG20's amendment).**
 /// Neither a wrong-width nor a wrong-function registered hasher for an
 /// algorithm that DOES have real, correctly-computed digests already
 /// stored may be silently accepted.

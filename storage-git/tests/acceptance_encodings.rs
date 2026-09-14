@@ -68,7 +68,7 @@ fn sg13_epochs_blob_matches_epochs_at() {
         log.add_algorithm(1, Box::new(FixtureHasher::new(20)))
             .await
             .unwrap();
-        // Setup change (GB44): tree_at(n) now errors, rather than silently
+        // Setup change: tree_at(n) errors, rather than silently
         // omitting an entry, for an active algorithm with no hasher
         // registered on the storage itself (SG20's amendment). This test's
         // own algorithm-1 hasher above is the *log's* combinator hasher,
@@ -287,8 +287,8 @@ fn meta_blob_has_one_fixed_shape_regardless_of_resume_history() {
         let dir_dst = tempfile::tempdir().unwrap();
         let repo_dst = bare_repo(dir_dst.path(), gix::hash::Kind::Sha256);
         let staging_dst = "refs/eml/storage/meta-shape-dst/staging";
-        let mut storage_dst =
-            GitStorage::new(repo_dst.clone(), staging_dst, 2).expect("open GitStorage over an empty ref");
+        let mut storage_dst = GitStorage::new(repo_dst.clone(), staging_dst, 2)
+            .expect("open GitStorage over an empty ref");
         storage_dst.register_hasher(0, Box::new(FixtureHasher::new(32)));
         let mut resumed = NaryMerkleLog::resume(
             &sealed,
@@ -312,8 +312,8 @@ fn meta_blob_has_one_fixed_shape_regardless_of_resume_history() {
 
         assert_eq!(
             resumed_meta_len, plain_meta_len,
-            "a resumed log's meta blob must be the same fixed length as a log that has never \
-             been resumed -- meta has exactly one shape"
+            "a resumed log's meta blob must be the same fixed length as a log that has never been \
+             resumed -- meta has exactly one shape"
         );
         assert_eq!(
             plain_meta_len, 12,
