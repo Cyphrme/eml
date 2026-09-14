@@ -232,4 +232,19 @@ mod tests {
         assert!(decode_epochs(&[]).is_err());
         assert!(decode_epochs(&[0u8; 15]).is_err());
     }
+
+    /// SG6: no fixed literal name is ever a valid `hex(_, w)` string for any
+    /// `w`, so it can never collide with a `hex16`/`hex2` sibling name --
+    /// checked exhaustively over the fixed literal alphabet, the way SG6
+    /// itself frames the claim ("a name-collision or prefix-ambiguity check
+    /// is exhaustive over the fixed alphabet").
+    #[test]
+    fn literal_names_never_collide_with_a_hex_encoded_name() {
+        for name in ["meta", "epochs", "roots", "peaks", "leaf", "digest"] {
+            assert!(
+                !name.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{name:?} is all-hex and could collide with a hex(alg_id,16)/hex(j,2)/hex(q,2)/hex(c,2) sibling"
+            );
+        }
+    }
 }
