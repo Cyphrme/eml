@@ -17,7 +17,7 @@
 #[path = "acceptance_support/mod.rs"]
 mod support;
 
-use polydigest::NaryMerkleLog;
+use polydigest::{NaryMerkleLog, verify_consistency};
 use spine::Subtree;
 use storage_git::GitStorage;
 use support::{FixtureHasher, bare_repo, hex, new_log};
@@ -97,8 +97,8 @@ fn resume_onto_a_ref_that_already_holds_a_log_is_refused() {
         // constructor produced it.
         let stale_storage = GitStorage::new(support::reopen_repo(dir.path()), staging, k)
             .expect("open GitStorage over the stale ref");
-        let result = NaryMerkleLog::resume(&sealed, stale_storage, vec![(0, Box::new(real.clone()))])
-            .await;
+        let result =
+            NaryMerkleLog::resume(&sealed, stale_storage, vec![(0, Box::new(real.clone()))]).await;
 
         assert!(
             result.is_err(),
@@ -119,6 +119,21 @@ fn resume_onto_a_ref_that_already_holds_a_log_is_refused() {
 /// the same seal onto an equally fresh (empty) ref must reach one identical
 /// tip -- the result must never depend on which constructor produced the
 /// storage.
+///
+/// Setup change: this test used to compare `GitStorage::new` against a
+/// since-removed, explicit resume-open constructor that carried a
+/// per-instance resume flag. Opacity is now
+/// decided purely by what is stored plus what the write supplies, and a
+/// resume onto non-fresh storage is refused outright by
+/// `polydigest::NaryMerkleLog::resume` itself, so no backend-side flag is
+/// needed to tell a resuming caller from a continuing one. `GitStorage::new`
+/// is now the only constructor, which would make a direct comparison
+/// against it hold by construction. Rewritten instead to compare the two
+/// constructors that remain: `GitStorage::new`, handed an
+/// already-open repository handle, against `GitStorage::open`, which opens
+/// the repository from a path itself -- still a genuine
+/// construction-independence check, just not the one this file's original
+/// setup exercised.
 #[test]
 fn resume_onto_a_fresh_ref_is_independent_of_how_the_storage_was_constructed() {
     smol::block_on(async {
@@ -140,19 +155,26 @@ fn resume_onto_a_fresh_ref_is_independent_of_how_the_storage_was_constructed() {
         let repo_a = bare_repo(dir_a.path(), gix::hash::Kind::Sha256);
         let storage_a = GitStorage::new(repo_a.clone(), staging_a, k)
             .expect("the plain constructor must open an empty ref");
-        let resumed_a = NaryMerkleLog::resume(&sealed, storage_a, vec![(0, Box::new(real.clone()))])
-            .await
-            .expect("resume onto a fresh ref via the plain constructor");
+        let resumed_a =
+            NaryMerkleLog::resume(&sealed, storage_a, vec![(0, Box::new(real.clone()))])
+                .await
+                .expect("resume onto a fresh ref via GitStorage::new");
 
         let dir_b = tempfile::tempdir().unwrap();
         let staging_b = "refs/eml/storage/resume-fresh-b/staging";
-        let repo_b = bare_repo(dir_b.path(), gix::hash::Kind::Sha256);
-        let storage_b = GitStorage::open_resumed(repo_b.clone(), staging_b, k)
-            .expect("the resume-open constructor must open an empty ref");
-        let resumed_b = NaryMerkleLog::resume(&sealed, storage_b, vec![(0, Box::new(real.clone()))])
-            .await
-            .expect("resume onto a fresh ref via the resume-open constructor");
+        // Establish an empty repository at `dir_b` first (`bare_repo`, same
+        // as every other fixture), then reopen it by path through
+        // `GitStorage::open` -- a distinct construction path from `new`'s
+        // already-open repository handle above.
+        let _ = bare_repo(dir_b.path(), gix::hash::Kind::Sha256);
+        let storage_b = GitStorage::open(dir_b.path(), staging_b, k)
+            .expect("GitStorage::open must open the same empty repository by path");
+        let resumed_b =
+            NaryMerkleLog::resume(&sealed, storage_b, vec![(0, Box::new(real.clone()))])
+                .await
+                .expect("resume onto a fresh ref via GitStorage::open");
 
+        let repo_b = support::reopen_repo(dir_b.path());
         let tip_a = support::ref_target(&repo_a.to_thread_local(), staging_a).unwrap();
         let tip_b = support::ref_target(&repo_b.to_thread_local(), staging_b).unwrap();
         assert_eq!(
@@ -193,9 +215,10 @@ fn resume_onto_an_empty_ref_still_yields_opaque_peaks() {
         let repo_dst = bare_repo(dir_dst.path(), gix::hash::Kind::Sha256);
         let storage_dst = GitStorage::new(repo_dst.clone(), staging_dst, k)
             .expect("the plain constructor must open an empty ref");
-        let mut resumed = NaryMerkleLog::resume(&sealed, storage_dst, vec![(0, Box::new(real.clone()))])
-            .await
-            .expect("resume onto an empty ref");
+        let mut resumed =
+            NaryMerkleLog::resume(&sealed, storage_dst, vec![(0, Box::new(real.clone()))])
+                .await
+                .expect("resume onto an empty ref");
 
         let local_dst = repo_dst.to_thread_local();
         let tip = support::ref_target(&local_dst, staging_dst).unwrap();
@@ -209,7 +232,8 @@ fn resume_onto_an_empty_ref_still_yields_opaque_peaks() {
             "T(0,2) resumed onto an empty ref must carry no leaf"
         );
         assert!(
-            !entries.iter().any(|e| e.name == hex(0, 2)) && !entries.iter().any(|e| e.name == hex(1, 2)),
+            !entries.iter().any(|e| e.name == hex(0, 2))
+                && !entries.iter().any(|e| e.name == hex(1, 2)),
             "T(0,2) resumed onto an empty ref must be opaque: no hex(c,2) children"
         );
         assert!(
@@ -232,6 +256,135 @@ fn resume_onto_an_empty_ref_still_yields_opaque_peaks() {
         assert!(
             !forward_entries.iter().any(|e| e.name == "leaf"),
             "a forward subtree append on a resumed log must be opaque too"
+        );
+    });
+}
+
+/// A fork: sealing a log under one ref and resuming into a brand-new ref in
+/// the SAME repository is a fresh-target resume like any other. Freshness
+/// is scoped to the target ref's own committed state, never to the
+/// repository as a whole, so the two logs share one object store but never
+/// each other's committed history: ref A stays byte-for-byte untouched by
+/// the fork and by every subsequent append to ref B, B's inherited peak is
+/// opaque, a consistency proof bridges A's sealed commitment to B's first
+/// forward commitment, and resuming the same seal back onto ref A -- which
+/// still holds the source log -- is still refused.
+#[test]
+fn resume_forks_into_a_new_ref_within_the_same_repository() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
+        let k = 2u64;
+        let real = FixtureHasher::new(32);
+        let staging_a = "refs/eml/storage/fork-a/staging";
+        let staging_b = "refs/eml/storage/fork-b/staging";
+
+        let mut log_a = new_log(&repo, staging_a, k, real.clone()).await;
+        for i in 0..4u32 {
+            log_a
+                .append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        let n = log_a.count();
+        let sealed_member = log_a.root_for_at(0, n).await.unwrap();
+        let sealed = log_a.seal().await.unwrap();
+
+        let local = repo.to_thread_local();
+        let ref_a_before = support::ref_target(&local, staging_a).unwrap();
+
+        // Fork: resume the same seal into a brand-new ref, staging_b, in
+        // the SAME repository -- a distinct key over the same underlying
+        // object store.
+        let storage_b = GitStorage::new(repo.clone(), staging_b, k)
+            .expect("staging_b has never been written; GitStorage::new must open it fresh");
+        let mut resumed_b =
+            NaryMerkleLog::resume(&sealed, storage_b, vec![(0, Box::new(real.clone()))])
+                .await
+                .expect("resuming into a fresh ref in the same repository must succeed");
+
+        let ref_a_after_fork = support::ref_target(&local, staging_a).unwrap();
+        assert_eq!(
+            ref_a_before, ref_a_after_fork,
+            "forking into ref B must leave ref A's log byte-for-byte untouched"
+        );
+
+        // B's inherited peak is opaque (n=4, arity 2: one peak, T(0,2)).
+        let tip_b = support::ref_target(&local, staging_b).unwrap();
+        let peak_path = format!("peaks/{}/{}", hex(2, 2), hex(0, 2));
+        let peak = support::resolve_path(&local, tip_b, &peak_path)
+            .unwrap_or_else(|| panic!("no peak at {peak_path}"));
+        let entries = support::read_tree(&local, peak.oid);
+        assert!(
+            !entries.iter().any(|e| e.name == "leaf"),
+            "B's inherited peak must carry no leaf"
+        );
+        assert!(
+            !entries.iter().any(|e| e.name == hex(0, 2))
+                && !entries.iter().any(|e| e.name == hex(1, 2)),
+            "B's inherited peak must be opaque: no hex(c,2) children"
+        );
+        assert!(
+            entries.iter().any(|e| e.name == "digest"),
+            "B's inherited peak must still carry digest/"
+        );
+
+        // Appends to B work.
+        resumed_b
+            .append_subtree(&Subtree::Leaf(b"fork-forward-0".to_vec()))
+            .await
+            .unwrap();
+        resumed_b
+            .append_subtree(&Subtree::Leaf(b"fork-forward-1".to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(resumed_b.count(), n + 2);
+
+        // Ref A is still untouched after appends to B.
+        let ref_a_after_appends = support::ref_target(&local, staging_a).unwrap();
+        assert_eq!(
+            ref_a_before, ref_a_after_appends,
+            "appends to the forked ref B must never touch ref A"
+        );
+
+        // A consistency proof bridges A's sealed commitment to B's first
+        // (forward) commitment.
+        let proof = resumed_b
+            .consistency_proof(n, n + 2)
+            .await
+            .unwrap()
+            .expect("consistency must bridge the fork's resume boundary");
+        let new_root = resumed_b.root_for_at(0, n + 2).await.unwrap();
+        assert!(
+            verify_consistency(
+                &real,
+                n,
+                n + 2,
+                k,
+                &proof.boundary_hash,
+                &proof.peak_path,
+                &proof.new_peaks,
+                proof.split_index,
+                &sealed_member,
+                &new_root,
+            ),
+            "consistency proof from A's sealed commitment to B's first commitment must verify"
+        );
+
+        // Resuming the SAME seal back onto ref A -- which still holds the
+        // source log's own committed objects -- is still refused.
+        let stale_storage =
+            GitStorage::new(repo.clone(), staging_a, k).expect("open GitStorage over ref A");
+        let result =
+            NaryMerkleLog::resume(&sealed, stale_storage, vec![(0, Box::new(real.clone()))]).await;
+        assert!(
+            result.is_err(),
+            "resuming the seal back onto ref A, which still holds the source log, must be refused"
+        );
+        let ref_a_final = support::ref_target(&local, staging_a).unwrap();
+        assert_eq!(
+            ref_a_before, ref_a_final,
+            "the refused resume back onto ref A must leave it untouched"
         );
     });
 }

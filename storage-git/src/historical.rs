@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use cml::mountain::bag_peaks;
 use gix::ObjectId;
 use gix::objs::tree::EntryKind;
-use spine::{Hasher, frontier_for_size};
+use spine::{Hasher, frontier_for_size, nary_mr};
 
 use crate::error::GitStorageError as Error;
 use crate::gitutil::{self, entry};
@@ -51,11 +51,6 @@ pub(crate) struct CurrentState {
     pub tree: Option<ObjectId>,
     pub size: u64,
     pub kind_byte: u8,
-    /// This log's own committed resume boundary (GB44, §4.3's SG20
-    /// amendment; `None` for a log never resumed), carried into the
-    /// reconstructed `meta` unchanged -- it is a fact about the log's
-    /// provenance, not about which historical `n` is being asked for.
-    pub resume_boundary: Option<u64>,
 }
 
 /// Reconstruct `C(n)` from the current checkpoint tree and write it,
@@ -74,7 +69,6 @@ pub(crate) fn reconstruct(
         tree: current_tree,
         size: current_size,
         kind_byte,
-        resume_boundary,
     } = current;
     let target_coords = frontier_for_size(n, arity);
     let current_coords = frontier_for_size(current_size, arity);
@@ -113,10 +107,7 @@ pub(crate) fn reconstruct(
         hashers,
     )?;
 
-    let meta_blob = gitutil::write_blob(
-        repo,
-        &layout::encode_meta(arity, n, kind_byte, resume_boundary),
-    )?;
+    let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, n, kind_byte))?;
     let top = vec![
         entry(EntryKind::Blob, "meta", meta_blob),
         entry(EntryKind::Tree, "epochs", epochs_tree),
@@ -224,12 +215,11 @@ fn reconstruct_epochs(
 /// computation exactly (same fold, same null-substitution rule as
 /// `get_node_hash`, `cml/src/engine.rs:262-298`).
 ///
-/// SG20's amendment (GB44): an algorithm active at `n` with **no** hasher
-/// in `hashers` is no longer silently omitted -- `tree_at` MUST never
-/// return a tree other than `C(n)` (SGG12), and an omitted `roots/` entry
-/// for an algorithm the log actually has one for is exactly that: a
-/// well-formed but wrong tree. This returns an error naming the algorithm
-/// instead.
+/// SG20's amendment: an algorithm active at `n` with **no** hasher in
+/// `hashers` is never silently omitted -- `tree_at` MUST never return a
+/// tree other than `C(n)`, and an omitted `roots/` entry for an algorithm
+/// the log actually has one for is exactly that: a well-formed but wrong
+/// tree. This returns an error naming the algorithm instead.
 fn reconstruct_roots(
     repo: &gix::Repository,
     arity: u64,
@@ -261,8 +251,8 @@ fn reconstruct_roots(
         let hasher = hashers.get(&alg_id).ok_or_else(|| {
             corrupt(format!(
                 "tree_at: algorithm {alg_id} is active at this historical size but has no hasher \
-                 registered (register_hasher, SG20 amendment, GB44) -- a historical roots/{} \
-                 entry cannot be reconstructed without one",
+                 registered (register_hasher, SG20 amendment) -- a historical roots/{} entry \
+                 cannot be reconstructed without one",
                 layout::hex16(alg_id)
             ))
         })?;
@@ -350,23 +340,31 @@ where
 }
 
 /// Reject a registered hasher before any historical root is trusted (§4.3,
-/// SG20 amendment; GB44): "A registered hasher must be checked against the
-/// stored current root ... before any historical root is trusted."
+/// SG20 amendment): a hasher is trusted only on stored evidence, and an
+/// algorithm this finds no evidence for -- because the one peak that could
+/// have supplied it is opaque -- is refused rather than trusted.
 ///
-/// [`bag_peaks`] promotes a lone peak to itself (`cml::mountain::bag_peaks`
-/// doc comment), so folding across the *current* frontier's peaks is
-/// uninformative whenever that frontier happens to be a single peak -- the
-/// wrong hasher is never actually invoked. This instead recomputes each
-/// currently active, fully-covered peak's **own** digest bottom-up from its
-/// materialized structure (`Hasher::leaf`/`Hasher::node`, the same
-/// operations that produced the stored value) and compares the result
-/// against the digest this layer already has on file for that exact
-/// coordinate -- exercising the hasher's real behavior regardless of how
-/// many peaks the current frontier has. A node this cannot fully recompute
-/// (opaque somewhere along the way, or the algorithm's activity does not
-/// cover the node's whole span) is skipped -- best effort, matching this
-/// crate's other named departures rather than guessing at `cml`'s
-/// null-substitution rule for partial coverage.
+/// Two independent forms of evidence are consulted. First, bottom-up
+/// recomputation: each currently active, fully-covered peak's **own**
+/// digest, recomputed from its materialized structure via [`nary_mr`] --
+/// the same promotion-and-collapse fold `cml::engine::carry` itself applies
+/// at every merge, never `Hasher::node` called directly, which would reject
+/// a correct hasher wherever eml's own canonicalization has collapsed equal
+/// children to their shared value -- compared against the digest this layer
+/// already has on file for that exact coordinate. A peak the algorithm is
+/// not fully active over is simply not this algorithm's to recompute (an
+/// ordinary, expected skip, never evidence of anything); a peak it fully
+/// owns but that turns out opaque is the genuine absence this check exists
+/// to catch. Second, frontier folding: [`bag_peaks`] promotes a lone peak to
+/// itself (`cml::mountain::bag_peaks` doc comment), so folding across the
+/// current frontier is only informative with two or more peaks, but where
+/// it is, folding their stored digests and comparing the result against the
+/// algorithm's already-stored `roots/` entry (the same fold
+/// `cml::engine::compute_root` uses to write it) catches a wrong hasher even
+/// where nothing can be recomputed bottom-up. An algorithm with a
+/// fully-owned peak that turns out opaque, and no multi-peak frontier fold
+/// to fall back on, is never silently trusted: this returns an error naming
+/// it.
 pub(crate) fn validate_hashers(
     repo: &gix::Repository,
     arity: u64,
@@ -378,7 +376,15 @@ pub(crate) fn validate_hashers(
         return Ok(());
     }
     let current_coords = frontier_for_size(current_size, arity);
+    if current_coords.is_empty() {
+        // n=0: no item has ever been appended, so no algorithm's root has
+        // ever actually been computed (mirrors `reconstruct_roots`'s own
+        // genesis bootstrap, above) -- there is nothing here for a hasher
+        // to be checked against, and so nothing to trust or distrust yet.
+        return Ok(());
+    }
     let metas = read::load_algorithm_metas(repo, current_tree)?;
+    let stored_roots = read::load_checkpoint_roots(repo, current_tree)?;
 
     for (&alg_id, hasher) in hashers {
         let Some((_, history)) = metas.iter().find(|(id, _)| *id == alg_id) else {
@@ -391,6 +397,14 @@ pub(crate) fn validate_hashers(
             continue; // frozen/removed already -- no live peak to recompute from
         }
 
+        let mut evidenced = false;
+        // Set only when a peak the algorithm is fully responsible for turns
+        // out opaque: a genuine absence of evidence, distinct from a peak
+        // this algorithm simply isn't wholly active over (`!fully_covered`,
+        // below) -- an ordinary, expected skip whenever an algorithm's
+        // activation does not align with a frontier peak's own span, never
+        // a reason to distrust the hasher.
+        let mut uncheckable_full_coverage = false;
         for &(left, height) in &current_coords {
             let cap = arity.pow(height);
             let fully_covered = projected
@@ -406,6 +420,7 @@ pub(crate) fn validate_hashers(
             let peak_id = read::peak_object_id(repo, current_tree, &current_coords, idx)?;
             let Some(recomputed) = recompute_digest(repo, arity, peak_id, height, hasher.as_ref())?
             else {
+                uncheckable_full_coverage = true;
                 continue;
             };
             let Some(digest_tree) = gitutil::find_entry(repo, peak_id, "digest")? else {
@@ -419,21 +434,66 @@ pub(crate) fn validate_hashers(
             if recomputed != stored {
                 return Err(corrupt(format!(
                     "tree_at: the hasher registered for algorithm {alg_id} does not reproduce the \
-                     digest already stored at (left={left}, height={height}) (SG20 amendment, \
-                     GB44) -- a wrong or mismatched hasher must be rejected before any historical \
-                     root is trusted"
+                     digest already stored at (left={left}, height={height}) (SG20 amendment) -- \
+                     a wrong or mismatched hasher must be rejected before any historical root is \
+                     trusted"
                 )));
             }
+            evidenced = true;
+        }
+
+        if current_coords.len() >= 2 {
+            if let Some((_, stored_root)) = stored_roots.iter().find(|(id, _)| *id == alg_id) {
+                let folded = fold_root(
+                    repo,
+                    arity,
+                    &current_coords,
+                    &projected,
+                    hasher.as_ref(),
+                    alg_id,
+                    |left, height| {
+                        let idx = current_coords
+                            .iter()
+                            .position(|&c| c == (left, height))
+                            .expect("left/height came from current_coords itself");
+                        read::peak_object_id(repo, current_tree, &current_coords, idx)
+                    },
+                )?;
+                if &folded != stored_root {
+                    return Err(corrupt(format!(
+                        "tree_at: the hasher registered for algorithm {alg_id} does not reproduce \
+                         the checkpoint root already stored for it (SG20 amendment) -- a wrong or \
+                         mismatched hasher must be rejected before any historical root is trusted"
+                    )));
+                }
+                evidenced = true;
+            }
+        }
+
+        // Refuse only where a peak this algorithm fully owns turned out
+        // opaque and nothing -- neither that peak's own recompute nor a
+        // multi-peak frontier fold -- could evidence the hasher. An
+        // algorithm whose activation simply never lined up with a
+        // materialized, fully-covered peak (`uncheckable_full_coverage`
+        // stays `false`) has nothing to distrust and is left as before.
+        if !evidenced && uncheckable_full_coverage {
+            return Err(corrupt(format!(
+                "tree_at: the hasher registered for algorithm {alg_id} cannot be checked against \
+                 any stored evidence (its fully-covered peak is opaque, and fewer than two \
+                 frontier peaks are available to fold) -- refusing to trust an unverifiable \
+                 hasher (SG20 amendment)"
+            )));
         }
     }
     Ok(())
 }
 
 /// Recompute a materialized node's digest bottom-up with `hasher`
-/// (`Hasher::leaf` at the leaves, `Hasher::node` at every merge), or `None`
-/// if the node -- or any descendant along the way -- is opaque: nothing to
-/// recompute from, so [`validate_hashers`] has no ground truth here and
-/// skips it rather than guessing.
+/// (`Hasher::leaf` at the leaves, [`nary_mr`] -- eml's own
+/// promotion-and-collapse fold -- at every merge), or `None` if the node --
+/// or any descendant along the way -- is opaque: nothing to recompute from,
+/// so [`validate_hashers`] has no ground truth here and skips it rather than
+/// guessing.
 fn recompute_digest(
     repo: &gix::Repository,
     arity: u64,
@@ -458,5 +518,5 @@ fn recompute_digest(
         children.push(digest);
     }
     let refs: Vec<&[u8]> = children.iter().map(Vec::as_slice).collect();
-    Ok(Some(hasher.node(&refs)))
+    Ok(Some(nary_mr(hasher, &refs)))
 }

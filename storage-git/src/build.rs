@@ -46,11 +46,6 @@ pub(crate) struct Applied {
     pub tree_id: ObjectId,
     pub count: u64,
     pub kind_byte: u8,
-    /// The committed resume boundary carried by this write's `meta` (GB44):
-    /// `Some(new_count)` when this write is the one that just established a
-    /// resume boundary (`force_fresh`), otherwise whatever boundary was
-    /// already committed (unchanged, possibly still `None`).
-    pub resume_boundary: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -68,7 +63,6 @@ pub(crate) struct OldState {
     pub tree: Option<ObjectId>,
     pub count: u64,
     pub kind: u8,
-    pub resume_boundary: Option<u64>,
 }
 
 /// Assemble and write the new checkpoint tree. Does not touch the staging
@@ -77,22 +71,15 @@ pub(crate) fn apply_write(
     repo: &gix::Repository,
     arity: u64,
     old: OldState,
-    force_fresh: bool,
     input: &WriteInputs<'_>,
 ) -> Result<Applied, Error> {
     let OldState {
         tree: old_tree,
         count: old_count,
         kind: old_kind,
-        resume_boundary: old_resume_boundary,
     } = old;
     let new_count = input.log_meta.map_or(old_count, |(n, _)| n);
     let new_kind = input.log_meta.map_or(old_kind, |(_, k)| k);
-    let new_resume_boundary = if force_fresh {
-        Some(new_count)
-    } else {
-        old_resume_boundary
-    };
 
     let leaf_map: HashMap<u64, &[u8]> = input.leaves.iter().map(|&(i, d)| (i, d)).collect();
     let mut node_map: NodeMap<'_> = HashMap::new();
@@ -109,14 +96,10 @@ pub(crate) fn apply_write(
     let batch = BatchInputs {
         leaf_map: &leaf_map,
         node_map: &node_map,
-        force_fresh,
     };
     let peaks_tree = build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
 
-    let meta_blob = gitutil::write_blob(
-        repo,
-        &layout::encode_meta(arity, new_count, new_kind, new_resume_boundary),
-    )?;
+    let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, new_count, new_kind))?;
     let top = vec![
         entry(EntryKind::Blob, "meta", meta_blob),
         entry(EntryKind::Tree, "epochs", epochs_tree),
@@ -129,7 +112,6 @@ pub(crate) fn apply_write(
         tree_id,
         count: new_count,
         kind_byte: new_kind,
-        resume_boundary: new_resume_boundary,
     })
 }
 
@@ -208,13 +190,10 @@ fn build_roots(
 
 /// This batch's own raw inputs `build_peaks`/`resolve_node` need, bundled
 /// only to stay under clippy's too-many-arguments threshold -- every field
-/// is exactly one of `WriteInputs`' own borrows or the `force_fresh`
-/// provenance flag [`resolve_node`]'s doc comment explains, never a
-/// separate concept.
+/// is exactly one of `WriteInputs`' own borrows, never a separate concept.
 struct BatchInputs<'a> {
     leaf_map: &'a HashMap<u64, &'a [u8]>,
     node_map: &'a NodeMap<'a>,
-    force_fresh: bool,
 }
 
 /// [`BatchInputs`] plus the coordinate index of `old_tree`'s own peaks --
@@ -225,7 +204,6 @@ struct ResolveCtx<'a> {
     leaf_map: &'a HashMap<u64, &'a [u8]>,
     node_map: &'a NodeMap<'a>,
     old_index: &'a HashMap<(u64, u32), Resolved>,
-    force_fresh: bool,
 }
 
 /// Build `peaks/` (§2.1, SG1-SG2): the frontier at `new_count`, each peak
@@ -244,7 +222,6 @@ fn build_peaks(
         leaf_map: batch.leaf_map,
         node_map: batch.node_map,
         old_index: &old_index,
-        force_fresh: batch.force_fresh,
     };
 
     let new_coords = frontier_for_size(new_count, arity);
@@ -301,30 +278,16 @@ fn would_materialize(
 
 /// Resolve (reusing or freshly building) the node at `(left, height)`.
 ///
-/// `force_fresh` is `true` only for the one write that establishes a
-/// committed resume boundary (GB44: [`crate::GitStorage::open_resumed`],
-/// consumed by exactly the next `write_batch`, never by an instance's mere
-/// lifetime -- see `src/lib.rs`'s `pending_resume` field). On that write, a
-/// *touched* coordinate's prior occupant (if any) is not this resumption's
-/// own -- it belongs to whatever the staging ref happened to point at
-/// before the resume, which may be a superseded provenance
-/// (`NaryMerkleLog::resume` reprovisioning a seal onto a ref an earlier,
-/// now-obsolete writer already materialized). `existing` is therefore
-/// forced to `None` for a touched coordinate on that one write, so
-/// materialization and `digest/` are derived solely from what *this batch*
-/// supplies, never carried forward from an unrelated occupant -- exactly
-/// SG10's "digest/ only, no leaf, no children ... whatever object
-/// previously existed at that coordinate", and identically whether the
-/// backing repository still holds that superseded occupant's objects or
-/// holds nothing at all (both starve `existing` the same way, so both
-/// produce the same opaque tree). An *untouched* coordinate is unaffected
-/// (the `is_touched` short-circuit above reuses it by object id regardless,
-/// per SG18a); a write that is not resume-establishing (every write from a
-/// plainly opened/reopened instance, and every write after the resume
-/// boundary is committed) always carries `existing` forward from
-/// `old_index`, so a continuing log's own prior digests/leaf/children
-/// survive a plain reopen (e.g. `resume_algorithm` adding a digest to an
-/// already-materialized leaf) -- the SGG10/SGG11 defect this replaces.
+/// A *touched* coordinate always carries `existing` forward from
+/// `old_index` when there is one: a resumption's `storage` is refused
+/// unless it is fresh (`polydigest::NaryMerkleLog::resume` via
+/// `Storage::load_log_meta`, see this crate's top-level docs), so whatever
+/// `old_index` holds for a touched coordinate is always this same log's own
+/// prior state, never an unrelated occupant's -- there is no second case to
+/// distinguish. An *untouched* coordinate is unaffected regardless (the
+/// `is_touched` short-circuit above reuses it by object id, per SG18a); a
+/// coordinate with no `existing` entry (a genuinely new one) builds fresh
+/// from this batch's own data.
 fn resolve_node(
     repo: &gix::Repository,
     k: u64,
@@ -336,7 +299,6 @@ fn resolve_node(
         leaf_map,
         node_map,
         old_index,
-        force_fresh,
     } = *ctx;
     if !is_touched(left, height, leaf_map, node_map) {
         return old_index.get(&(left, height)).copied().ok_or_else(|| {
@@ -346,11 +308,7 @@ fn resolve_node(
         });
     }
 
-    let existing = if force_fresh {
-        None
-    } else {
-        old_index.get(&(left, height)).copied()
-    };
+    let existing = old_index.get(&(left, height)).copied();
 
     let mut digest_map: HashMap<u64, Vec<u8>> = match existing {
         Some(r) => read_digest_map(repo, r.id)?,
