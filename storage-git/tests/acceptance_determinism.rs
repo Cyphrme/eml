@@ -69,7 +69,13 @@ enum RawOp {
 // the two up.
 fn raw_step_strategy() -> impl Strategy<Value = (RawOp, bool)> {
     prop_oneof![
-        2 => any::<u8>()
+        // Drawn from a tiny alphabet (not `any::<u8>()`) so that two
+        // adjacent appended leaves -- and so two sibling subtrees over
+        // them -- share the same value often, not as a one-in-256 fluke.
+        // eml's fold collapses equal children to their shared value, and
+        // this property must hold under that collapse, not just under
+        // leaves that are pairwise distinct almost every time.
+        2 => (0u8..4)
             .prop_flat_map(|b| (Just(RawOp::Append(b)), prop::bool::weighted(0.2))),
         3 => (0u64..3)
             .prop_flat_map(|id| (Just(RawOp::Add(id)), prop::bool::weighted(0.2))),
