@@ -37,36 +37,59 @@ pub fn parse_hex16(name: &str) -> Option<u64> {
     u64::from_str_radix(name, 16).ok()
 }
 
-/// `meta`'s fixed 12-byte encoding (§3.1, SG12).
+/// `meta`'s encoding (§3.1, SG12). Two byte-exact shapes, chosen by whether
+/// this log has ever been resumed (GB44): a log with no committed resume
+/// boundary encodes exactly the original 12 bytes, version `0x01` --
+/// byte-identical to every log that predates the boundary field, so no
+/// existing golden vector changes. A log carrying a committed resume
+/// boundary (§4.3, SG20 amendment) encodes 20 bytes, version `0x02`, with
+/// the boundary appended as a `u64` BE suffix.
 #[must_use]
-pub fn encode_meta(arity: u64, count: u64, kind: u8) -> [u8; 12] {
-    let mut out = [0u8; 12];
-    out[0] = 0x01;
-    out[1..3].copy_from_slice(&(arity as u16).to_be_bytes());
-    out[3..11].copy_from_slice(&count.to_be_bytes());
-    out[11] = kind;
+pub fn encode_meta(arity: u64, count: u64, kind: u8, resume_boundary: Option<u64>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(if resume_boundary.is_some() { 20 } else { 12 });
+    out.push(if resume_boundary.is_some() {
+        0x02
+    } else {
+        0x01
+    });
+    out.extend_from_slice(&(arity as u16).to_be_bytes());
+    out.extend_from_slice(&count.to_be_bytes());
+    out.push(kind);
+    if let Some(boundary) = resume_boundary {
+        out.extend_from_slice(&boundary.to_be_bytes());
+    }
     out
 }
 
-/// Decode `meta`'s bytes (§3.1, SG12). Rejects any length other than 12 or
-/// an unrecognized version byte.
-pub fn decode_meta(bytes: &[u8]) -> Result<(u64, u64, u8), Error> {
-    if bytes.len() != 12 {
+/// Decode `meta`'s bytes (§3.1, SG12). Rejects any length other than the two
+/// documented shapes (12 bytes / version `0x01`, no boundary; 20 bytes /
+/// version `0x02`, with a committed resume boundary) or a version byte that
+/// disagrees with its length.
+pub fn decode_meta(bytes: &[u8]) -> Result<(u64, u64, u8, Option<u64>), Error> {
+    let (version, resume_boundary) = match bytes.len() {
+        12 => (0x01u8, None),
+        20 => (
+            0x02u8,
+            Some(u64::from_be_bytes(bytes[12..20].try_into().unwrap())),
+        ),
+        other => {
+            return Err(Error::Corruption(format!(
+                "meta blob must be exactly 12 bytes (no resume boundary) or 20 bytes (with one), \
+                 got {other}"
+            )));
+        },
+    };
+    if bytes[0] != version {
         return Err(Error::Corruption(format!(
-            "meta blob must be exactly 12 bytes, got {}",
+            "meta blob has version byte {:#04x}, expected {version:#04x} for a {}-byte blob",
+            bytes[0],
             bytes.len()
-        )));
-    }
-    if bytes[0] != 0x01 {
-        return Err(Error::Corruption(format!(
-            "meta blob has unrecognized version byte {:#04x}",
-            bytes[0]
         )));
     }
     let arity = u16::from_be_bytes([bytes[1], bytes[2]]) as u64;
     let count = u64::from_be_bytes(bytes[3..11].try_into().unwrap());
     let kind = bytes[11];
-    Ok((arity, count, kind))
+    Ok((arity, count, kind, resume_boundary))
 }
 
 /// A `epochs/hex(alg_id,16)` blob's encoding (§3.2): a sequence of
@@ -225,9 +248,25 @@ mod tests {
 
     #[test]
     fn meta_round_trip() {
-        let bytes = encode_meta(4, 12345, 1);
-        assert_eq!(decode_meta(&bytes).unwrap(), (4, 12345, 1));
+        let bytes = encode_meta(4, 12345, 1, None);
+        assert_eq!(bytes.len(), 12, "no resume boundary must stay 12 bytes");
+        assert_eq!(decode_meta(&bytes).unwrap(), (4, 12345, 1, None));
         assert!(decode_meta(&bytes[..11]).is_err());
+    }
+
+    #[test]
+    fn meta_round_trip_with_resume_boundary() {
+        let bytes = encode_meta(4, 12345, 1, Some(999));
+        assert_eq!(
+            bytes.len(),
+            20,
+            "a resume boundary must extend meta to 20 bytes"
+        );
+        assert_eq!(decode_meta(&bytes).unwrap(), (4, 12345, 1, Some(999)));
+        // A 20-byte blob claiming the no-boundary version is rejected.
+        let mut wrong_version = bytes.clone();
+        wrong_version[0] = 0x01;
+        assert!(decode_meta(&wrong_version).is_err());
     }
 
     #[test]

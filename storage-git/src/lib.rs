@@ -32,13 +32,40 @@
 //!    subtree-kind/resumed logs at historical, already-subsumed coordinates; a flat log is never
 //!    affected, since every one of its nodes is materialized all the way to its leaves. See
 //!    `src/read.rs` and `src/historical.rs` for the full argument.
-//! 4. **`tree_at(n)` for `n < len()` needs a registered hasher to fold `roots/` correctly.** A past
-//!    member root needs the algorithm's hash fold over its historical frontier peaks;
-//!    [`GitStorage::register_hasher`] lets a caller supply that fold (an opaque `spine::Hasher`
-//!    trait object, keyed by the same opaque `alg_id` every other method already uses -- SG26 names
-//!    no algorithm regardless). An algorithm active at `n` with no hasher registered omits its
-//!    `roots/` entry rather than fabricating or erroring -- opt-out per algorithm, not the crate's
-//!    former unconditional departure. See `src/historical.rs`.
+//! 4. **A resumed seal's opacity is a committed fact, never a process-lifetime flag (GB44).** A
+//!    prior design (`has_written`) forced a `GitStorage` instance's own first `write_batch` to
+//!    treat every touched coordinate as absent, so a peak inherited from a resumed seal could not
+//!    silently reuse a stale, differently-provisioned occupant (SG10/SG11). The merge gate found
+//!    that this made `C(n)` depend on process history: the *same* logical operations reached a
+//!    different object id depending on whether the writer had reopened before its next write, and
+//!    on the reopen path it also discarded another algorithm's already-stored digest and a flat
+//!    node's children -- the exact SGG10/SGG11 corruption (`.ledger/deposits/git-backend/
+//!    lead-maintainer/storage-git-merge-gate.md`), because an instance flag cannot distinguish "the
+//!    caller is genuinely resuming a seal" from "the caller merely reopened a continuing log". That
+//!    distinction cannot come from the `Storage` trait's call arguments -- `store_node` and
+//!    `write_batch` look identical either way -- so it comes from which constructor opened the
+//!    instance instead. [`GitStorage::open_resumed`] is the explicit resume-open: it records a
+//!    resume boundary (the size the very next `write_batch` commits to) into that write's own
+//!    `meta` blob (§3.1, SG12's two-shape encoding), so the boundary is a fact about the log's
+//!    committed state, read back by any later plain [`GitStorage::open`]/[`GitStorage::new`], never
+//!    an ephemeral property of one process's instance. Only the one write immediately following
+//!    `open_resumed` treats every touched coordinate as absent (mirroring the old flag's forcing,
+//!    but scoped to the caller's explicit intent rather than instance lifetime); every other write
+//!    -- including a plain reopen's very first one -- carries a touched coordinate's prior digests,
+//!    leaf, and children forward exactly as an ordinary continuing write does. Resuming onto a
+//!    repository still holding a pre-seal instance's materialized objects and resuming onto an
+//!    empty repository therefore write byte-identical trees: both starve `existing` the same way.
+//! 5. **`tree_at(n)` for `n < len()` needs a registered hasher to fold `roots/` correctly, and
+//!    never returns a tree other than `C(n)` (SG20's amendment, GB44).** A past member root needs
+//!    the algorithm's hash fold over its historical frontier peaks; [`GitStorage::register_hasher`]
+//!    lets a caller supply that fold (an opaque `spine::Hasher` trait object, keyed by the same
+//!    opaque `alg_id` every other method already uses -- SG26 names no algorithm regardless). The
+//!    merge gate found that the crate's former behavior -- omitting an active algorithm's `roots/`
+//!    entry when no hasher was registered for it -- returned a well-formed but wrong tree, which a
+//!    consumer could not tell from the genuine one (SGG12). `tree_at` now returns an error naming
+//!    the algorithm instead of `Ok`, and a registered hasher is rejected before any historical root
+//!    is trusted if it fails to reproduce a digest this layer already has on file for it. See
+//!    `src/historical.rs`.
 
 mod build;
 mod error;
@@ -77,27 +104,25 @@ pub struct GitStorage {
     /// `roots/` entry (§4.3, SG20). Empty by default -- this crate never
     /// assumes or requires one (SG26).
     hashers: HashMap<u64, Box<dyn Hasher>>,
-    /// Whether this instance has itself completed a successful
-    /// `write_batch` (SG10/SG11): a node this batch touches that also
-    /// existed under whatever tree this instance's staging ref happened to
-    /// point at *before this instance ever wrote to it* must not inherit
-    /// that prior occupant's materialization -- that prior tree may belong
-    /// to a different, superseded provenance (`NaryMerkleLog::resume`
-    /// reprovisioning a seal onto a ref that still holds an earlier
-    /// instance's materialized objects). From this instance's own second
-    /// write onward, `existing` reflects writes this same instance
-    /// performed, so carrying it forward is safe again. See
-    /// `src/build.rs::resolve_node`.
-    ///
-    /// Named residual: `NaryMerkleLog::from_storage_with_config` reopens a
-    /// *continuing* (non-sealed) log by correctly re-deriving its in-memory
-    /// frontier from this instance's own stored digests, so a first write
-    /// through *that* path (e.g. `resume_algorithm` right after such a
-    /// reopen) would also see `existing` forced to `None`, opacifying a
-    /// node this crate could have safely trusted. No test in this crate's
-    /// suite constructs that sequence, so it is not closed here -- flagging
-    /// it rather than silently assuming this flag's scope is total.
-    has_written: bool,
+    /// The committed resume boundary this log's `meta` currently carries
+    /// (§3.1, SG12's two-shape encoding; §4.3's SG20 amendment; GB44):
+    /// `Some(n)` once some write has established the log as resumed at size
+    /// `n`, `None` for a log that has never been resumed. Read back from
+    /// `meta` on open ([`Self::new`]/[`Self::open_resumed`]) and carried
+    /// forward unchanged by every write that is not itself the
+    /// resume-establishing one (see [`Self::pending_resume`]'s doc comment).
+    resume_boundary: Option<u64>,
+    /// Set only by [`Self::open_resumed`], and consumed by exactly this
+    /// instance's next `write_batch` (build.rs::resolve_node's
+    /// `force_fresh`): that one write treats every coordinate it touches as
+    /// absent, regardless of what the backing repository's ref happened to
+    /// point at before, and commits `resume_boundary = Some(new_count)`
+    /// alongside it. A plainly opened/reopened instance ([`Self::new`],
+    /// [`Self::open`]) never sets this, so its own first write behaves
+    /// exactly like every later one -- the fix for the SGG10/SGG11 defect
+    /// an instance-lifetime flag caused (see this module's top-level docs,
+    /// departure 4).
+    pending_resume: bool,
 }
 
 impl GitStorage {
@@ -129,11 +154,11 @@ impl GitStorage {
             .map_err(|_| GitStorageError::InvalidRef(staging_ref.as_ref().to_string()))?;
 
         let local = repo.to_thread_local();
-        let (observed_tip, count, kind_byte) = match local
+        let (observed_tip, count, kind_byte, resume_boundary) = match local
             .try_find_reference(staging_ref.as_ref())
             .map_err(|e| GitStorageError::Git(e.to_string()))?
         {
-            None => (None, 0, 0),
+            None => (None, 0, 0, None),
             Some(mut r) => {
                 let tree_id = r
                     .peel_to_id()
@@ -143,13 +168,14 @@ impl GitStorage {
                     GitStorageError::Corruption("staging ref's tree has no meta".into())
                 })?;
                 let bytes = gitutil::read_blob(&local, meta_id)?;
-                let (stored_arity, count, kind_byte) = layout::decode_meta(&bytes)?;
+                let (stored_arity, count, kind_byte, resume_boundary) =
+                    layout::decode_meta(&bytes)?;
                 if stored_arity != arity {
                     return Err(GitStorageError::InvalidArity(format!(
                         "instance arity {arity} disagrees with stored meta.arity {stored_arity}"
                     )));
                 }
-                (Some(tree_id), count, kind_byte)
+                (Some(tree_id), count, kind_byte, resume_boundary)
             },
         };
 
@@ -161,8 +187,32 @@ impl GitStorage {
             count,
             kind_byte,
             hashers: HashMap::new(),
-            has_written: false,
+            resume_boundary,
+            pending_resume: false,
         })
+    }
+
+    /// Open a `storage-git` instance exactly as [`Self::new`] does, but mark
+    /// this instance's next `write_batch` as the one that establishes a
+    /// resume boundary (§4.3, SG20 amendment; GB44). Use this in place of
+    /// [`Self::new`]/[`Self::open`] only when the storage returned is about
+    /// to be handed to a genuine seal resumption (e.g.
+    /// `polydigest::NaryMerkleLog::resume`) -- never for reopening a
+    /// continuing log, which must use the plain constructors so its own
+    /// prior digests, leaf, and children carry forward normally (this
+    /// module's top-level docs, departure 4).
+    ///
+    /// # Errors
+    ///
+    /// Identical to [`Self::new`].
+    pub fn open_resumed(
+        repo: gix::ThreadSafeRepository,
+        staging_ref: impl AsRef<str>,
+        arity: u64,
+    ) -> Result<Self, GitStorageError> {
+        let mut storage = Self::new(repo, staging_ref, arity)?;
+        storage.pending_resume = true;
+        Ok(storage)
     }
 
     /// Register `hasher` as `alg_id`'s fold, for [`Self::tree_at`]'s
@@ -200,8 +250,11 @@ impl GitStorage {
     /// # Errors
     ///
     /// Returns [`GitStorageError::Corruption`] if `n` exceeds the current
-    /// size, or if a historical coordinate below `n` is not reconstructable
-    /// (Departure 3 above: an opaque node subsumed by a later merge).
+    /// size, if a historical coordinate below `n` is not reconstructable
+    /// (Departure 3 above: an opaque node subsumed by a later merge), if an
+    /// algorithm active at `n` has no hasher registered, or if a registered
+    /// hasher does not reproduce a digest this layer already has on file for
+    /// it (Departure 5 above, SG20's amendment, GB44).
     pub fn tree_at(&self, n: u64) -> Result<ObjectId, GitStorageError> {
         if n > self.count {
             return Err(GitStorageError::Corruption(format!(
@@ -210,20 +263,21 @@ impl GitStorage {
             )));
         }
         let repo = self.repo.to_thread_local();
+        if let Some(tree) = self.observed_tip {
+            historical::validate_hashers(&repo, self.arity, tree, self.count, &self.hashers)?;
+        }
         if n == self.count {
             if let Some(id) = self.observed_tip {
                 return Ok(id);
             }
         }
-        historical::reconstruct(
-            &repo,
-            self.arity,
-            self.observed_tip,
-            self.count,
-            self.kind_byte,
-            n,
-            &self.hashers,
-        )
+        let current = historical::CurrentState {
+            tree: self.observed_tip,
+            size: self.count,
+            kind_byte: self.kind_byte,
+            resume_boundary: self.resume_boundary,
+        };
+        historical::reconstruct(&repo, self.arity, current, n, &self.hashers)
     }
 
     /// A read-only view over an arbitrary checkpoint tree (§4.4, SG21),
@@ -238,7 +292,7 @@ impl GitStorage {
         let meta_id = gitutil::find_entry(&repo, tree, "meta")?
             .ok_or_else(|| GitStorageError::Corruption("tree has no meta".into()))?;
         let bytes = gitutil::read_blob(&repo, meta_id)?;
-        let (stored_arity, count, _kind) = layout::decode_meta(&bytes)?;
+        let (stored_arity, count, _kind, _resume_boundary) = layout::decode_meta(&bytes)?;
         Ok(GitReadOnlyView {
             repo: self.repo.clone(),
             tree,
@@ -385,21 +439,20 @@ impl Storage for GitStorage {
             log_meta,
             checkpoint_roots,
         };
-        let first_write = !self.has_written;
-        let applied = build::apply_write(
-            &repo,
-            self.arity,
-            self.observed_tip,
-            self.count,
-            self.kind_byte,
-            first_write,
-            &input,
-        )?;
+        let force_fresh = self.pending_resume;
+        let old = build::OldState {
+            tree: self.observed_tip,
+            count: self.count,
+            kind: self.kind_byte,
+            resume_boundary: self.resume_boundary,
+        };
+        let applied = build::apply_write(&repo, self.arity, old, force_fresh, &input)?;
         self.cas(&repo, applied.tree_id)?;
         self.observed_tip = Some(applied.tree_id);
         self.count = applied.count;
         self.kind_byte = applied.kind_byte;
-        self.has_written = true;
+        self.resume_boundary = applied.resume_boundary;
+        self.pending_resume = false;
         Ok(())
     }
 }
