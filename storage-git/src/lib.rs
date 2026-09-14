@@ -56,8 +56,10 @@
 //!    likewise trusted only on stored evidence: it is rejected before any historical root is
 //!    trusted if it fails to reproduce a digest this layer already has on file for it, and an
 //!    algorithm with no such evidence anywhere -- nothing materialized to recompute, and fewer than
-//!    two frontier peaks to fold -- is refused outright rather than silently trusted. See
-//!    `src/historical.rs`.
+//!    two frontier peaks to fold -- is refused outright rather than silently trusted, but only
+//!    where reconstructing the requested `n` would actually need that trust: never for `n` equal to
+//!    the current size served as the staging tip, and never for a target frontier of zero or one
+//!    peak, since a fold is only ever needed to combine two or more peaks. See `src/historical.rs`.
 
 mod build;
 mod error;
@@ -209,9 +211,10 @@ impl GitStorage {
     /// (Departure 3 above: an opaque node subsumed by a later merge), if an
     /// algorithm active at `n` has no hasher registered, or if a registered
     /// hasher cannot be trusted -- because it fails to reproduce a digest
-    /// this layer already has on file for it, or because no stored evidence
-    /// exists anywhere to check it against (Departure 5 above, SG20's
-    /// amendment).
+    /// this layer already has on file for it, or because reconstructing `n`
+    /// actually needs to fold two or more peaks together and no stored
+    /// evidence exists anywhere to check it against (Departure 5 above,
+    /// SG20's amendment).
     pub fn tree_at(&self, n: u64) -> Result<ObjectId, GitStorageError> {
         if n > self.count {
             return Err(GitStorageError::Corruption(format!(
@@ -221,7 +224,7 @@ impl GitStorage {
         }
         let repo = self.repo.to_thread_local();
         if let Some(tree) = self.observed_tip {
-            historical::validate_hashers(&repo, self.arity, tree, self.count, &self.hashers)?;
+            historical::validate_hashers(&repo, self.arity, tree, self.count, n, &self.hashers)?;
         }
         if n == self.count {
             if let Some(id) = self.observed_tip {

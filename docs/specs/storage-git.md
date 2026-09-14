@@ -487,11 +487,11 @@ historical `roots/` entry that is then indistinguishable from a genuine
 one. `tree_at` MUST check a registered hasher against digests this layer
 already has on file for that algorithm before trusting it for any
 historical reconstruction, and MUST return an error rather than `Ok` on a
-mismatch. This check is registration- or first-use-scoped, not
-per-historical-`n`, and draws on two forms of evidence. First, bottom-up
-recomputation: a currently active, fully-covered node's own digest,
-recomputed via `spine::nary_mr` (`Hasher::leaf` at the leaves, the same
-promotion-and-collapse fold `cml::engine::carry` itself applies at each
+mismatch, and draws on two forms of evidence, both computed over the
+*current*, live frontier regardless of which `n` is being reconstructed.
+First, bottom-up recomputation: a currently active, fully-covered node's own
+digest, recomputed via `spine::nary_mr` (`Hasher::leaf` at the leaves, the
+same promotion-and-collapse fold `cml::engine::carry` itself applies at each
 merge -- never `Hasher::node` called directly, which would reject a correct
 hasher wherever eml's own canonicalization has collapsed equal children to
 their shared value) and compared against the digest already stored at that
@@ -506,15 +506,28 @@ against the algorithm's already-stored `roots/` entry is evidence enough to
 catch a wrong function even when nothing can be recomputed bottom-up
 (`cml::mountain::bag_peaks` promotes a lone peak to itself, so a
 single-peak frontier never actually exercises a wrong hasher through this
-path -- this is why it takes two or more). An algorithm with a fully-owned
-peak that turns out opaque, and fewer than two frontier peaks to fall back
-on, MUST NOT be silently trusted: `tree_at` returns an error naming it
-rather than `Ok`. *Checked by: property test — a hasher of a different
-digest width, and a hasher of the same width but a different function,
-registered for an algorithm with real, correctly-computed digests already
-stored, MUST both cause `tree_at` to return an error rather than `Ok`,
-including where every node is opaque and only a multi-peak frontier fold
-supplies the evidence.*
+path -- this is why it takes two or more). Either form of demonstrated
+wrongness MUST be rejected unconditionally, regardless of which `n` is being
+reconstructed: a hasher already proven wrong is never safe to fold anything
+with. An algorithm with a fully-owned peak that turns out opaque, and fewer
+than two frontier peaks to fall back on, has no evidence either way -- and
+MUST NOT be silently trusted -- but only where reconstructing the requested
+`n` would actually need that trust: a fold is only ever needed to combine
+two or more of `n`'s *own* frontier peaks, so this refusal MUST NOT fire for
+`n` equal to the current size (served as the staging tip, needing no fold at
+all) nor for a target frontier of zero or one peak (`bag_peaks` promotes a
+lone peak to itself, and an empty frontier has no root to fold, mirroring
+the `n = 0` case above); it MUST still fire wherever reconstructing `n`
+genuinely needs a fold across two or more of its own peaks and no evidence
+exists anywhere to trust the hasher for it. *Checked by: property test — a
+hasher of a different digest width, and a hasher of the same width but a
+different function, registered for an algorithm with real,
+correctly-computed digests already stored, MUST both cause `tree_at` to
+return an error rather than `Ok`, including where every node is opaque and
+only a multi-peak frontier fold supplies the evidence; and a fork resumed at
+a single-peak size, with the correct hasher registered, MUST succeed at
+`tree_at(0)` and at `tree_at` of the current size, never refused for lack of
+evidence a query needing no fold was never going to use.*
 
 The rejected alternative — persisting each root as it is computed, rather
 than folding it back from stored peaks on demand — does not compose with

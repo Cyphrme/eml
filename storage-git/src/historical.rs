@@ -15,9 +15,10 @@
 //! the exact bytes `C(n)` was originally written with (SG9 purity), making
 //! `tree_at(n)`'s object byte-identical to that original checkpoint.
 //!
-//! An algorithm active at `n` with no hasher registered omits its
-//! `roots/hex(alg_id,16)` entry -- the crate's previous unconditional
-//! departure, now opt-out per algorithm rather than universal. See this
+//! An algorithm active at `n` with no hasher registered errors rather than
+//! omitting its `roots/hex(alg_id,16)` entry -- the crate's previous
+//! unconditional departure has been replaced with an explicit refusal, so
+//! `tree_at` never returns a well-formed but silently-wrong tree. See this
 //! crate's top-level docs for the full writeup.
 
 use std::collections::HashMap;
@@ -363,13 +364,22 @@ where
 /// `cml::engine::compute_root` uses to write it) catches a wrong hasher even
 /// where nothing can be recomputed bottom-up. An algorithm with a
 /// fully-owned peak that turns out opaque, and no multi-peak frontier fold
-/// to fall back on, is never silently trusted: this returns an error naming
-/// it.
+/// to fall back on, is never silently trusted -- but only where `target`
+/// (the `n` `tree_at` is reconstructing) would ever need that trust: a fold
+/// across two or more peaks is the only place a hasher is actually invoked
+/// to combine anything (a single peak is promoted to itself, and an empty
+/// frontier folds nothing, mirroring `reconstruct_roots`'s own genesis
+/// bootstrap below), so an absence of evidence is refused only when
+/// `target`'s own frontier needs a fold; there is nothing to refuse trust
+/// *for* otherwise. Either form of demonstrated wrongness above is rejected
+/// unconditionally, regardless of `target` -- a hasher already proven wrong
+/// is never safe to fold anything with.
 pub(crate) fn validate_hashers(
     repo: &gix::Repository,
     arity: u64,
     current_tree: ObjectId,
     current_size: u64,
+    target: u64,
     hashers: &HashMap<u64, Box<dyn Hasher>>,
 ) -> Result<(), Error> {
     if hashers.is_empty() {
@@ -383,6 +393,10 @@ pub(crate) fn validate_hashers(
         // to be checked against, and so nothing to trust or distrust yet.
         return Ok(());
     }
+    // A fold is only ever needed to combine two or more peaks (`bag_peaks`
+    // promotes a lone peak to itself); this is a fact about `target`'s own
+    // frontier, never about `current_size`.
+    let target_needs_fold = frontier_for_size(target, arity).len() >= 2;
     let metas = read::load_algorithm_metas(repo, current_tree)?;
     let stored_roots = read::load_checkpoint_roots(repo, current_tree)?;
 
@@ -472,11 +486,15 @@ pub(crate) fn validate_hashers(
 
         // Refuse only where a peak this algorithm fully owns turned out
         // opaque and nothing -- neither that peak's own recompute nor a
-        // multi-peak frontier fold -- could evidence the hasher. An
-        // algorithm whose activation simply never lined up with a
-        // materialized, fully-covered peak (`uncheckable_full_coverage`
-        // stays `false`) has nothing to distrust and is left as before.
-        if !evidenced && uncheckable_full_coverage {
+        // multi-peak frontier fold -- could evidence the hasher, AND
+        // `target`'s own reconstruction would actually need that trust (a
+        // fold across two or more of `target`'s peaks). An algorithm whose
+        // activation simply never lined up with a materialized,
+        // fully-covered peak (`uncheckable_full_coverage` stays `false`)
+        // has nothing to distrust and is left as before; and a `target`
+        // needing no fold at all has nothing this absence of evidence would
+        // ever have been trusted for.
+        if !evidenced && uncheckable_full_coverage && target_needs_fold {
             return Err(corrupt(format!(
                 "tree_at: the hasher registered for algorithm {alg_id} cannot be checked against \
                  any stored evidence (its fully-covered peak is opaque, and fewer than two \
