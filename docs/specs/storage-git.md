@@ -221,13 +221,23 @@ non-git reference implementation's (e.g. `MemoryStorage`) value for the same
 **[SG9]** `C(n)`'s object id (per object-hash format) MUST be a pure
 function of exactly: `k`, the item sequence `0..n`, the **currently known**
 epoch history of every registered algorithm truncated to `n`
-(`cml::engine::AlgView::epochs_at`, `cml/src/engine.rs:196-217`), and the log
-kind byte (§3.1). It MUST NOT depend on insertion order among operations
-that do not change `n` (for example two algorithm registrations at the same
-size, in either order, yield the same `C(n)` once both are known), on
-wall-clock time, or on writer identity. *Checked by: property test —
-build the same log through two different operation orderings that reach an
-identical logical state, and require identical `C(n)` object ids.*
+(`cml::engine::AlgView::epochs_at`, `cml/src/engine.rs:196-217`), the log
+kind byte (§3.1), and the log's **committed resume boundary**, if any (§2.6's
+SG10 amendment, §4.3's SG20 amendment; GB44) — a fact established once, by
+an explicit resume-open's next write, and read back thereafter from `meta`,
+never re-derived from a process instance's own history. It MUST NOT depend
+on insertion order among operations that do not change `n` (for example two
+algorithm registrations at the same size, in either order, yield the same
+`C(n)` once both are known), on wall-clock time, or on writer identity —
+including *how many times* a writer has reopened the log, which the resume
+boundary's committed nature is what forecloses (a bare instance-lifetime
+flag makes `C(n)` depend on exactly that, the defect GB44 closes). *Checked
+by: property test — build the same log through two different operation
+orderings that reach an identical logical state, and require identical
+`C(n)` object ids; and, separately, a continuous writer and a writer that
+reopens through a plain (non-resuming) open at arbitrary points over an
+identical operation sequence must reach byte-identical `C(n)` for every
+`n`.*
 
 One consequence of SG9 is worth stating precisely, because the exhibit's
 `C(n)` notation can otherwise be misread as "one object per size, forever."
@@ -255,12 +265,45 @@ persists only frontier peaks, never historical leaves) MUST be opaque:
 a subtree-kind log and a resumed log must never call `store_leaf`, and the
 git backend must never synthesize a `leaf` or child entry it was not handed.*
 
+**Amendment — the resume boundary is a committed fact, not process history
+(GB44).** A backend cannot tell, from `Storage::store_node`/`write_batch`'s
+own arguments, whether a call is resuming a seal onto this node's coordinate
+or merely continuing an already-materialized log through a plain reopen —
+the two calls look identical. Deciding by what a process instance has or
+has not written before (an ephemeral, in-memory flag) makes `C(n)` depend on
+process history: a merge gate found the same logical operations reaching a
+different object id depending on whether the writer had reopened before its
+next write, and on the reopen path silently discarding another algorithm's
+already-stored digest and a flat node's children
+(`.ledger/deposits/git-backend/lead-maintainer/storage-git-merge-gate.md`,
+SGG10/SGG11). The distinguishing signal instead comes from an explicit
+resume-open the caller uses only when genuinely resuming a seal
+(`GitStorage::open_resumed`, alongside `register_hasher`/`tree_at`/`open_at`
+as a named addition beyond the trait): it marks that instance's *next*
+`write_batch` as the one that establishes a resume boundary, and that write
+commits the boundary — the size it writes to — into its own `meta` blob
+(§3.1, SG12's amended two-shape encoding), so a later plain
+`GitStorage::open`/`GitStorage::new` reads it back as a fact about the log's
+provenance, never re-derives it from an instance's lifetime. Only that one
+write treats every coordinate it touches as absent, regardless of whether
+the backing repository still holds a superseded provenance's materialized
+objects at that coordinate or holds nothing there at all — both starve the
+write's view of "existing" data identically, so resuming onto a repository
+holding stale materialized objects and resuming onto an empty repository
+write byte-identical trees. Every other write — including a plainly
+reopened instance's own first one — carries a touched coordinate's prior
+digests, leaf, and children forward exactly as an ordinary continuing write
+does.
+
 **[SG11]** Opacity is a property of the node, not of the log. A single log
 instance MAY carry both materialized nodes (from before a resumption or
 before its first subtree-kind append) and opaque nodes (from after). A
 backend implementation MUST NOT infer materialization from the log's current
 `meta.kind` byte; it MUST infer it from whether it was ever handed the leaf
-bytes or the child structure for that specific node. *Checked by: property
+bytes or the child structure for that specific node, and (per the SG10
+amendment above) from the log's own committed resume boundary — a fact
+recorded once, by the resume-establishing write, never re-inferred from a
+process's own history. *Checked by: property
 test — mix flat and subtree appends where `cml` permits it, and confirm
 per-node opacity matches per-node provenance, not the log-wide kind byte.*
 
@@ -277,18 +320,25 @@ are big-endian throughout, matching the encoding `storage-fjall` already
 uses for the same fields (`storage-fjall/src/lib.rs:163-252`), so a
 migration between backends never has to reconcile endianness.
 
-### 3.1 `meta` (fixed 12 bytes)
+### 3.1 `meta` (12 bytes, or 20 with a committed resume boundary)
 
 | Offset | Width | Field | Value |
 | --: | --: | :-- | :-- |
-| 0 | 1 | version | `0x01` |
+| 0 | 1 | version | `0x01` (no resume boundary) or `0x02` (with one) |
 | 1 | 2 | arity | `k` as `u16` BE |
 | 3 | 8 | count | `n` as `u64` BE |
 | 11 | 1 | kind | `0x00` = flat, `0x01` = subtree (`cml::LogKind::to_byte`, `cml/src/lib.rs`) |
+| 12 | 8 | resume boundary | present only under version `0x02`: the size, as a `u64` BE, this log was resumed at |
 
-**[SG12]** `meta` MUST be exactly these 12 bytes in this order, with no
-trailing padding. A reader MUST reject any other length. *Checked by:
-golden vector; structural length check.*
+**[SG12]** `meta` MUST be exactly 12 bytes (version `0x01`, no resume
+boundary) or exactly 20 bytes (version `0x02`, the resume boundary
+appended), with no trailing padding either way, and the version byte MUST
+agree with the length. A reader MUST reject any other length, and MUST
+reject a version byte that disagrees with the length it was found at
+(§2.6's SG10 amendment, GB44: the two shapes exist so that a log never
+resumed encodes byte-identically to every log written before the boundary
+field existed, and only a log that has genuinely been resumed pays for the
+wider encoding). *Checked by: golden vector; structural length check.*
 
 ### 3.2 An `epochs/hex(alg_id, 16)` blob
 
@@ -415,36 +465,66 @@ returning its id. `tree_at` MUST NOT move the staging ref. *Checked by:
 property test — `tree_at(n)` for a range of past `n` MUST match a
 from-genesis rebuild's `C(n)` for the same log state.*
 
-**Amendment — `roots/` reconstruction and `register_hasher`.** A
-historical `roots/hex(alg_id,16)` entry (§3.3, SG14) is a per-algorithm
-*member root*: the peak-bagging fold (`cml::mountain::bag_peaks`, the same
-fold `cml::engine::compute_root` uses to produce the live root this layer
-stores verbatim via `checkpoint_roots`) over that algorithm's frontier peak
-digests as they stood at `n`. Unlike `meta`/`epochs`/`peaks`, this fold is
-not recoverable from stored bytes alone — folding more than one peak digest
-into one root is a hash operation this layer does not otherwise perform,
-so reconstructing it needs the algorithm's own hash fold, not merely its
-already-stored digests. This does not relax SG26: the fold runs under a
-`spine::Hasher` **trait object** the caller registers per `alg_id` via
-`GitStorage::register_hasher(alg_id, Box<dyn Hasher>)` — an addition
-alongside `tree_at`/`open_at` — never a hash algorithm this crate names,
-links against by concrete type, or assumes a digest width for; the
-interface is exactly the opaque, caller-supplied shape SG26 already
+**Amendment — `roots/` reconstruction and `register_hasher`, revised by
+GB44.** A historical `roots/hex(alg_id,16)` entry (§3.3, SG14) is a
+per-algorithm *member root*: the peak-bagging fold (`cml::mountain::bag_peaks`,
+the same fold `cml::engine::compute_root` uses to produce the live root this
+layer stores verbatim via `checkpoint_roots`) over that algorithm's frontier
+peak digests as they stood at `n`. Unlike `meta`/`epochs`/`peaks`, this fold
+is not recoverable from stored bytes alone — folding more than one peak
+digest into one root is a hash operation this layer does not otherwise
+perform, so reconstructing it needs the algorithm's own hash fold, not
+merely its already-stored digests. This does not relax SG26: the fold runs
+under a `spine::Hasher` **trait object** the caller registers per `alg_id`
+via `GitStorage::register_hasher(alg_id, Box<dyn Hasher>)` — an addition
+alongside `tree_at`/`open_at`/`open_resumed` — never a hash algorithm this
+crate names, links against by concrete type, or assumes a digest width for;
+the interface is exactly the opaque, caller-supplied shape SG26 already
 requires everywhere else. A `tree_at(n)` call reconstructs `roots/hex(alg_id,16)`
-correctly for every algorithm with a hasher registered this way, and
-**omits** the entry for an algorithm active at `n` with no hasher
-registered, rather than fabricating or erroring — an explicit, per-algorithm
-opt-out of SG14's "MUST carry an entry for every algorithm active at `n`"
-in the one case this layer cannot compute the value, never a silent
-violation of it. At `n = 0` the frontier is empty by construction (no item
-has ever been appended), so no algorithm's root has ever actually been
-computed by the combinator regardless of registration; `roots/` at `n = 0`
-is always the empty tree, matching the checkpoint tree this layer itself
-writes when an algorithm is first registered (§4, SG18: a registration
-alone never supplies `checkpoint_roots`). *Checked by: property test —
-`tree_at(n)` for a range of past `n`, with every registered algorithm's
-hasher supplied, MUST be byte-identical to the checkpoint tree actually
-written at size `n`, including `roots/`.*
+correctly for every algorithm with a hasher registered this way. `tree_at`
+MUST NOT return a tree other than `C(n)`: for an algorithm active at `n`
+with **no** hasher registered, it MUST return an error naming the
+algorithm, never `Ok` with the entry silently omitted. The merge gate found
+that the crate's prior, since-superseded behavior here — omitting the
+entry rather than erroring — turned a missing precondition into a
+well-formed but wrong tree that a consumer (for example an Axios view
+commit) could not distinguish from the genuine one
+(`.ledger/deposits/git-backend/lead-maintainer/storage-git-merge-gate.md`,
+SGG12). At `n = 0` the frontier is empty by construction (no item has ever
+been appended), so no algorithm's root has ever actually been computed by
+the combinator regardless of registration; `roots/` at `n = 0` is always
+the empty tree, matching the checkpoint tree this layer itself writes when
+an algorithm is first registered (§4, SG18: a registration alone never
+supplies `checkpoint_roots`), and this one case needs no hasher and never
+errors. *Checked by: property test — `tree_at(n)` for a range of past `n`,
+with every registered algorithm's hasher supplied, MUST be byte-identical
+to the checkpoint tree actually written at size `n`, including `roots/`;
+and `tree_at(n)` for an algorithm active at `n` with no hasher registered
+MUST return an error naming that algorithm, for every such `n`.*
+
+**Amendment — a registered hasher is verified before any historical root is
+trusted (GB44).** A registered hasher of the wrong digest width, or of the
+right width but the wrong function, MUST be rejected rather than silently
+folded into a historical `roots/` entry that is then indistinguishable from
+a genuine one — the same SGG12 failure mode extends to a *wrong* hasher, not
+only a missing one. `tree_at` MUST check a registered hasher against digests
+this layer already has on file for that algorithm before trusting it for
+any historical reconstruction, and MUST return an error rather than `Ok` on
+a mismatch. This check is registration- or first-use-scoped, not
+per-historical-`n`: it recomputes a currently active, fully materialized
+node's own digest bottom-up (`Hasher::leaf` at the leaves, `Hasher::node` at
+each merge — the same operations that produced the stored value) and
+compares it against the digest already stored at that exact coordinate,
+rather than folding across the current frontier's peaks via `bag_peaks`
+(`cml::mountain::bag_peaks` promotes a lone peak to itself, so a
+single-peak frontier would never actually exercise a wrong hasher through
+that path). A node this cannot fully recompute (opaque somewhere along the
+way, or the algorithm's activity does not cover the node's whole span) is
+skipped — best effort, not a violation, matching this layer's other named
+departures. *Checked by: property test — a hasher of a different digest
+width, and a hasher of the same width but a different function, registered
+for an algorithm with real, correctly-computed digests already stored, MUST
+both cause `tree_at` to return an error rather than `Ok`.*
 
 The rejected alternative — persisting each root as it is computed, rather
 than folding it back from stored peaks on demand — does not compose with
@@ -476,8 +556,10 @@ tests"). *Checked by: property test.*
 
 ### 4.5 The tip-moved error
 
-Specified as part of SG19; repeated here because it is one of the four
-named additions. It MUST be introspectable by the caller (a distinguishable
+Specified as part of SG19; repeated here because it is one of the named
+additions (§4.2–§4.4 and this section: `tree_at`, `open_at`,
+`register_hasher`, `open_resumed`, and the tip-moved error itself). It MUST
+be introspectable by the caller (a distinguishable
 variant or an `is_tip_moved()`-style predicate), never conflated with
 "object not found" or "corrupted", since the caller's correct response
 (reload and retry) differs from its response to either of those.
