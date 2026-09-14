@@ -88,6 +88,15 @@ pub struct GitStorage {
     /// write onward, `existing` reflects writes this same instance
     /// performed, so carrying it forward is safe again. See
     /// `src/build.rs::resolve_node`.
+    ///
+    /// Named residual: `NaryMerkleLog::from_storage_with_config` reopens a
+    /// *continuing* (non-sealed) log by correctly re-deriving its in-memory
+    /// frontier from this instance's own stored digests, so a first write
+    /// through *that* path (e.g. `resume_algorithm` right after such a
+    /// reopen) would also see `existing` forced to `None`, opacifying a
+    /// node this crate could have safely trusted. No test in this crate's
+    /// suite constructs that sequence, so it is not closed here -- flagging
+    /// it rather than silently assuming this flag's scope is total.
     has_written: bool,
 }
 
