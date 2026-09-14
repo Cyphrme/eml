@@ -1,12 +1,10 @@
 //! Acceptance tests for `tree_at(n)` on a log resumed from a seal (a fork),
-//! from `docs/specs/storage-git.md` §4.3 (SG20) alone, narrowed by the merge
-//! re-gate's own directive (`storage-git-regate-2.md`, RT20 [1]): hasher
-//! evidence must be required only where reconstructing `n` actually invokes
-//! the hasher -- never for `n == current size`, and never for a target
-//! frontier of zero or one peak. A fold is only ever needed to combine two
-//! or more peaks; a lone peak is promoted to itself (`bag_peaks`'s own
-//! documented behavior), and an empty frontier has no algorithm root to
-//! fold at all.
+//! from `docs/specs/storage-git.md` §4.3 (SG20) alone: hasher evidence must
+//! be required only where reconstructing `n` actually invokes the hasher --
+//! never for `n == current size`, and never for a target frontier of zero
+//! or one peak. A fold is only ever needed to combine two or more peaks; a
+//! lone peak is promoted to itself (`bag_peaks`'s own documented behavior),
+//! and an empty frontier has no algorithm root to fold at all.
 //!
 //! A fork's resumed frontier is opaque (SG10/SG11): the coordinate a
 //! resumed peak was sealed at is addressable, but nothing strictly beneath
