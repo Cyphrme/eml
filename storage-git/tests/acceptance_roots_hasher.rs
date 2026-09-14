@@ -16,7 +16,7 @@
 mod support;
 
 use polydigest::{NaryMerkleLog, TreeConfig};
-use spine::Hasher;
+use spine::{Hasher, Subtree};
 use storage_git::GitStorage;
 use support::FixtureHasher;
 
@@ -197,4 +197,72 @@ fn tree_at_rejects_a_hasher_that_does_not_reproduce_the_stored_root() {
     if let Err(msg) = result {
         panic!("{msg}");
     }
+}
+
+/// A wrong hasher registered for a subtree-kind log with no materialized
+/// node anywhere -- built entirely through `append_subtree`, so every peak
+/// carries `digest/` only and there is nothing to recompute bottom-up --
+/// must still be rejected for the log's own live tree (the one a caller
+/// actually shares). A frontier of two or more peaks is exactly the case in
+/// which folding them under the hasher and comparing against the stored
+/// current root is evidence enough to catch a wrong function, even with
+/// nothing node-by-node to recompute against. `tree_at(n)` at the current
+/// size MUST return an error for a same-width hasher that differs from the
+/// true one, never `Ok`; the correct hasher must still succeed there.
+///
+/// (Historical `n` below an opaque subtree log's current size is a
+/// separate, already-documented limitation -- such a coordinate is not
+/// reconstructable at all, correct hasher or not, once folded under a
+/// taller peak -- so this test checks the live tree only.)
+#[test]
+fn tree_at_rejects_a_wrong_same_width_hasher_on_an_opaque_multi_peak_log() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = "refs/eml/storage/tree-at-opaque-wrong-hasher/staging";
+        let repo = support::bare_repo(dir.path(), gix::hash::Kind::Sha1);
+
+        let mut storage = GitStorage::new(repo, staging, ARITY).expect("open");
+        storage.register_hasher(0, Box::new(real_hasher()));
+        let mut log = NaryMerkleLog::new(
+            storage,
+            Box::new(real_hasher()),
+            TreeConfig { arity: ARITY },
+        )
+        .await
+        .expect("new");
+
+        // Every append is subtree-kind: no node anywhere is materialized,
+        // so a bottom-up recompute has nothing to walk. Seven appends at
+        // arity 2 give three peaks (heights 2, 1, 0) -- two or more peaks
+        // for the frontier fold to use as evidence.
+        for i in 0..7u8 {
+            log.append_subtree(&Subtree::Leaf(vec![i]))
+                .await
+                .expect("append_subtree");
+        }
+        let n = log.count();
+        assert!(
+            spine::frontier_for_size(n, ARITY).len() >= 2,
+            "fixture sanity: the frontier must carry at least two peaks"
+        );
+
+        // Sanity: the correct hasher succeeds for the live tree.
+        log.storage()
+            .tree_at(n)
+            .unwrap_or_else(|e| panic!("tree_at({n}) with the correct hasher: {e}"));
+        drop(log);
+
+        // A same-width, different-function hasher must be rejected for that
+        // same live tree.
+        let mut wrong_storage =
+            GitStorage::new(support::reopen_repo(dir.path()), staging, ARITY).expect("reopen");
+        wrong_storage.register_hasher(0, Box::new(WrongFunctionHasher::new(REAL_WIDTH)));
+        if let Ok(id) = wrong_storage.tree_at(n) {
+            panic!(
+                "tree_at({n}) returned Ok({id}) with a wrong same-width hasher over an opaque, \
+                 multi-peak subtree log -- an error is required, never Ok, even where no single \
+                 node can be recomputed bottom-up"
+            );
+        }
+    });
 }
