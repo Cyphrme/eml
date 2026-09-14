@@ -22,13 +22,6 @@ categories.workspace = true
 name = "storage_git"
 doctest = false
 
-[features]
-# Gates a test-only module (storage-git/tests/acceptance_determinism.rs)
-# written against an API GB44 names but that does not exist yet
-# (GitStorage::open_resumed). Enabling this feature is expected to fail to
-# compile until that call is added; it gates no library code.
-acceptance-pending = []
-
 [dependencies]
 # The Storage trait is the polydigest combinator's; this backend implements it.
 polydigest = { version = "0.1", path = "../polydigest" }

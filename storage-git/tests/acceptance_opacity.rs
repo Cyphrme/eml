@@ -2,12 +2,24 @@
 //! SG10 (a subtree-kind or resumed node MUST be opaque) and SG11 (opacity is
 //! a property of the node's own provenance, never inferred from the log's
 //! `meta.kind` byte), from `docs/specs/storage-git.md` alone.
+//!
+//! A seal resumption's own contract (`polydigest::NaryMerkleLog::resume`'s
+//! doc comment: "storage is a fresh backend the resumed log writes forward
+//! into") already excludes reopening a ref that still holds a log's own
+//! committed objects -- that is not a way to continue a log, it is a
+//! contract violation. So that case is refused outright, before anything is
+//! written, rather than reconciled into an opaque tree: this file used to
+//! assert the latter, and the tests below replace that assertion with the
+//! refusal, while keeping SG10/SG11's opacity guarantee for the case the
+//! contract actually supports -- resuming onto a genuinely fresh, empty
+//! ref.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
 
 use polydigest::NaryMerkleLog;
 use spine::Subtree;
+use storage_git::GitStorage;
 use support::{FixtureHasher, bare_repo, hex, new_log};
 
 /// [SG10] A `T(left, 0)` node built from `Storage::store_node` with no
@@ -49,131 +61,177 @@ fn sg10_subtree_kind_append_is_opaque() {
     });
 }
 
-/// [SG10]/[SG11] A node inherited opaque from a resumed seal MUST be
-/// opaque -- `digest/` only, no children -- even though it covers a
-/// height > 0 range that, for a live flat log, would ordinarily be fully
-/// materialized. This shows opacity tracks *how a specific node's write was
-/// provisioned* (SG11), not `meta.kind`: the resumed write only ever
-/// supplies a raw peak digest via `store_node`, never the children a
-/// height > 0 materialized node would need, regardless of whether an
-/// earlier, differently-provisioned object at a different git id happened
-/// to materialize the same logical range.
+/// A resumption's `storage` must be a fresh backend: a ref that still holds
+/// a log's own committed objects -- e.g. the very ref a source log was just
+/// sealed from -- MUST be refused, not silently folded into a new tree, and
+/// nothing must be written when it is. This replaces this file's prior
+/// assertion that a peak resumed onto such a stale ref still comes back
+/// opaque: that case has moved from "supported, but must stay opaque" to
+/// "refused before anything is written" -- the stale ref never was a
+/// resumable target, so reconciling it into a well-formed tree was the
+/// wrong fix for the corruption that reconciliation itself introduced.
 #[test]
-fn sg10_11_resumed_peak_is_opaque_despite_covering_a_once_materialized_range() {
+fn resume_onto_a_ref_that_already_holds_a_log_is_refused() {
     smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
+        let staging = "refs/eml/storage/resume-refusal/staging";
         let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
-        let staging = "refs/eml/storage/sg11/staging";
         let k = 2u64;
-        let hasher0 = FixtureHasher::new(32);
+        let real = FixtureHasher::new(32);
 
-        // Build a flat, fully materialized log to n=4 (one peak, T(0,2)).
-        let mut log = new_log(&repo, staging, k, hasher0.clone()).await;
+        let mut log = new_log(&repo, staging, k, real.clone()).await;
         for i in 0..4u32 {
             log.append_leaf(format!("leaf-{i}").as_bytes())
                 .await
                 .unwrap();
         }
+        let sealed = log.seal().await.unwrap();
 
         let local = repo.to_thread_local();
-        let materialized_tip = support::ref_target(&local, staging).unwrap();
-        let materialized_peak = support::resolve_path(
-            &local,
-            materialized_tip,
-            &format!("peaks/{}/{}", hex(2, 2), hex(0, 2)),
-        )
-        .unwrap()
-        .oid;
+        let before = support::ref_target(&local, staging).unwrap();
+
+        // A plain, ordinary constructor over the SAME ref the source log
+        // just sealed from: it still holds every one of that log's
+        // committed objects. Handed straight to `resume` -- the path any
+        // caller actually uses -- this must be refused, whatever
+        // constructor produced it.
+        let stale_storage = GitStorage::new(support::reopen_repo(dir.path()), staging, k)
+            .expect("open GitStorage over the stale ref");
+        let result = NaryMerkleLog::resume(&sealed, stale_storage, vec![(0, Box::new(real.clone()))])
+            .await;
+
         assert!(
-            support::read_tree(&local, materialized_peak)
-                .iter()
-                .any(|e| e.name == hex(0, 2)),
-            "sanity: the pre-resumption peak T(0,2) must start out materialized (SG4)"
+            result.is_err(),
+            "resume onto a ref that already holds a log's committed objects must be refused; it \
+             was silently accepted instead"
         );
 
-        // Seal, then resume -- onto the *same* GitStorage/ref this log was
-        // already writing to, so the object database it resumes into is the
-        // one that already holds the materialized objects above.
+        let after = support::ref_target(&local, staging).unwrap();
+        assert_eq!(
+            before, after,
+            "a refused resume must leave the stale ref exactly as it was before the attempt -- \
+             nothing written"
+        );
+    });
+}
+
+/// However the fresh storage handed to `resume` was constructed, resuming
+/// the same seal onto an equally fresh (empty) ref must reach one identical
+/// tip -- the result must never depend on which constructor produced the
+/// storage.
+#[test]
+fn resume_onto_a_fresh_ref_is_independent_of_how_the_storage_was_constructed() {
+    smol::block_on(async {
+        let dir_src = tempfile::tempdir().unwrap();
+        let staging_src = "refs/eml/storage/resume-fresh-src/staging";
+        let repo_src = bare_repo(dir_src.path(), gix::hash::Kind::Sha256);
+        let k = 2u64;
+        let real = FixtureHasher::new(32);
+        let mut log = new_log(&repo_src, staging_src, k, real.clone()).await;
+        for i in 0..3u32 {
+            log.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
         let sealed = log.seal().await.unwrap();
-        let resumed_storage = support_reopen(&repo, staging, k);
-        let mut resumed: NaryMerkleLog<storage_git::GitStorage> = NaryMerkleLog::resume(
-            &sealed,
-            resumed_storage,
-            vec![(0, Box::new(hasher0.clone()))],
-        )
-        .await
-        .unwrap();
 
-        let resumed_tip = support::ref_target(&local, staging).unwrap();
-        let resumed_peak = support::resolve_path(
-            &local,
-            resumed_tip,
-            &format!("peaks/{}/{}", hex(2, 2), hex(0, 2)),
-        )
-        .unwrap()
-        .oid;
-        assert_ne!(
-            resumed_peak, materialized_peak,
-            "the resumed T(0,2) reused the exact same (materialized) git tree object id as the \
-             pre-resumption peak, instead of a fresh digest-only object"
-        );
+        let dir_a = tempfile::tempdir().unwrap();
+        let staging_a = "refs/eml/storage/resume-fresh-a/staging";
+        let repo_a = bare_repo(dir_a.path(), gix::hash::Kind::Sha256);
+        let storage_a = GitStorage::new(repo_a.clone(), staging_a, k)
+            .expect("the plain constructor must open an empty ref");
+        let resumed_a = NaryMerkleLog::resume(&sealed, storage_a, vec![(0, Box::new(real.clone()))])
+            .await
+            .expect("resume onto a fresh ref via the plain constructor");
 
-        let entries = support::read_tree(&local, resumed_peak);
-        assert!(
-            !entries.iter().any(|e| e.name == hex(0, 2))
-                && !entries.iter().any(|e| e.name == hex(1, 2)),
-            "T(0,2) resumed from a seal must be opaque: no hex(c,2) children, even though the \
-             same coordinate was materialized moments ago under the pre-resumption log"
+        let dir_b = tempfile::tempdir().unwrap();
+        let staging_b = "refs/eml/storage/resume-fresh-b/staging";
+        let repo_b = bare_repo(dir_b.path(), gix::hash::Kind::Sha256);
+        let storage_b = GitStorage::open_resumed(repo_b.clone(), staging_b, k)
+            .expect("the resume-open constructor must open an empty ref");
+        let resumed_b = NaryMerkleLog::resume(&sealed, storage_b, vec![(0, Box::new(real.clone()))])
+            .await
+            .expect("resume onto a fresh ref via the resume-open constructor");
+
+        let tip_a = support::ref_target(&repo_a.to_thread_local(), staging_a).unwrap();
+        let tip_b = support::ref_target(&repo_b.to_thread_local(), staging_b).unwrap();
+        assert_eq!(
+            tip_a, tip_b,
+            "resuming the same seal onto an equally fresh ref must reach the same tip regardless \
+             of which constructor produced the storage handed to resume"
         );
+        assert_eq!(
+            resumed_a.count(),
+            resumed_b.count(),
+            "both resumptions must report the same size"
+        );
+    });
+}
+
+/// [SG10]/[SG11] Resuming onto a genuinely fresh (empty) ref must still
+/// yield opaque peaks -- digest only, no leaf, no children -- and so must
+/// every forward `append_subtree` on the resumed log.
+#[test]
+fn resume_onto_an_empty_ref_still_yields_opaque_peaks() {
+    smol::block_on(async {
+        let dir_src = tempfile::tempdir().unwrap();
+        let staging_src = "refs/eml/storage/resume-empty-src/staging";
+        let repo_src = bare_repo(dir_src.path(), gix::hash::Kind::Sha256);
+        let k = 2u64;
+        let real = FixtureHasher::new(32);
+
+        let mut log = new_log(&repo_src, staging_src, k, real.clone()).await;
+        for i in 0..4u32 {
+            log.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        let sealed = log.seal().await.unwrap();
+
+        let dir_dst = tempfile::tempdir().unwrap();
+        let staging_dst = "refs/eml/storage/resume-empty-dst/staging";
+        let repo_dst = bare_repo(dir_dst.path(), gix::hash::Kind::Sha256);
+        let storage_dst = GitStorage::new(repo_dst.clone(), staging_dst, k)
+            .expect("the plain constructor must open an empty ref");
+        let mut resumed = NaryMerkleLog::resume(&sealed, storage_dst, vec![(0, Box::new(real.clone()))])
+            .await
+            .expect("resume onto an empty ref");
+
+        let local_dst = repo_dst.to_thread_local();
+        let tip = support::ref_target(&local_dst, staging_dst).unwrap();
+        // n=4, arity 2: one peak, T(0,2).
+        let peak_path = format!("peaks/{}/{}", hex(2, 2), hex(0, 2));
+        let peak = support::resolve_path(&local_dst, tip, &peak_path)
+            .unwrap_or_else(|| panic!("no peak at {peak_path}"));
+        let entries = support::read_tree(&local_dst, peak.oid);
         assert!(
             !entries.iter().any(|e| e.name == "leaf"),
-            "T(0,2) resumed from a seal must carry no leaf"
+            "T(0,2) resumed onto an empty ref must carry no leaf"
+        );
+        assert!(
+            !entries.iter().any(|e| e.name == hex(0, 2)) && !entries.iter().any(|e| e.name == hex(1, 2)),
+            "T(0,2) resumed onto an empty ref must be opaque: no hex(c,2) children"
         );
         assert!(
             entries.iter().any(|e| e.name == "digest"),
-            "T(0,2) resumed from a seal must still carry digest/"
+            "T(0,2) resumed onto an empty ref must still carry digest/"
         );
 
         // Forward appends on a resumed (Subtree-kind) log go through
         // append_subtree and must themselves be opaque too (SG10 again, on
-        // the same instance that just inherited an opaque peak -- SG11's
-        // "single log instance" carrying opaque nodes from a single,
-        // consistent provenance class after resumption).
+        // the same instance that just inherited an opaque peak).
         resumed
             .append_subtree(&Subtree::Leaf(b"forward-1".to_vec()))
             .await
             .unwrap();
-        let after_forward_tip = support::ref_target(&local, staging).unwrap();
-        let forward_leaf_path = format!("peaks/{}/{}", hex(0, 2), hex(0, 2));
-        let forward_node = support::resolve_path(&local, after_forward_tip, &forward_leaf_path)
-            .unwrap_or_else(|| panic!("no peak at {forward_leaf_path}"))
-            .oid;
-        let forward_entries = support::read_tree(&local, forward_node);
+        let after_forward_tip = support::ref_target(&local_dst, staging_dst).unwrap();
+        let forward_path = format!("peaks/{}/{}", hex(0, 2), hex(0, 2));
+        let forward_node = support::resolve_path(&local_dst, after_forward_tip, &forward_path)
+            .unwrap_or_else(|| panic!("no peak at {forward_path}"));
+        let forward_entries = support::read_tree(&local_dst, forward_node.oid);
         assert!(
             !forward_entries.iter().any(|e| e.name == "leaf"),
             "a forward subtree append on a resumed log must be opaque too"
         );
     });
-}
-
-/// Reopen a fresh `GitStorage` handle over the same on-disk repository and
-/// ref, for use as `resume`'s "fresh backend the resumed log writes forward
-/// into" -- deliberately the *same* physical object database and ref name
-/// the pre-resumption log used, so a reader inspecting `staging` afterwards
-/// observes the resumed state directly.
-///
-/// Setup change (GB44): a genuine seal resumption now opens through
-/// `GitStorage::open_resumed`, not the plain `GitStorage::new` this helper
-/// used before the resume boundary became a committed fact rather than an
-/// instance-lifetime flag -- see `docs/specs/storage-git.md` SG10/SG11's
-/// amendment and `.ledger/state/2026-09-14-the-git-backend-in-three-layers.md`
-/// GB44. No assertion in this file changes; this test's own expectations
-/// (the resumed peak is opaque) are exactly what `open_resumed` restores.
-fn support_reopen(
-    repo: &gix::ThreadSafeRepository,
-    staging: &str,
-    arity: u64,
-) -> storage_git::GitStorage {
-    storage_git::GitStorage::open_resumed(repo.clone(), staging, arity)
-        .expect("reopen GitStorage for resume")
 }
