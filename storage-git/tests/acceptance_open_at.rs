@@ -24,11 +24,16 @@ fn sg21_open_at_yields_durable_witness_parity() {
         // Record what get_leaf/get_node returned for every size m, as it
         // was actually observed at that size -- before any further append
         // could possibly move the log past it.
+        //
+        // Lint-only fix: a type alias for the (alg, left, height) -> digest
+        // recording, requested by the dispatch that named this file's
+        // clippy::type_complexity lint -- no assertion changes.
+        type NodeRecording = Vec<((u64, u64, u32), Option<Vec<u8>>)>;
         struct Recorded {
             m: u64,
             tree: gix::ObjectId,
             leaves: Vec<(u64, Vec<u8>)>,
-            nodes: Vec<((u64, u64, u32), Option<Vec<u8>>)>,
+            nodes: NodeRecording,
         }
         let mut recorded = Vec::new();
 

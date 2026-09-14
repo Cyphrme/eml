@@ -161,11 +161,19 @@ fn sg10_11_resumed_peak_is_opaque_despite_covering_a_once_materialized_range() {
 /// into" -- deliberately the *same* physical object database and ref name
 /// the pre-resumption log used, so a reader inspecting `staging` afterwards
 /// observes the resumed state directly.
+///
+/// Setup change (GB44): a genuine seal resumption now opens through
+/// `GitStorage::open_resumed`, not the plain `GitStorage::new` this helper
+/// used before the resume boundary became a committed fact rather than an
+/// instance-lifetime flag -- see `docs/specs/storage-git.md` SG10/SG11's
+/// amendment and `.ledger/state/2026-09-14-the-git-backend-in-three-layers.md`
+/// GB44. No assertion in this file changes; this test's own expectations
+/// (the resumed peak is opaque) are exactly what `open_resumed` restores.
 fn support_reopen(
     repo: &gix::ThreadSafeRepository,
     staging: &str,
     arity: u64,
 ) -> storage_git::GitStorage {
-    storage_git::GitStorage::new(repo.clone(), staging, arity)
+    storage_git::GitStorage::open_resumed(repo.clone(), staging, arity)
         .expect("reopen GitStorage for resume")
 }

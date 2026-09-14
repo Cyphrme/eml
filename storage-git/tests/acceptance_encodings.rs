@@ -66,6 +66,16 @@ fn sg13_epochs_blob_matches_epochs_at() {
         log.add_algorithm(1, Box::new(FixtureHasher::new(20)))
             .await
             .unwrap();
+        // Setup change (GB44): tree_at(n) now errors, rather than silently
+        // omitting an entry, for an active algorithm with no hasher
+        // registered on the storage itself (SG20's amendment). This test's
+        // own algorithm-1 hasher above is the *log's* combinator hasher,
+        // separate from storage's registry that tree_at's historical
+        // roots/ reconstruction consults -- register the same fold there
+        // too so tree_at(n) below can still succeed for every n. No
+        // assertion changes: this test never inspects roots/ at all.
+        log.storage_mut()
+            .register_hasher(1, Box::new(FixtureHasher::new(20)));
         for i in 3..6u32 {
             log.append_leaf(format!("leaf-{i}").as_bytes())
                 .await

@@ -33,7 +33,15 @@ fn named(entries: &[(String, gix::ObjectId)], name: &str) -> gix::ObjectId {
 fn sg20_tree_at_matches_fresh_rebuild() {
     smol::block_on(async {
         let (_dir, repo) = init_repo(HashKind::Sha1);
-        let storage = GitStorage::new(repo.clone(), "refs/eml/storage/live/staging", 2).unwrap();
+        let mut storage =
+            GitStorage::new(repo.clone(), "refs/eml/storage/live/staging", 2).unwrap();
+        // Setup change (GB44): tree_at(m) for m < len() now errors, rather
+        // than silently omitting an entry, for an active algorithm with no
+        // hasher registered (SG20's amendment) -- register algorithm 0's
+        // fold so the historical calls below can succeed. No assertion
+        // here changes: this test never inspects roots/, only
+        // meta/epochs/peaks.
+        storage.register_hasher(0, Box::new(WideHasher));
         let mut log = NaryMerkleLog::new(storage, Box::new(WideHasher), TreeConfig { arity: 2 })
             .await
             .unwrap();
@@ -48,8 +56,9 @@ fn sg20_tree_at_matches_fresh_rebuild() {
 
             // Independent from-genesis rebuild to exactly size m.
             let (_dir2, repo2) = init_repo(HashKind::Sha1);
-            let storage2 =
+            let mut storage2 =
                 GitStorage::new(repo2.clone(), "refs/eml/storage/fresh/staging", 2).unwrap();
+            storage2.register_hasher(0, Box::new(WideHasher));
             let mut log2 =
                 NaryMerkleLog::new(storage2, Box::new(WideHasher), TreeConfig { arity: 2 })
                     .await
@@ -82,15 +91,24 @@ fn sg20_tree_at_matches_fresh_rebuild() {
     });
 }
 
-/// Documented departure: `tree_at(m)` for `m < len()` reconstructs `roots/`
-/// as the empty tree (no hasher available to recompute a superseded root);
-/// `tree_at(len())` returns the live tree, whose `roots/` is populated as
-/// usual.
+/// Superseded departure, updated for GB44 (named change, not a fixture-only
+/// adaptation -- this test's own premise is what the merge gate's SGG12
+/// finding rejected): `tree_at(m)` for `m < len()` used to reconstruct
+/// `roots/` as the empty tree whenever no hasher was registered, silently
+/// standing in a well-formed but wrong object for the real one (SGG12,
+/// `.ledger/deposits/git-backend/lead-maintainer/storage-git-merge-gate.md`).
+/// SG20's amendment now makes that an error instead (see
+/// `acceptance_roots_hasher.rs`'s `tree_at_without_registered_hasher_names_the_missing_algorithm`
+/// for that path), and a *registered* hasher reconstructs the real,
+/// non-empty `roots/` entry historically, matching what `tree_at(len())`
+/// already returns live -- this test now checks exactly that parity instead
+/// of the old, since-closed "empty" gap.
 #[test]
-fn tree_at_historical_roots_is_documented_empty() {
+fn tree_at_historical_roots_matches_the_live_entry_once_a_hasher_is_registered() {
     smol::block_on(async {
         let (_dir, repo) = init_repo(HashKind::Sha1);
-        let storage = GitStorage::new(repo.clone(), "refs/eml/storage/t/staging", 2).unwrap();
+        let mut storage = GitStorage::new(repo.clone(), "refs/eml/storage/t/staging", 2).unwrap();
+        storage.register_hasher(0, Box::new(WideHasher));
         let mut log = NaryMerkleLog::new(storage, Box::new(WideHasher), TreeConfig { arity: 2 })
             .await
             .unwrap();
@@ -103,13 +121,15 @@ fn tree_at_historical_roots_is_documented_empty() {
         let past_entries = read_entries(&local, past);
         let roots_id = named(&past_entries, "roots");
         assert!(
-            local
+            !local
                 .find_tree(roots_id)
                 .unwrap()
                 .decode()
                 .unwrap()
                 .entries
-                .is_empty()
+                .is_empty(),
+            "algorithm 0 is active at m=1 and has a registered hasher: roots/ must carry its \
+             reconstructed entry, not the old empty-departure placeholder"
         );
 
         let live = git_storage.tree_at(2).unwrap();
@@ -134,7 +154,9 @@ fn tree_at_historical_roots_is_documented_empty() {
 fn sg21_open_at_durable_witness_parity() {
     smol::block_on(async {
         let (_dir, repo) = init_repo(HashKind::Sha1);
-        let storage = GitStorage::new(repo.clone(), "refs/eml/storage/t/staging", 2).unwrap();
+        let mut storage = GitStorage::new(repo.clone(), "refs/eml/storage/t/staging", 2).unwrap();
+        // Setup change (GB44): see sg20_tree_at_matches_fresh_rebuild above.
+        storage.register_hasher(0, Box::new(WideHasher));
         let mut log = NaryMerkleLog::new(storage, Box::new(WideHasher), TreeConfig { arity: 2 })
             .await
             .unwrap();
