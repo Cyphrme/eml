@@ -121,23 +121,42 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// leaf hash, byte-identical to a flat append. The frontier carry proceeds
     /// from the genesis frontier exactly as a fresh log's would from empty.
     ///
-    /// `storage` is a fresh backend the resumed log writes forward into;
-    /// `hashers` resolves each active algorithm's own hash (the `Sealed` froze
-    /// digests, not hashers). Every algorithm carried in the `Sealed`'s frontier
-    /// is reopened at the sealed size under its committed timeline; folding the
+    /// `storage` MUST be a fresh backend the resumed log writes forward
+    /// into: one that carries no committed log of its own yet. A `storage`
+    /// that already holds one -- `Storage::load_log_meta` returns
+    /// `Some((count, _))` -- is refused before anything is written, since a
+    /// resumption's genesis frontier is not a way to reopen or splice onto
+    /// an existing log's own committed state. Freshness is scoped to
+    /// whatever coordinate space `storage` itself observes, never to some
+    /// wider store it might share with other logs: a backend that hosts
+    /// several logs side by side under distinct keys (e.g. one git
+    /// repository with several staging refs) must answer `load_log_meta`
+    /// per key, so forking a project -- sealing one log and resuming into a
+    /// brand-new key in that same underlying store -- is exactly the
+    /// supported, fresh case, and resuming back onto the key that still
+    /// holds the source log is exactly the refused one. `hashers` resolves
+    /// each active algorithm's own hash (the `Sealed` froze digests, not
+    /// hashers). Every algorithm carried in the `Sealed`'s frontier is
+    /// reopened at the sealed size under its committed timeline; folding the
     /// seeded frontier reproduces that algorithm's sealed member root, so a
     /// consistency proof bridges the resume.
     ///
     /// # Errors
     ///
-    /// Returns [`LogError::UnknownAlgorithm`] if an algorithm in the frontier has
-    /// no hasher in `hashers`, [`LogError::CorruptedMetadata`] on an invalid arity,
-    /// or a storage error if the seeded frontier cannot be persisted.
+    /// Returns [`LogError::ResumeTargetNotFresh`] if `storage` already
+    /// carries a committed log, [`LogError::UnknownAlgorithm`] if an
+    /// algorithm in the frontier has no hasher in `hashers`,
+    /// [`LogError::CorruptedMetadata`] on an invalid arity, or a storage
+    /// error if the seeded frontier cannot be persisted.
     pub async fn resume(
         sealed: &crate::Sealed,
         mut storage: S,
         hashers: Vec<(u64, Box<dyn Hasher>)>,
     ) -> Result<Self, S::Error> {
+        if let Some((count, _kind)) = storage.load_log_meta().await.map_err(LogError::Storage)? {
+            return Err(LogError::ResumeTargetNotFresh(count));
+        }
+
         let k = sealed.arity();
         if !ARITY_RANGE.contains(&k) {
             return Err(LogError::CorruptedMetadata {
@@ -1783,5 +1802,101 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
 
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod resume_freshness_tests {
+    use sha2::{Digest, Sha256};
+
+    use super::*;
+    use crate::storage::MemoryStorage;
+
+    #[derive(Debug, Clone)]
+    struct Sha256Hasher;
+    impl Hasher for Sha256Hasher {
+        fn leaf(&self, data: &[u8]) -> Vec<u8> {
+            Sha256::digest(data).to_vec()
+        }
+
+        fn node(&self, children: &[&[u8]]) -> Vec<u8> {
+            let mut h = Sha256::new();
+            for c in children {
+                h.update(c);
+            }
+            h.finalize().to_vec()
+        }
+
+        fn empty(&self) -> Vec<u8> {
+            Sha256::digest(b"").to_vec()
+        }
+
+        fn hash(&self, data: &[u8]) -> Vec<u8> {
+            Sha256::digest(data).to_vec()
+        }
+
+        fn clone_box(&self) -> Box<dyn Hasher> {
+            Box::new(self.clone())
+        }
+    }
+
+    async fn sealed_log(n: u64) -> crate::Sealed {
+        let mut log = NaryMerkleLog::new(
+            MemoryStorage::new(),
+            Box::new(Sha256Hasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
+        for i in 0..n {
+            log.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        log.seal().await.unwrap()
+    }
+
+    /// `resume`'s contract is a fresh backend only: storage that already
+    /// carries its own committed log -- `load_log_meta` returns
+    /// `Some((count, _))` -- must be refused before anything is written,
+    /// never silently folded into a new tree.
+    #[test]
+    fn resume_onto_a_non_fresh_storage_is_refused() {
+        smol::block_on(async {
+            let sealed = sealed_log(3).await;
+
+            let mut occupied = NaryMerkleLog::new(
+                MemoryStorage::new(),
+                Box::new(Sha256Hasher),
+                TreeConfig { arity: 2 },
+            )
+            .await
+            .unwrap();
+            occupied.append_leaf(b"already-here").await.unwrap();
+            let occupied_storage = occupied.into_storage();
+
+            let err =
+                NaryMerkleLog::resume(&sealed, occupied_storage, vec![(0, Box::new(Sha256Hasher))])
+                    .await
+                    .unwrap_err();
+            assert_eq!(err, LogError::ResumeTargetNotFresh(1));
+        });
+    }
+
+    /// The refusal is specific to non-fresh storage: a genuinely fresh
+    /// backend still resumes successfully.
+    #[test]
+    fn resume_onto_a_fresh_storage_still_succeeds() {
+        smol::block_on(async {
+            let sealed = sealed_log(3).await;
+            let resumed = NaryMerkleLog::resume(
+                &sealed,
+                MemoryStorage::new(),
+                vec![(0, Box::new(Sha256Hasher))],
+            )
+            .await
+            .expect("resume onto genuinely fresh storage must still succeed");
+            assert_eq!(resumed.count(), 3);
+        });
     }
 }

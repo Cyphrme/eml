@@ -48,6 +48,12 @@ pub enum LogError<E> {
     /// [`crate::BoundSnapshot`] (the committed epochs are not well-formed at the
     /// sealed size).
     MalformedSeal,
+    /// [`crate::NaryMerkleLog::resume`] was handed storage that already
+    /// carries a committed log (`Storage::load_log_meta` returned
+    /// `Some((count, _))`). A resumed log writes forward into a fresh
+    /// backend only; the size already committed there is included for
+    /// diagnostics.
+    ResumeTargetNotFresh(u64),
 }
 
 impl<E: fmt::Display> fmt::Display for LogError<E> {
@@ -78,6 +84,11 @@ impl<E: fmt::Display> fmt::Display for LogError<E> {
                 write!(f, "corrupted metadata for algorithm {alg_id}: {reason}")
             },
             Self::MalformedSeal => write!(f, "spine rejected the timeline while sealing"),
+            Self::ResumeTargetNotFresh(count) => write!(
+                f,
+                "resume target is not a fresh backend: it already holds a committed log of size \
+                 {count}"
+            ),
         }
     }
 }
