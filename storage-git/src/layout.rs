@@ -37,38 +37,30 @@ pub fn parse_hex16(name: &str) -> Option<u64> {
     u64::from_str_radix(name, 16).ok()
 }
 
-/// `meta`'s fixed 12-byte encoding (§3.1, SG12). One shape, for every log
+/// `meta`'s fixed 11-byte encoding (§3.1, SG12). One shape, for every log
 /// regardless of resume history: there is nothing this early to stay
-/// compatible with, so no second, wider shape and no boundary field exist
-/// to distinguish.
+/// compatible with, so no version byte, no second wider shape, and no
+/// boundary field exist to distinguish one from another.
 #[must_use]
-pub fn encode_meta(arity: u64, count: u64, kind: u8) -> [u8; 12] {
-    let mut out = [0u8; 12];
-    out[0] = 0x01;
-    out[1..3].copy_from_slice(&(arity as u16).to_be_bytes());
-    out[3..11].copy_from_slice(&count.to_be_bytes());
-    out[11] = kind;
+pub fn encode_meta(arity: u64, count: u64, kind: u8) -> [u8; 11] {
+    let mut out = [0u8; 11];
+    out[0..2].copy_from_slice(&(arity as u16).to_be_bytes());
+    out[2..10].copy_from_slice(&count.to_be_bytes());
+    out[10] = kind;
     out
 }
 
-/// Decode `meta`'s bytes (§3.1, SG12). Rejects any length other than 12 or
-/// an unrecognized version byte.
+/// Decode `meta`'s bytes (§3.1, SG12). Rejects any length other than 11.
 pub fn decode_meta(bytes: &[u8]) -> Result<(u64, u64, u8), Error> {
-    if bytes.len() != 12 {
+    if bytes.len() != 11 {
         return Err(Error::Corruption(format!(
-            "meta blob must be exactly 12 bytes, got {}",
+            "meta blob must be exactly 11 bytes, got {}",
             bytes.len()
         )));
     }
-    if bytes[0] != 0x01 {
-        return Err(Error::Corruption(format!(
-            "meta blob has unrecognized version byte {:#04x}",
-            bytes[0]
-        )));
-    }
-    let arity = u16::from_be_bytes([bytes[1], bytes[2]]) as u64;
-    let count = u64::from_be_bytes(bytes[3..11].try_into().unwrap());
-    let kind = bytes[11];
+    let arity = u16::from_be_bytes([bytes[0], bytes[1]]) as u64;
+    let count = u64::from_be_bytes(bytes[2..10].try_into().unwrap());
+    let kind = bytes[10];
     Ok((arity, count, kind))
 }
 
@@ -229,25 +221,18 @@ mod tests {
     #[test]
     fn meta_round_trip() {
         let bytes = encode_meta(4, 12345, 1);
-        assert_eq!(bytes.len(), 12, "meta's one fixed shape is 12 bytes");
+        assert_eq!(bytes.len(), 11, "meta's one fixed shape is 11 bytes");
         assert_eq!(decode_meta(&bytes).unwrap(), (4, 12345, 1));
-        assert!(decode_meta(&bytes[..11]).is_err());
+        assert!(decode_meta(&bytes[..10]).is_err());
     }
 
     #[test]
-    fn meta_rejects_any_length_other_than_twelve() {
+    fn meta_rejects_any_length_other_than_eleven() {
         let bytes = encode_meta(4, 12345, 1);
         let mut too_long = bytes.to_vec();
         too_long.push(0);
         assert!(decode_meta(&too_long).is_err());
-        assert!(decode_meta(&bytes[..11]).is_err());
-    }
-
-    #[test]
-    fn meta_rejects_an_unrecognized_version_byte() {
-        let mut bytes = encode_meta(4, 12345, 1);
-        bytes[0] = 0x02;
-        assert!(decode_meta(&bytes).is_err());
+        assert!(decode_meta(&bytes[..10]).is_err());
     }
 
     #[test]

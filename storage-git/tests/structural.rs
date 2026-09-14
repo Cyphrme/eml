@@ -165,7 +165,7 @@ fn sg5_entry_modes() {
     });
 }
 
-/// SG12/SG16: `meta` is exactly 12 bytes in the documented layout, and
+/// SG12/SG16: `meta` is exactly 11 bytes in the documented layout, and
 /// `leaf` is byte-identical to what `store_leaf` received.
 #[test]
 fn sg12_sg16_golden_bytes() {
@@ -185,19 +185,18 @@ fn sg12_sg16_golden_bytes() {
         let tree = checkpoint_tree(&repo, staging);
         let meta_id = find(&local, tree, "meta");
         let meta_bytes = local.find_blob(meta_id).unwrap().data.clone();
-        assert_eq!(meta_bytes.len(), 12);
-        assert_eq!(meta_bytes[0], 0x01, "version byte");
+        assert_eq!(meta_bytes.len(), 11);
         assert_eq!(
-            u16::from_be_bytes([meta_bytes[1], meta_bytes[2]]),
+            u16::from_be_bytes([meta_bytes[0], meta_bytes[1]]),
             3,
             "arity"
         );
         assert_eq!(
-            u64::from_be_bytes(meta_bytes[3..11].try_into().unwrap()),
+            u64::from_be_bytes(meta_bytes[2..10].try_into().unwrap()),
             1,
             "count"
         );
-        assert_eq!(meta_bytes[11], 0, "kind byte: Flat");
+        assert_eq!(meta_bytes[10], 0, "kind byte: Flat");
 
         let peaks_id = find(&local, tree, "peaks");
         let group_id = find(&local, peaks_id, "00");

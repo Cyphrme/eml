@@ -305,21 +305,20 @@ are big-endian throughout, matching the encoding `storage-fjall` already
 uses for the same fields (`storage-fjall/src/lib.rs:163-252`), so a
 migration between backends never has to reconcile endianness.
 
-### 3.1 `meta` (fixed 12 bytes)
+### 3.1 `meta` (fixed 11 bytes)
 
 | Offset | Width | Field | Value |
 | --: | --: | :-- | :-- |
-| 0 | 1 | version | `0x01` |
-| 1 | 2 | arity | `k` as `u16` BE |
-| 3 | 8 | count | `n` as `u64` BE |
-| 11 | 1 | kind | `0x00` = flat, `0x01` = subtree (`cml::LogKind::to_byte`, `cml/src/lib.rs`) |
+| 0 | 2 | arity | `k` as `u16` BE |
+| 2 | 8 | count | `n` as `u64` BE |
+| 10 | 1 | kind | `0x00` = flat, `0x01` = subtree (`cml::LogKind::to_byte`, `cml/src/lib.rs`) |
 
-**[SG12]** `meta` MUST be exactly these 12 bytes in this order, with no
+**[SG12]** `meta` MUST be exactly these 11 bytes in this order, with no
 trailing padding, the same fixed shape for every log regardless of resume
 history: there is nothing this early to stay compatible with, so no wider,
-resume-carrying shape and no version-byte branching between shapes exist. A
-reader MUST reject any other length. *Checked by: golden vector; structural
-length check.*
+resume-carrying shape and no version byte exist to distinguish a shape that
+has never had a second variant. A reader MUST reject any other length.
+*Checked by: golden vector; structural length check.*
 
 ### 3.2 An `epochs/hex(alg_id, 16)` blob
 
