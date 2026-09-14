@@ -6,6 +6,8 @@
 mod support;
 
 use cml::engine::AlgView;
+use polydigest::NaryMerkleLog;
+use storage_git::GitStorage;
 use support::{FixtureHasher, bare_repo, hex, new_log};
 
 /// [SG12] `meta` MUST be exactly 12 bytes: version (0x01), arity (u16 BE),
@@ -244,3 +246,84 @@ fn sg16_leaf_blob_is_byte_identical_to_input() {
 // one layer up that does carry a `Hasher`; it is not reachable through this
 // crate's API. Recorded here rather than faked with a test that could never
 // go red.
+
+/// [SG12] `meta` MUST have exactly one fixed length and layout for every
+/// log, resumed or not, and that shape MUST be observable straight off the
+/// blob's length -- no version-byte branching. A log that has never been
+/// resumed and a log that has, each read from its own checkpoint tree, must
+/// report the identical meta length.
+#[test]
+fn meta_blob_has_one_fixed_shape_regardless_of_resume_history() {
+    smol::block_on(async {
+        let dir_plain = tempfile::tempdir().unwrap();
+        let repo_plain = bare_repo(dir_plain.path(), gix::hash::Kind::Sha256);
+        let staging_plain = "refs/eml/storage/meta-shape-plain/staging";
+        let mut plain = new_log(&repo_plain, staging_plain, 2, FixtureHasher::new(32)).await;
+        for i in 0..5u32 {
+            plain
+                .append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        let local_plain = repo_plain.to_thread_local();
+        let plain_tip = support::ref_target(&local_plain, staging_plain).unwrap();
+        let plain_meta_len = meta_len_at(&local_plain, plain_tip);
+
+        // A resumed log: seal a small source log, resume onto a fresh
+        // (empty) ref, then append a couple more (forward) leaves so the
+        // checkpoint read back is not just the one write `resume` itself
+        // performs.
+        let dir_src = tempfile::tempdir().unwrap();
+        let repo_src = bare_repo(dir_src.path(), gix::hash::Kind::Sha256);
+        let staging_src = "refs/eml/storage/meta-shape-src/staging";
+        let mut src = new_log(&repo_src, staging_src, 2, FixtureHasher::new(32)).await;
+        for i in 0..3u32 {
+            src.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        let sealed = src.seal().await.unwrap();
+
+        let dir_dst = tempfile::tempdir().unwrap();
+        let repo_dst = bare_repo(dir_dst.path(), gix::hash::Kind::Sha256);
+        let staging_dst = "refs/eml/storage/meta-shape-dst/staging";
+        let mut storage_dst =
+            GitStorage::new(repo_dst.clone(), staging_dst, 2).expect("open GitStorage over an empty ref");
+        storage_dst.register_hasher(0, Box::new(FixtureHasher::new(32)));
+        let mut resumed = NaryMerkleLog::resume(
+            &sealed,
+            storage_dst,
+            vec![(0, Box::new(FixtureHasher::new(32)))],
+        )
+        .await
+        .expect("resume onto an empty ref");
+        resumed
+            .append_subtree(&spine::Subtree::Leaf(b"fwd-0".to_vec()))
+            .await
+            .unwrap();
+        resumed
+            .append_subtree(&spine::Subtree::Leaf(b"fwd-1".to_vec()))
+            .await
+            .unwrap();
+
+        let local_dst = repo_dst.to_thread_local();
+        let dst_tip = support::ref_target(&local_dst, staging_dst).unwrap();
+        let resumed_meta_len = meta_len_at(&local_dst, dst_tip);
+
+        assert_eq!(
+            resumed_meta_len, plain_meta_len,
+            "a resumed log's meta blob must be the same fixed length as a log that has never \
+             been resumed -- meta has exactly one shape"
+        );
+        assert_eq!(
+            plain_meta_len, 12,
+            "meta's one fixed shape carries no per-log resume marker: version, arity, count, and \
+             kind alone -- 12 bytes, the same for every log regardless of resume history"
+        );
+    });
+}
+
+fn meta_len_at(repo: &gix::Repository, tree: gix::ObjectId) -> usize {
+    let meta_id = support::find_entry(repo, tree, "meta").unwrap().oid;
+    support::read_blob(repo, meta_id).len()
+}
