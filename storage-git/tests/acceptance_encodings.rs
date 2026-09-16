@@ -54,13 +54,30 @@ fn sg12_meta_blob_is_11_exact_bytes_with_no_version_byte() {
 /// [SG13] The epoch list at `epochs/hex(alg_id,16)` inside `C(n)` MUST equal
 /// `AlgView::epochs_at(n)` applied to the algorithm's full, currently-known
 /// epoch history.
+///
+/// Rewritten in this dispatch to stop calling `tree_at` (deleted outright
+/// per the head's 2026-09-16 design ruling): each checked size's tree is
+/// now recorded straight off the staging ref at the exact moment its epoch
+/// state stops changing -- right after `new_log`'s own genesis write (n=0),
+/// right after `add_algorithm(1)` (n=3, alg1's epoch newly open), right
+/// after `remove_algorithm(1)` (n=6, alg1's epoch newly closed), and at the
+/// final tip (n=9) -- rather than growing past every size and asking a
+/// reconstruction to reproduce it. `register_hasher`, which existed only to
+/// feed that reconstruction's fold, is gone too.
 #[test]
 fn sg13_epochs_blob_matches_epochs_at() {
     smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
         let staging = "refs/eml/storage/sg13/staging";
+        let local = repo.to_thread_local();
         let mut log = new_log(&repo, staging, 2, FixtureHasher::new(32)).await;
+
+        let mut trees: Vec<(u64, gix::ObjectId)> = vec![(
+            0,
+            support::ref_target(&local, staging).expect("genesis checkpoint must exist"),
+        )];
+
         for i in 0..3u32 {
             log.append_leaf(format!("leaf-{i}").as_bytes())
                 .await
@@ -69,39 +86,28 @@ fn sg13_epochs_blob_matches_epochs_at() {
         log.add_algorithm(1, Box::new(FixtureHasher::new(20)))
             .await
             .unwrap();
-        // Setup change: tree_at(n) errors, rather than silently
-        // omitting an entry, for an active algorithm with no hasher
-        // registered on the storage itself (SG20's amendment). This test's
-        // own algorithm-1 hasher above is the *log's* combinator hasher,
-        // separate from storage's registry that tree_at's historical
-        // roots/ reconstruction consults -- register the same fold there
-        // too so tree_at(n) below can still succeed for every n. No
-        // assertion changes: this test never inspects roots/ at all.
-        log.storage_mut()
-            .register_hasher(1, Box::new(FixtureHasher::new(20)));
+        trees.push((3, support::ref_target(&local, staging).unwrap()));
+
         for i in 3..6u32 {
             log.append_leaf(format!("leaf-{i}").as_bytes())
                 .await
                 .unwrap();
         }
         log.remove_algorithm(1).await.unwrap(); // freeze alg1 at n=6
+        trees.push((6, support::ref_target(&local, staging).unwrap()));
+
         for i in 6..9u32 {
             log.append_leaf(format!("leaf-{i}").as_bytes())
                 .await
                 .unwrap();
         }
-
-        let local = repo.to_thread_local();
+        trees.push((9, support::ref_target(&local, staging).unwrap()));
 
         // The full, currently-known epoch history of each algorithm.
         let full_epochs_alg0 = vec![(0u64, u64::MAX)];
         let full_epochs_alg1 = vec![(3u64, 6u64)];
 
-        for n in [0u64, 3, 6, 9] {
-            // SG13 is a claim about `epochs/hex(alg_id,16)` *inside `C(n)`*,
-            // for `n` possibly behind the log's current size -- exercise it
-            // through `tree_at(n)` (SG20), not just the current tip.
-            let tree_n = log.storage().tree_at(n).unwrap();
+        for (n, tree_n) in trees {
             for (alg_id, full_epochs) in [(0u64, &full_epochs_alg0), (1u64, &full_epochs_alg1)] {
                 let view = AlgView {
                     hasher: Box::new(FixtureHasher::new(32)),
@@ -288,9 +294,8 @@ fn meta_blob_has_one_fixed_shape_regardless_of_resume_history() {
         let dir_dst = tempfile::tempdir().unwrap();
         let repo_dst = bare_repo(dir_dst.path(), gix::hash::Kind::Sha256);
         let staging_dst = "refs/eml/storage/meta-shape-dst/staging";
-        let mut storage_dst = GitStorage::new(repo_dst.clone(), staging_dst, 2)
+        let storage_dst = GitStorage::new(repo_dst.clone(), staging_dst, 2)
             .expect("open GitStorage over an empty ref");
-        storage_dst.register_hasher(0, Box::new(FixtureHasher::new(32)));
         let mut resumed = NaryMerkleLog::resume(
             &sealed,
             storage_dst,
