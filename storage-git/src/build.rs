@@ -11,8 +11,22 @@
 //! fresh from this batch's own data plus, for a node that already existed,
 //! its previously-stored digest/leaf/children — the only cases the object
 //! model needs to represent (§2.6).
+//!
+//! **Decomposition, not all-or-nothing materialization.** A brand-new parent
+//! coordinate is given `hex(c, 2)` children for *every* child this batch (or
+//! `old_index`) actually has an occupant for, never gated on whether the
+//! whole subtree resolves down to real leaf bytes everywhere (`resolve_node`'s
+//! `is_decomposable`, below). A child that is itself opaque is wired in by
+//! object id exactly like a materialized one; only a coordinate arriving as
+//! one atomic, undecomposed digest — a resumed log's genesis peak, or a
+//! single subtree append — has no known children at all and stays a pure
+//! `digest/`-only leaf shape. This is what makes every coordinate this batch
+//! (or any prior one) ever named permanently reachable by ordinary descent
+//! from whatever peak now covers it, without a side archive: see
+//! `docs/specs/storage-git.md`'s §2.7 for the full argument for why the
+//! former `inherited/` archive (SG28/SG29) is gone.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use gix::ObjectId;
 use gix::objs::tree::EntryKind;
@@ -97,19 +111,15 @@ pub(crate) fn apply_write(
         leaf_map: &leaf_map,
         node_map: &node_map,
     };
-    let (peaks_tree, inherited_tree) =
-        build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
+    let peaks_tree = build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, new_count, new_kind))?;
-    let mut top = vec![
+    let top = vec![
         entry(EntryKind::Blob, "meta", meta_blob),
         entry(EntryKind::Tree, "epochs", epochs_tree),
         entry(EntryKind::Tree, "roots", roots_tree),
         entry(EntryKind::Tree, "peaks", peaks_tree),
     ];
-    if let Some(inherited_tree) = inherited_tree {
-        top.push(entry(EntryKind::Tree, "inherited", inherited_tree));
-    }
     let tree_id = gitutil::write_tree(repo, top)?;
 
     Ok(Applied {
@@ -211,13 +221,7 @@ struct ResolveCtx<'a> {
 }
 
 /// Build `peaks/` (§2.1, SG1-SG2): the frontier at `new_count`, each peak
-/// either reused unchanged from `old_tree` or freshly resolved. Also builds
-/// `inherited/` (Departure 3 amendment): whatever this batch's frontier
-/// transition leaves behind while opaque, archived by coordinate so it
-/// outlives being a current peak. Returns `(peaks_tree, inherited_tree)`;
-/// `inherited_tree` is `None` when nothing has ever needed archiving, so a
-/// log that has never superseded an opaque peak keeps SG1's original
-/// four-entry shape exactly.
+/// either reused unchanged from `old_tree` or freshly resolved.
 fn build_peaks(
     repo: &gix::Repository,
     arity: u64,
@@ -225,7 +229,7 @@ fn build_peaks(
     old_count: u64,
     new_count: u64,
     batch: &BatchInputs<'_>,
-) -> Result<(ObjectId, Option<ObjectId>), Error> {
+) -> Result<ObjectId, Error> {
     let old_coords = frontier_for_size(old_count, arity);
     let old_index = index_old_peaks(repo, old_tree, &old_coords)?;
     let ctx = ResolveCtx {
@@ -251,99 +255,7 @@ fn build_peaks(
         let group_tree = gitutil::write_tree(repo, group)?;
         top.push(entry(EntryKind::Tree, hex2(u64::from(height)), group_tree));
     }
-    let peaks_tree = gitutil::write_tree(repo, top)?;
-
-    let inherited_tree = build_inherited(repo, old_tree, &old_coords, &new_coords, &old_index)?;
-    Ok((peaks_tree, inherited_tree))
-}
-
-/// Build `inherited/` (Departure 3 amendment, SG10/SG11): the permanent
-/// archive of every frontier coordinate that was ever a peak and turned out
-/// opaque, keyed by its own `(left, height)` the moment a later write's new
-/// frontier no longer includes it. An opaque node carries no leaf bytes
-/// anywhere (§2.6) -- once its coordinate stops being a current peak in
-/// `peaks/`, nothing can ever redescend to it again, so this is the only
-/// point such a node can still be captured. Carries every previously
-/// archived entry forward unchanged (this archive only ever grows), and
-/// returns `None` when the result is empty.
-fn build_inherited(
-    repo: &gix::Repository,
-    old_tree: Option<ObjectId>,
-    old_coords: &[(u64, u32)],
-    new_coords: &[(u64, u32)],
-    old_index: &HashMap<(u64, u32), Resolved>,
-) -> Result<Option<ObjectId>, Error> {
-    let mut archive = read_inherited_index(repo, old_tree)?;
-    let still_current: HashSet<(u64, u32)> = new_coords.iter().copied().collect();
-    for &coord in old_coords {
-        if still_current.contains(&coord) {
-            continue;
-        }
-        let Some(resolved) = old_index.get(&coord) else {
-            continue;
-        };
-        if resolved.materialized {
-            // A materialized coordinate's leaf/children were reused by
-            // object id wherever it is still needed; nothing about it is
-            // ever unrecoverable the way an opaque node's absence of leaf
-            // bytes is, so archiving it here would only be dead weight.
-            continue;
-        }
-        archive.entry(coord).or_insert(resolved.id);
-    }
-    if archive.is_empty() {
-        return Ok(None);
-    }
-
-    let mut by_height: HashMap<u32, Vec<(u64, ObjectId)>> = HashMap::new();
-    for (&(left, height), &id) in &archive {
-        by_height.entry(height).or_default().push((left, id));
-    }
-    let mut top = Vec::with_capacity(by_height.len());
-    for (height, mut lefts) in by_height {
-        lefts.sort_unstable_by_key(|&(left, _)| left);
-        let entries: Vec<_> = lefts
-            .into_iter()
-            .map(|(left, id)| entry(EntryKind::Tree, hex16(left), id))
-            .collect();
-        let sub_tree = gitutil::write_tree(repo, entries)?;
-        top.push(entry(EntryKind::Tree, hex2(u64::from(height)), sub_tree));
-    }
-    Ok(Some(gitutil::write_tree(repo, top)?))
-}
-
-/// Read an existing `inherited/` archive (if any) into a coordinate-keyed
-/// map, so [`build_inherited`] carries every previously archived entry
-/// forward unchanged.
-fn read_inherited_index(
-    repo: &gix::Repository,
-    old_tree: Option<ObjectId>,
-) -> Result<HashMap<(u64, u32), ObjectId>, Error> {
-    let mut map = HashMap::new();
-    let Some(old_tree) = old_tree else {
-        return Ok(map);
-    };
-    let Some(inherited_id) = gitutil::find_entry(repo, old_tree, "inherited")? else {
-        return Ok(map);
-    };
-    for height_entry in gitutil::read_tree(repo, inherited_id)? {
-        let height = layout::parse_hex2(&height_entry.filename.to_string()).ok_or_else(|| {
-            corrupt(format!(
-                "inherited/ entry {} is not a hex(height,2) name",
-                height_entry.filename
-            ))
-        })? as u32;
-        for left_entry in gitutil::read_tree(repo, height_entry.oid)? {
-            let left = layout::parse_hex16(&left_entry.filename.to_string()).ok_or_else(|| {
-                corrupt(format!(
-                    "inherited/{} entry {} is not a hex(left,16) name",
-                    height_entry.filename, left_entry.filename
-                ))
-            })?;
-            map.insert((left, height), left_entry.oid);
-        }
-    }
-    Ok(map)
+    gitutil::write_tree(repo, top)
 }
 
 fn is_touched(
@@ -355,27 +267,42 @@ fn is_touched(
     node_map.contains_key(&(left, height)) || (height == 0 && leaf_map.contains_key(&left))
 }
 
-/// Whether a brand-new (never-before-existing) node at `(left, height)`
-/// would end up materialized, without performing any I/O or writes — a pure
-/// predicate over this batch's own data, so [`resolve_node`] can decide
-/// whether to recurse into children before writing anything (never leaving
-/// an orphaned child object behind for a node that turns out opaque, SG10).
-fn would_materialize(
+/// Whether a brand-new (never-before-existing) node at `(left, height)` has
+/// a known occupant for *every* immediate child slot — a pure predicate over
+/// this batch's own data plus `old_index`, so [`resolve_node`] can decide
+/// whether to wire `hex(c, 2)` children before writing anything.
+///
+/// This is a **structural** question ("do I know what goes in each child
+/// slot"), never a leaf-level one ("does every descendant leaf have real
+/// bytes") — the two used to be the same test (`would_materialize`, before
+/// this decision), which is exactly what made a parent with even one opaque
+/// descendant lose every *other*, genuinely materialized descendant it had:
+/// nothing else in this batch or `old_index` would recurse into them, so
+/// their objects were built (or reused) but never referenced by anything,
+/// and the very next write that dropped this parent from `peaks/` made them
+/// permanently unreachable (`docs/specs/storage-git.md`'s §2.7 has the full
+/// argument for why the resulting `inherited/` archive is gone now that this
+/// is fixed at the source). A child slot is known here if it is *touched*
+/// this batch (a leaf or node digest was actually given for it) or if
+/// `old_index` already names an occupant for it (reused from the prior
+/// write, materialized or opaque alike — SG18a). A coordinate with **no**
+/// known child at all — a resumed log's genesis peak, or a single subtree
+/// append — has nothing here to decompose into, and correctly stays a pure
+/// `digest/`-only leaf shape (SG10/SG11 unaffected).
+fn is_decomposable(
     k: u64,
     left: u64,
     height: u32,
     leaf_map: &HashMap<u64, &[u8]>,
+    node_map: &NodeMap<'_>,
     old_index: &HashMap<(u64, u32), Resolved>,
 ) -> bool {
-    if let Some(r) = old_index.get(&(left, height)) {
-        return r.materialized;
-    }
-    if height == 0 {
-        leaf_map.contains_key(&left)
-    } else {
-        let span = k.pow(height - 1);
-        (0..k).all(|c| would_materialize(k, left + c * span, height - 1, leaf_map, old_index))
-    }
+    let span = k.pow(height - 1);
+    (0..k).all(|c| {
+        let child_left = left + c * span;
+        old_index.contains_key(&(child_left, height - 1))
+            || is_touched(child_left, height - 1, leaf_map, node_map)
+    })
 }
 
 /// Resolve (reusing or freshly building) the node at `(left, height)`.
@@ -469,29 +396,27 @@ fn resolve_node(
         }
         leaf_bytes.is_some()
     } else if let Some(r) = existing {
-        // Already existed: its shape (leaf/children presence) cannot change
-        // through this trait (an opaque node has no backfill operation,
-        // §2.6) -- carry the same children references forward unchanged.
-        if r.materialized {
-            for child in gitutil::read_tree(repo, r.id)? {
-                if child.filename != "digest" {
-                    top.push(entry(child.kind, child.filename, child.oid));
-                }
+        // Already existed: carry forward whatever children it already has
+        // (none, if it was ever opaque -- SG10's no-backfill rule means that
+        // can never change through this trait) unconditionally; the loop is
+        // simply empty for a node with no children to carry.
+        for child in gitutil::read_tree(repo, r.id)? {
+            if child.filename != "digest" {
+                top.push(entry(child.kind, child.filename, child.oid));
             }
         }
         r.materialized
     } else {
-        let span = k.pow(height - 1);
-        let materialize =
-            (0..k).all(|c| would_materialize(k, left + c * span, height - 1, leaf_map, old_index));
-        if materialize {
+        let decomposable = is_decomposable(k, left, height, leaf_map, node_map, old_index);
+        if decomposable {
+            let span = k.pow(height - 1);
             for c in 0..k {
                 let child_left = left + c * span;
                 let child = resolve_node(repo, k, child_left, height - 1, ctx)?;
                 top.push(entry(EntryKind::Tree, hex2(c), child.id));
             }
         }
-        materialize
+        decomposable
     };
 
     let id = gitutil::write_tree(repo, top)?;

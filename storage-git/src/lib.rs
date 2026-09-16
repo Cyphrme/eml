@@ -24,24 +24,26 @@
 //!    count-changing append (it always goes through `write_batch`, which carries the combinator's
 //!    own computed node digests alongside the leaf); this limitation is only reachable by a caller
 //!    driving the trait directly, bypassing the combinator.
-//! 3. **`get_node`/`tree_at` are scoped to peaks, materialized descendants, and the permanent
-//!    `inherited/` archive (§2.7, SG28/SG29).** A node sealed opaque (§2.6) carries no `hex(c,2)`
-//!    children (SG4/SG10 forbid it), so nothing beneath it is ever addressable by descent -- but
-//!    the coordinate *itself*, once a later write's frontier no longer includes it, is archived by
-//!    [`build::apply_write`] at `inherited/hex(h,2)/hex(left,16)`, referencing the same object id
-//!    it already had, and carried forward unchanged by every write after that. `get_node`/`tree_at`
-//!    consult this archive before answering `Ok(None)` or a reconstruction error, so a coordinate
-//!    that was itself ever a frontier peak stays reachable for the life of the log; only a
-//!    coordinate strictly *beneath* an opaque node -- one that was never itself a peak -- remains
-//!    unreconstructable, since it was never archived either. This affects every subtree-kind or
-//!    resumed log the same way a flat log never needs it: a flat log's nodes stay materialized and
-//!    reachable through `peaks/` forever, so its `inherited/` stays empty and absent (SG1). A
-//!    related, narrower case in the same area: a frontier coordinate every covering algorithm has
-//!    already been removed from (so `write_batch` is handed no digest for it by anyone, most
-//!    reachably through `polydigest::NaryMerkleLog::resume`'s per-algorithm epoch gate) is built as
-//!    an empty-`digest/`, opaque node rather than rejected as `Corruption` -- a legitimate frontier
-//!    position with nothing live behind it, not a missing-data bug. See `src/build.rs`,
-//!    `src/read.rs`, and `src/historical.rs` for the full argument.
+//! 3. **`get_node`/`tree_at` are scoped to peaks and their descendants, decomposed independently
+//!    per child slot (§2.6, §2.7, SG28/SG29).** An earlier revision built a taller peak opaque
+//!    (`digest/` only, no children at all) the moment *any* child it would need to attach was not
+//!    fully materialized -- which silently dropped a materialized descendant sitting right next to
+//!    an opaque one, permanently, the instant its parent left `peaks/`; a side `inherited/` archive
+//!    patched around that loss for the one case it *could* still recover (a coordinate that had
+//!    itself once been a peak). [`build::resolve_node`] now wires a `hex(c,2)` child entry for
+//!    *every* slot it has any occupant for -- opaque or materialized, reused by object id (SG18a)
+//!    or freshly built -- independently of every other slot, so a coordinate that was ever a
+//!    frontier peak stays reachable by ordinary descent from whatever taller peak now covers it,
+//!    for the life of the log, with no side archive at all: `C(n)`'s four top-level entries (SG1)
+//!    are unconditional now, for every log, resumed or not. Only a coordinate strictly *beneath* a
+//!    leaf-level opaque node (`h = 0`, no `leaf` blob, SG4) -- one that was never itself a peak and
+//!    so was never given a digest of its own -- remains unreconstructable, since nothing was ever
+//!    there to decompose. A related, narrower case in the same area: a frontier coordinate every
+//!    covering algorithm has already been removed from (so `write_batch` is handed no digest for it
+//!    by anyone, most reachably through `polydigest::NaryMerkleLog::resume`'s per-algorithm epoch
+//!    gate) is built as an empty-`digest/`, opaque node rather than rejected as `Corruption` -- a
+//!    legitimate frontier position with nothing live behind it, not a missing-data bug. See
+//!    `src/build.rs`, `src/read.rs`, and `src/historical.rs` for the full argument.
 //! 4. **A resumption's storage MUST be fresh, so a resumed seal's opacity is decided purely by what
 //!    is stored plus what the write supplies.** `polydigest::NaryMerkleLog::resume` refuses a
 //!    `storage` that already carries a committed log of its own (`Storage::load_log_meta` returns
@@ -218,7 +220,8 @@ impl GitStorage {
     ///
     /// Returns [`GitStorageError::Corruption`] if `n` exceeds the current
     /// size, if a historical coordinate below `n` is not reconstructable
-    /// (Departure 3 above: an opaque node subsumed by a later merge), if an
+    /// (Departure 3 above: a coordinate strictly beneath a leaf-level opaque
+    /// node that was never itself a peak), if an
     /// algorithm active at `n` has no hasher registered, or if a registered
     /// hasher cannot be trusted -- because it fails to reproduce a digest
     /// this layer already has on file for it, or because reconstructing `n`

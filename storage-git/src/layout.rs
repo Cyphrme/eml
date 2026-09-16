@@ -37,16 +37,6 @@ pub fn parse_hex16(name: &str) -> Option<u64> {
     u64::from_str_radix(name, 16).ok()
 }
 
-/// Decode a `hex(_, 2)` name back to its `u64` (`0..=255`), or `None` if it
-/// is not exactly 2 lowercase hex digits.
-#[must_use]
-pub fn parse_hex2(name: &str) -> Option<u64> {
-    if name.len() != 2 || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    u64::from_str_radix(name, 16).ok()
-}
-
 /// `meta`'s fixed 11-byte encoding (§3.1, SG12). One shape, for every log
 /// regardless of resume history: there is nothing this early to stay
 /// compatible with, so no version byte, no second wider shape, and no

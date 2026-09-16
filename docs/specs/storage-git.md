@@ -100,24 +100,15 @@ C(n)                          tree
                                        with digit d_j > 0
       hex(q, 2)                tree   T(left, j), for q = 0 .. d_j - 1,
                                        left to right
-  inherited/                  tree    OPTIONAL, §2.7 -- present only once
-                                       some T(left, h) has left peaks/
-                                       while still opaque
-    hex(h, 2)/                tree    one per height that has ever archived
-                                       a node
-      hex(left, 16)            tree   the archived T(left, h), by coordinate
 ```
 
-**[SG1]** `C(n)` MUST be a git tree object with exactly the four mandatory
-top-level entries `meta` (blob), `epochs` (tree), `roots` (tree), and
-`peaks` (tree), present even when empty (an empty `roots`/`epochs`/`peaks`
-tree is the empty git tree object, one fixed object id per repository
-object-hash format), plus the OPTIONAL fifth entry `inherited` (tree, §2.7),
-present if and only if this log has ever archived a node under it. *Checked
-by: structural — any C(n) reader that does not find exactly these four
-mandatory entries (plus `inherited` exactly when the archive is non-empty)
-MUST reject the object as malformed; golden vector against a handful of
-representative `n`.*
+**[SG1]** `C(n)` MUST be a git tree object with exactly the four top-level
+entries `meta` (blob), `epochs` (tree), `roots` (tree), and `peaks` (tree),
+present even when empty (an empty `roots`/`epochs`/`peaks` tree is the empty
+git tree object, one fixed object id per repository object-hash format).
+*Checked by: structural — any C(n) reader that does not find exactly these
+four entries MUST reject the object as malformed; golden vector against a
+handful of representative `n`.*
 
 **[SG2]** For each base-`k` digit position `j` (the frontier height) where
 `n`'s base-`k` representation has a nonzero digit `d_j`, `peaks/hex(j, 2)`
@@ -183,11 +174,17 @@ to it: `digest/` present and empty, no `leaf`, no children — never a
 digests is exactly what `MemoryStorage` already represents by recording
 nothing for it at all.
 
-**[SG4]** `T(left, 0)` MAY carry a `leaf` blob; `T(left, h > 0)` MAY carry
-`hex(c, 2)` child entries for `c = 0..k-1`. Both are present if and only if
-the node is materialized (§2.6). A `digest/` subtree alone, with no `leaf`
-and no `hex(c, 2)` children, is a **structurally valid, opaque** node.
-*Checked by: structural.*
+**[SG4]** `T(left, 0)` MAY carry a `leaf` blob, present iff this layer was
+ever given the leaf's own bytes (§2.6). `T(left, h > 0)` MAY carry
+`hex(c, 2)` child entries for `c = 0..k-1`; each is present independently,
+iff this layer has *some* occupant for that child slot — materialized or
+opaque alike (§2.6's decomposition rule) — never gated on whether the other
+children, or anything beneath them, are themselves opaque. A `digest/`
+subtree alone, with no `leaf` and no `hex(c, 2)` children at all, is a
+**structurally valid, opaque** node: the only way this arises is a
+coordinate whose digest arrived as one atomic, undecomposed unit with
+nothing known about any child slot at all (a resumed log's genesis peak, or
+a single subtree append — §2.6). *Checked by: structural.*
 
 ### 2.3 Entry modes and canonical order
 
@@ -269,17 +266,32 @@ behind is simply unreferenced and eligible for collection (§5).
 
 ### 2.6 Materialized versus opaque nodes
 
-**[SG10]** A `T(left, h)` node built from `Storage::store_leaf` (flat
-append) or from full-height merges of materialized children MUST be
-materialized: it carries `leaf` (at `h=0`) or all `k` children (at `h>0`) in
-addition to `digest/`. A `T(left, 0)` node built from `Storage::store_node`
-with no corresponding `store_leaf` call — which is exactly what happens for
-every `cml::LogKind::Subtree` append (`polydigest::NaryMerkleLog::append_subtree`,
+**[SG10]** At `h = 0`, a `T(left, 0)` node built from `Storage::store_leaf`
+MUST carry `leaf` (materialized); one built from `Storage::store_node` with
+no corresponding `store_leaf` call — which is exactly what happens for every
+`cml::LogKind::Subtree` append (`polydigest::NaryMerkleLog::append_subtree`,
 `polydigest/src/tree.rs:821-868`, calls only `store_node`, never
-`store_leaf`) — and any node inherited opaque from a resumed seal
-(`polydigest::NaryMerkleLog::resume`, `polydigest/src/tree.rs:136-233`,
-persists only frontier peaks, never historical leaves, and only ever onto a
-fresh backend) MUST be opaque: `digest/` only, no `leaf`, no children.
+`store_leaf`) — MUST be opaque: `digest/` only, no `leaf`. At `h > 0`, a
+`T(left, h)` node MUST carry a `hex(c, 2)` child entry for every `c` this
+layer has *any* occupant for — decomposition is decided **independently per
+child slot**, never gated on whether the *other* children (or anything
+beneath them) are themselves opaque (§2.1's `resolve_node`, `is_decomposable`
+in `src/build.rs`). A child slot has a known occupant when this batch was
+given a digest or leaf bytes for it, or when the prior write's own tree
+already names an occupant for it (SG18a) — regardless of whether that
+occupant is itself opaque or carries further structure. Only a coordinate
+arriving with **no** known occupant for *any* child slot — a resumed log's
+genesis peak (`polydigest::NaryMerkleLog::resume`,
+`polydigest/src/tree.rs:151-260`, persists only frontier peaks, never
+historical leaves, and only ever onto a fresh backend) or a single subtree
+append's own root — stays a pure `digest/`-only opaque leaf shape, since
+there is nothing to decompose it with. This is what makes a mixed
+subtree — some descendants opaque (inherited, or from a subtree append),
+others materialized (an ordinary forward leaf) — carry every descendant it
+has *any* occupant for, rather than collapsing the whole thing to opaque the
+moment one descendant is: the two used to be the same test, which is exactly
+what made a materialized descendant of an otherwise-opaque parent
+permanently unreachable the moment that parent left `peaks/` (§2.7 below).
 *Checked by: property test — a subtree-kind log and a resumed log must
 never call `store_leaf`, and the git backend must never synthesize a `leaf`
 or child entry it was not handed.*
@@ -322,68 +334,60 @@ gap from real historical data (`polydigest::fill`) is an application-level,
 trustless rehydration that reads the *original* data source, not this git
 backend's own object store, and is out of this layer's scope (§8).
 
-### 2.7 The permanent archive of superseded opaque nodes
+### 2.7 Permanent reachability by decomposition (no side archive)
 
-An opaque `T(left, h)` carries no `leaf` and no children (§2.6): there is
-nowhere else its bytes live. As long as `(left, h)` remains a current
-frontier peak it stays reachable through `peaks/` (§2.1). Once a later write
-folds it into a taller peak, `peaks/` no longer names it — and because the
-taller peak is itself opaque whenever any child it would need to attach is
-not fully materialized (SG10), the new tree carries **no** reference to the
-superseded coordinate at all. Nothing below §2.4's position-lookup walk can
-reach it again, and nothing can recompute it: it has no leaf bytes to fold
-from. Left this way, the very first merge past a resumption (or past any
-subtree-kind append) would make that coordinate's digest permanently
-unrecoverable, even though the log's own committed history never discarded
-it on purpose — it would simply have nowhere left to point.
+An earlier revision of this layer (`inherited/`, SG28/SG29 in prior
+versions of this document) archived a superseded opaque peak into a side
+tree the moment a later write's frontier stopped naming it, because that
+write's `T(left, h)` replacement was built **opaque whenever any child it
+would need to attach was not fully materialized** — so a coordinate one
+level below the new peak, even a genuinely materialized one, was silently
+dropped: nothing in the new tree referenced it, and the very next write that
+retired its parent made it permanently unreachable. That defect (not a gap
+in the archive's coverage, a gap in *what got built in the first place*) is
+what an ordinary forward `append_leaf` on a resumed log exposes: its
+materialized leaf sits directly beside the inherited opaque genesis frontier
+in the very next merge, and the old rule would have discarded it on the
+spot.
 
-**[SG28]** The instant a write's new frontier (`spine::frontier_for_size`
-applied to the new count) no longer contains a coordinate `(left, h)` that
-was a peak going into that write, and that coordinate's `T(left, h)` was
-opaque, this layer MUST archive it at `inherited/hex(h, 2)/hex(left, 16)` in
-the tree this write produces, referencing the *same* object id `T(left, h)`
-already had — never a copy, never a rewrite. A coordinate already present in
-`inherited/` (from an earlier write) MUST be carried forward unchanged. A
-coordinate that was materialized when superseded MUST NOT be archived: its
-leaf/children were themselves reused by object id wherever the new tree
-still needs them (SG18a), so nothing about it is otherwise unrecoverable.
-*Checked by: property test — comparing every coordinate a sequence's
-frontier has ever named against `MemoryStorage` (which never drops a node it
-was given) at every step, not just the current frontier.*
+The fix removes the defect at its source instead of archiving around it:
+§2.6's `hex(c, 2)` children are now wired **per child slot**, independently,
+for every occupant this layer actually knows about, whether that occupant is
+opaque or materialized. A coordinate that was ever a frontier peak is
+therefore *always* reachable afterward, by ordinary §2.4 descent from
+whatever taller peak now covers it — ordinarily one hop, transitively many
+after several merges, but never a separate lookup outside `peaks/`. Nothing
+is archived, nothing is copied: a superseded coordinate's `T(left, h)`
+object is reused by object id (SG18a) as a child of its new parent, exactly
+like a materialized one always was. This is why a former `inherited/`
+archive is not merely small now, it does not exist at all — `C(n)` keeps
+SG1's original four-entry shape unconditionally, for every log, resumed or
+not, flat or subtree-kind.
 
-**[SG29]** A reader resolving `(alg_id, left, h)` that is not reachable
-through the current `peaks/` (§2.4's walk fails, or finds no peak covering
-it) MUST consult `inherited/hex(h, 2)/hex(left, 16)` before answering
-"absent": if present there, the archived node's `digest/hex(alg_id, 16)` is
-the answer (`Ok(None)` if that specific algorithm has none); only if
-`inherited/` also carries nothing at this exact coordinate MUST the reader
-answer `Ok(None)` (`get_node`) or a reconstruction error naming the
-coordinate (`tree_at`). This is the amendment to this crate's own
-"Departure 3" (see `storage-git/src/lib.rs`'s module docs): the coordinate a
-peak was folded away at while opaque is now always addressable; a
-coordinate strictly *beneath* an opaque node that was never itself a peak
-remains unreconstructable, because it was never archived either — it was
-never a frontier member in its own right. *Checked by: the same property
-test as SG28, extended to every historical size the sequence has passed
-through via `tree_at`.*
+**[SG28]** For any coordinate `(left, h)` this layer ever built with a known
+digest (via `store_leaf`, `store_node`, or `write_batch`'s `nodes`), every
+later write's `T(left', h')` for any taller coordinate that comes to cover
+`(left, h)` MUST carry a `hex(c, 2)` entry along the path down to it,
+reusing `T(left, h)`'s own object id unchanged for as long as that
+coordinate's own digest never changes again (which, once it stops being a
+frontier peak, is forever — `cml::engine::carry` never re-touches a sealed
+position). *Checked by: property test — comparing every coordinate a
+sequence's frontier has ever named against `MemoryStorage` (which never
+drops a node it was given) at every step, not just the current frontier.*
 
-**Bounded, not amortized-free, and never rematerialized.** `inherited/`
-only ever grows, coordinate by coordinate, in lockstep with
-`frontier_for_size` transitions — the same schedule that governs how many
-peaks a frontier of a given size ever has. For the genesis frontier a
-resumption seeds (`polydigest::NaryMerkleLog::resume`), the peak count is
-`O(log_k n)`: the "handful of peaks" a seal freezes, and once a resumed
-log's first merge past that genesis frontier files them into `inherited/`,
-they never move again. A subtree-kind log's own **forward** appends after
-that point are opaque too (`append_subtree` never calls `store_leaf`,
-SG10), so the same mechanism keeps archiving each one the moment it is
-folded into a taller peak — for a long-lived subtree-kind log this makes
-`inherited/`'s growth track total appends, not `log n`, matching exactly
-what `MemoryStorage` already pays to keep every node it was ever given; a
-flat log that never resumes or goes subtree-kind never exercises this path
-at all (every one of its nodes stays materialized and reachable through
-`peaks/` forever), so `inherited/` is entirely absent for it and SG1's
-original four-entry shape holds unamended.
+**[SG29]** A reader resolving `(alg_id, left, h)` MUST descend from the
+current frontier's covering peak (§2.4) and answer from whatever
+`T(left, h)` it finds there — this is now the *only* path, live or
+historical (`tree_at`), and it always succeeds for a coordinate that was
+ever itself a frontier peak (SG28). The one case that remains genuinely
+unreconstructable is a coordinate strictly *beneath* a leaf-level opaque
+node (`h = 0` with no `leaf` blob) that was never itself a peak: SG4 forbids
+a height-0 opaque node from carrying anything to descend through, and no
+digest was ever given for a position beneath it in the first place, so
+`get_node` MUST answer `Ok(None)` and `tree_at` MUST answer a reconstruction
+error naming the coordinate. *Checked by: the same property test as SG28,
+extended to every historical size the sequence has passed through via
+`tree_at`.*
 
 ## 3. Byte-exact encodings
 
@@ -761,7 +765,7 @@ Every `SG<n>` constraint above names its check inline. Summarized, a
 | SG7 (pre-sorted entries) | A release-mode unit test, since the failure mode is compiled out of `debug_assert!` |
 | SG9, SG20 (purity, `tree_at`) | Property tests over reordered-but-equivalent operation sequences and over historical `n` |
 | SG10–SG11 (opacity) | Property tests mixing flat, subtree, and resumed logs |
-| SG28–SG29 (permanent archive of superseded opaque nodes) | Property tests over fork lifecycles (seal, resume, forward subtree appends, reopen), comparing every coordinate and every historical size the sequence has ever named against `MemoryStorage` |
+| SG28–SG29 (permanent reachability by decomposition) | Property tests over fork lifecycles (seal, resume, forward leaf and subtree appends, reopen), comparing every coordinate and every historical size the sequence has ever named against `MemoryStorage` |
 | SG12–SG16 (byte-exact encodings) | Golden vectors: fixed `(k, leaves, algorithms)` inputs with pinned expected object ids, one per supported object-hash format |
 | SG17–SG19, SG25 (staging ref, CAS, tip-moved, crash safety) | Property/integration tests using two `storage-git` instances against one bare repository, one racing the other's write |
 | SG21 (`open_at`) | Durability property test mirroring `docs/architecture.md`'s existing MMR durable-witness test pattern |
