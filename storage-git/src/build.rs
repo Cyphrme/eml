@@ -12,7 +12,7 @@
 //! its previously-stored digest/leaf/children — the only cases the object
 //! model needs to represent (§2.6).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gix::ObjectId;
 use gix::objs::tree::EntryKind;
@@ -97,15 +97,19 @@ pub(crate) fn apply_write(
         leaf_map: &leaf_map,
         node_map: &node_map,
     };
-    let peaks_tree = build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
+    let (peaks_tree, inherited_tree) =
+        build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, new_count, new_kind))?;
-    let top = vec![
+    let mut top = vec![
         entry(EntryKind::Blob, "meta", meta_blob),
         entry(EntryKind::Tree, "epochs", epochs_tree),
         entry(EntryKind::Tree, "roots", roots_tree),
         entry(EntryKind::Tree, "peaks", peaks_tree),
     ];
+    if let Some(inherited_tree) = inherited_tree {
+        top.push(entry(EntryKind::Tree, "inherited", inherited_tree));
+    }
     let tree_id = gitutil::write_tree(repo, top)?;
 
     Ok(Applied {
@@ -207,7 +211,13 @@ struct ResolveCtx<'a> {
 }
 
 /// Build `peaks/` (§2.1, SG1-SG2): the frontier at `new_count`, each peak
-/// either reused unchanged from `old_tree` or freshly resolved.
+/// either reused unchanged from `old_tree` or freshly resolved. Also builds
+/// `inherited/` (Departure 3 amendment): whatever this batch's frontier
+/// transition leaves behind while opaque, archived by coordinate so it
+/// outlives being a current peak. Returns `(peaks_tree, inherited_tree)`;
+/// `inherited_tree` is `None` when nothing has ever needed archiving, so a
+/// log that has never superseded an opaque peak keeps SG1's original
+/// four-entry shape exactly.
 fn build_peaks(
     repo: &gix::Repository,
     arity: u64,
@@ -215,7 +225,7 @@ fn build_peaks(
     old_count: u64,
     new_count: u64,
     batch: &BatchInputs<'_>,
-) -> Result<ObjectId, Error> {
+) -> Result<(ObjectId, Option<ObjectId>), Error> {
     let old_coords = frontier_for_size(old_count, arity);
     let old_index = index_old_peaks(repo, old_tree, &old_coords)?;
     let ctx = ResolveCtx {
@@ -241,7 +251,99 @@ fn build_peaks(
         let group_tree = gitutil::write_tree(repo, group)?;
         top.push(entry(EntryKind::Tree, hex2(u64::from(height)), group_tree));
     }
-    gitutil::write_tree(repo, top)
+    let peaks_tree = gitutil::write_tree(repo, top)?;
+
+    let inherited_tree = build_inherited(repo, old_tree, &old_coords, &new_coords, &old_index)?;
+    Ok((peaks_tree, inherited_tree))
+}
+
+/// Build `inherited/` (Departure 3 amendment, SG10/SG11): the permanent
+/// archive of every frontier coordinate that was ever a peak and turned out
+/// opaque, keyed by its own `(left, height)` the moment a later write's new
+/// frontier no longer includes it. An opaque node carries no leaf bytes
+/// anywhere (§2.6) -- once its coordinate stops being a current peak in
+/// `peaks/`, nothing can ever redescend to it again, so this is the only
+/// point such a node can still be captured. Carries every previously
+/// archived entry forward unchanged (this archive only ever grows), and
+/// returns `None` when the result is empty.
+fn build_inherited(
+    repo: &gix::Repository,
+    old_tree: Option<ObjectId>,
+    old_coords: &[(u64, u32)],
+    new_coords: &[(u64, u32)],
+    old_index: &HashMap<(u64, u32), Resolved>,
+) -> Result<Option<ObjectId>, Error> {
+    let mut archive = read_inherited_index(repo, old_tree)?;
+    let still_current: HashSet<(u64, u32)> = new_coords.iter().copied().collect();
+    for &coord in old_coords {
+        if still_current.contains(&coord) {
+            continue;
+        }
+        let Some(resolved) = old_index.get(&coord) else {
+            continue;
+        };
+        if resolved.materialized {
+            // A materialized coordinate's leaf/children were reused by
+            // object id wherever it is still needed; nothing about it is
+            // ever unrecoverable the way an opaque node's absence of leaf
+            // bytes is, so archiving it here would only be dead weight.
+            continue;
+        }
+        archive.entry(coord).or_insert(resolved.id);
+    }
+    if archive.is_empty() {
+        return Ok(None);
+    }
+
+    let mut by_height: HashMap<u32, Vec<(u64, ObjectId)>> = HashMap::new();
+    for (&(left, height), &id) in &archive {
+        by_height.entry(height).or_default().push((left, id));
+    }
+    let mut top = Vec::with_capacity(by_height.len());
+    for (height, mut lefts) in by_height {
+        lefts.sort_unstable_by_key(|&(left, _)| left);
+        let entries: Vec<_> = lefts
+            .into_iter()
+            .map(|(left, id)| entry(EntryKind::Tree, hex16(left), id))
+            .collect();
+        let sub_tree = gitutil::write_tree(repo, entries)?;
+        top.push(entry(EntryKind::Tree, hex2(u64::from(height)), sub_tree));
+    }
+    Ok(Some(gitutil::write_tree(repo, top)?))
+}
+
+/// Read an existing `inherited/` archive (if any) into a coordinate-keyed
+/// map, so [`build_inherited`] carries every previously archived entry
+/// forward unchanged.
+fn read_inherited_index(
+    repo: &gix::Repository,
+    old_tree: Option<ObjectId>,
+) -> Result<HashMap<(u64, u32), ObjectId>, Error> {
+    let mut map = HashMap::new();
+    let Some(old_tree) = old_tree else {
+        return Ok(map);
+    };
+    let Some(inherited_id) = gitutil::find_entry(repo, old_tree, "inherited")? else {
+        return Ok(map);
+    };
+    for height_entry in gitutil::read_tree(repo, inherited_id)? {
+        let height = layout::parse_hex2(&height_entry.filename.to_string()).ok_or_else(|| {
+            corrupt(format!(
+                "inherited/ entry {} is not a hex(height,2) name",
+                height_entry.filename
+            ))
+        })? as u32;
+        for left_entry in gitutil::read_tree(repo, height_entry.oid)? {
+            let left = layout::parse_hex16(&left_entry.filename.to_string()).ok_or_else(|| {
+                corrupt(format!(
+                    "inherited/{} entry {} is not a hex(left,16) name",
+                    height_entry.filename, left_entry.filename
+                ))
+            })?;
+            map.insert((left, height), left_entry.oid);
+        }
+    }
+    Ok(map)
 }
 
 fn is_touched(

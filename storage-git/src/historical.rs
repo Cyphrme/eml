@@ -21,7 +21,7 @@
 //! `tree_at` never returns a well-formed but silently-wrong tree. See this
 //! crate's top-level docs for the full writeup.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cml::mountain::bag_peaks;
 use gix::ObjectId;
@@ -107,15 +107,81 @@ pub(crate) fn reconstruct(
         &projected_epochs,
         hashers,
     )?;
+    let inherited_tree = reconstruct_inherited(repo, arity, current_tree, n, &target_coords)?;
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, n, kind_byte))?;
-    let top = vec![
+    let mut top = vec![
         entry(EntryKind::Blob, "meta", meta_blob),
         entry(EntryKind::Tree, "epochs", epochs_tree),
         entry(EntryKind::Tree, "roots", roots_tree),
         entry(EntryKind::Tree, "peaks", peaks_tree),
     ];
+    if let Some(inherited_tree) = inherited_tree {
+        top.push(entry(EntryKind::Tree, "inherited", inherited_tree));
+    }
     gitutil::write_tree(repo, top)
+}
+
+/// Reconstruct `inherited/` (Departure 3 amendment) as it stood at the
+/// historical size `n`: the subset of the *current* tree's accumulated
+/// archive that was already superseded by size `n` -- fully covered
+/// (`left + arity^height <= n`) and not itself a member of `target_coords`
+/// (`n`'s own frontier). The archive only ever grows, coordinate by
+/// coordinate, exactly in step with `frontier_for_size` transitions, so
+/// this filter reproduces exactly what the live write at size `n` would
+/// have committed -- the same SG9 byte-identity `reconstruct` promises for
+/// every other section. Returns `None` when the filtered result is empty.
+fn reconstruct_inherited(
+    repo: &gix::Repository,
+    arity: u64,
+    current_tree: Option<ObjectId>,
+    n: u64,
+    target_coords: &[(u64, u32)],
+) -> Result<Option<ObjectId>, Error> {
+    let Some(current_tree) = current_tree else {
+        return Ok(None);
+    };
+    let Some(inherited_id) = gitutil::find_entry(repo, current_tree, "inherited")? else {
+        return Ok(None);
+    };
+    let target_set: HashSet<(u64, u32)> = target_coords.iter().copied().collect();
+
+    let mut top = Vec::new();
+    for height_entry in gitutil::read_tree(repo, inherited_id)? {
+        let height = layout::parse_hex2(&height_entry.filename.to_string()).ok_or_else(|| {
+            corrupt(format!(
+                "inherited/ entry {} is not a hex(height,2) name",
+                height_entry.filename
+            ))
+        })? as u32;
+        let Some(cap) = arity.checked_pow(height) else {
+            continue;
+        };
+        let mut kept = Vec::new();
+        for left_entry in gitutil::read_tree(repo, height_entry.oid)? {
+            let left = layout::parse_hex16(&left_entry.filename.to_string()).ok_or_else(|| {
+                corrupt(format!(
+                    "inherited/{} entry {} is not a hex(left,16) name",
+                    height_entry.filename, left_entry.filename
+                ))
+            })?;
+            let Some(end) = left.checked_add(cap) else {
+                continue;
+            };
+            if end <= n && !target_set.contains(&(left, height)) {
+                kept.push(entry(EntryKind::Tree, layout::hex16(left), left_entry.oid));
+            }
+        }
+        if !kept.is_empty() {
+            let sub_tree = gitutil::write_tree(repo, kept)?;
+            top.push(entry(EntryKind::Tree, hex2(u64::from(height)), sub_tree));
+        }
+    }
+    if top.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(gitutil::write_tree(repo, top)?))
+    }
 }
 
 fn resolve_historical_node(
@@ -138,6 +204,13 @@ fn resolve_historical_node(
         if let Some(id) = descend(repo, arity, peak_left, peak_height, peak_id, left, height)? {
             return Ok(id);
         }
+    }
+    // Not reachable through the current frontier at all -- but a coordinate
+    // that was itself once a peak and got folded away while opaque is
+    // permanently archived (Departure 3 amendment), regardless of how long
+    // ago that happened.
+    if let Some(id) = read::inherited_node_id(repo, current_tree, left, height)? {
+        return Ok(id);
     }
     Err(corrupt(format!(
         "historical coordinate (left={left}, height={height}) is not reconstructable: it was \

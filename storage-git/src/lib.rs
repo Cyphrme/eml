@@ -24,14 +24,19 @@
 //!    count-changing append (it always goes through `write_batch`, which carries the combinator's
 //!    own computed node digests alongside the leaf); this limitation is only reachable by a caller
 //!    driving the trait directly, bypassing the combinator.
-//! 3. **`get_node`/`tree_at` are scoped to peaks and materialized descendants.** A node sealed
-//!    opaque (§2.6) that has since been folded into a taller peak carries no `hex(c,2)` children
-//!    (SG4/SG10 forbid it), so nothing beneath a superseded opaque peak is addressable once it
-//!    stops being the frontier's own peak; `get_node` answers `Ok(None)` and `tree_at` returns a
-//!    reconstruction error for such a coordinate rather than fabricating a value. This affects
-//!    subtree-kind/resumed logs at historical, already-subsumed coordinates; a flat log is never
-//!    affected, since every one of its nodes is materialized all the way to its leaves. See
-//!    `src/read.rs` and `src/historical.rs` for the full argument.
+//! 3. **`get_node`/`tree_at` are scoped to peaks, materialized descendants, and the permanent
+//!    `inherited/` archive (§2.7, SG28/SG29).** A node sealed opaque (§2.6) carries no `hex(c,2)`
+//!    children (SG4/SG10 forbid it), so nothing beneath it is ever addressable by descent -- but
+//!    the coordinate *itself*, once a later write's frontier no longer includes it, is archived by
+//!    [`build::apply_write`] at `inherited/hex(h,2)/hex(left,16)`, referencing the same object id
+//!    it already had, and carried forward unchanged by every write after that. `get_node`/`tree_at`
+//!    consult this archive before answering `Ok(None)` or a reconstruction error, so a coordinate
+//!    that was itself ever a frontier peak stays reachable for the life of the log; only a
+//!    coordinate strictly *beneath* an opaque node -- one that was never itself a peak -- remains
+//!    unreconstructable, since it was never archived either. This affects every subtree-kind or
+//!    resumed log the same way a flat log never needs it: a flat log's nodes stay materialized and
+//!    reachable through `peaks/` forever, so its `inherited/` stays empty and absent (SG1). See
+//!    `src/build.rs`, `src/read.rs`, and `src/historical.rs` for the full argument.
 //! 4. **A resumption's storage MUST be fresh, so a resumed seal's opacity is decided purely by what
 //!    is stored plus what the write supplies.** `polydigest::NaryMerkleLog::resume` refuses a
 //!    `storage` that already carries a committed log of its own (`Storage::load_log_meta` returns

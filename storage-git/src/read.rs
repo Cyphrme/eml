@@ -4,14 +4,19 @@
 //!
 //! Scope, named rather than silently assumed: this walks from a peak down
 //! through `hex(c,2)` children, so it resolves any coordinate that is either
-//! a current peak itself or a descendant of a **materialized** peak. A
-//! coordinate that was sealed opaque (§2.6) and has since been folded into a
-//! taller peak has no reachable path here -- SG4/SG10 forbid an opaque node
-//! from carrying `hex(c,2)` children at all, so nothing below a taller
-//! opaque peak is addressable once it stops being the frontier's own peak.
-//! `get_node` and `tree_at` both report this honestly (`Ok(None)` / a
-//! reconstruction error) rather than fabricating a value; see this crate's
-//! top-level docs for the full departure writeup.
+//! a current peak itself, a descendant of a **materialized** peak, or an
+//! exact match in the permanent `inherited/` archive (Departure 3
+//! amendment) -- the coordinate a peak was folded away at while opaque,
+//! kept forever by [`crate::build`] the moment it stops being a current
+//! peak, since an opaque node carries no leaf bytes anywhere to
+//! reconstruct it from otherwise. A coordinate *beneath* an opaque
+//! ancestor that was never itself a peak -- interior structure that was
+//! simply never given -- still has no reachable path: SG4/SG10 forbid an
+//! opaque node from carrying `hex(c,2)` children at all, and such a
+//! coordinate was never archived either, because it was never a frontier
+//! member in its own right. `get_node` and `tree_at` both report this
+//! honestly (`Ok(None)` / a reconstruction error) rather than fabricating a
+//! value; see this crate's top-level docs for the full departure writeup.
 
 use gix::ObjectId;
 use spine::frontier_for_size;
@@ -135,13 +140,20 @@ pub(crate) fn get_node(
     height: u32,
 ) -> Result<Option<Vec<u8>>, Error> {
     let coords = frontier_for_size(size, arity);
-    let Some(target) = covering_peak(&coords, arity, left, height) else {
-        return Ok(None);
+    let via_peaks = match covering_peak(&coords, arity, left, height) {
+        Some(target) => {
+            let (peak_left, peak_height) = coords[target];
+            let peak_id = peak_object_id(repo, tree_id, &coords, target)?;
+            descend(repo, arity, peak_left, peak_height, peak_id, left, height)?
+        },
+        None => None,
     };
-    let (peak_left, peak_height) = coords[target];
-    let peak_id = peak_object_id(repo, tree_id, &coords, target)?;
-    let Some(node_id) = descend(repo, arity, peak_left, peak_height, peak_id, left, height)? else {
-        return Ok(None);
+    let node_id = match via_peaks {
+        Some(id) => id,
+        None => match inherited_node_id(repo, tree_id, left, height)? {
+            Some(id) => id,
+            None => return Ok(None),
+        },
     };
     let Some(digest_id) = gitutil::find_entry(repo, node_id, "digest")? else {
         return Ok(None);
@@ -150,6 +162,27 @@ pub(crate) fn get_node(
         Some(blob_id) => Ok(Some(gitutil::read_blob(repo, blob_id)?)),
         None => Ok(None),
     }
+}
+
+/// Look up an archived, permanently-superseded frontier node by its exact
+/// coordinate in `tree_id`'s `inherited/` (Departure 3 amendment) -- the
+/// side archive [`crate::build`] populates whenever a peak leaves `peaks/`
+/// while still opaque. `None` if `tree_id` carries no `inherited/` at all
+/// (nothing has ever needed archiving), or no entry at this exact
+/// coordinate (this coordinate was never itself a frontier peak).
+pub(crate) fn inherited_node_id(
+    repo: &gix::Repository,
+    tree_id: ObjectId,
+    left: u64,
+    height: u32,
+) -> Result<Option<ObjectId>, Error> {
+    let Some(inherited_id) = gitutil::find_entry(repo, tree_id, "inherited")? else {
+        return Ok(None);
+    };
+    let Some(height_id) = gitutil::find_entry(repo, inherited_id, &hex2(u64::from(height)))? else {
+        return Ok(None);
+    };
+    gitutil::find_entry(repo, height_id, &hex16(left))
 }
 
 /// Decode `load_algorithm_metas`'s result from `tree_id`'s `epochs/`.
