@@ -17,6 +17,9 @@
 //!    exceed a flat log of just the forward leaves by no more than a bound scaled by the sealed
 //!    frontier's own peak count, not by the number of forward appends, and every forward leaf's own
 //!    blob must stay reachable.
+//! 4. `verify_audit_payload` and `verify_non_divergence` on a resumed log with forward leaves: both
+//!    return `Err`, never a verdict, and the error must not be the misleading `UnknownAlgorithm`
+//!    for an algorithm that is in fact registered.
 
 mod common;
 
@@ -530,4 +533,169 @@ proptest! {
             "refs/eml/storage/storage-cost/prop",
         );
     }
+}
+
+// ============================================================================
+// 4. `verify_audit_payload` and `verify_non_divergence` on a resumed log with forward leaves: both
+//    pin today's documented behavior -- an `Err`, never a verdict -- on both backends, and guard
+//    against the misleading `UnknownAlgorithm` a checkpoint-start replay produces today for an
+//    algorithm that is in fact registered. Genesis-frontier replay (making either function return
+//    an actual verdict for a resumed log) is not current behavior and is not attempted here; these
+//    tests pin the current, honest-failure behavior, not a future one.
+// ============================================================================
+
+/// Resume `n`-leaf, arity-`k` seals identically onto fresh `GitStorage` and
+/// `MemoryStorage`, then append `m` ordinary forward leaves on both. Returns
+/// both logs and the git backend's `TempDir` (which the caller must keep
+/// alive for every read from the git log).
+async fn resumed_with_forward_leaves(
+    n: u64,
+    k: u64,
+    m: u64,
+    ref_name: &str,
+) -> (
+    NaryMerkleLog<GitStorage>,
+    NaryMerkleLog<MemoryStorage>,
+    tempfile::TempDir,
+) {
+    let git_sealed = seal_git(n, k, &format!("{ref_name}/src")).await;
+    let mem_sealed = seal_mem(n, k).await;
+
+    let (dir, repo) = init_repo(HashKind::Sha1);
+    let mut git_log = NaryMerkleLog::resume(
+        &git_sealed,
+        GitStorage::new(repo, format!("{ref_name}/dst"), k).unwrap(),
+        vec![(0, Box::new(WideHasher))],
+    )
+    .await
+    .expect("resume onto fresh git storage never fails for a well-formed Sealed");
+    let mut mem_log = NaryMerkleLog::resume(
+        &mem_sealed,
+        MemoryStorage::new(),
+        vec![(0, Box::new(WideHasher))],
+    )
+    .await
+    .expect("resume onto fresh memory storage never fails for a well-formed Sealed");
+
+    for i in 0..m {
+        let bytes = format!("fwd-{i}").into_bytes();
+        git_log
+            .append_leaf(&bytes)
+            .await
+            .expect("append_leaf must succeed on the resumed git log");
+        mem_log
+            .append_leaf(&bytes)
+            .await
+            .expect("append_leaf must succeed on the resumed memory log");
+    }
+    (git_log, mem_log, dir)
+}
+
+/// `verify_non_divergence(None, &[])` -- a from-genesis replay --
+/// must return `Err` on a resumed log with forward leaves, on both backends,
+/// never `Ok(false)` (a false "diverged" verdict, what the pre-branch
+/// subtree-kind resume would have produced by reading nonexistent level-0
+/// nodes as leaves) or `Ok(true)` (a false "not diverged" verdict).
+#[test]
+fn verify_non_divergence_from_genesis_errors_on_resumed_log_with_forward_leaves() {
+    smol::block_on(async {
+        let (git_log, mem_log, _dir) =
+            resumed_with_forward_leaves(29, 2, 3, "refs/eml/storage/verify-resumed/from-genesis")
+                .await;
+
+        let git_result = git_log.verify_non_divergence(None, &[]).await;
+        assert!(
+            git_result.is_err(),
+            "verify_non_divergence(None) on git must return Err for a resumed log with forward \
+             leaves, not {git_result:?}"
+        );
+
+        let mem_result = mem_log.verify_non_divergence(None, &[]).await;
+        assert!(
+            mem_result.is_err(),
+            "verify_non_divergence(None) on memory must return Err for a resumed log with forward \
+             leaves, not {mem_result:?}"
+        );
+    });
+}
+
+/// `verify_audit_payload` replays from index 0 the same way
+/// `verify_non_divergence(None, ..)` does (`tree.rs`'s `is_flat` branch reads
+/// `get_leaf(i)` from `0`), so it must likewise return `Err`, never a
+/// verdict, for a resumed log with forward leaves -- the payload itself
+/// builds successfully (it only reads combined roots at a size, not
+/// individual leaves), so the error surfaces only once verification actually
+/// streams over the opaque, inherited prefix.
+#[test]
+fn verify_audit_payload_errors_on_resumed_log_with_forward_leaves() {
+    smol::block_on(async {
+        let (git_log, mem_log, _dir) =
+            resumed_with_forward_leaves(29, 2, 3, "refs/eml/storage/verify-resumed/audit-payload")
+                .await;
+
+        let git_payload = git_log
+            .audit_payload([0u8; 32])
+            .await
+            .expect("audit_payload only reads combined roots, not individual leaves");
+        let git_result = git_log.verify_audit_payload(&git_payload).await;
+        assert!(
+            git_result.is_err(),
+            "verify_audit_payload on git must return Err for a resumed log with forward leaves, \
+             not {git_result:?}"
+        );
+
+        let mem_payload = mem_log
+            .audit_payload([0u8; 32])
+            .await
+            .expect("audit_payload only reads combined roots, not individual leaves");
+        let mem_result = mem_log.verify_audit_payload(&mem_payload).await;
+        assert!(
+            mem_result.is_err(),
+            "verify_audit_payload on memory must return Err for a resumed log with forward \
+             leaves, not {mem_result:?}"
+        );
+    });
+}
+
+/// `verify_non_divergence(Some(resume_size), &[])` -- a
+/// checkpoint-start replay from exactly where the log was resumed -- must
+/// also return `Err`, never a verdict, on both backends. RED today: the
+/// error git returns is `UnknownAlgorithm(0)`, which is misleading, since
+/// algorithm 0 is in fact registered on this log (it is the only algorithm,
+/// and every forward leaf above was appended through it). The fix this test
+/// waits on is naming the real cause (the checkpoint boundary is inside the
+/// opaque inherited prefix, not that algorithm 0 is unknown), not merely
+/// keeping the result an `Err`.
+#[test]
+fn verify_non_divergence_from_checkpoint_error_is_not_unknown_algorithm() {
+    smol::block_on(async {
+        let n = 29u64;
+        let (git_log, mem_log, _dir) =
+            resumed_with_forward_leaves(n, 2, 3, "refs/eml/storage/verify-resumed/from-checkpoint")
+                .await;
+
+        let git_result = git_log.verify_non_divergence(Some(n), &[]).await;
+        assert!(
+            git_result.is_err(),
+            "verify_non_divergence(Some({n})) on git must return Err for a resumed log with \
+             forward leaves, not {git_result:?}"
+        );
+        assert!(
+            !matches!(git_result, Err(polydigest::LogError::UnknownAlgorithm(_))),
+            "verify_non_divergence(Some({n})) on git must not fail with UnknownAlgorithm: \
+             algorithm 0 is registered and is the only algorithm on this log -- got {git_result:?}"
+        );
+
+        let mem_result = mem_log.verify_non_divergence(Some(n), &[]).await;
+        assert!(
+            mem_result.is_err(),
+            "verify_non_divergence(Some({n})) on memory must return Err for a resumed log with \
+             forward leaves, not {mem_result:?}"
+        );
+        assert!(
+            !matches!(mem_result, Err(polydigest::LogError::UnknownAlgorithm(_))),
+            "verify_non_divergence(Some({n})) on memory must not fail with UnknownAlgorithm: \
+             algorithm 0 is registered and is the only algorithm on this log -- got {mem_result:?}"
+        );
+    });
 }
