@@ -71,6 +71,19 @@ pub(crate) fn reconstruct(
         size: current_size,
         kind_byte,
     } = current;
+    // At n == 0 there is no bound content to carry a kind at all (polydigest's
+    // own contract: an empty log accepts either kind, `NaryMerkleLog::new`'s
+    // and a fresh `GitStorage`'s own genesis default is `LogKind::Flat`'s
+    // byte). Using `current`'s kind here -- the log's eventual, bound kind --
+    // would make `tree_at(0)` depend on what this log's *history* later
+    // decided rather than on its (empty) content, so every log's size-0 tree
+    // is pinned to that same canonical byte regardless of `n == current_size`
+    // or what kind this log is bound to by the time this call is made.
+    let kind_byte = if n == 0 {
+        cml::LogKind::Flat.to_byte()
+    } else {
+        kind_byte
+    };
     let target_coords = frontier_for_size(n, arity);
     let current_coords = frontier_for_size(current_size, arity);
 

@@ -249,16 +249,22 @@ non-git reference implementation's (e.g. `MemoryStorage`) value for the same
 function of exactly: `k`, the item sequence `0..n`, the **currently known**
 epoch history of every registered algorithm truncated to `n`
 (`cml::engine::AlgView::epochs_at`, `cml/src/engine.rs:196-217`), and the log
-kind byte (§3.1). It MUST NOT depend on insertion order among operations
-that do not change `n` (for example two algorithm registrations at the same
-size, in either order, yield the same `C(n)` once both are known), on
-wall-clock time, or on writer identity — including *how many times* a
-writer has reopened the log. *Checked by: property test — build the same
-log through two different operation orderings that reach an identical
-logical state, and require identical `C(n)` object ids; and, separately, a
-continuous writer and a writer that reopens through a plain open at
-arbitrary points over an identical operation sequence must reach
-byte-identical `C(n)` for every `n`.*
+kind byte (§3.1) — except at `n == 0`, where `meta.kind` is fixed to the
+canonical value `0x00` for every log, regardless of what kind it is bound
+to or will ever be bound to (§3.1's note). It MUST NOT depend on insertion
+order among operations that do not change `n` (for example two algorithm
+registrations at the same size, in either order, yield the same `C(n)` once
+both are known), on wall-clock time, on writer identity — including *how
+many times* a writer has reopened the log — or, at `n == 0` specifically,
+on which kind of append (leaf or subtree) the log's history goes on to make
+first. *Checked by: property test — build the same log through two
+different operation orderings that reach an identical logical state, and
+require identical `C(n)` object ids; separately, a continuous writer and a
+writer that reopens through a plain open at arbitrary points over an
+identical operation sequence must reach byte-identical `C(n)` for every
+`n`; and, separately again, two logs with byte-identical (empty) content at
+`n == 0` must reach the identical `C(0)` even when one log's first-ever
+append is a leaf and the other's is a subtree.*
 
 One consequence of SG9 is worth stating precisely, because the exhibit's
 `C(n)` notation can otherwise be misread as "one object per size, forever."
@@ -424,6 +430,28 @@ history: there is nothing this early to stay compatible with, so no wider,
 resume-carrying shape and no version byte exist to distinguish a shape that
 has never had a second variant. A reader MUST reject any other length.
 *Checked by: golden vector; structural length check.*
+
+At `n == 0`, `kind` MUST always be `0x00`, never a value read off the log's
+current or eventual kind. `polydigest`'s own contract already says an empty
+log accepts either kind (`NaryMerkleLog::append_leaf`'s comment, "an empty
+log ... accepts either kind", `polydigest/src/tree.rs:777`) — there is no
+committed append at `n == 0` to bind a kind to at all, flat or subtree, so
+`0x00` here is a fixed constant, not a claim about what either log's first
+real append will be. Fixing it to one value (rather than, say, omitting the
+byte or deriving it from some other n=0-only signal) means `C(0)` is
+identical for every log with the same arity and content: two logs whose
+histories diverge immediately afterward — one going flat, the other going
+subtree — still commit to byte-identical `C(0)` objects, since nothing
+about that later divergence exists yet at `n == 0`. `GitStorage::new`'s own
+genesis default (before any ref exists) and `NaryMerkleLog::new`'s in-memory
+starting `kind` are already `LogKind::Flat`/`0x00`, so this is not a new
+value introduced for `tree_at(0)` alone — it is the same constant every
+fresh log already starts from, now also the one `tree_at(0)`'s
+reconstruction uses regardless of what the log has become by the time it is
+called. *Checked by: property test — `tree_at(0)` for a log whose first
+append is `append_leaf` and a log whose first append is `append_subtree`,
+otherwise byte-identical (arity, empty content), MUST yield the identical
+`C(0)` object id.*
 
 ### 3.2 An `epochs/hex(alg_id, 16)` blob
 
