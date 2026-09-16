@@ -168,6 +168,21 @@ absence in an active range is corruption, absence in an inactive range is
 the null constant). *Checked by: property test against
 `cml::engine::get_node_hash`'s null/corruption split.*
 
+The degenerate case — **every** algorithm's active range over
+`[left, left + k^h)` is empty, so `digest/` itself is empty — is not
+corruption either. It arises whenever every algorithm that ever covered a
+frontier coordinate is removed before a write that still needs that
+coordinate to exist structurally (`frontier_for_size` depends only on the
+total count, never on which algorithms are active), most reachably through
+`polydigest::NaryMerkleLog::resume`, which gates each pushed node digest on
+the covering algorithm's own still-open epoch rather than on the coordinate
+merely belonging to the resumed frontier. This layer MUST build such a
+coordinate the same way it builds any other opaque node with nothing handed
+to it: `digest/` present and empty, no `leaf`, no children — never a
+`Corruption` error, since a git-native frontier position with zero live
+digests is exactly what `MemoryStorage` already represents by recording
+nothing for it at all.
+
 **[SG4]** `T(left, 0)` MAY carry a `leaf` blob; `T(left, h > 0)` MAY carry
 `hex(c, 2)` child entries for `c = 0..k-1`. Both are present if and only if
 the node is materialized (§2.6). A `digest/` subtree alone, with no `leaf`

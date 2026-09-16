@@ -390,6 +390,17 @@ fn would_materialize(
 /// `is_touched` short-circuit above reuses it by object id, per SG18a); a
 /// coordinate with no `existing` entry (a genuinely new one) builds fresh
 /// from this batch's own data.
+///
+/// An untouched coordinate with no `existing` entry either is a distinct,
+/// legitimate third case: every algorithm that ever covered it was already
+/// removed by the time this write ran, so `write_batch` was never handed a
+/// digest for it by anyone (`polydigest::NaryMerkleLog::resume` gates each
+/// pushed node on that algorithm's own still-open epoch, per-coordinate,
+/// never on the coordinate merely belonging to the frontier). The
+/// coordinate is still a real frontier position -- `frontier_for_size`
+/// depends only on the total count, never on which algorithms are active --
+/// so it is resolved the same way `MemoryStorage` represents the same
+/// absence: an empty `digest/`, no leaf, no children, opaque.
 fn resolve_node(
     repo: &gix::Repository,
     k: u64,
@@ -403,10 +414,15 @@ fn resolve_node(
         old_index,
     } = *ctx;
     if !is_touched(left, height, leaf_map, node_map) {
-        return old_index.get(&(left, height)).copied().ok_or_else(|| {
-            corrupt(format!(
-                "no data for coordinate (left={left}, height={height})"
-            ))
+        if let Some(existing) = old_index.get(&(left, height)).copied() {
+            return Ok(existing);
+        }
+        let empty_digest_tree = gitutil::write_tree(repo, Vec::new())?;
+        let top = vec![entry(EntryKind::Tree, "digest", empty_digest_tree)];
+        let id = gitutil::write_tree(repo, top)?;
+        return Ok(Resolved {
+            id,
+            materialized: false,
         });
     }
 

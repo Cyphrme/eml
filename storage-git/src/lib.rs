@@ -35,8 +35,13 @@
 //!    coordinate strictly *beneath* an opaque node -- one that was never itself a peak -- remains
 //!    unreconstructable, since it was never archived either. This affects every subtree-kind or
 //!    resumed log the same way a flat log never needs it: a flat log's nodes stay materialized and
-//!    reachable through `peaks/` forever, so its `inherited/` stays empty and absent (SG1). See
-//!    `src/build.rs`, `src/read.rs`, and `src/historical.rs` for the full argument.
+//!    reachable through `peaks/` forever, so its `inherited/` stays empty and absent (SG1). A
+//!    related, narrower case in the same area: a frontier coordinate every covering algorithm has
+//!    already been removed from (so `write_batch` is handed no digest for it by anyone, most
+//!    reachably through `polydigest::NaryMerkleLog::resume`'s per-algorithm epoch gate) is built as
+//!    an empty-`digest/`, opaque node rather than rejected as `Corruption` -- a legitimate frontier
+//!    position with nothing live behind it, not a missing-data bug. See `src/build.rs`,
+//!    `src/read.rs`, and `src/historical.rs` for the full argument.
 //! 4. **A resumption's storage MUST be fresh, so a resumed seal's opacity is decided purely by what
 //!    is stored plus what the write supplies.** `polydigest::NaryMerkleLog::resume` refuses a
 //!    `storage` that already carries a committed log of its own (`Storage::load_log_meta` returns
