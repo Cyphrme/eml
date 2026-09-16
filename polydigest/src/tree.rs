@@ -54,7 +54,43 @@ pub struct NaryMerkleLog<S: Storage> {
     count: u64,
     /// Whether appends are flat leaf or subtree appends.
     kind: LogKind,
+    /// The size a [`Self::resume`]d log's genesis frontier ends at (`0` for a
+    /// log that was never resumed). Indices below this bound are the
+    /// inherited, permanently opaque past a seal froze; indices at or above
+    /// it are this log's own forward appends. `kind` alone cannot gate a
+    /// *resumed* log's first forward append -- `count` is already the
+    /// inherited size, not `0` -- so the kind-conflict guards in
+    /// [`Self::append_leaf`]/[`Self::append_subtree`] compare `count` against
+    /// `sealed_prefix` rather than against a hardcoded `0`. See
+    /// [`Self::resume`]'s doc for how this is persisted across a reload
+    /// without widening [`cml::LogKind`] or the `Storage` trait.
+    sealed_prefix: u64,
 }
+
+/// The `Storage::load_log_meta`/`write_batch` `kind_byte` [`NaryMerkleLog::resume`]
+/// persists for a log that has inherited a genesis frontier but has not yet
+/// taken its first forward append -- neither `LogKind::Flat` (0) nor
+/// `LogKind::Subtree` (1), the only two values [`cml::LogKind::from_byte`]
+/// recognizes. `polydigest` decodes it itself, before ever handing the byte
+/// to `cml`, into `(kind: LogKind::Subtree, sealed_prefix: count)`: `Subtree`
+/// reproduces exactly what a virgin resumed log has always reported through
+/// [`NaryMerkleLog::kind`]/[`NaryMerkleLog::subtree_count`] (unchanged by this
+/// byte's introduction), and `sealed_prefix == count` neutralizes *both*
+/// kind-conflict guards while nothing has been appended yet, so the first
+/// forward call -- either `append_leaf` or `append_subtree` -- decides which
+/// kind the log commits to, exactly as a fresh, never-resumed log already
+/// lets its own first append decide. Once a forward append lands, the
+/// persisted byte becomes an ordinary `LogKind` byte (0 or 1) again and
+/// `sealed_prefix` stops mattering to the guard that already fired at that
+/// commitment (`count` only grows, so `count > sealed_prefix` stays true
+/// forever after). A brand-new `cml::LogKind` variant was the other option
+/// considered (`NaryMerkleLog::resume`'s doc); this byte was chosen instead
+/// because it adds no third arm to `cml::LogKind` -- a type `cml`'s own engine
+/// matches on, and shared with every other backend and crate in this
+/// workspace -- so no storage backend outside `polydigest` ever needs to know
+/// this byte exists: every `Storage` impl already treats `kind_byte` as an
+/// opaque `u8` it persists and returns verbatim.
+const VIRGIN_RESUMED_KIND_BYTE: u8 = 2;
 
 /// Owned batch data computed by `build_append_state`.
 ///
@@ -94,6 +130,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             algs: HashMap::new(),
             count: 0,
             kind: LogKind::Flat,
+            sealed_prefix: 0,
         };
         // Eagerly register algorithm 0 as active from index 0
         log.add_algorithm(0, hasher).await?;
@@ -110,16 +147,49 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// frontier**: an EML is "a committed frontier you append real leaves onto"
     /// (the MMR view), never "a pure append-from-empty sequence", so nulls in
     /// the genesis frontier (e.g. from a sparse EMT origin) are admitted and
-    /// forward appends add real leaves. The resumed log **cannot read the
-    /// committed past** — only the peaks are carried, not the interior history —
-    /// which is exactly the seal's one-way guarantee; the path to a readable
-    /// historical tree is [`fill`](crate::fill), not `resume`.
+    /// **forward appends add real leaves, storing their bytes through
+    /// [`Storage::store_leaf`] exactly as a flat log does** (the 2026-09-16
+    /// ruling: a resumed log is a flat log going forward, never a same-digest,
+    /// no-bytes shortcut). The resumed log **cannot read the committed past** —
+    /// only the peaks are carried, not the interior history — which is exactly
+    /// the seal's one-way guarantee; the path to a readable historical tree is
+    /// [`fill`](crate::fill), not `resume`. Indices below the resumed size stay
+    /// unreadable forever (`storage` never receives their bytes, before or
+    /// after this call); indices at or above it are ordinary [`Self::append_leaf`]
+    /// leaves the moment the caller appends one.
     ///
-    /// The resumed log is [`LogKind::Subtree`]: the committed past is not
-    /// materialized as a dense leaf array, so a forward real leaf is appended as
-    /// a single-leaf subtree via [`Self::append_subtree`] — whose digest is the
-    /// leaf hash, byte-identical to a flat append. The frontier carry proceeds
-    /// from the genesis frontier exactly as a fresh log's would from empty.
+    /// **[`Self::append_subtree`] still works on a resumed log** — it is not a
+    /// leftover of the pre-ruling shortcut, it is the ordinary way to append a
+    /// *structured* (non-leaf) item, exactly as on a fresh log, and two real
+    /// call sites still use it on a resumed log specifically: the digest-parity
+    /// test (`polydigest/tests/resume_forward_leaves.rs`'s
+    /// `forward_leaf_digest_matches_subtree_equivalent`) that pins
+    /// `append_leaf`'s result to `append_subtree(&Subtree::Leaf(bytes))`'s, and
+    /// `examples/tests/seal_embed.rs`'s `seal_emt_then_resume_eml_appends_forward`,
+    /// which resumes an EML onto an EMT's sealed frontier and only ever appends
+    /// forward via `append_subtree`. A resumed log's first forward append still
+    /// decides which of the two kinds it commits to for its own life (see
+    /// `sealed_prefix`'s doc on [`NaryMerkleLog`]), exactly as a fresh log's
+    /// first append always has.
+    ///
+    /// **`LogKind` decision.** A resumed log's `kind` is `Subtree` until its
+    /// first forward append (matching what this method has always reported
+    /// through [`Self::kind`]/[`Self::subtree_count`], unchanged), then becomes
+    /// whichever kind that first append committed to — precisely today's
+    /// two-variant [`cml::LogKind`], carrying no third "resumed" arm. The
+    /// alternative considered was a new `cml::LogKind::Resumed` variant; it was
+    /// rejected because `cml::engine` itself matches on `LogKind`, and every
+    /// other `Storage` backend and crate in this workspace (`storage-fjall`,
+    /// `eml`, every ad-hoc test `Storage` impl) would need a new match arm for
+    /// a byte they never actually branch on today — `storage-git`, for one,
+    /// already treats `kind_byte` as fully opaque (persists and returns it
+    /// verbatim, decodes it nowhere). Instead, a resumed-but-virgin log persists
+    /// a third byte value (`VIRGIN_RESUMED_KIND_BYTE`) through the *existing*
+    /// `Storage::write_batch`/`load_log_meta` `kind_byte` channel — every
+    /// backend already carries it opaquely — and `NaryMerkleLog` alone decodes
+    /// it into `(kind: LogKind::Subtree, sealed_prefix: count)` on reload,
+    /// so the "sealed-prefix size alongside `Flat`" framing and the
+    /// "distinct kind" framing turn out to be the same fact told two ways.
     ///
     /// `storage` MUST be a fresh backend the resumed log writes forward
     /// into: one that carries no committed log of its own yet. A `storage`
@@ -230,24 +300,30 @@ impl<S: Storage> NaryMerkleLog<S> {
                 &[],
                 &nodes_ref,
                 &metas_ref,
-                Some((size, LogKind::Subtree.to_byte())),
+                Some((size, VIRGIN_RESUMED_KIND_BYTE)),
                 &checkpoints_ref,
             )
             .await
             .map_err(LogError::Storage)?;
 
-        // A resumed log is subtree-kind: the committed past is not materialized
-        // as a dense leaf array (the seal carried only the frontier peaks, not
-        // the historical leaves), so forward appends commit leaf *digests* as
-        // nodes rather than raw payloads. A single-leaf subtree's digest is the
-        // leaf hash, so forward "real leaf" appends are byte-identical to a flat
-        // append — the frontier-anchored model, with the past kept unreadable.
+        // The committed past is not materialized as a dense leaf array (the
+        // seal carried only the frontier peaks, not the historical leaves),
+        // and stays that way forever -- but forward appends are ordinary
+        // going forward: `append_leaf` stores real bytes exactly as a flat
+        // log's does. `kind` starts `Subtree` only because nothing has been
+        // appended yet (matching this method's behavior before
+        // `sealed_prefix` existed); `sealed_prefix == size` is what actually
+        // lets either `append_leaf` or `append_subtree` be the log's first
+        // forward call, and what the persisted `VIRGIN_RESUMED_KIND_BYTE`
+        // reconstructs on reload (see `NaryMerkleLog`'s and this method's own
+        // docs).
         Ok(Self {
             storage,
             config,
             algs,
             count: size,
             kind: LogKind::Subtree,
+            sealed_prefix: size,
         })
     }
 
@@ -307,27 +383,33 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         }
 
-        // Recover authoritative (count, kind) from persisted log metadata when
-        // available; fall back to deterministic probing for legacy stores.
-        let (global_size, kind) = match storage.load_log_meta().await.map_err(LogError::Storage)? {
-            Some((count, kind_byte)) => {
-                let kind =
-                    LogKind::from_byte(kind_byte).ok_or_else(|| LogError::CorruptedMetadata {
-                        alg_id: 0,
-                        reason: format!("unknown LogKind byte: {kind_byte}"),
+        // Recover authoritative (count, kind, sealed_prefix) from persisted
+        // log metadata when available; fall back to deterministic probing
+        // for legacy stores. `VIRGIN_RESUMED_KIND_BYTE` is intercepted before
+        // ever reaching `cml::LogKind::from_byte` (see `resume`'s doc) -- a
+        // byte value `cml` was never taught and never needs to be.
+        let (global_size, kind, sealed_prefix) =
+            match storage.load_log_meta().await.map_err(LogError::Storage)? {
+                Some((count, VIRGIN_RESUMED_KIND_BYTE)) => (count, LogKind::Subtree, count),
+                Some((count, kind_byte)) => {
+                    let kind = LogKind::from_byte(kind_byte).ok_or_else(|| {
+                        LogError::CorruptedMetadata {
+                            alg_id: 0,
+                            reason: format!("unknown LogKind byte: {kind_byte}"),
+                        }
                     })?;
-                (count, kind)
-            },
-            None => {
-                let size = Self::determine_global_size(&storage, &metas).await?;
-                let kind = if storage.len().await.map_err(LogError::Storage)? > 0 {
-                    LogKind::Flat
-                } else {
-                    LogKind::Subtree
-                };
-                (size, kind)
-            },
-        };
+                    (count, kind, 0)
+                },
+                None => {
+                    let size = Self::determine_global_size(&storage, &metas).await?;
+                    let kind = if storage.len().await.map_err(LogError::Storage)? > 0 {
+                        LogKind::Flat
+                    } else {
+                        LogKind::Subtree
+                    };
+                    (size, kind, 0)
+                },
+            };
 
         let mut algs = HashMap::new();
         let k = config.arity;
@@ -378,6 +460,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             algs,
             count: global_size,
             kind,
+            sealed_prefix,
         })
     }
 
@@ -767,9 +850,12 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// Returns [`LogError`] on a kind conflict, capacity overflow, no active
     /// algorithms, or a storage error.
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
-        // Kind is only binding once an append has happened; an empty log
-        // (including one reloaded from an empty store) accepts either kind.
-        if self.kind == LogKind::Subtree && self.count > 0 {
+        // Kind is only binding once a *forward* append has happened; a log
+        // with nothing appended yet -- empty (count == 0 == sealed_prefix),
+        // reloaded from an empty store, or resumed but still virgin
+        // (count == sealed_prefix == the inherited size) -- accepts either
+        // kind for its first forward call.
+        if self.kind == LogKind::Subtree && self.count > self.sealed_prefix {
             return Err(LogError::CorruptedMetadata {
                 alg_id: 0,
                 reason: "cannot append leaf after subtree appends".to_string(),
@@ -838,7 +924,11 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// Returns [`LogError`] on a kind conflict, capacity overflow, no active
     /// algorithms, or a storage error.
     pub async fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
-        if self.kind == LogKind::Flat && self.count > 0 {
+        // Mirrors `append_leaf`'s guard: kind is only binding once a
+        // *forward* append has happened, not merely because `count` is
+        // nonzero -- a resumed-but-virgin log's `count` is the inherited
+        // size, not `0`.
+        if self.kind == LogKind::Flat && self.count > self.sealed_prefix {
             return Err(LogError::CorruptedMetadata {
                 alg_id: 0,
                 reason: "cannot append subtree after leaf appends".to_string(),
