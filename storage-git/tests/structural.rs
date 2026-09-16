@@ -27,41 +27,18 @@ fn checkpoint_tree(repo: &gix::ThreadSafeRepository, staging_ref: &str) -> gix::
     r.target().id().to_owned()
 }
 
-/// SG1: `C(n)` is a tree with exactly the four top-level entries, present
-/// even at `n = 0`.
-#[test]
-fn sg1_four_top_level_entries_always_present() {
-    smol::block_on(async {
-        let (_dir, repo) = init_repo(HashKind::Sha1);
-        let mut storage = GitStorage::new(repo.clone(), "refs/eml/storage/t/staging", 2).unwrap();
-
-        // Genesis: no ref yet, but `tree_at(0)` must still produce the
-        // well-formed empty state.
-        let tree0 = storage.tree_at(0).unwrap();
-        let local = repo.to_thread_local();
-        let mut names: Vec<String> = read_entries(&local, tree0)
-            .into_iter()
-            .map(|(n, ..)| n)
-            .collect();
-        names.sort();
-        assert_eq!(names, vec!["epochs", "meta", "peaks", "roots"]);
-
-        // After a real append, still exactly four.
-        let mut log = NaryMerkleLog::new(storage, Box::new(WideHasher), TreeConfig { arity: 2 })
-            .await
-            .unwrap();
-        log.append_leaf(b"a").await.unwrap();
-        storage = log.into_storage();
-        let tree1 = checkpoint_tree(&repo, "refs/eml/storage/t/staging");
-        let mut names1: Vec<String> = read_entries(&local, tree1)
-            .into_iter()
-            .map(|(n, ..)| n)
-            .collect();
-        names1.sort();
-        assert_eq!(names1, vec!["epochs", "meta", "peaks", "roots"]);
-        let _ = storage;
-    });
-}
+// SG1 ("C(n) is a tree with exactly the four top-level entries, present
+// even at n = 0") used to be checked here two ways: via `tree_at(0)`'s
+// synthetic pre-write construction (no ref exists yet at true genesis --
+// `GitStorage` creates the ref lazily on the first write, so there is
+// nothing durable for `n = 0` to mean before one), and via a real tree
+// after the first append. `tree_at` is deleted outright by the head's
+// 2026-09-16 design ruling, and the synthetic pre-write case it checked
+// was never a state any checkpoint layer could actually observe. The
+// durable half of this guarantee -- C(n) carries exactly these four
+// entries from the very first real write onward -- is already covered,
+// more thoroughly (five appends, not one), by
+// `acceptance_layout.rs::sg1_checkpoint_tree_has_exactly_four_top_level_entries`.
 
 /// SG4/SG10: a flat append materializes `T(left,0)` with `leaf` + `digest/`;
 /// a subtree append leaves it opaque (`digest/` only, no `leaf`).
