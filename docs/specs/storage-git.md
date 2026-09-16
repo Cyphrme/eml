@@ -138,7 +138,9 @@ T(left, 0)                    tree
 T(left, h > 0)                tree
   hex(c, 2)                   tree    child T(left + c*k^(h-1), h-1),
                                        for c = 0 .. k-1
-                                       (present only if materialized, §2.6)
+                                       (present per child, independently,
+                                       iff that child's own occupant is
+                                       known -- §2.6)
   digest/                     tree
     hex(alg_id, 16)           blob    the algorithm's node digest over
                                        [left, left + k^h), one per algorithm
