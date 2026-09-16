@@ -1,17 +1,27 @@
 //! Acceptance test for §4.4's `open_at(tree)` (SG21), from
 //! `docs/specs/storage-git.md` alone.
+//!
+//! Rewritten in this dispatch to stop calling `tree_at` (deleted outright
+//! per the head's 2026-09-16 design ruling -- storage-git never renders or
+//! reconstructs a tree for a past size): each size's tree id is now
+//! recorded directly off the staging ref the instant that size is reached,
+//! never through a reconstruction. This is strictly stronger evidence for
+//! the same SG21 claim, not a weaker substitute -- the recorded id is
+//! exactly what a real checkpoint layer would have committed at that size.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
 
 use support::{FixtureHasher, bare_repo, new_log};
 
-/// [SG21] Reading through a view returned by `open_at(tree_at(m))` for some
-/// past `m` MUST yield the same leaf and node values `get_leaf`/`get_node`
-/// returned when the log was actually at size `m` (durable-witness parity).
-/// The view MUST be independent of the instance's own staging ref and
-/// current size, and MUST NOT accept or perform any mutation (checked by
-/// its type: `GitReadOnlyView` exposes no write method).
+/// [SG21] Reading through a view returned by `open_at(tree)` for some past
+/// size `m`'s tree (recorded straight off the staging ref the moment `m`
+/// was reached) MUST yield the same leaf and node values `get_leaf`/
+/// `get_node` returned when the log was actually at size `m`
+/// (durable-witness parity). The view MUST be independent of the
+/// instance's own staging ref and current size, and MUST NOT accept or
+/// perform any mutation (checked by its type: `GitReadOnlyView` exposes no
+/// write method).
 #[test]
 fn sg21_open_at_yields_durable_witness_parity() {
     smol::block_on(async {
@@ -41,7 +51,8 @@ fn sg21_open_at_yields_durable_witness_parity() {
             let leaf = format!("leaf-{m}").into_bytes();
             log.append_leaf(&leaf).await.unwrap();
 
-            let tree = log.storage().tree_at(m + 1).unwrap();
+            let tree = support::ref_target(&repo.to_thread_local(), staging)
+                .expect("staging ref must exist right after an append");
             let mut leaves = Vec::new();
             for i in 0..=m {
                 leaves.push((
@@ -81,17 +92,17 @@ fn sg21_open_at_yields_durable_witness_parity() {
                 let got = view.get_leaf(*i).await.unwrap();
                 assert_eq!(
                     &got, expected,
-                    "size {}: open_at(tree_at({})).get_leaf({i}) must match the live value",
-                    r.m, r.m
+                    "size {}: open_at(recorded tip).get_leaf({i}) must match the live value",
+                    r.m
                 );
             }
             for ((alg, left, height), expected) in &r.nodes {
                 let got = view.get_node(*alg, *left, *height).await.unwrap();
                 assert_eq!(
                     &got, expected,
-                    "size {}: open_at(tree_at({})).get_node({alg},{left},{height}) must match the \
-                     live value",
-                    r.m, r.m
+                    "size {}: open_at(recorded tip).get_node({alg},{left},{height}) must match \
+                     the live value",
+                    r.m
                 );
             }
         }
