@@ -10,15 +10,13 @@
 //! is made, so it carries no storage-git-specific behavior and needs no test
 //! here (its refusal is exercised at the `polydigest` level instead).
 //!
-//! 1. GB71: a node created and folded away within one write -- a chained,
-//!    double resume triggers it -- must not be lost by `storage-git`, unlike
-//!    the old `inherited/`-archive design. `086c181` (`fix(storage-git):
-//!    decompose children per slot`) fixed the general case this pins; kept
-//!    here as a regression guard, not as new coverage.
-//! 2. `verify_audit_payload` and `verify_non_divergence` on a resumed log
-//!    with forward subtree appends: pinned for parity between `storage-git`
-//!    and `MemoryStorage`, covering a from-genesis replay, a payload-based
-//!    replay, and a checkpoint-start replay.
+//! 1. GB71: a node created and folded away within one write -- a chained, double resume triggers it
+//!    -- must not be lost by `storage-git`, unlike the old `inherited/`-archive design. `086c181`
+//!    (`fix(storage-git): decompose children per slot`) fixed the general case this pins; kept here
+//!    as a regression guard, not as new coverage.
+//! 2. `verify_audit_payload` and `verify_non_divergence` on a resumed log with forward subtree
+//!    appends: pinned for parity between `storage-git` and `MemoryStorage`, covering a from-genesis
+//!    replay, a payload-based replay, and a checkpoint-start replay.
 
 mod common;
 
@@ -64,10 +62,10 @@ async fn seal_mem(n: u64, k: u64) -> polydigest::Sealed {
 
 // ============================================================================
 // 1. GB71: a node created and folded away within one write -- reproduced with `append_subtree`
-//    alone (a resumed log's only forward-append path), via a *double* resume: seal, resume,
-//    append to size 3, reseal from that live frontier, resume a second instance, append once
-//    more to size 4. `MemoryStorage` never drops a node it was given, so it is the parity oracle
-//    this test's every assertion is checked against.
+//    alone (a resumed log's only forward-append path), via a *double* resume: seal, resume, append
+//    to size 3, reseal from that live frontier, resume a second instance, append once more to size
+//    4. `MemoryStorage` never drops a node it was given, so it is the parity oracle this test's
+//    every assertion is checked against.
 // ============================================================================
 
 /// The double-resume GB71 sequence, applied identically to a git-backed and
@@ -201,22 +199,22 @@ fn gb71_consistency_proof_across_the_merge_matches_memory() {
 // ============================================================================
 // 2. `verify_audit_payload` and `verify_non_divergence` on a resumed log with forward subtree
 //    appends: pinned for parity between `storage-git` and `MemoryStorage`. Under the fork's
-//    (reverted) contract, forward appends went through `append_leaf`, driving the log's `kind`
-//    to `Flat` and routing verification through the `is_flat` streaming branch (`get_leaf(i)`
-//    from index 0), which produced an honest `Err` once it hit the opaque inherited prefix.
-//    Under eml's restored contract, forward appends go through `append_subtree` and `kind` stays
-//    `Subtree` for the resumed log's whole life, so verification instead takes the subtree
-//    branch (`get_node(alg_id, i, 0)`). That branch's behavior on the two replay entry points
-//    differs by exactly how it fails, not whether it fails:
-//    - a from-genesis or payload-based replay still returns `Err` (a missing internal node in
-//      the opaque inherited prefix is a storage-level `CorruptedMetadata`, not a `None` the
-//      subtree branch's active-set check can turn into `Ok(false)`) for `verify_non_divergence`,
-//      but `verify_audit_payload`'s own subtree branch treats that same missing coordinate as
-//      `None if active_set.contains(&alg_id) => return Ok(false)` -- a false "diverged" verdict,
-//      not an honest failure. This is a `polydigest`-level behavior, identical on both backends,
-//      pinned here as today's actual result rather than the fork's (reverted) `Err` expectation;
-//      it is not a `storage-git` defect, but is flagged in this dispatch's report as a
-//      discrepancy worth the head's attention.
+//    (reverted) contract, forward appends went through `append_leaf`, driving the log's `kind` to
+//    `Flat` and routing verification through the `is_flat` streaming branch (`get_leaf(i)` from
+//    index 0), which produced an honest `Err` once it hit the opaque inherited prefix. Under eml's
+//    restored contract, forward appends go through `append_subtree` and `kind` stays `Subtree` for
+//    the resumed log's whole life, so verification instead takes the subtree branch
+//    (`get_node(alg_id, i, 0)`). That branch's behavior on the two replay entry points differs by
+//    exactly how it fails, not whether it fails:
+//    - a from-genesis or payload-based replay still returns `Err` (a missing internal node in the
+//      opaque inherited prefix is a storage-level `CorruptedMetadata`, not a `None` the subtree
+//      branch's active-set check can turn into `Ok(false)`) for `verify_non_divergence`, but
+//      `verify_audit_payload`'s own subtree branch treats that same missing coordinate as `None if
+//      active_set.contains(&alg_id) => return Ok(false)` -- a false "diverged" verdict, not an
+//      honest failure. This is a `polydigest`-level behavior, identical on both backends, pinned
+//      here as today's actual result rather than the fork's (reverted) `Err` expectation; it is not
+//      a `storage-git` defect, but is flagged in this dispatch's report as a discrepancy worth the
+//      head's attention.
 //    - a checkpoint-start replay still returns `Err(MissingTrustedRoot)`, never the misleading
 //      `UnknownAlgorithm`, exactly as before.
 // ============================================================================
