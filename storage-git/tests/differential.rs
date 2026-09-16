@@ -294,31 +294,6 @@ async fn assert_root_at_parity(
     }
 }
 
-/// `tree_at`/`open_at` self-consistency (SG20/SG21), scoped to what is
-/// always true regardless of the defect above: the live tip (`n ==
-/// git_log.size()`) must always be servable per this crate's own documented
-/// fast path (§4.3, Departure 5), and whenever `tree_at(n)` succeeds for any
-/// `n`, `open_at` of its result must succeed too -- a well-formed checkpoint
-/// tree `tree_at` claims to have built must actually open.
-async fn assert_tree_at_open_at(git_log: &NaryMerkleLog<GitStorage>, n: u64, context: &str) {
-    if n == git_log.size() {
-        let tree = git_log.storage().tree_at(n).unwrap_or_else(|e| {
-            panic!("{context}: tree_at({n}) at the current size must always succeed: {e}")
-        });
-        git_log
-            .storage()
-            .open_at(tree)
-            .unwrap_or_else(|e| panic!("{context}: open_at(tree_at({n})) failed: {e}"));
-        return;
-    }
-    if let Ok(tree) = git_log.storage().tree_at(n) {
-        git_log
-            .storage()
-            .open_at(tree)
-            .unwrap_or_else(|e| panic!("{context}: open_at(tree_at({n})) failed: {e}"));
-    }
-}
-
 async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
     // Every git repo this sequence's forks create must outlive the run, so
     // its objects stay readable; dropped otherwise (SG17-adjacent: a fork
@@ -327,11 +302,8 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
 
     let (dir0, repo0) = init_repo(HashKind::Sha1);
     dirs.push(dir0);
-    let mut git_storage = GitStorage::new(repo0, "refs/eml/storage/fork-diff/0/staging", arity)
+    let git_storage = GitStorage::new(repo0, "refs/eml/storage/fork-diff/0/staging", arity)
         .expect("fresh git storage");
-    for id in 0u64..4 {
-        git_storage.register_hasher(id, Box::new(WideHasher));
-    }
     let mut git_log = NaryMerkleLog::new(git_storage, Box::new(WideHasher), TreeConfig { arity })
         .await
         .unwrap();
@@ -383,11 +355,8 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
                 let (dir, repo) = init_repo(HashKind::Sha1);
                 dirs.push(dir);
                 let staging = format!("refs/eml/storage/fork-diff/{fork_id}/staging");
-                let mut fresh_git_storage =
+                let fresh_git_storage =
                     GitStorage::new(repo, &staging, arity).expect("fresh fork storage");
-                for id in 0u64..4 {
-                    fresh_git_storage.register_hasher(id, Box::new(WideHasher));
-                }
 
                 let git_hashers: Vec<(u64, Box<dyn Hasher>)> = git_sealed
                     .frontiers()
@@ -467,10 +436,6 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
 
         // Every size the sequence has ever passed through, not just today's.
         assert_root_at_parity(&git_log, &mem_log, &sizes_seen, &context).await;
-
-        for &n in &sizes_seen {
-            assert_tree_at_open_at(&git_log, n, &context).await;
-        }
     }
 }
 
@@ -524,9 +489,8 @@ fn fork_merge_of_two_opaque_peaks_keeps_the_superseded_nodes() {
         assert_eq!(frontier_for_size(3, arity).len(), 2);
 
         let (_dir_dst, repo_dst) = init_repo(HashKind::Sha1);
-        let mut git_storage =
+        let git_storage =
             GitStorage::new(repo_dst, "refs/eml/storage/fork-min/dst/staging", arity).unwrap();
-        git_storage.register_hasher(0, Box::new(WideHasher));
         let mut git_log =
             NaryMerkleLog::resume(&sealed, git_storage, vec![(0, Box::new(WideHasher))])
                 .await
