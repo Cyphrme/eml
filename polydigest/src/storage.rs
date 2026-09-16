@@ -148,22 +148,8 @@ impl<S: Storage> cml::NodeReader for StorageReader<'_, S> {
 /// In-memory leaf and node storage backed by collections.
 #[derive(Debug, Default, Clone)]
 pub struct MemoryStorage {
-    /// Raw leaf payloads for global indices `leaf_base..leaf_base +
-    /// leaves.len()`. Dense and zero-based *within that range*, never from
-    /// global index `0` for a resumed log: `leaf_base` is inferred the first
-    /// time a leaf is ever given (see `Self::leaf_base`'s own doc), which for
-    /// a resumed log is its first *forward* append, not `0`.
+    /// Raw leaf payloads.
     pub leaves: Vec<Vec<u8>>,
-    /// The global index `leaves[0]` corresponds to (`0` for a log that has
-    /// never resumed, or hasn't taken a forward leaf append yet). Inferred,
-    /// never set directly: the first leaf `store_leaf`/`write_batch` is ever
-    /// given fixes it, so a resumed log's inherited genesis indices (below
-    /// its first forward leaf's own index) are never represented in `leaves`
-    /// at all -- `get_leaf` refuses them the same way it refuses any other
-    /// leaf this storage was never handed, keeping the seal's one-way
-    /// opacity guarantee without `leaves` ever needing a placeholder entry
-    /// for bytes that do not exist.
-    pub leaf_base: u64,
     /// Sealed internal node hashes, keyed by `(alg_id, left, height)`.
     pub nodes: HashMap<(u64, u64, u32), Vec<u8>>,
     /// Algorithm epoch metadata, keyed by algorithm ID.
@@ -180,22 +166,10 @@ impl MemoryStorage {
     pub fn new() -> Self {
         Self {
             leaves: Vec::new(),
-            leaf_base: 0,
             nodes: HashMap::new(),
             algorithm_metas: HashMap::new(),
             log_meta: None,
             checkpoint_roots: HashMap::new(),
-        }
-    }
-
-    /// Record `index` as `leaf_base` the first time a leaf is ever given, so
-    /// a resumed log's forward leaves are stored densely from their own
-    /// starting index rather than needing `leaves` padded with placeholders
-    /// for the genesis indices below it (which this storage was never, and
-    /// will never be, handed bytes for).
-    fn note_first_leaf_index(&mut self, index: u64) {
-        if self.leaves.is_empty() && self.leaf_base == 0 {
-            self.leaf_base = index;
         }
     }
 }
@@ -225,10 +199,9 @@ impl Storage for MemoryStorage {
     type Error = MemoryStorageError;
 
     async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        self.note_first_leaf_index(index);
         debug_assert_eq!(
             index,
-            self.leaf_base + self.leaves.len() as u64,
+            self.leaves.len() as u64,
             "store_leaf called out of order"
         );
         self.leaves.push(data.to_vec());
@@ -236,14 +209,8 @@ impl Storage for MemoryStorage {
     }
 
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
-        if index < self.leaf_base {
-            return Err(MemoryStorageError {
-                index,
-                stored: self.leaves.len() as u64,
-            });
-        }
         self.leaves
-            .get((index - self.leaf_base) as usize)
+            .get(index as usize)
             .cloned()
             .ok_or(MemoryStorageError {
                 index,
@@ -313,10 +280,9 @@ impl Storage for MemoryStorage {
         checkpoint_roots: &[(u64, &[u8])],
     ) -> Result<(), Self::Error> {
         for &(index, data) in leaves {
-            self.note_first_leaf_index(index);
             debug_assert_eq!(
                 index,
-                self.leaf_base + self.leaves.len() as u64,
+                self.leaves.len() as u64,
                 "write_batch leaf out of order"
             );
             self.leaves.push(data.to_vec());
