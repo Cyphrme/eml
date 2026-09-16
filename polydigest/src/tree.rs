@@ -597,7 +597,13 @@ impl<S: Storage> NaryMerkleLog<S> {
         self.kind
     }
 
-    /// Number of flat leaf appends (0 for subtree logs).
+    /// Number of flat leaf appends: `0` for a subtree-kind log (including a
+    /// virgin resumed log, which stays subtree-kind until its first forward
+    /// append decides otherwise). On a **resumed** log that has gone flat,
+    /// this is the inherited size plus every forward append since — `count`
+    /// itself, not just the forward portion — since resumption folds the
+    /// sealed prefix into the same running count rather than tracking it
+    /// apart (see [`Self::count`]).
     #[must_use]
     pub fn size(&self) -> u64 {
         if self.kind == LogKind::Flat {
@@ -1287,6 +1293,14 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// never from local uncommitted epoch state — using local state would be
     /// circular and would miss the equivocation.
     ///
+    /// Step 2 always streams from index `0`, so on a **resumed** log this
+    /// returns `Err`, never a verdict, whenever `tree_size` reaches past the
+    /// inherited prefix: the leaves under `0..sealed_prefix` were never
+    /// stored (only the sealed frontier's combined digests were), so reading
+    /// one back is a storage error rather than a cell to check. Replaying
+    /// the inherited prefix so this can return a verdict on a resumed log is
+    /// a routed follow-up, not implemented here.
+    ///
     /// # Errors
     ///
     /// Returns [`LogError::UnknownAlgorithm`] or a storage error.
@@ -1629,9 +1643,27 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// Verify that the trees for all active algorithms have not diverged
     /// from the underlying leaf data stored in the database.
     ///
+    /// `checkpoint_size: Some(n)` verifies only `[n, count)`, trusting the
+    /// boundary at `n` to the root supplied in `trusted_roots` rather than
+    /// re-deriving it; `checkpoint_size: None` instead verifies the full
+    /// `[0, count)` by replay, deriving every root itself as it streams
+    /// leaves from genesis.
+    ///
+    /// On a **resumed** log this always returns `Err`, never a verdict,
+    /// whichever way it is called: `None` replays from genesis and hits the
+    /// inherited prefix's opaque leaves (a storage error, since that history
+    /// was never stored to replay); `Some(n)` needs a trusted root for `n`
+    /// and, absent one from the caller, cannot derive it either, since
+    /// deriving it would itself require replaying that same opaque prefix.
+    /// Replaying the inherited prefix so this can return a verdict on a
+    /// resumed log is a routed follow-up, not implemented here.
+    ///
     /// # Errors
     ///
-    /// Returns [`LogError::UnknownAlgorithm`] or a storage error.
+    /// Returns [`LogError::MissingTrustedRoot`] if `checkpoint_size` names a
+    /// boundary at or after an algorithm's first activation with no matching
+    /// entry in `trusted_roots`, [`LogError::UnknownAlgorithm`], or a storage
+    /// error.
     pub async fn verify_non_divergence(
         &self,
         checkpoint_size: Option<u64>,
@@ -1669,7 +1701,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                                 break;
                             }
                         }
-                        found.ok_or(LogError::UnknownAlgorithm(id))?
+                        found.ok_or(LogError::MissingTrustedRoot(id))?
                     };
                     let new_root = self.root_for_at(id, end).await?;
 
@@ -1767,7 +1799,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                             // fold to null() by null promotion — no trusted root needed.
                             view.hasher.null()
                         } else {
-                            return Err(LogError::UnknownAlgorithm(alg_id));
+                            return Err(LogError::MissingTrustedRoot(alg_id));
                         }
                     },
                 };

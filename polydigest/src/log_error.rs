@@ -54,6 +54,18 @@ pub enum LogError<E> {
     /// backend only; the size already committed there is included for
     /// diagnostics.
     ResumeTargetNotFresh(u64),
+    /// [`crate::NaryMerkleLog::verify_non_divergence`] was asked to start
+    /// from a checkpoint at or after this algorithm's first activation, but
+    /// `trusted_roots` carries no entry for it. Checkpoint verification
+    /// trusts a caller-supplied root for the boundary by design -- the same
+    /// way a consistency proof trusts its own starting root -- rather than
+    /// deriving one itself, so there is nothing to check the tail against.
+    /// The algorithm named here is registered; call with
+    /// `checkpoint_size: None` instead to verify by full replay from
+    /// genesis, which derives its own root as it goes (and, on a resumed
+    /// log, fails on the opaque inherited prefix rather than returning a
+    /// verdict, since that history was never stored to replay).
+    MissingTrustedRoot(u64),
 }
 
 impl<E: fmt::Display> fmt::Display for LogError<E> {
@@ -88,6 +100,11 @@ impl<E: fmt::Display> fmt::Display for LogError<E> {
                 f,
                 "resume target is not a fresh backend: it already holds a committed log of size \
                  {count}"
+            ),
+            Self::MissingTrustedRoot(id) => write!(
+                f,
+                "checkpoint verification for algorithm {id} needs a trusted root for the \
+                 checkpoint boundary; none was supplied in `trusted_roots`"
             ),
         }
     }
