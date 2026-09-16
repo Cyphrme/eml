@@ -514,13 +514,16 @@ impl<S: Storage> NaryMerkleLog<S> {
         self.kind
     }
 
-    /// Number of flat leaf appends: `0` for a subtree-kind log (including a
-    /// virgin resumed log, which stays subtree-kind until its first forward
-    /// append decides otherwise). On a **resumed** log that has gone flat,
-    /// this is the inherited size plus every forward append since — `count`
-    /// itself, not just the forward portion — since resumption folds the
-    /// sealed prefix into the same running count rather than tracking it
-    /// apart (see [`Self::count`]).
+    /// Number of flat leaf appends: `0` for a subtree-kind log. A
+    /// **resumed** log is always subtree-kind, and eml's restored contract
+    /// refuses [`Self::append_leaf`] outright once it has any inherited
+    /// (non-empty) sealed history (`count > 0`), so a resume onto a
+    /// non-empty seal can never go flat -- `size()` stays `0` for its whole
+    /// life. Only a **virgin** resume (a seal at tree size `0`, nothing yet
+    /// inherited) can still call `append_leaf` and turn flat, exactly like
+    /// a freshly-created log; there `size()` is simply `count()`, since
+    /// there is no inherited prefix to add on top of the forward appends
+    /// (see [`Self::count`]).
     #[must_use]
     pub fn size(&self) -> u64 {
         if self.kind == LogKind::Flat {
