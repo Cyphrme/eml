@@ -30,7 +30,7 @@
 //!    fully materialized -- which silently dropped a materialized descendant sitting right next to
 //!    an opaque one, permanently, the instant its parent left `peaks/`; a side `inherited/` archive
 //!    patched around that loss for the one case it *could* still recover (a coordinate that had
-//!    itself once been a peak). [`build::resolve_node`] now wires a `hex(c,2)` child entry for
+//!    itself once been a peak). `build::resolve_node` now wires a `hex(c,2)` child entry for
 //!    *every* slot it has any occupant for -- opaque or materialized, reused by object id (SG18a)
 //!    or freshly built -- independently of every other slot, so a coordinate that was ever a
 //!    frontier peak stays reachable by ordinary descent from whatever taller peak now covers it,
