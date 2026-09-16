@@ -138,9 +138,9 @@ T(left, 0)                    tree
 T(left, h > 0)                tree
   hex(c, 2)                   tree    child T(left + c*k^(h-1), h-1),
                                        for c = 0 .. k-1
-                                       (present per child, independently,
-                                       iff that child's own occupant is
-                                       known -- §2.6)
+                                       (present for c = 0 .. k-1 together,
+                                       once every child slot has a known
+                                       occupant -- §2.6)
   digest/                     tree
     hex(alg_id, 16)           blob    the algorithm's node digest over
                                        [left, left + k^h), one per algorithm
@@ -178,10 +178,14 @@ nothing for it at all.
 
 **[SG4]** `T(left, 0)` MAY carry a `leaf` blob, present iff this layer was
 ever given the leaf's own bytes (§2.6). `T(left, h > 0)` MAY carry
-`hex(c, 2)` child entries for `c = 0..k-1`; each is present independently,
-iff this layer has *some* occupant for that child slot — materialized or
-opaque alike (§2.6's decomposition rule) — never gated on whether the other
-children, or anything beneath them, are themselves opaque. A `digest/`
+`hex(c, 2)` child entries for `c = 0..k-1`, present together, all or none,
+iff this layer has *some* occupant for **every** child slot — materialized or
+opaque alike (§2.6's decomposition rule) — never gated on whether a known
+child, or anything beneath it, is itself opaque rather than materialized. A
+coordinate with a known occupant for only *some* of its child slots is not
+reachable in practice (a merge only ever combines peaks that are each
+already known), so this layer never has to decide what such a coordinate
+would look like. A `digest/`
 subtree alone, with no `leaf` and no `hex(c, 2)` children at all, is a
 **structurally valid, opaque** node: the only way this arises is a
 coordinate whose digest arrived as one atomic, undecomposed unit with
@@ -274,20 +278,26 @@ no corresponding `store_leaf` call — which is exactly what happens for every
 `cml::LogKind::Subtree` append (`polydigest::NaryMerkleLog::append_subtree`,
 `polydigest/src/tree.rs:821-868`, calls only `store_node`, never
 `store_leaf`) — MUST be opaque: `digest/` only, no `leaf`. At `h > 0`, a
-`T(left, h)` node MUST carry a `hex(c, 2)` child entry for every `c` this
-layer has *any* occupant for — decomposition is decided **independently per
-child slot**, never gated on whether the *other* children (or anything
-beneath them) are themselves opaque (§2.1's `resolve_node`, `is_decomposable`
-in `src/build.rs`). A child slot has a known occupant when this batch was
+`T(left, h)` node MUST carry a `hex(c, 2)` child entry for **every** `c`
+iff this layer has a known occupant for every child slot at once — the
+node decomposes as a whole, never one slot at a time (§2.1's
+`resolve_node`, `is_decomposable` in `src/build.rs`, requires
+`(0..k).all(..)`). Decomposition is never gated on whether a known
+child (or anything beneath it) is itself opaque rather than
+materialized. A child slot has a known occupant when this batch was
 given a digest or leaf bytes for it, or when the prior write's own tree
 already names an occupant for it (SG18a) — regardless of whether that
-occupant is itself opaque or carries further structure. Only a coordinate
+occupant is itself opaque or carries further structure. A coordinate
 arriving with **no** known occupant for *any* child slot — a resumed log's
 genesis peak (`polydigest::NaryMerkleLog::resume`,
 `polydigest/src/tree.rs:151-260`, persists only frontier peaks, never
 historical leaves, and only ever onto a fresh backend) or a single subtree
 append's own root — stays a pure `digest/`-only opaque leaf shape, since
-there is nothing to decompose it with. This is what makes a mixed
+there is nothing to decompose it with; so does a coordinate with a known
+occupant for only *some* of its child slots, though that case does not
+arise in practice — a merge only ever combines peaks that are each
+already known, so a partially-known coordinate has no path into the
+frontier this layer ever sees. This is what makes a mixed
 subtree — some descendants opaque (inherited, or from a subtree append),
 others materialized (an ordinary forward leaf) — carry every descendant it
 has *any* occupant for, rather than collapsing the whole thing to opaque the
@@ -353,9 +363,11 @@ in the very next merge, and the old rule would have discarded it on the
 spot.
 
 The fix removes the defect at its source instead of archiving around it:
-§2.6's `hex(c, 2)` children are now wired **per child slot**, independently,
-for every occupant this layer actually knows about, whether that occupant is
-opaque or materialized. A coordinate that was ever a frontier peak is
+§2.6's `hex(c, 2)` children are now wired together, all at once, gated on
+every child slot having a known occupant rather than on the whole subtree
+being materialized — whichever occupant this layer actually knows about
+for each slot, opaque or materialized, is wired in unchanged. A coordinate
+that was ever a frontier peak is
 therefore *always* reachable afterward, by ordinary §2.4 descent from
 whatever taller peak now covers it — ordinarily one hop, transitively many
 after several merges, but never a separate lookup outside `peaks/`. Nothing
