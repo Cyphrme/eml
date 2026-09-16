@@ -266,10 +266,8 @@ fn reopen_after_resume_on_a_reopened_log_stays_clean() {
         let staging_ref = "refs/eml/storage/reopen-clean/staging";
         let repo = support::bare_repo(dir.path(), gix::hash::Kind::Sha1);
 
-        let mut storage =
+        let storage =
             GitStorage::new(repo, staging_ref, ARITY).map_err(|e| format!("open: {e}"))?;
-        storage.register_hasher(0, Box::new(hasher()));
-        storage.register_hasher(1, Box::new(hasher()));
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher()), TreeConfig { arity: ARITY })
             .await
             .map_err(|e| format!("new: {e:?}"))?;
@@ -291,10 +289,8 @@ fn reopen_after_resume_on_a_reopened_log_stays_clean() {
 
         // First reopen, before resume_algorithm.
         let repo2 = support::reopen_repo(dir.path());
-        let mut storage2 =
+        let storage2 =
             GitStorage::new(repo2, staging_ref, ARITY).map_err(|e| format!("reopen 1: {e}"))?;
-        storage2.register_hasher(0, Box::new(hasher()));
-        storage2.register_hasher(1, Box::new(hasher()));
         let hashers1: Vec<(u64, Box<dyn Hasher>)> = vec![
             (0, Box::new(hasher()) as Box<dyn Hasher>),
             (1, Box::new(hasher())),
@@ -317,10 +313,8 @@ fn reopen_after_resume_on_a_reopened_log_stays_clean() {
         // Second reopen, after resume_algorithm -- this is where the loss
         // this test guards against would surface.
         let repo3 = support::reopen_repo(dir.path());
-        let mut storage3 =
+        let storage3 =
             GitStorage::new(repo3, staging_ref, ARITY).map_err(|e| format!("reopen 2: {e}"))?;
-        storage3.register_hasher(0, Box::new(hasher()));
-        storage3.register_hasher(1, Box::new(hasher()));
         let hashers2: Vec<(u64, Box<dyn Hasher>)> = vec![
             (0, Box::new(hasher()) as Box<dyn Hasher>),
             (1, Box::new(hasher())),
@@ -364,10 +358,8 @@ fn resume_algorithm_on_reopened_log_keeps_prior_digests_and_children() {
         let staging_ref = "refs/eml/storage/resume-keeps-digests/staging";
         let repo = support::bare_repo(dir.path(), gix::hash::Kind::Sha1);
 
-        let mut storage =
+        let storage =
             GitStorage::new(repo, staging_ref, ARITY).map_err(|e| format!("open: {e}"))?;
-        storage.register_hasher(0, Box::new(hasher()));
-        storage.register_hasher(1, Box::new(hasher()));
         let mut log = NaryMerkleLog::new(storage, Box::new(hasher()), TreeConfig { arity: ARITY })
             .await
             .map_err(|e| format!("new: {e:?}"))?;
@@ -390,10 +382,8 @@ fn resume_algorithm_on_reopened_log_keeps_prior_digests_and_children() {
         // Reopen through polydigest's from-storage path before resuming --
         // exactly the provenance boundary opacity must survive.
         let repo2 = support::reopen_repo(dir.path());
-        let mut storage2 =
+        let storage2 =
             GitStorage::new(repo2, staging_ref, ARITY).map_err(|e| format!("reopen: {e}"))?;
-        storage2.register_hasher(0, Box::new(hasher()));
-        storage2.register_hasher(1, Box::new(hasher()));
         let hashers: Vec<(u64, Box<dyn Hasher>)> = vec![
             (0, Box::new(hasher()) as Box<dyn Hasher>),
             (1, Box::new(hasher())),
