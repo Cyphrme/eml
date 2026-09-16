@@ -20,7 +20,6 @@ use storage_git::GitStorage;
 use support::FixtureHasher;
 
 const ARITY: u64 = 2;
-const ALG_DOMAIN: [u64; 3] = [0, 1, 2];
 const HASHER_WIDTH: usize = 20;
 
 fn hasher() -> FixtureHasher {
@@ -145,10 +144,14 @@ async fn apply_op(
     }
 }
 
-/// Run `ops` against a fresh `GitStorage`-backed log rooted at `dir`. When
-/// `reopen_enabled`, a step whose `reopen` flag is set first drops the live
-/// log, reopens a brand-new `GitStorage` from disk (`GitStorage::new` over
-/// a freshly reopened repository -- "polydigest's from-storage path"), and
+/// Run `ops` against a fresh `GitStorage`-backed log rooted at `dir`,
+/// returning the log plus the staging ref's tip -- read straight off the
+/// ref, never through `tree_at` (deleted outright per the head's
+/// 2026-09-16 design ruling) -- recorded after `NaryMerkleLog::new`'s own
+/// genesis write and again after every op. When `reopen_enabled`, a step
+/// whose `reopen` flag is set first drops the live log, reopens a
+/// brand-new `GitStorage` from disk (`GitStorage::new` over a freshly
+/// reopened repository -- "polydigest's from-storage path"), and
 /// reconstructs the log through `NaryMerkleLog::from_storage_with_config`
 /// before applying that step.
 async fn run_writer(
@@ -156,26 +159,25 @@ async fn run_writer(
     staging_ref: &str,
     ops: &[(Op, bool, Vec<u64>)],
     reopen_enabled: bool,
-) -> Result<NaryMerkleLog<GitStorage>, String> {
+) -> Result<(NaryMerkleLog<GitStorage>, Vec<gix::ObjectId>), String> {
     let repo = support::bare_repo(dir, gix::hash::Kind::Sha1);
-    let mut storage =
-        GitStorage::new(repo, staging_ref, ARITY).map_err(|e| format!("initial open: {e}"))?;
-    for id in ALG_DOMAIN {
-        storage.register_hasher(id, Box::new(hasher()));
-    }
+    let storage = GitStorage::new(repo.clone(), staging_ref, ARITY)
+        .map_err(|e| format!("initial open: {e}"))?;
     let mut log = NaryMerkleLog::new(storage, Box::new(hasher()), TreeConfig { arity: ARITY })
         .await
         .map_err(|e| format!("new log: {e:?}"))?;
+
+    let mut tips = vec![
+        support::ref_target(&repo.to_thread_local(), staging_ref)
+            .ok_or_else(|| "no tip after NaryMerkleLog::new's own genesis write".to_string())?,
+    ];
 
     for (i, (op, reopen, known_before)) in ops.iter().enumerate() {
         if reopen_enabled && *reopen {
             drop(log);
             let repo2 = support::reopen_repo(dir);
-            let mut storage2 = GitStorage::new(repo2, staging_ref, ARITY)
+            let storage2 = GitStorage::new(repo2, staging_ref, ARITY)
                 .map_err(|e| format!("reopen at step {i}: {e}"))?;
-            for id in ALG_DOMAIN {
-                storage2.register_hasher(id, Box::new(hasher()));
-            }
             let hashers: Vec<(u64, Box<dyn Hasher>)> = known_before
                 .iter()
                 .map(|&id| (id, Box::new(hasher()) as Box<dyn Hasher>))
@@ -191,8 +193,12 @@ async fn run_writer(
         apply_op(&mut log, op)
             .await
             .map_err(|e| format!("op {i} ({op:?}) failed: {e:?}"))?;
+        tips.push(
+            support::ref_target(&repo.to_thread_local(), staging_ref)
+                .ok_or_else(|| format!("no tip after op {i}"))?,
+        );
     }
-    Ok(log)
+    Ok((log, tips))
 }
 
 proptest! {
@@ -200,8 +206,9 @@ proptest! {
 
     /// **SG9 purity.** A continuous writer and a writer that reopens
     /// through `from_storage_with_config` at arbitrary points, run over the
-    /// identical operation sequence, must end at byte-identical staging
-    /// tips and identical `tree_at(n)` for every `n`.
+    /// identical operation sequence, must produce byte-identical staging
+    /// tips after every single op -- not merely at the end -- each tip read
+    /// straight off the ref, never reconstructed.
     #[test]
     fn purity_under_reopen_matches_continuous_writer(
         raw in prop::collection::vec(raw_step_strategy(), 3..14)
@@ -214,8 +221,10 @@ proptest! {
             let dir_b = tempfile::tempdir().map_err(|e| format!("tempdir b: {e}"))?;
             let staging_ref = "refs/eml/storage/purity/staging";
 
-            let continuous = run_writer(dir_a.path(), staging_ref, &ops, false).await?;
-            let reopening = run_writer(dir_b.path(), staging_ref, &ops, true).await?;
+            let (continuous, continuous_tips) =
+                run_writer(dir_a.path(), staging_ref, &ops, false).await?;
+            let (reopening, reopening_tips) =
+                run_writer(dir_b.path(), staging_ref, &ops, true).await?;
 
             if continuous.count() != reopening.count() {
                 return Err(format!(
@@ -225,20 +234,11 @@ proptest! {
                 ));
             }
 
-            let n = continuous.count();
-            for m in 0..=n {
-                let id_a = continuous
-                    .storage()
-                    .tree_at(m)
-                    .map_err(|e| format!("tree_at({m}) continuous: {e}"))?;
-                let id_b = reopening
-                    .storage()
-                    .tree_at(m)
-                    .map_err(|e| format!("tree_at({m}) reopening: {e}"))?;
+            for (step, (id_a, id_b)) in continuous_tips.iter().zip(&reopening_tips).enumerate() {
                 if id_a != id_b {
                     return Err(format!(
-                        "tree_at({m}) diverged by reopen alone: continuous={id_a} \
-                         reopening={id_b}, over ops {ops:?}"
+                        "tip diverged by reopen alone after step {step} (0 = the genesis write): \
+                         continuous={id_a} reopening={id_b}, over ops {ops:?}"
                     ));
                 }
             }
