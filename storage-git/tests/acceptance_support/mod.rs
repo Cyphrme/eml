@@ -238,21 +238,14 @@ pub fn age_loose_object(git_dir: &Path, id: gix::ObjectId) {
 
 /// Build a fresh `NaryMerkleLog<GitStorage>` at `staging_ref` inside `repo`,
 /// with algorithm `0` registered under `hasher`.
-///
-/// Also registers `hasher` with the `GitStorage` instance itself (SG20's
-/// amendment, `GitStorage::register_hasher`), so `tree_at(n)` on the
-/// resulting log's storage can fold algorithm 0's historical `roots/` entry
-/// correctly for every acceptance test built through this fixture, with no
-/// change to the test bodies themselves.
 pub async fn new_log(
     repo: &gix::ThreadSafeRepository,
     staging_ref: &str,
     arity: u64,
     hasher: FixtureHasher,
 ) -> NaryMerkleLog<storage_git::GitStorage> {
-    let mut storage =
+    let storage =
         storage_git::GitStorage::new(repo.clone(), staging_ref, arity).expect("open GitStorage");
-    storage.register_hasher(0, Box::new(hasher.clone()));
     NaryMerkleLog::new(storage, Box::new(hasher), TreeConfig { arity })
         .await
         .expect("new log")
