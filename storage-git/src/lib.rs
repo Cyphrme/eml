@@ -7,67 +7,49 @@
 //! layer persists is caller-supplied bytes, and it queries
 //! `Repository::object_hash()` rather than assuming SHA-1 or SHA-256 (SG27).
 //!
+//! # The key-derived layout
+//!
+//! THE DESIGN, ratified by two spikes (`spike-report.md` and its prototype
+//! crate `storage-git-keyed/`, both under `.worktrees/spike-key-layout/`):
+//! every node and leaf lives at a git tree path derived **only** from its
+//! own key -- `n/hex16(alg_id)/hex2(height)/<trimmed(left)>` for a node,
+//! `l/<trimmed(index)>` for a leaf, where `trimmed` is the `byte1-be-trim`
+//! scheme (`src/layout.rs::trimmed_key_segments`). A write adds exactly the
+//! keys it is given: no peak-and-children hierarchy, no decomposition of a
+//! taller coordinate into its parts, no materialized-versus-opaque
+//! distinction, and nothing wired or carried forward by decision. This
+//! replaces an earlier peak-wired layout (`peaks/hex(height,2)/hex(q,2)/…`)
+//! that had to reconstruct every frontier coordinate's children from
+//! scratch on each write and, in doing so, could silently drop a
+//! descendant that stopped being a frontier peak
+//! (`completeness_property.rs`'s dropped-node finding); the key-derived
+//! layout has no such reconstruction step to get wrong, since every
+//! coordinate a write is ever handed keeps its own permanent, independent
+//! path for the life of the log.
+//!
 //! # Departures from the spec's literal text
 //!
-//! 1. **Arity is a constructor parameter, not trait-carried.** `Storage` never passes `k`; the
-//!    checkpoint tree's layout (§2) is parametric in it throughout. [`GitStorage::new`] takes
-//!    `arity` explicitly and persists it in `meta` (SG12); reopening against a tree whose stored
-//!    arity disagrees is rejected as [`GitStorageError::InvalidArity`].
-//! 2. **Standalone `store_leaf`/`store_node` require in-order coordinates, and never complete a
-//!    merge on their own.** Unlike `storage-fjall`'s sparse-friendly flat keyspace, this layer's
-//!    positional layout is built on aligned blocks sealed in order (SG8); a standalone
+//! 1. **Arity is a constructor parameter, not trait-carried.** `Storage` never passes `k`; it is
+//!    not part of the key-derived layout at all beyond `meta.arity` (§3.1). [`GitStorage::new`]
+//!    takes `arity` explicitly and persists it in `meta` (SG12); reopening against a tree whose
+//!    stored arity disagrees is rejected as [`GitStorageError::InvalidArity`].
+//! 2. **Standalone `store_leaf`/`store_node` require in-order leaf indices.** A standalone
 //!    `store_leaf(index, _)` is accepted only at `index == len()`, matching the same append-only
-//!    assumption `MemoryStorage` already makes via its own `debug_assert_eq!`. Further, because
-//!    neither standalone method carries a hasher, if `index` would complete a `k`-ary merge (a
-//!    carry reduction), this layer has no digest to seal the merged parent with and the write fails
-//!    with `Corruption` -- `polydigest` never actually calls either method standalone for a
-//!    count-changing append (it always goes through `write_batch`, which carries the combinator's
-//!    own computed node digests alongside the leaf); this limitation is only reachable by a caller
-//!    driving the trait directly, bypassing the combinator.
-//! 3. **`get_node` is scoped to peaks and their descendants, decomposed once every child slot has a
-//!    known occupant (§2.6, §2.7, SG28/SG29).** An earlier revision built a taller peak opaque
-//!    (`digest/` only, no children at all) the moment *any* child it would need to attach was not
-//!    fully materialized -- which silently dropped a materialized descendant sitting right next to
-//!    an opaque one, permanently, the instant its parent left `peaks/`; a side `inherited/` archive
-//!    patched around that loss for the one case it *could* still recover (a coordinate that had
-//!    itself once been a peak). `build::resolve_node` now wires a `hex(c,2)` child entry for every
-//!    slot at once, as soon as this layer has a known occupant for *all* of them -- opaque or
-//!    materialized, reused by object id (SG18a) or freshly built -- never gated on whether a known
-//!    occupant is itself opaque, so a coordinate that was ever a frontier peak stays reachable by
-//!    ordinary descent from whatever taller peak now covers it, for the life of the log, with no
-//!    side archive at all: `C(n)`'s four top-level entries (SG1) are unconditional now, for every
-//!    log, resumed or not. Only a coordinate strictly *beneath* a leaf-level opaque node (`h = 0`,
-//!    no `leaf` blob, SG4) -- one that was never itself a peak and so was never given a digest of
-//!    its own -- remains unreconstructable, since nothing was ever there to decompose. A related,
-//!    narrower case in the same area: a frontier coordinate every covering algorithm has already
-//!    been removed from (so `write_batch` is handed no digest for it by anyone, most reachably
-//!    through `polydigest::NaryMerkleLog::resume`'s per-algorithm epoch gate) is built as an
-//!    empty-`digest/`, opaque node rather than rejected as `Corruption` -- a legitimate frontier
-//!    position with nothing live behind it, not a missing-data bug. See `src/build.rs` and
-//!    `src/read.rs` for the full argument.
-//! 4. **A resumption's storage MUST be fresh, so a resumed seal's opacity is decided purely by what
-//!    is stored plus what the write supplies.** `polydigest::NaryMerkleLog::resume` refuses a
-//!    `storage` that already carries a committed log of its own (`Storage::load_log_meta` returns
-//!    `Some`), before anything is written -- a resumption's genesis frontier is not a way to reopen
-//!    or splice onto an existing log's committed state (`polydigest/src/tree.rs`'s `resume`). That
-//!    refusal is what removes the only case in which this layer would otherwise need to distinguish
-//!    "the caller is genuinely resuming a seal" from "the caller merely reopened a continuing log":
-//!    a resumption's target is always empty, so its first write's touched coordinates never carry a
-//!    stale, differently-provisioned occupant to starve -- there is nothing there to begin with.
-//!    Every write, resuming or continuing, therefore follows the one rule: a touched coordinate
-//!    carries its prior digests, leaf, and children forward from whatever this same log's own
-//!    history already gave it (§2.6, SG10/SG11), with no separate resume-open constructor and no
-//!    committed provenance field needed to tell the two cases apart.
+//!    assumption `MemoryStorage` already makes via its own `debug_assert_eq!`. Nothing about the
+//!    key-derived layout itself requires in-order writes -- every key is independent -- this
+//!    constraint exists only to keep `len()`/`meta.count` (which the layout does still track, §3.1)
+//!    a faithful count of contiguous leaves.
 //!
 //! # The tip-tree model
 //!
 //! This layer keeps the **complete** checkpoint tree behind its staging ref: every leaf and
-//! sealed node ever written, by coordinate, forever (§2.6-§2.7). The staging ref always points
-//! **directly at a tree object** (never a commit), and [`GitStorage::tip_tree`] hands that object
-//! id back verbatim. This layer never creates a commit and never renders or reconstructs a tree
-//! for a size other than its current one: a past size is read by wrapping an earlier tip tree in
-//! a commit one layer up (the checkpoint library this crate is deliberately ignorant of), and by
-//! `eml` reading over the nodes the complete tip tree already contains.
+//! sealed node ever written, by key, forever. The staging ref always points
+//! **directly at a tree object** (never a commit), and [`GitStorage::tip_tree`] hands back the
+//! tree the staging ref currently points at. This layer never creates a commit and never
+//! renders or reconstructs a tree for a size other than its current one: a past size is read by
+//! wrapping an earlier tip tree in a commit one layer up (the checkpoint library this crate is
+//! deliberately ignorant of), and by `eml` reading over the nodes the complete tip tree already
+//! contains.
 
 mod build;
 mod error;
@@ -213,11 +195,10 @@ impl GitStorage {
         let meta_id = gitutil::find_entry(&repo, tree, "meta")?
             .ok_or_else(|| GitStorageError::Corruption("tree has no meta".into()))?;
         let bytes = gitutil::read_blob(&repo, meta_id)?;
-        let (stored_arity, count, _kind) = layout::decode_meta(&bytes)?;
+        let (_arity, count, _kind) = layout::decode_meta(&bytes)?;
         Ok(GitReadOnlyView {
             repo: self.repo.clone(),
             tree,
-            arity: stored_arity,
             size: count,
         })
     }
@@ -284,7 +265,7 @@ impl Storage for GitStorage {
             )));
         };
         let repo = self.thread_local();
-        read::get_leaf(&repo, tree, self.arity, self.count, index)
+        read::get_leaf(&repo, tree, self.count, index)
     }
 
     async fn len(&self) -> Result<u64, Self::Error> {
@@ -312,7 +293,7 @@ impl Storage for GitStorage {
             return Ok(None);
         };
         let repo = self.thread_local();
-        read::get_node(&repo, tree, self.arity, self.count, alg_id, left, height)
+        read::get_node(&repo, tree, alg_id, left, height)
     }
 
     async fn store_algorithm_meta(
@@ -381,7 +362,6 @@ impl Storage for GitStorage {
 pub struct GitReadOnlyView {
     repo: gix::ThreadSafeRepository,
     tree: ObjectId,
-    arity: u64,
     size: u64,
 }
 
@@ -400,7 +380,7 @@ impl GitReadOnlyView {
     /// was never materialized.
     pub async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, GitStorageError> {
         let repo = self.repo.to_thread_local();
-        read::get_leaf(&repo, self.tree, self.arity, self.size, index)
+        read::get_leaf(&repo, self.tree, self.size, index)
     }
 
     /// Read a sealed node digest at `(alg_id, left, height)`.
@@ -415,9 +395,7 @@ impl GitReadOnlyView {
         height: u32,
     ) -> Result<Option<Vec<u8>>, GitStorageError> {
         let repo = self.repo.to_thread_local();
-        read::get_node(
-            &repo, self.tree, self.arity, self.size, alg_id, left, height,
-        )
+        read::get_node(&repo, self.tree, alg_id, left, height)
     }
 
     /// Load every registered algorithm's epoch history as projected onto

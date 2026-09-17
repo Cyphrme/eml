@@ -1,11 +1,10 @@
 //! Low-level `gix` plumbing: computing an object id under the repository's
 //! own hash format and writing through the object database handle's
 //! non-shortcut writer (SG22), plus the small set of read helpers the
-//! position-lookup and tree-assembly code needs.
+//! key-derived path resolution needs.
 
 use gix::bstr::BString;
-use gix::objs::tree::{Entry, EntryKind};
-use gix::objs::{Kind, Tree, Write as _, WriteTo as _};
+use gix::objs::{Kind, Write as _};
 
 use crate::error::GitStorageError as Error;
 
@@ -53,26 +52,11 @@ pub(crate) fn write_blob(repo: &gix::Repository, data: &[u8]) -> Result<gix::Obj
     write_object(repo, Kind::Blob, data)
 }
 
-/// Build and write a tree object from `entries` (SG22 write path). Entries
-/// are sorted by git's canonical tree order (SG7) unconditionally — `gix`
-/// only `debug_assert!`s pre-sorted order and never sorts for us.
-pub(crate) fn write_tree(
-    repo: &gix::Repository,
-    mut entries: Vec<Entry>,
-) -> Result<gix::ObjectId, Error> {
-    entries.sort();
-    let tree = Tree { entries };
-    let mut buf = Vec::new();
-    tree.write_to(&mut buf).map_err(git_err)?;
-    write_object(repo, Kind::Tree, &buf)
-}
-
 /// One decoded tree entry, detached from the source tree's borrow.
 #[derive(Debug, Clone)]
 pub(crate) struct DecodedEntry {
     pub filename: BString,
     pub oid: gix::ObjectId,
-    pub kind: EntryKind,
 }
 
 /// Read and decode a tree object's entries.
@@ -88,7 +72,6 @@ pub(crate) fn read_tree(
         .map(|e| DecodedEntry {
             filename: e.filename.to_owned(),
             oid: e.oid.to_owned(),
-            kind: e.mode.kind(),
         })
         .collect())
 }
@@ -111,19 +94,30 @@ pub(crate) fn read_blob(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec
     Ok(repo.find_blob(id).map_err(git_err)?.data.clone())
 }
 
+/// Resolve a sequence of path segments from `tree`, following named entries
+/// only -- no decomposition, no fallback: a key not present at its derived
+/// path was simply never written. Returns the final segment's object id, or
+/// `None` the moment any segment along the way is missing.
+pub(crate) fn resolve_at_path(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    segments: &[String],
+) -> Result<Option<gix::ObjectId>, Error> {
+    let mut current = tree;
+    for seg in segments {
+        match find_entry(repo, current, seg)? {
+            Some(id) => current = id,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+
 /// A cheap "does this object still exist" check (a header lookup, not a
 /// full read) — SG23's post-write presence verification.
 pub(crate) fn object_exists(repo: &gix::Repository, id: gix::ObjectId) -> bool {
     use gix::objs::Exists as _;
     repo.objects.exists(&id)
-}
-
-pub(crate) fn entry(kind: EntryKind, name: impl Into<BString>, oid: gix::ObjectId) -> Entry {
-    Entry {
-        mode: kind.into(),
-        filename: name.into(),
-        oid,
-    }
 }
 
 #[cfg(test)]
@@ -182,63 +176,6 @@ mod tests {
             "write_object must refresh an existing object's mtime, not skip the write \
              (before={mtime_before:?}, after={mtime_after:?})"
         );
-    }
-
-    /// SG7: `gix::objs::Tree::write_to` does not sort entries -- it only
-    /// `debug_assert!`s pre-sorted order (compiled out in release), so
-    /// `write_tree` must sort them itself in every profile. Confirmed two
-    /// ways: every permutation of the same entry set produces the same
-    /// (correctly sorted) object id through `write_tree`, and that id
-    /// differs from the id a naive, unsorted serialization of the same
-    /// entries would produce -- proving the sort is doing real work, not
-    /// merely a no-op on already-sorted input.
-    #[test]
-    fn write_tree_sorts_entries_regardless_of_input_order() {
-        let (_dir, repo) = init_repo();
-        let local = repo.to_thread_local();
-
-        let a = write_blob(&local, b"a").unwrap();
-        let b = write_blob(&local, b"b").unwrap();
-        let c = write_blob(&local, b"c").unwrap();
-        let mk = |name: &str, oid: gix::ObjectId| entry(EntryKind::Blob, name, oid);
-
-        // Deliberately unsorted (reverse of canonical order: "cc" > "bb" > "aa").
-        let unsorted = vec![mk("cc", c), mk("aa", a), mk("bb", b)];
-        let reversed = vec![mk("bb", b), mk("cc", c), mk("aa", a)];
-        let already_sorted = vec![mk("aa", a), mk("bb", b), mk("cc", c)];
-
-        let id_unsorted = write_tree(&local, unsorted.clone()).unwrap();
-        let id_reversed = write_tree(&local, reversed).unwrap();
-        let id_sorted = write_tree(&local, already_sorted).unwrap();
-        assert_eq!(
-            id_unsorted, id_sorted,
-            "write_tree must sort regardless of input order"
-        );
-        assert_eq!(id_reversed, id_sorted);
-
-        // A naive write that skips the sort either panics on gix's own
-        // `debug_assert!` (this test runs with debug assertions on, like
-        // any `cargo test`) or -- in a release build, where that assertion
-        // compiles out -- would silently serialize the wrong bytes. Either
-        // way, skipping `write_tree`'s own unconditional sort is never
-        // safe; `catch_unwind` here demonstrates the debug-mode half of
-        // that claim without taking down the whole test binary.
-        let naive = std::panic::catch_unwind(|| {
-            let mut naive_buf = Vec::new();
-            Tree { entries: unsorted }.write_to(&mut naive_buf).unwrap();
-            naive_buf
-        });
-        match naive {
-            Err(_) => {}, /* gix's debug_assert! caught it first -- expected under debug */
-            // assertions.
-            Ok(naive_buf) => {
-                let naive_id = write_object(&local, Kind::Tree, &naive_buf).unwrap();
-                assert_ne!(
-                    naive_id, id_sorted,
-                    "the unsorted serialization must differ from the sorted one"
-                );
-            },
-        }
     }
 
     /// SG23: a subsequent call over the same content heals a gap left by a

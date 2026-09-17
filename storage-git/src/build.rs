@@ -1,49 +1,46 @@
 //! Checkpoint-tree assembly: turning a `write_batch` call's leaves/nodes/
-//! algorithm-metas/checkpoint-roots into a new `C(n')` tree object (§2, §3,
-//! SG17-SG19, SG22).
+//! algorithm-metas/checkpoint-roots into a new `C(n')` tree object (§2, §3),
+//! per THE DESIGN (`spike-report.md` and its prototype `storage-git-keyed/`):
+//! a node or leaf is placed at a path derived *only* from its key, and
+//! nothing else is ever recomputed from it -- no peak/child wiring, no
+//! decomposition, no opacity bookkeeping. A write adds exactly the keys it
+//! is given, with nothing wired or carried forward by decision.
 //!
-//! The write algorithm never recomputes content it was not given and never
-//! decomposes an already-sealed node further than treating it as an opaque
-//! or materialized whole (SG18a "reusing unchanged children by object id
-//! rather than rewriting them"): every coordinate in the new frontier is
-//! either (a) an old peak untouched by this batch, reused by object id with
-//! no I/O beyond the one-time read that seeded `old_index`, or (b) resolved
-//! fresh from this batch's own data plus, for a node that already existed,
-//! its previously-stored digest/leaf/children — the only cases the object
-//! model needs to represent (§2.6).
+//! `meta`/`e`/`r` are the one exception: small, non-key-addressed metadata
+//! that is genuinely mutated (not just appended to) on each write, so it is
+//! projected forward from the prior tree the same way every write, touched
+//! or not.
 //!
-//! **Decomposition, not all-or-nothing materialization.** A brand-new parent
-//! coordinate is given `hex(c, 2)` children for *every* child this batch (or
-//! `old_index`) actually has an occupant for, never gated on whether the
-//! whole subtree resolves down to real leaf bytes everywhere (`resolve_node`'s
-//! `is_decomposable`, below). A child that is itself opaque is wired in by
-//! object id exactly like a materialized one; only a coordinate arriving as
-//! one atomic, undecomposed digest — a resumed log's genesis peak, or a
-//! single subtree append — has no known children at all and stays a pure
-//! `digest/`-only leaf shape. This is what makes every coordinate this batch
-//! (or any prior one) ever named permanently reachable by ordinary descent
-//! from whatever peak now covers it, without a side archive: see
-//! `docs/specs/storage-git.md`'s §2.7 for the full argument for why the
-//! former `inherited/` archive (SG28/SG29) is gone.
+//! The whole batch is applied through one `gix_object::tree::Editor` session
+//! (one call to [`apply_write`] issues exactly one batched raw tree edit,
+//! never one independent read-modify-write chain per key): every ancestor
+//! touched by more than one key in this batch is written to the object
+//! database exactly once, on the single final `write()` call. The detached,
+//! unvalidated raw editor is used deliberately -- the higher-level wrapper's
+//! `write()` re-validates every entry of every changed tree on every call
+//! (an `objects.has()` existence probe per entry, scaling with bucket
+//! width), which the spike measured as slower wall-clock than a per-key
+//! write despite writing fewer objects; every entry upserted here was
+//! already produced by this crate's own [`crate::gitutil::write_blob`] a few
+//! lines above, so that validation is redundant for this crate's own writes.
 
 use std::collections::HashMap;
 
 use gix::ObjectId;
+use gix::objs::WriteTo as _;
 use gix::objs::tree::EntryKind;
-use spine::frontier_for_size;
 
 use crate::error::GitStorageError as Error;
-use crate::gitutil::{self, entry};
-use crate::layout::{self, hex2, hex16};
+use crate::gitutil;
+use crate::layout::{self, hex2, hex16, trimmed_key_segments};
 
 fn corrupt(msg: impl Into<String>) -> Error {
     Error::Corruption(msg.into())
 }
 
-/// This batch's freshly-provided node digests, keyed by coordinate: each
-/// `(alg_id, hash)` pair a `write_batch` call's `nodes` argument carries for
-/// that `(left, height)`.
-type NodeMap<'a> = HashMap<(u64, u32), Vec<(u64, &'a [u8])>>;
+fn git_err(e: impl std::fmt::Display) -> Error {
+    Error::Git(e.to_string())
+}
 
 /// The inputs a `Storage::write_batch` call carries, borrowed for the
 /// duration of one [`apply_write`] call.
@@ -62,12 +59,6 @@ pub(crate) struct Applied {
     pub kind_byte: u8,
 }
 
-#[derive(Clone, Copy)]
-struct Resolved {
-    id: ObjectId,
-    materialized: bool,
-}
-
 /// The instance's committed state as of its last observed write, bundled
 /// only to stay under clippy's too-many-arguments threshold -- every field
 /// is a distinct fact [`apply_write`] reads once and projects forward
@@ -79,48 +70,70 @@ pub(crate) struct OldState {
     pub kind: u8,
 }
 
+fn node_path(alg_id: u64, height: u32, left: u64) -> String {
+    let mut segs = vec![hex16(alg_id), hex2(u64::from(height))];
+    segs.extend(trimmed_key_segments(left));
+    format!("n/{}", segs.join("/"))
+}
+
+fn leaf_path(index: u64) -> String {
+    format!("l/{}", trimmed_key_segments(index).join("/"))
+}
+
 /// Assemble and write the new checkpoint tree. Does not touch the staging
-/// ref; the caller performs the compare-and-swap (SG18c) once this returns.
+/// ref; the caller performs the compare-and-swap once this returns.
 pub(crate) fn apply_write(
     repo: &gix::Repository,
     arity: u64,
     old: OldState,
     input: &WriteInputs<'_>,
 ) -> Result<Applied, Error> {
-    let OldState {
-        tree: old_tree,
-        count: old_count,
-        kind: old_kind,
-    } = old;
-    let new_count = input.log_meta.map_or(old_count, |(n, _)| n);
-    let new_kind = input.log_meta.map_or(old_kind, |(_, k)| k);
+    let root_tree = match old.tree {
+        Some(id) => repo.find_tree(id).map_err(git_err)?,
+        None => repo.empty_tree(),
+    };
+    let mut editor = root_tree.edit().map_err(git_err)?;
 
-    let leaf_map: HashMap<u64, &[u8]> = input.leaves.iter().map(|&(i, d)| (i, d)).collect();
-    let mut node_map: NodeMap<'_> = HashMap::new();
-    for &(alg, left, height, hash) in input.nodes {
-        node_map
-            .entry((left, height))
-            .or_default()
-            .push((alg, hash));
+    for &(index, data) in input.leaves {
+        let blob = gitutil::write_blob(repo, data)?;
+        editor
+            .upsert(leaf_path(index).as_str(), EntryKind::Blob, blob)
+            .map_err(git_err)?;
     }
 
-    let (epochs_tree, active_algs) =
-        build_epochs(repo, old_tree, input.algorithm_metas, new_count)?;
-    let roots_tree = build_roots(repo, old_tree, input.checkpoint_roots, &active_algs)?;
-    let batch = BatchInputs {
-        leaf_map: &leaf_map,
-        node_map: &node_map,
-    };
-    let peaks_tree = build_peaks(repo, arity, old_tree, old_count, new_count, &batch)?;
+    for &(alg_id, left, height, hash) in input.nodes {
+        let blob = gitutil::write_blob(repo, hash)?;
+        editor
+            .upsert(
+                node_path(alg_id, height, left).as_str(),
+                EntryKind::Blob,
+                blob,
+            )
+            .map_err(git_err)?;
+    }
+
+    let new_count = input.log_meta.map_or(old.count, |(n, _)| n);
+    let requested_kind = input.log_meta.map_or(old.kind, |(_, k)| k);
+    // SG9: canonicalize away the size-0 kind ambiguity. At count==0 a fresh
+    // log and an empty-seal resume are observationally identical through
+    // every polydigest accessor, so encoding the requested kind there would
+    // make two provenance-different-but-content-identical logs produce
+    // different tree ids for no observable benefit.
+    let new_kind = if new_count == 0 { 0 } else { requested_kind };
+
+    apply_epochs_and_roots(repo, old.tree, &mut editor, input, new_count)?;
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, new_count, new_kind))?;
-    let top = vec![
-        entry(EntryKind::Blob, "meta", meta_blob),
-        entry(EntryKind::Tree, "epochs", epochs_tree),
-        entry(EntryKind::Tree, "roots", roots_tree),
-        entry(EntryKind::Tree, "peaks", peaks_tree),
-    ];
-    let tree_id = gitutil::write_tree(repo, top)?;
+    editor
+        .upsert("meta", EntryKind::Blob, meta_blob)
+        .map_err(git_err)?;
+
+    let mut raw = editor.detach();
+    let tree_id: ObjectId = raw.write(|tree| {
+        let mut buf = Vec::new();
+        tree.write_to(&mut buf).map_err(git_err)?;
+        gitutil::write_object(repo, gix::objs::Kind::Tree, &buf)
+    })?;
 
     Ok(Applied {
         tree_id,
@@ -129,38 +142,47 @@ pub(crate) fn apply_write(
     })
 }
 
-/// Build `epochs/` (§3.2, SG13) and return the set of algorithms active at
-/// `new_count` (SG14 — only these get a `roots/` entry).
-fn build_epochs(
+/// Project `e/` (epoch history) and `r/` (checkpoint roots) forward,
+/// applying this batch's own updates. An algorithm active at `new_count`
+/// keeps (or gains) an `r/` entry; every other previously-known algorithm's
+/// `r/` entry, if any, is removed.
+fn apply_epochs_and_roots(
     repo: &gix::Repository,
     old_tree: Option<ObjectId>,
-    algorithm_metas: &[(u64, &[(u64, u64)])],
+    editor: &mut gix::object::tree::Editor<'_>,
+    input: &WriteInputs<'_>,
     new_count: u64,
-) -> Result<(ObjectId, Vec<u64>), Error> {
+) -> Result<(), Error> {
     let mut alg_ids: Vec<u64> = match old_tree {
-        Some(t) => list_epoch_algorithms(repo, t)?,
+        Some(t) => list_hex16_children(repo, t, "e")?,
         None => Vec::new(),
     };
-    for &(alg_id, _) in algorithm_metas {
+    for &(alg_id, _) in input.algorithm_metas {
         if !alg_ids.contains(&alg_id) {
             alg_ids.push(alg_id);
         }
     }
 
-    let mut entries = Vec::new();
+    let mut old_roots: HashMap<u64, Vec<u8>> = match old_tree {
+        Some(t) => read_named_map(repo, t, "r")?,
+        None => HashMap::new(),
+    };
+    for &(alg_id, root) in input.checkpoint_roots {
+        old_roots.insert(alg_id, root.to_vec());
+    }
+
     let mut active = Vec::new();
-    for alg_id in alg_ids {
-        let history: Vec<(u64, u64)> =
-            if let Some(&(_, epochs)) = algorithm_metas.iter().find(|&&(id, _)| id == alg_id) {
-                epochs.to_vec()
-            } else {
-                let blob = read_named_blob(repo, old_tree, "epochs", alg_id)?.ok_or_else(|| {
-                    corrupt(format!(
-                        "algorithm {alg_id} registered but epochs/ blob missing"
-                    ))
-                })?;
-                layout::decode_epochs(&blob)?
-            };
+    for &alg_id in &alg_ids {
+        let history: Vec<(u64, u64)> = if let Some(&(_, epochs)) =
+            input.algorithm_metas.iter().find(|&&(id, _)| id == alg_id)
+        {
+            epochs.to_vec()
+        } else {
+            let blob = read_named_blob(repo, old_tree, "e", alg_id)?.ok_or_else(|| {
+                corrupt(format!("algorithm {alg_id} registered but e/ blob missing"))
+            })?;
+            layout::decode_epochs(&blob)?
+        };
         let Some(projected) = layout::epochs_at(&history, new_count) else {
             continue;
         };
@@ -168,359 +190,61 @@ fn build_epochs(
             active.push(alg_id);
         }
         let blob_id = gitutil::write_blob(repo, &layout::encode_epochs(&projected))?;
-        entries.push(entry(EntryKind::Blob, hex16(alg_id), blob_id));
-    }
-    Ok((gitutil::write_tree(repo, entries)?, active))
-}
-
-/// Build `roots/` (§3.3, SG14): carry forward every still-active algorithm's
-/// previous root, overlaid by this batch's fresh roots, dropped for anything
-/// no longer active.
-fn build_roots(
-    repo: &gix::Repository,
-    old_tree: Option<ObjectId>,
-    checkpoint_roots: &[(u64, &[u8])],
-    active_algs: &[u64],
-) -> Result<ObjectId, Error> {
-    let mut roots: HashMap<u64, Vec<u8>> = match old_tree {
-        Some(t) => read_named_map(repo, t, "roots")?,
-        None => HashMap::new(),
-    };
-    for &(alg_id, root) in checkpoint_roots {
-        roots.insert(alg_id, root.to_vec());
-    }
-    roots.retain(|alg_id, _| active_algs.contains(alg_id));
-
-    let mut entries = Vec::with_capacity(roots.len());
-    for (alg_id, bytes) in &roots {
-        entries.push(entry(
-            EntryKind::Blob,
-            hex16(*alg_id),
-            gitutil::write_blob(repo, bytes)?,
-        ));
-    }
-    gitutil::write_tree(repo, entries)
-}
-
-/// This batch's own raw inputs `build_peaks`/`resolve_node` need, bundled
-/// only to stay under clippy's too-many-arguments threshold -- every field
-/// is exactly one of `WriteInputs`' own borrows, never a separate concept.
-struct BatchInputs<'a> {
-    leaf_map: &'a HashMap<u64, &'a [u8]>,
-    node_map: &'a NodeMap<'a>,
-}
-
-/// [`BatchInputs`] plus the coordinate index of `old_tree`'s own peaks --
-/// everything [`resolve_node`]'s recursion needs, bundled for the same
-/// too-many-arguments reason.
-#[derive(Clone, Copy)]
-struct ResolveCtx<'a> {
-    leaf_map: &'a HashMap<u64, &'a [u8]>,
-    node_map: &'a NodeMap<'a>,
-    old_index: &'a HashMap<(u64, u32), Resolved>,
-}
-
-/// Build `peaks/` (§2.1, SG1-SG2): the frontier at `new_count`, each peak
-/// either reused unchanged from `old_tree` or freshly resolved.
-fn build_peaks(
-    repo: &gix::Repository,
-    arity: u64,
-    old_tree: Option<ObjectId>,
-    old_count: u64,
-    new_count: u64,
-    batch: &BatchInputs<'_>,
-) -> Result<ObjectId, Error> {
-    let old_coords = frontier_for_size(old_count, arity);
-    let old_index = index_old_peaks(repo, old_tree, &old_coords)?;
-    let ctx = ResolveCtx {
-        leaf_map: batch.leaf_map,
-        node_map: batch.node_map,
-        old_index: &old_index,
-    };
-
-    let new_coords = frontier_for_size(new_count, arity);
-    let mut by_height: HashMap<u32, Vec<u64>> = HashMap::new();
-    for &(left, height) in &new_coords {
-        by_height.entry(height).or_default().push(left);
-    }
-
-    let mut top = Vec::with_capacity(by_height.len());
-    for (height, mut lefts) in by_height {
-        lefts.sort_unstable();
-        let mut group = Vec::with_capacity(lefts.len());
-        for (q, left) in lefts.into_iter().enumerate() {
-            let resolved = resolve_node(repo, arity, left, height, &ctx)?;
-            group.push(entry(EntryKind::Tree, hex2(q as u64), resolved.id));
-        }
-        let group_tree = gitutil::write_tree(repo, group)?;
-        top.push(entry(EntryKind::Tree, hex2(u64::from(height)), group_tree));
-    }
-    gitutil::write_tree(repo, top)
-}
-
-fn is_touched(
-    left: u64,
-    height: u32,
-    leaf_map: &HashMap<u64, &[u8]>,
-    node_map: &NodeMap<'_>,
-) -> bool {
-    node_map.contains_key(&(left, height)) || (height == 0 && leaf_map.contains_key(&left))
-}
-
-/// Whether a brand-new (never-before-existing) node at `(left, height)` has
-/// a known occupant for *every* immediate child slot — a pure predicate over
-/// this batch's own data plus `old_index`, so [`resolve_node`] can decide
-/// whether to wire `hex(c, 2)` children before writing anything.
-///
-/// This is a **structural** question ("do I know what goes in each child
-/// slot"), never a leaf-level one ("does every descendant leaf have real
-/// bytes") — the two used to be the same test (`would_materialize`, before
-/// this decision), which is exactly what made a parent with even one opaque
-/// descendant lose every *other*, genuinely materialized descendant it had:
-/// nothing else in this batch or `old_index` would recurse into them, so
-/// their objects were built (or reused) but never referenced by anything,
-/// and the very next write that dropped this parent from `peaks/` made them
-/// permanently unreachable (`docs/specs/storage-git.md`'s §2.7 has the full
-/// argument for why the resulting `inherited/` archive is gone now that this
-/// is fixed at the source). A child slot is known here if it is *touched*
-/// this batch (a leaf or node digest was actually given for it) or if
-/// `old_index` already names an occupant for it (reused from the prior
-/// write, materialized or opaque alike — SG18a). A coordinate with **no**
-/// known child at all — a resumed log's genesis peak, or a single subtree
-/// append — has nothing here to decompose into, and correctly stays a pure
-/// `digest/`-only leaf shape (SG10/SG11 unaffected).
-fn is_decomposable(
-    k: u64,
-    left: u64,
-    height: u32,
-    leaf_map: &HashMap<u64, &[u8]>,
-    node_map: &NodeMap<'_>,
-    old_index: &HashMap<(u64, u32), Resolved>,
-) -> bool {
-    let span = k.pow(height - 1);
-    (0..k).all(|c| {
-        let child_left = left + c * span;
-        old_index.contains_key(&(child_left, height - 1))
-            || is_touched(child_left, height - 1, leaf_map, node_map)
-    })
-}
-
-/// Resolve (reusing or freshly building) the node at `(left, height)`.
-///
-/// A *touched* coordinate always carries `existing` forward from
-/// `old_index` when there is one: a resumption's `storage` is refused
-/// unless it is fresh (`polydigest::NaryMerkleLog::resume` via
-/// `Storage::load_log_meta`, see this crate's top-level docs), so whatever
-/// `old_index` holds for a touched coordinate is always this same log's own
-/// prior state, never an unrelated occupant's -- there is no second case to
-/// distinguish. An *untouched* coordinate is unaffected regardless (the
-/// `is_touched` short-circuit above reuses it by object id, per SG18a); a
-/// coordinate with no `existing` entry (a genuinely new one) builds fresh
-/// from this batch's own data.
-///
-/// An untouched coordinate with no `existing` entry either is a distinct,
-/// legitimate third case: every algorithm that ever covered it was already
-/// removed by the time this write ran, so `write_batch` was never handed a
-/// digest for it by anyone (`polydigest::NaryMerkleLog::resume` gates each
-/// pushed node on that algorithm's own still-open epoch, per-coordinate,
-/// never on the coordinate merely belonging to the frontier). The
-/// coordinate is still a real frontier position -- `frontier_for_size`
-/// depends only on the total count, never on which algorithms are active --
-/// so it is resolved the same way `MemoryStorage` represents the same
-/// absence: an empty `digest/`, no leaf, no children, opaque.
-fn resolve_node(
-    repo: &gix::Repository,
-    k: u64,
-    left: u64,
-    height: u32,
-    ctx: &ResolveCtx<'_>,
-) -> Result<Resolved, Error> {
-    let ResolveCtx {
-        leaf_map,
-        node_map,
-        old_index,
-    } = *ctx;
-    if !is_touched(left, height, leaf_map, node_map) {
-        if let Some(existing) = old_index.get(&(left, height)).copied() {
-            return Ok(existing);
-        }
-        let empty_digest_tree = gitutil::write_tree(repo, Vec::new())?;
-        let top = vec![entry(EntryKind::Tree, "digest", empty_digest_tree)];
-        let id = gitutil::write_tree(repo, top)?;
-        return Ok(Resolved {
-            id,
-            materialized: false,
-        });
-    }
-
-    let existing = old_index.get(&(left, height)).copied();
-
-    let mut digest_map: HashMap<u64, Vec<u8>> = match existing {
-        Some(r) => read_digest_map(repo, r.id)?,
-        None => HashMap::new(),
-    };
-    if let Some(fresh) = node_map.get(&(left, height)) {
-        for &(alg, hash) in fresh {
-            digest_map.insert(alg, hash.to_vec());
-        }
-    }
-    let mut digest_entries = Vec::with_capacity(digest_map.len());
-    for (alg, bytes) in &digest_map {
-        digest_entries.push(entry(
-            EntryKind::Blob,
-            hex16(*alg),
-            gitutil::write_blob(repo, bytes)?,
-        ));
-    }
-    let digest_tree = gitutil::write_tree(repo, digest_entries)?;
-    let mut top = vec![entry(EntryKind::Tree, "digest", digest_tree)];
-
-    let materialized = if height == 0 {
-        let leaf_bytes: Option<Vec<u8>> = if let Some(&data) = leaf_map.get(&left) {
-            Some(data.to_vec())
-        } else if let Some(r) = existing {
-            if r.materialized {
-                read_leaf_blob(repo, r.id)?
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if let Some(bytes) = &leaf_bytes {
-            top.push(entry(
+        editor
+            .upsert(
+                format!("e/{}", hex16(alg_id)).as_str(),
                 EntryKind::Blob,
-                "leaf",
-                gitutil::write_blob(repo, bytes)?,
-            ));
-        }
-        leaf_bytes.is_some()
-    } else if let Some(r) = existing {
-        // Already existed: carry forward whatever children it already has
-        // (none, if it was ever opaque -- SG10's no-backfill rule means that
-        // can never change through this trait) unconditionally; the loop is
-        // simply empty for a node with no children to carry.
-        for child in gitutil::read_tree(repo, r.id)? {
-            if child.filename != "digest" {
-                top.push(entry(child.kind, child.filename, child.oid));
+                blob_id,
+            )
+            .map_err(git_err)?;
+    }
+
+    // SG9's note: at new_count == 0 there is no committed append for either
+    // construction path to bind a root to, so a caller-supplied root value
+    // here is exactly as observationally meaningless as the kind byte is --
+    // `NaryMerkleLog::new`'s eager `add_algorithm` never supplies one at
+    // genesis, while `NaryMerkleLog::resume` from an empty seal always does
+    // (the empty view's own computed root), and the two provenances must
+    // still commit the identical `C(0)`. Suppressing every `r/` entry at
+    // count 0, regardless of what this batch was handed, closes that gap
+    // the same way the kind canonicalization above does.
+    for &alg_id in &alg_ids {
+        let keep = new_count > 0 && active.contains(&alg_id);
+        if keep {
+            if let Some(bytes) = old_roots.get(&alg_id) {
+                let blob_id = gitutil::write_blob(repo, bytes)?;
+                editor
+                    .upsert(
+                        format!("r/{}", hex16(alg_id)).as_str(),
+                        EntryKind::Blob,
+                        blob_id,
+                    )
+                    .map_err(git_err)?;
+                continue;
             }
         }
-        r.materialized
-    } else {
-        let decomposable = is_decomposable(k, left, height, leaf_map, node_map, old_index);
-        if decomposable {
-            let span = k.pow(height - 1);
-            for c in 0..k {
-                let child_left = left + c * span;
-                let child = resolve_node(repo, k, child_left, height - 1, ctx)?;
-                top.push(entry(EntryKind::Tree, hex2(c), child.id));
-            }
-        }
-        decomposable
-    };
+        editor
+            .remove(format!("r/{}", hex16(alg_id)).as_str())
+            .map_err(git_err)?;
+    }
 
-    let id = gitutil::write_tree(repo, top)?;
-    Ok(Resolved { id, materialized })
+    Ok(())
 }
 
-/// Read every old peak's object id and materialization flag, keyed by
-/// coordinate, so unchanged peaks can be reused with zero further I/O.
-fn index_old_peaks(
+fn list_hex16_children(
     repo: &gix::Repository,
-    old_tree: Option<ObjectId>,
-    old_coords: &[(u64, u32)],
-) -> Result<HashMap<(u64, u32), Resolved>, Error> {
-    let Some(old_tree) = old_tree else {
-        return Ok(HashMap::new());
-    };
-    if old_coords.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let peaks_id = gitutil::find_entry(repo, old_tree, "peaks")?
-        .ok_or_else(|| corrupt("C(n) missing peaks/"))?;
-
-    let mut by_height: HashMap<u32, Vec<u64>> = HashMap::new();
-    for &(left, height) in old_coords {
-        by_height.entry(height).or_default().push(left);
-    }
-
-    let mut out = HashMap::new();
-    for (height, mut lefts) in by_height {
-        lefts.sort_unstable();
-        let group_id = gitutil::find_entry(repo, peaks_id, &hex2(u64::from(height)))?
-            .ok_or_else(|| corrupt(format!("missing peaks/{}", hex2(u64::from(height)))))?;
-        for (q, left) in lefts.into_iter().enumerate() {
-            let node_id =
-                gitutil::find_entry(repo, group_id, &hex2(q as u64))?.ok_or_else(|| {
-                    corrupt(format!(
-                        "missing peaks/{}/{}",
-                        hex2(u64::from(height)),
-                        hex2(q as u64)
-                    ))
-                })?;
-            let materialized = node_is_materialized(repo, node_id, height)?;
-            out.insert(
-                (left, height),
-                Resolved {
-                    id: node_id,
-                    materialized,
-                },
-            );
-        }
-    }
-    Ok(out)
-}
-
-fn node_is_materialized(
-    repo: &gix::Repository,
-    node_id: ObjectId,
-    height: u32,
-) -> Result<bool, Error> {
-    let entries = gitutil::read_tree(repo, node_id)?;
-    if height == 0 {
-        Ok(entries.iter().any(|e| e.filename == "leaf"))
-    } else {
-        Ok(entries.iter().any(|e| e.filename != "digest"))
-    }
-}
-
-fn read_digest_map(
-    repo: &gix::Repository,
-    node_id: ObjectId,
-) -> Result<HashMap<u64, Vec<u8>>, Error> {
-    let Some(digest_id) = gitutil::find_entry(repo, node_id, "digest")? else {
-        return Ok(HashMap::new());
-    };
-    let mut map = HashMap::new();
-    for e in gitutil::read_tree(repo, digest_id)? {
-        let alg = layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
-            corrupt(format!(
-                "digest/ entry {} is not a hex(alg_id,16) name",
-                e.filename
-            ))
-        })?;
-        map.insert(alg, gitutil::read_blob(repo, e.oid)?);
-    }
-    Ok(map)
-}
-
-fn read_leaf_blob(repo: &gix::Repository, node_id: ObjectId) -> Result<Option<Vec<u8>>, Error> {
-    match gitutil::find_entry(repo, node_id, "leaf")? {
-        Some(id) => Ok(Some(gitutil::read_blob(repo, id)?)),
-        None => Ok(None),
-    }
-}
-
-fn list_epoch_algorithms(repo: &gix::Repository, tree: ObjectId) -> Result<Vec<u64>, Error> {
-    let Some(epochs_id) = gitutil::find_entry(repo, tree, "epochs")? else {
+    tree: ObjectId,
+    section: &str,
+) -> Result<Vec<u64>, Error> {
+    let Some(section_id) = gitutil::find_entry(repo, tree, section)? else {
         return Ok(Vec::new());
     };
-    gitutil::read_tree(repo, epochs_id)?
+    gitutil::read_tree(repo, section_id)?
         .into_iter()
         .map(|e| {
             layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
                 corrupt(format!(
-                    "epochs/ entry {} is not a hex(alg_id,16) name",
+                    "{section}/ entry {} is not a hex(alg_id,16) name",
                     e.filename
                 ))
             })

@@ -37,6 +37,29 @@ pub fn parse_hex16(name: &str) -> Option<u64> {
     u64::from_str_radix(name, 16).ok()
 }
 
+/// The `byte1-be-trim` key path scheme (THE DESIGN, ratified by two spikes:
+/// `spike-report.md` and its prototype `storage-git-keyed/`). A key's
+/// leading zero bytes are stripped, a one-ASCII-digit length segment (the
+/// count of remaining significant bytes, `1..=8`) is prepended, and each
+/// remaining byte becomes its own two-lowercase-hex-digit segment,
+/// most-significant byte first. `key == 0` is one significant (zero) byte,
+/// never zero segments, so every key gets a non-empty path. Distinct keys
+/// always produce distinct segment sequences (the length segment keeps two
+/// keys of different significant-byte-length from ever sharing a directory,
+/// and fixed-width hex-pair segments keep two keys of the same length from
+/// ever sharing one once their bytes differ) -- `tests/key_derived_layout.rs`
+/// checks this by exhaustive round-trip over representative keys.
+#[must_use]
+pub fn trimmed_key_segments(key: u64) -> Vec<String> {
+    let be = key.to_be_bytes();
+    let first_nonzero = be.iter().position(|&b| b != 0).unwrap_or(7);
+    let sig = &be[first_nonzero..];
+    let mut segs = Vec::with_capacity(sig.len() + 1);
+    segs.push(sig.len().to_string());
+    segs.extend(sig.iter().map(|b| format!("{b:02x}")));
+    segs
+}
+
 /// `meta`'s fixed 11-byte encoding (§3.1, SG12). One shape, for every log
 /// regardless of resume history: there is nothing this early to stay
 /// compatible with, so no version byte, no second wider shape, and no
@@ -244,27 +267,45 @@ mod tests {
         assert!(decode_epochs(&[0u8; 15]).is_err());
     }
 
-    /// SG6: no fixed literal name is ever a valid `hex(_, w)` string for any
-    /// `w`, so it can never collide with a `hex16`/`hex2` sibling name --
-    /// checked exhaustively over the fixed literal alphabet, the way SG6
-    /// itself frames the claim ("a name-collision or prefix-ambiguity check
-    /// is exhaustive over the fixed alphabet").
+    /// SG6: the five fixed top-level literals are mutually distinct and
+    /// never sit as siblings of a hex- or trimmed-key-encoded entry under
+    /// the key-derived layout (`n`/`l` hold only key-fanned-out subtrees;
+    /// `meta`/`e`/`r` hold only named metadata) -- so, unlike the retired
+    /// peak-and-children layout, no literal name needs to avoid looking
+    /// like a hex string at all: this test only needs the five literals
+    /// distinct from one another, checked exhaustively.
     #[test]
-    fn literal_names_never_collide_with_a_hex_encoded_name() {
-        for name in [
-            "meta",
-            "epochs",
-            "roots",
-            "peaks",
-            "leaf",
-            "digest",
-            "inherited",
-        ] {
-            assert!(
-                !name.bytes().all(|b| b.is_ascii_hexdigit()),
-                "{name:?} is all-hex and could collide with a \
-                 hex(alg_id,16)/hex(j,2)/hex(q,2)/hex(c,2) sibling"
-            );
+    fn top_level_literal_names_are_mutually_distinct() {
+        let names = ["meta", "n", "l", "e", "r"];
+        for (i, a) in names.iter().enumerate() {
+            for b in &names[i + 1..] {
+                assert_ne!(a, b, "top-level literal names must be mutually distinct");
+            }
+        }
+    }
+
+    #[test]
+    fn trimmed_shrinks_path_for_small_keys() {
+        assert_eq!(trimmed_key_segments(0), vec!["1", "00"]);
+        assert_eq!(trimmed_key_segments(0xab), vec!["1", "ab"]);
+        assert_eq!(trimmed_key_segments(0x0100), vec!["2", "01", "00"]);
+        assert_eq!(
+            trimmed_key_segments(u64::MAX),
+            vec!["8", "ff", "ff", "ff", "ff", "ff", "ff", "ff", "ff"]
+        );
+    }
+
+    #[test]
+    fn trimmed_length_segment_prevents_cross_length_collision() {
+        assert_ne!(trimmed_key_segments(1)[0], trimmed_key_segments(256)[0]);
+    }
+
+    #[test]
+    fn every_key_round_trips_to_a_distinct_path() {
+        let mut seen = std::collections::HashSet::new();
+        for k in [0u64, 1, 2, 255, 256, 65535, 65536, 1_000_000, u64::MAX] {
+            let p = trimmed_key_segments(k);
+            assert!(seen.insert(p.clone()), "key {k} collided with path {p:?}");
         }
     }
 }
