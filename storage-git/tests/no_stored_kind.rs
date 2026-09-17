@@ -5,12 +5,14 @@
 //! version byte (nothing this early in the format's life to stay compatible
 //! with).
 //!
-//! RED today: `layout::encode_meta`/`decode_meta` still produce/expect an
-//! 11-byte blob with a trailing kind byte (`storage-git/src/layout.rs`).
-//! Checked at the raw byte level, straight off the git tree -- independent
-//! of `storage-git`'s own `decode_meta` (which is exactly the function
-//! under scrutiny; asserting the byte LENGTH does not depend on trusting it
-//! to decode correctly).
+//! Passing at HEAD: `layout::encode_meta`/`decode_meta` already produce/expect
+//! the 10-byte, kind-free shape (`storage-git/src/layout.rs::encode_meta`
+//! returns `[u8; 10]`, `decode_meta` rejects any other length). Checked at
+//! the raw byte level, straight off the git tree -- independent of
+//! `storage-git`'s own `decode_meta` (which is exactly the function under
+//! scrutiny; asserting the byte LENGTH does not depend on trusting it to
+//! decode correctly). Demonstrated by mutation: reverting `encode_meta` to
+//! an 11-byte, kind-carrying shape turns this red immediately.
 
 mod common;
 
@@ -44,8 +46,7 @@ fn meta_len(repo: &gix::ThreadSafeRepository, staging: &str) -> usize {
 
 /// [NO STORED KIND] `meta` is exactly 10 bytes after a genesis write (arity,
 /// append count) -- demonstrated by mutation: reverting `layout::encode_meta`
-/// to its current 11-byte, kind-carrying shape turns this red immediately
-/// (it already is, at HEAD).
+/// to an 11-byte, kind-carrying shape turns this red.
 #[test]
 fn meta_blob_carries_no_kind_byte_at_genesis() {
     smol::block_on(async {

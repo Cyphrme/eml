@@ -3,12 +3,13 @@
 //! metadata keyspace therefore carries the append count alone -- 8 bytes,
 //! never 9 -- under its reserved log-metadata key: no kind byte.
 //!
-//! RED today: `FjallStorage`'s (stubbed) write path is a direct
-//! translation of the old `write_batch`'s `log_meta: Option<(u64, u8)>`
-//! shape, which still reserves a 9-byte value with a trailing kind byte
-//! (`storage-fjall/src/lib.rs::LOG_META_KEY`/`append_count`). Checked at the
-//! raw keyspace-value-length level, independent of `FjallStorage`'s own
-//! `append_count` decoding.
+//! Passing at HEAD: `FjallStorage`'s write path already stores the
+//! append count alone under `LOG_META_KEY` -- an 8-byte value, no kind byte
+//! (`storage-fjall/src/lib.rs:15-17`). Checked at the raw keyspace-value-length
+//! level, independent of `FjallStorage`'s own `append_count` decoding.
+//! Demonstrated by mutation: reverting the write path to the old
+//! `write_batch`'s `log_meta: Option<(u64, u8)>` shape (a 9-byte value with
+//! a trailing kind byte) turns this red immediately.
 
 use polydigest::{Hasher, NaryMerkleLog, TreeConfig};
 use sha2::{Digest, Sha256};
@@ -62,8 +63,8 @@ fn log_meta_value_len(dir: &std::path::Path) -> usize {
 
 /// [NO STORED KIND] The log-metadata value is exactly 8 bytes (the append
 /// count alone) after a genesis write -- demonstrated by mutation:
-/// reverting `FjallStorage`'s write path to its current 9-byte,
-/// kind-carrying shape turns this red immediately (it already is, at HEAD).
+/// reverting `FjallStorage`'s write path to a 9-byte, kind-carrying shape
+/// turns this red.
 #[test]
 fn log_meta_value_carries_no_kind_byte_at_genesis() {
     smol::block_on(async {
