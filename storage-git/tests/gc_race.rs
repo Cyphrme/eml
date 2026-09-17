@@ -91,7 +91,6 @@ use std::time::Duration;
 
 use common::init_repo;
 use gix::hash::Kind as HashKind;
-use polydigest::Storage;
 use storage_git::GitStorage;
 
 /// The bound the implementation must honor: a ref-update retry loop must
@@ -159,7 +158,7 @@ fn retry_gives_up_within_the_stated_bound_when_the_lock_never_clears() {
 
         let (result_tx, result_rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = smol::block_on(storage.store_leaf(0, b"leaf0"));
+            let result = smol::block_on(common::append_leaf(&mut storage, 0, b"leaf0"));
             // A `send` failure here just means the receiver already gave up
             // after the ceiling elapsed and this thread is now leaking past
             // the end of a failed test -- not a bug in this thread itself.
@@ -230,7 +229,7 @@ fn deterministic_transient_lock_does_not_fail_an_append() {
         let (result_tx, result_rx) = mpsc::channel();
         thread::spawn(move || {
             let _ = started_tx.send(());
-            let result = smol::block_on(storage.store_leaf(0, b"leaf0"));
+            let result = smol::block_on(common::append_leaf(&mut storage, 0, b"leaf0"));
             let _ = result_tx.send(result);
         });
 
@@ -302,7 +301,7 @@ fn small_scale_concurrent_gc_against_a_sequential_writer() {
             let mut attempts = 0u32;
             loop {
                 attempts += 1;
-                match storage.store_leaf(i, &data).await {
+                match common::append_leaf(&mut storage, i, &data).await {
                     Ok(()) => break,
                     Err(e) => {
                         if e.is_tip_moved() {

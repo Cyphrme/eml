@@ -15,7 +15,6 @@ mod support;
 
 use std::time::SystemTime;
 
-use polydigest::Storage;
 use support::{age_loose_object, bare_repo, loose_object_mtime, new_log};
 
 /// [SG22] An object that already exists, unreferenced, and past the grace
@@ -55,7 +54,9 @@ fn sg22_writing_an_already_existing_object_freshens_it() {
         // id-identical) to the pre-aged object.
         let before_write = SystemTime::now();
         let mut log = new_log(&repo, staging, 2, support::FixtureHasher::new(32)).await;
-        log.storage_mut().store_leaf(0, payload).await.unwrap();
+        support::append_leaf(log.storage_mut(), 0, payload)
+            .await
+            .unwrap();
 
         let after_mtime = loose_object_mtime(&git_dir, blob_id)
             .expect("the object must still exist as a loose object after GitStorage's write");

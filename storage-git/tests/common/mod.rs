@@ -7,9 +7,31 @@ use std::collections::HashSet;
 use gix::ThreadSafeRepository;
 use gix::create::{Kind as CreateKind, Options as CreateOptions};
 use gix::hash::Kind as HashKind;
+use polydigest::{Storage, WriteOp};
 use sha2::{Digest, Sha256};
 use spine::Hasher;
+use storage_git::{GitStorage, GitStorageError};
 use tempfile::TempDir;
+
+/// Append one raw leaf directly through [`Storage::apply`], with no node or
+/// checkpoint-root side effects -- the direct-`Storage`-level equivalent of
+/// the old standalone `store_leaf`, for tests exercising `GitStorage`'s CAS
+/// and error-classification behavior below the `NaryMerkleLog` layer.
+#[allow(dead_code)]
+pub async fn append_leaf(
+    storage: &mut GitStorage,
+    index: u64,
+    data: &[u8],
+) -> Result<(), GitStorageError> {
+    storage
+        .apply(&[WriteOp::AppendLeaf {
+            at: index,
+            data,
+            nodes: &[],
+            checkpoint_roots: &[],
+        }])
+        .await
+}
 
 /// Initialize a fresh bare repository under the requested object-hash
 /// format (SG27).

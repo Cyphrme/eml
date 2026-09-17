@@ -61,7 +61,6 @@ use std::fs;
 
 use common::init_repo;
 use gix::hash::Kind as HashKind;
-use polydigest::Storage;
 use storage_git::GitStorage;
 
 /// [CAS CLASSIFICATION] Forces a `LockAcquire`-shaped failure directly:
@@ -85,7 +84,7 @@ fn lock_contention_before_any_compare_is_not_reported_as_tip_moved() {
         fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         fs::write(&lock_path, b"held by this test\n").unwrap();
 
-        let result = storage.store_leaf(0, b"leaf0").await;
+        let result = common::append_leaf(&mut storage, 0, b"leaf0").await;
         let err = result.expect_err("a held lock must fail the write");
 
         assert!(
@@ -141,7 +140,7 @@ fn lock_contention_at_genesis_is_not_reported_as_tip_moved() {
         fs::write(&lock_path, b"held by this test\n").unwrap();
 
         let mut storage = GitStorage::new(repo, staging, 2).unwrap();
-        let result = storage.store_leaf(0, b"leaf0").await;
+        let result = common::append_leaf(&mut storage, 0, b"leaf0").await;
         let err = result.expect_err("a held lock must fail the genesis write");
 
         assert!(

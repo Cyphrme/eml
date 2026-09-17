@@ -5,7 +5,6 @@
 #[path = "acceptance_support/mod.rs"]
 mod support;
 
-use polydigest::Storage;
 use support::{FixtureHasher, bare_repo, new_log, object_kind, ref_target, reopen_repo};
 
 /// [SG17] The staging ref's target MUST always be a tree object, `C(n)` for
@@ -61,15 +60,14 @@ fn sg19_sg25_concurrent_writer_gets_tip_moved_and_ref_never_moves_on_failure() {
         );
 
         // Writer A wins the genesis race.
-        writer_a
-            .store_leaf(0, b"from-a")
+        support::append_leaf(&mut writer_a, 0, b"from-a")
             .await
             .expect("writer A's genesis write must succeed");
         let tip_after_a = ref_target(&local, staging).expect("ref must exist after A's write");
 
         // Writer B, still holding the pre-A observation (no ref), now
         // attempts its own genesis write and must lose.
-        let result_b = writer_b.store_leaf(0, b"from-b").await;
+        let result_b = support::append_leaf(&mut writer_b, 0, b"from-b").await;
         let err = result_b.expect_err(
             "writer B's stale genesis write must fail, not silently overwrite A's data",
         );
@@ -99,8 +97,7 @@ fn sg19_sg25_concurrent_writer_gets_tip_moved_and_ref_never_moves_on_failure() {
         // against the ref's *current* value succeeds.
         let mut writer_b_retry = storage_git::GitStorage::new(reopen_repo(dir.path()), staging, 10)
             .expect("reopen for retry");
-        writer_b_retry
-            .store_leaf(1, b"from-b-retry")
+        support::append_leaf(&mut writer_b_retry, 1, b"from-b-retry")
             .await
             .expect("a reloaded writer must be able to append next");
         let tip_after_retry = ref_target(&local, staging).unwrap();
@@ -111,13 +108,13 @@ fn sg19_sg25_concurrent_writer_gets_tip_moved_and_ref_never_moves_on_failure() {
     });
 }
 
-/// [SG18d] Every non-batched mutating method (here, a second `store_leaf`
-/// through the same stale instance) goes through the identical
-/// compare-and-swap path as `write_batch` -- it must not bypass CAS
-/// protection just because it is not literally routed through
-/// `write_batch` at the call site.
+/// [SG18d] Every [`polydigest::WriteOp`] variant goes through the identical
+/// compare-and-swap path -- an `AddAlgorithm` op on a stale instance must
+/// fail exactly the same way an `AppendLeaf` op does; there is only the one
+/// mutating entry point ([`Storage::apply`]), so no variant may bypass CAS
+/// protection.
 #[test]
-fn sg18d_standalone_methods_share_the_same_cas_path() {
+fn sg18d_every_op_variant_shares_the_same_cas_path() {
     smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
@@ -129,16 +126,17 @@ fn sg18d_standalone_methods_share_the_same_cas_path() {
         let mut writer_b =
             storage_git::GitStorage::new(repo.clone(), staging, 10).expect("open writer B");
 
-        writer_a.store_leaf(0, b"a0").await.unwrap();
-        writer_a.store_leaf(1, b"a1").await.unwrap();
+        support::append_leaf(&mut writer_a, 0, b"a0").await.unwrap();
+        support::append_leaf(&mut writer_a, 1, b"a1").await.unwrap();
         let tip_after_a = ref_target(&local, staging).unwrap();
 
-        // writer_b is stale from before either of A's writes; its next
-        // standalone store_algorithm_meta call must also be CAS-protected.
-        let result = writer_b.store_algorithm_meta(0, &[(0, u64::MAX)]).await;
+        // writer_b is stale from before either of A's writes; an
+        // `AddAlgorithm` op through the same instance must also be
+        // CAS-protected.
+        let result = support::add_algorithm_meta(&mut writer_b, 0, &[(0, u64::MAX)]).await;
         assert!(
             result.is_err_and(|e| e.is_tip_moved()),
-            "a standalone store_algorithm_meta must go through the same CAS path as write_batch"
+            "WriteOp::AddAlgorithm must go through the identical CAS path as WriteOp::AppendLeaf"
         );
         assert_eq!(
             ref_target(&local, staging).unwrap(),

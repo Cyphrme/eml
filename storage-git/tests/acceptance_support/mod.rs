@@ -19,8 +19,43 @@
 use std::path::Path;
 use std::time::SystemTime;
 
-use polydigest::{MemoryStorage, NaryMerkleLog, TreeConfig};
+use polydigest::{MemoryStorage, NaryMerkleLog, Storage, TreeConfig, WriteOp};
 use spine::Hasher;
+use storage_git::{GitStorage, GitStorageError};
+
+/// Append one raw leaf directly through [`Storage::apply`], with no node or
+/// checkpoint-root side effects -- the direct-`Storage`-level equivalent of
+/// the old standalone `store_leaf`, for tests exercising `GitStorage`'s CAS
+/// behavior below the `NaryMerkleLog` layer.
+#[allow(dead_code)]
+pub async fn append_leaf(
+    storage: &mut GitStorage,
+    index: u64,
+    data: &[u8],
+) -> Result<(), GitStorageError> {
+    storage
+        .apply(&[WriteOp::AppendLeaf {
+            at: index,
+            data,
+            nodes: &[],
+            checkpoint_roots: &[],
+        }])
+        .await
+}
+
+/// Register one algorithm directly through [`Storage::apply`] -- the
+/// direct-`Storage`-level equivalent of the old standalone
+/// `store_algorithm_meta`.
+#[allow(dead_code)]
+pub async fn add_algorithm_meta(
+    storage: &mut GitStorage,
+    alg_id: u64,
+    epochs: &[(u64, u64)],
+) -> Result<(), GitStorageError> {
+    storage
+        .apply(&[WriteOp::AddAlgorithm { alg_id, epochs }])
+        .await
+}
 
 /// A caller-supplied hasher fixture (SG26: this crate's tests may hardcode a
 /// concrete hasher; `storage-git` itself never may). Backed by SHA-256,

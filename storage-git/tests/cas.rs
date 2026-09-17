@@ -15,7 +15,9 @@ fn sg17_staging_ref_points_at_a_tree() {
     smol::block_on(async {
         let (_dir, repo) = init_repo(HashKind::Sha1);
         let mut storage = GitStorage::new(repo.clone(), STAGING, 2).unwrap();
-        storage.store_leaf(0, b"leaf0").await.unwrap();
+        common::append_leaf(&mut storage, 0, b"leaf0")
+            .await
+            .unwrap();
 
         let local = repo.to_thread_local();
         let r = local.find_reference(STAGING).unwrap();
@@ -41,12 +43,12 @@ fn sg19_stale_writer_gets_tip_moved_and_ref_is_unmoved() {
         let (_dir, repo) = init_repo(HashKind::Sha1);
 
         let mut writer_a = GitStorage::new(repo.clone(), STAGING, 8).unwrap();
-        writer_a.store_leaf(0, b"a0").await.unwrap();
+        common::append_leaf(&mut writer_a, 0, b"a0").await.unwrap();
 
         // writer_b opens the ref at the same point writer_a started from,
         // then writer_a advances again before writer_b's own write lands.
         let mut writer_b = GitStorage::new(repo.clone(), STAGING, 8).unwrap();
-        writer_a.store_leaf(1, b"a1").await.unwrap();
+        common::append_leaf(&mut writer_a, 1, b"a1").await.unwrap();
 
         let local = repo.to_thread_local();
         let tip_after_a = local
@@ -56,7 +58,7 @@ fn sg19_stale_writer_gets_tip_moved_and_ref_is_unmoved() {
             .id()
             .to_owned();
 
-        let result = writer_b.store_leaf(1, b"b1-conflicting").await;
+        let result = common::append_leaf(&mut writer_b, 1, b"b1-conflicting").await;
         assert!(result.is_err(), "stale writer's CAS must fail");
         assert!(
             result.unwrap_err().is_tip_moved(),
@@ -92,8 +94,8 @@ fn sg19_genesis_race_is_also_tip_moved() {
         let mut first = GitStorage::new(repo.clone(), STAGING, 2).unwrap();
         let mut racer = GitStorage::new(repo, STAGING, 2).unwrap();
 
-        first.store_leaf(0, b"first").await.unwrap();
-        let result = racer.store_leaf(0, b"racer").await;
+        common::append_leaf(&mut first, 0, b"first").await.unwrap();
+        let result = common::append_leaf(&mut racer, 0, b"racer").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().is_tip_moved());
     });
