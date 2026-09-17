@@ -60,46 +60,37 @@ pub fn trimmed_key_segments(key: u64) -> Vec<String> {
     segs
 }
 
-/// `meta`'s fixed 11-byte encoding (§3.1, SG12). One shape, for every log
-/// regardless of resume history: there is nothing this early to stay
-/// compatible with, so no version byte, no second wider shape, and no
-/// boundary field exist to distinguish one from another.
+/// `meta`'s fixed 10-byte encoding (§3.1, SG12): arity, then count. One
+/// shape, for every log regardless of resume history: there is nothing this
+/// early to stay compatible with, so no version byte, no second wider
+/// shape, and no boundary field exist to distinguish one from another. No
+/// kind byte either -- a log's kind is derived from content, never stored
+/// (head's ruling, 2026-09-17); see [`crate::LogMetadata`]'s own doc for the
+/// derivation.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
-              exercised directly by this module's own tests below"
-)]
-pub fn encode_meta(arity: u64, count: u64, kind: u8) -> [u8; 11] {
-    let mut out = [0u8; 11];
+pub fn encode_meta(arity: u64, count: u64) -> [u8; 10] {
+    let mut out = [0u8; 10];
     out[0..2].copy_from_slice(&(arity as u16).to_be_bytes());
     out[2..10].copy_from_slice(&count.to_be_bytes());
-    out[10] = kind;
     out
 }
 
-/// Decode `meta`'s bytes (§3.1, SG12). Rejects any length other than 11.
-pub fn decode_meta(bytes: &[u8]) -> Result<(u64, u64, u8), Error> {
-    if bytes.len() != 11 {
+/// Decode `meta`'s bytes (§3.1, SG12). Rejects any length other than 10.
+pub fn decode_meta(bytes: &[u8]) -> Result<(u64, u64), Error> {
+    if bytes.len() != 10 {
         return Err(Error::Corruption(format!(
-            "meta blob must be exactly 11 bytes, got {}",
+            "meta blob must be exactly 10 bytes, got {}",
             bytes.len()
         )));
     }
     let arity = u16::from_be_bytes([bytes[0], bytes[1]]) as u64;
     let count = u64::from_be_bytes(bytes[2..10].try_into().unwrap());
-    let kind = bytes[10];
-    Ok((arity, count, kind))
+    Ok((arity, count))
 }
 
 /// A `epochs/hex(alg_id,16)` blob's encoding (§3.2): a sequence of
 /// `(start, end)` `u64` BE pairs, each 16 bytes.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
-              exercised directly by this module's own tests below"
-)]
 pub fn encode_epochs(epochs: &[(u64, u64)]) -> Vec<u8> {
     let mut out = Vec::with_capacity(epochs.len() * 16);
     for &(start, end) in epochs {
@@ -136,11 +127,6 @@ pub fn decode_epochs(bytes: &[u8]) -> Result<Vec<(u64, u64)>, Error> {
 /// `tests/epoch_parity.rs` checks this copy against the real `AlgView` for
 /// randomized histories so the two cannot silently drift apart.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
-              exercised directly by this module's own tests below"
-)]
 pub fn epochs_at(history: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
     let mut out = Vec::new();
     for &(start, end) in history {
@@ -158,11 +144,6 @@ pub fn epochs_at(history: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
 
 /// Whether the epoch timeline's last entry is active (open) at `size`.
 #[must_use]
-#[allow(
-    dead_code,
-    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
-              exercised directly by this module's own tests below"
-)]
 pub fn is_active_at(epochs_at_size: &[(u64, u64)]) -> bool {
     epochs_at_size
         .last()
@@ -263,19 +244,19 @@ mod tests {
 
     #[test]
     fn meta_round_trip() {
-        let bytes = encode_meta(4, 12345, 1);
-        assert_eq!(bytes.len(), 11, "meta's one fixed shape is 11 bytes");
-        assert_eq!(decode_meta(&bytes).unwrap(), (4, 12345, 1));
-        assert!(decode_meta(&bytes[..10]).is_err());
+        let bytes = encode_meta(4, 12345);
+        assert_eq!(bytes.len(), 10, "meta's one fixed shape is 10 bytes");
+        assert_eq!(decode_meta(&bytes).unwrap(), (4, 12345));
+        assert!(decode_meta(&bytes[..9]).is_err());
     }
 
     #[test]
-    fn meta_rejects_any_length_other_than_eleven() {
-        let bytes = encode_meta(4, 12345, 1);
+    fn meta_rejects_any_length_other_than_ten() {
+        let bytes = encode_meta(4, 12345);
         let mut too_long = bytes.to_vec();
         too_long.push(0);
         assert!(decode_meta(&too_long).is_err());
-        assert!(decode_meta(&bytes[..10]).is_err());
+        assert!(decode_meta(&bytes[..9]).is_err());
     }
 
     #[test]
