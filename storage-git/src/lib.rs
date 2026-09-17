@@ -33,12 +33,13 @@
 //!    not part of the key-derived layout at all beyond `meta.arity` (§3.1). [`GitStorage::new`]
 //!    takes `arity` explicitly and persists it in `meta` (SG12); reopening against a tree whose
 //!    stored arity disagrees is rejected as [`GitStorageError::InvalidArity`].
-//! 2. **Standalone `store_leaf`/`store_node` require in-order leaf indices.** A standalone
-//!    `store_leaf(index, _)` is accepted only at `index == len()`, matching the same append-only
-//!    assumption `MemoryStorage` already makes via its own `debug_assert_eq!`. Nothing about the
-//!    key-derived layout itself requires in-order writes -- every key is independent -- this
-//!    constraint exists only to keep `len()`/`meta.count` (which the layout does still track, §3.1)
-//!    a faithful count of contiguous leaves.
+//! 2. **`apply`'s `AppendLeaf`/`AppendSubtree` ops require in-order positions.** A
+//!    [`polydigest::WriteOp::AppendLeaf`]/[`polydigest::WriteOp::AppendSubtree`]'s `at` is accepted
+//!    only at `at == append_count()`, matching the same append-only assumption `MemoryStorage`
+//!    already makes via its own `debug_assert_eq!`. Nothing about the key-derived layout itself
+//!    requires in-order writes -- every key is independent -- this constraint exists only to keep
+//!    `len()`/`meta.count` (which the layout does still track, §3.1) a faithful count of contiguous
+//!    leaves.
 //!
 //! # The tip-tree model
 //!
@@ -64,7 +65,7 @@ pub use error::GitStorageError;
 use gix::ObjectId;
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit};
 use gix::refs::{FullName, Target};
-use polydigest::{AlgorithmMetas, Storage};
+use polydigest::{AlgorithmMetas, LogKind, Storage, WriteOp};
 
 /// The bound `cas()`'s internal retry loop honors for a definitely-non-
 /// mismatch ref-update failure (SG19a): give up and return
@@ -73,6 +74,20 @@ use polydigest::{AlgorithmMetas, Storage};
 /// genuine compare-mismatch is never retried internally regardless of this
 /// bound -- it returns [`GitStorageError::TipMoved`] on the first attempt.
 const RETRY_BOUND: Duration = Duration::from_secs(2);
+
+/// A checkpoint's log metadata (head's ruling, 2026-09-17, requirement E):
+/// the append count and the derived kind, so the checkpoint layer above
+/// this crate never decodes `meta`'s raw bytes -- or reasons about kind
+/// derivation -- itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogMetadata {
+    /// The total number of log-level appends committed at this checkpoint.
+    pub count: u64,
+    /// The derived kind (never stored -- see [`Storage::len`]'s doc comment
+    /// for the derivation this mirrors). `LogKind::Flat` at `count == 0`,
+    /// where either kind is equally valid.
+    pub kind: LogKind,
+}
 
 /// A `polydigest::Storage` backend over a git object database.
 ///
@@ -88,14 +103,13 @@ pub struct GitStorage {
     /// next write's compare-and-swap uses `MustNotExist`). Populated once,
     /// in [`Self::new`], from a lookup of `staging_ref` alone -- never from
     /// scanning the backing repository's object database or any other ref.
-    /// `load_log_meta` (below) reports `None` exactly when this is `None`,
-    /// so a repository that hosts several logs side by side, each under its
-    /// own staging ref (e.g. a fork: sealing one ref and resuming into a
+    /// `append_count` (below) reports `0` exactly when this is `None`, so a
+    /// repository that hosts several logs side by side, each under its own
+    /// staging ref (e.g. a fork: sealing one ref and resuming into a
     /// brand-new ref in the same repository), reports freshness correctly
     /// per ref -- one ref's committed log is never visible through another.
     observed_tip: Option<ObjectId>,
     count: u64,
-    kind_byte: u8,
 }
 
 impl GitStorage {
@@ -127,11 +141,11 @@ impl GitStorage {
             .map_err(|_| GitStorageError::InvalidRef(staging_ref.as_ref().to_string()))?;
 
         let local = repo.to_thread_local();
-        let (observed_tip, count, kind_byte) = match local
+        let (observed_tip, count) = match local
             .try_find_reference(staging_ref.as_ref())
             .map_err(|e| GitStorageError::Git(e.to_string()))?
         {
-            None => (None, 0, 0),
+            None => (None, 0),
             Some(mut r) => {
                 let tree_id = r
                     .peel_to_id()
@@ -141,13 +155,16 @@ impl GitStorage {
                     GitStorageError::Corruption("staging ref's tree has no meta".into())
                 })?;
                 let bytes = gitutil::read_blob(&local, meta_id)?;
-                let (stored_arity, count, kind_byte) = layout::decode_meta(&bytes)?;
+                // `_kind_byte`: meta's stored kind byte is on its way out
+                // (a log's kind is derived, never persisted); nothing here
+                // depends on it until `layout::decode_meta` drops it.
+                let (stored_arity, count, _kind_byte) = layout::decode_meta(&bytes)?;
                 if stored_arity != arity {
                     return Err(GitStorageError::InvalidArity(format!(
                         "instance arity {arity} disagrees with stored meta.arity {stored_arity}"
                     )));
                 }
-                (Some(tree_id), count, kind_byte)
+                (Some(tree_id), count)
             },
         };
 
@@ -157,7 +174,6 @@ impl GitStorage {
             arity,
             observed_tip,
             count,
-            kind_byte,
         })
     }
 
@@ -191,6 +207,19 @@ impl GitStorage {
     #[must_use]
     pub fn tip_tree(&self) -> Option<ObjectId> {
         self.observed_tip
+    }
+
+    /// This instance's current log metadata: append count and derived kind
+    /// (head's ruling, 2026-09-17, requirement E), so a caller (e.g. the
+    /// checkpoint layer) never needs to decode `meta`'s raw bytes or derive
+    /// kind itself.
+    #[must_use]
+    pub fn metadata(&self) -> LogMetadata {
+        // Deliberately unimplemented: this reads exactly the same
+        // (`len`, `append_count`) pair `Storage::apply`/`from_storage`
+        // already derive kind from, and has no implementation on this
+        // backend yet.
+        unimplemented!("GitStorage::metadata: pending the operation-enum write path landing")
     }
 
     /// A read-only view over an arbitrary checkpoint tree (§4.4, SG21),
@@ -299,23 +328,6 @@ fn is_genuine_cas_mismatch(e: &gix::reference::edit::Error) -> bool {
 impl Storage for GitStorage {
     type Error = GitStorageError;
 
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        if index != self.count {
-            return Err(GitStorageError::Corruption(format!(
-                "store_leaf: out-of-order index {index}, expected {}",
-                self.count
-            )));
-        }
-        self.write_batch(
-            &[(index, data)],
-            &[],
-            &[],
-            Some((index + 1, self.kind_byte)),
-            &[],
-        )
-        .await
-    }
-
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         let Some(tree) = self.observed_tip else {
             return Err(GitStorageError::NotFound(format!(
@@ -328,17 +340,6 @@ impl Storage for GitStorage {
 
     async fn len(&self) -> Result<u64, Self::Error> {
         Ok(self.count)
-    }
-
-    async fn store_node(
-        &mut self,
-        alg_id: u64,
-        left: u64,
-        height: u32,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        self.write_batch(&[], &[(alg_id, left, height, hash)], &[], None, &[])
-            .await
     }
 
     async fn get_node(
@@ -354,15 +355,6 @@ impl Storage for GitStorage {
         read::get_node(&repo, tree, alg_id, left, height)
     }
 
-    async fn store_algorithm_meta(
-        &mut self,
-        alg_id: u64,
-        epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        self.write_batch(&[], &[], &[(alg_id, epochs)], None, &[])
-            .await
-    }
-
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         let Some(tree) = self.observed_tip else {
             return Ok(Vec::new());
@@ -371,8 +363,8 @@ impl Storage for GitStorage {
         read::load_algorithm_metas(&repo, tree)
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
-        Ok(self.observed_tip.map(|_| (self.count, self.kind_byte)))
+    async fn append_count(&self) -> Result<u64, Self::Error> {
+        Ok(self.count)
     }
 
     async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
@@ -383,32 +375,20 @@ impl Storage for GitStorage {
         read::load_checkpoint_roots(&repo, tree)
     }
 
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-        algorithm_metas: &[(u64, &[(u64, u64)])],
-        log_meta: Option<(u64, u8)>,
-        checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
+    async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
+        // Deliberately unimplemented: the operation-enum write path (head's
+        // ruling 2026-09-17, plus the readable top-level names and the
+        // dropped kind byte) has no landed implementation on this backend
+        // yet. `build::apply` is the stub the implementer fills in.
         let repo = self.thread_local();
-        let input = build::WriteInputs {
-            leaves,
-            nodes,
-            algorithm_metas,
-            log_meta,
-            checkpoint_roots,
-        };
         let old = build::OldState {
             tree: self.observed_tip,
             count: self.count,
-            kind: self.kind_byte,
         };
-        let applied = build::apply_write(&repo, self.arity, old, &input)?;
+        let applied = build::apply(&repo, self.arity, old, ops)?;
         self.cas(&repo, applied.tree_id)?;
         self.observed_tip = Some(applied.tree_id);
         self.count = applied.count;
-        self.kind_byte = applied.kind_byte;
         Ok(())
     }
 }
@@ -428,6 +408,13 @@ impl GitReadOnlyView {
     #[must_use]
     pub fn tree(&self) -> ObjectId {
         self.tree
+    }
+
+    /// This view's log metadata: append count and derived kind (head's
+    /// ruling, 2026-09-17, requirement E) -- see [`GitStorage::metadata`].
+    #[must_use]
+    pub fn metadata(&self) -> LogMetadata {
+        unimplemented!("GitReadOnlyView::metadata: pending the operation-enum write path landing")
     }
 
     /// Read item `index`'s raw leaf payload.

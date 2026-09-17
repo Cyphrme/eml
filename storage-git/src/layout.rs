@@ -65,6 +65,11 @@ pub fn trimmed_key_segments(key: u64) -> Vec<String> {
 /// compatible with, so no version byte, no second wider shape, and no
 /// boundary field exist to distinguish one from another.
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
+              exercised directly by this module's own tests below"
+)]
 pub fn encode_meta(arity: u64, count: u64, kind: u8) -> [u8; 11] {
     let mut out = [0u8; 11];
     out[0..2].copy_from_slice(&(arity as u16).to_be_bytes());
@@ -90,6 +95,11 @@ pub fn decode_meta(bytes: &[u8]) -> Result<(u64, u64, u8), Error> {
 /// A `epochs/hex(alg_id,16)` blob's encoding (§3.2): a sequence of
 /// `(start, end)` `u64` BE pairs, each 16 bytes.
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
+              exercised directly by this module's own tests below"
+)]
 pub fn encode_epochs(epochs: &[(u64, u64)]) -> Vec<u8> {
     let mut out = Vec::with_capacity(epochs.len() * 16);
     for &(start, end) in epochs {
@@ -126,6 +136,11 @@ pub fn decode_epochs(bytes: &[u8]) -> Result<Vec<(u64, u64)>, Error> {
 /// `tests/epoch_parity.rs` checks this copy against the real `AlgView` for
 /// randomized histories so the two cannot silently drift apart.
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
+              exercised directly by this module's own tests below"
+)]
 pub fn epochs_at(history: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
     let mut out = Vec::new();
     for &(start, end) in history {
@@ -143,6 +158,11 @@ pub fn epochs_at(history: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
 
 /// Whether the epoch timeline's last entry is active (open) at `size`.
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
+              exercised directly by this module's own tests below"
+)]
 pub fn is_active_at(epochs_at_size: &[(u64, u64)]) -> bool {
     epochs_at_size
         .last()

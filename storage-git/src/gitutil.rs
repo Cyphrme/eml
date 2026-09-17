@@ -17,6 +17,11 @@ fn git_err(e: impl std::fmt::Display) -> Error {
 /// handle's `write_buf_with_known_id` (SG22): this call always performs the
 /// write (no existence short-circuit), which is what refreshes an object's
 /// mtime when its content happens to already exist unreferenced.
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
+              exercised directly by this module's own tests below"
+)]
 pub(crate) fn write_object(
     repo: &gix::Repository,
     kind: Kind,
@@ -48,6 +53,11 @@ pub(crate) fn write_object(
 }
 
 /// Write a blob (SG22 write path).
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
+              exercised directly by this module's own tests below"
+)]
 pub(crate) fn write_blob(repo: &gix::Repository, data: &[u8]) -> Result<gix::ObjectId, Error> {
     write_object(repo, Kind::Blob, data)
 }
@@ -115,6 +125,11 @@ pub(crate) fn resolve_at_path(
 
 /// A cheap "does this object still exist" check (a header lookup, not a
 /// full read) — SG23's post-write presence verification.
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) write path until build::apply lands; \
+              exercised directly by this module's own tests below"
+)]
 pub(crate) fn object_exists(repo: &gix::Repository, id: gix::ObjectId) -> bool {
     use gix::objs::Exists as _;
     repo.objects.exists(&id)
