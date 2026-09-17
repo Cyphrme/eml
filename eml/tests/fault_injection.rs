@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use eml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use eml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig, WriteOp};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -73,13 +73,6 @@ impl std::error::Error for FaultError {}
 impl Storage for FaultInjectingStorage {
     type Error = FaultError;
 
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        self.inner
-            .store_leaf(index, data)
-            .await
-            .map_err(|_| FaultError::Storage)
-    }
-
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         self.inner
             .get_leaf(index)
@@ -89,19 +82,6 @@ impl Storage for FaultInjectingStorage {
 
     async fn len(&self) -> Result<u64, Self::Error> {
         self.inner.len().await.map_err(|_| FaultError::Storage)
-    }
-
-    async fn store_node(
-        &mut self,
-        alg_id: u64,
-        left: u64,
-        height: u32,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        self.inner
-            .store_node(alg_id, left, height, hash)
-            .await
-            .map_err(|_| FaultError::Storage)
     }
 
     async fn get_node(
@@ -116,17 +96,6 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn store_algorithm_meta(
-        &mut self,
-        alg_id: u64,
-        epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        self.inner
-            .store_algorithm_meta(alg_id, epochs)
-            .await
-            .map_err(|_| FaultError::Storage)
-    }
-
     async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
         self.inner
             .load_algorithm_metas()
@@ -134,9 +103,9 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+    async fn append_count(&self) -> Result<u64, Self::Error> {
         self.inner
-            .load_log_meta()
+            .append_count()
             .await
             .map_err(|_| FaultError::Storage)
     }
@@ -148,14 +117,7 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-        algorithm_metas: &[(u64, &[(u64, u64)])],
-        log_meta: Option<(u64, u8)>,
-        checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
+    async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         let should_fail = {
             let mut count = self.batch_count.lock().unwrap();
             let limit = self.fail_after_batches.lock().unwrap();
@@ -178,12 +140,7 @@ impl Storage for FaultInjectingStorage {
 
         // Apply atomically: snapshot for rollback, apply all, restore on error.
         let backup = self.inner.clone();
-        if self
-            .inner
-            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
-            .await
-            .is_err()
-        {
+        if self.inner.apply(ops).await.is_err() {
             self.inner = backup;
             return Err(FaultError::Storage);
         }
@@ -400,11 +357,11 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
         let mut mutated_storage = log.storage().clone();
 
         // Write a garbage node to storage at alg 0, left 0, height 2 (root of size 4)
-        // representing a corrupted/partial write.
-        mutated_storage
-            .store_node(0, 0, 2, &[0xAA; 32])
-            .await
-            .unwrap();
+        // representing a corrupted/partial write. `MemoryStorage`'s fields are
+        // public precisely for this kind of white-box fixture setup -- direct
+        // field mutation, not a `Storage::apply` call, since this simulates a
+        // torn write no legal op could ever produce.
+        mutated_storage.nodes.insert((0, 0, 2), vec![0xAA; 32]);
         // Also corrupt the checkpoint root so from_storage doesn't reject alg 0's
         // current frozen state (we're simulating a pre-resume partial write, not
         // a post-resume corruption).
