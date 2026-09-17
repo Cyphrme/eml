@@ -27,3 +27,8 @@ smol = "2.0"
 spine = { version = "0.1", path = "../spine", package = "merkle-spine" }
 cml = { version = "0.1", path = "../cml", package = "canonical-ml" }
 cmt = { version = "0.1", path = "../cmt", package = "canonical-mt" }
+# Compile-level API-surface lint (tests/api_surface.rs): parses this crate's
+# own `src/storage.rs` to check the `Storage` trait's mutating-method count,
+# mirroring storage-git's own syn-based tripwires (tests/acceptance_encodings.rs).
+syn       = { version = "2", features = ["full", "visit"] }
+quote     = "1"
