@@ -49,6 +49,20 @@ pub enum GitStorageError {
     /// disagrees with a previously-committed `meta.arity` on reopen.
     #[error("invalid arity: {0}")]
     InvalidArity(String),
+
+    /// The staging ref's compare-and-swap failed for a reason that never
+    /// reached the point of comparing a value at all -- a lock a concurrent
+    /// `git gc`/`pack-refs` briefly held, an I/O error, or a packed-refs
+    /// preparation failure (`gix::reference::edit::Error`'s non-mismatch
+    /// variants). Distinct from [`Self::TipMoved`] (a genuine compare
+    /// mismatch) and from [`Self::Corruption`] (a malformed stored layout):
+    /// a caller MAY retry this one without first reloading, since nothing
+    /// about the ref's value was ever observed to have changed. `cas()`
+    /// already retries internally for up to its own bound before returning
+    /// this variant, so seeing it means that bound was exhausted and the
+    /// condition had not cleared.
+    #[error("ref update transient failure (gave up retrying): {0}")]
+    RefUpdateTransient(String),
 }
 
 impl GitStorageError {
@@ -56,5 +70,13 @@ impl GitStorageError {
     #[must_use]
     pub fn is_tip_moved(&self) -> bool {
         matches!(self, Self::TipMoved { .. })
+    }
+
+    /// Whether this error is the distinguished transient/retriable variant
+    /// (SG19a): a compare-and-swap failure that never reached a genuine
+    /// value comparison.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::RefUpdateTransient(_))
     }
 }

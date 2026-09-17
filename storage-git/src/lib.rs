@@ -45,7 +45,7 @@
 //! This layer keeps the **complete** checkpoint tree behind its staging ref: every leaf and
 //! sealed node ever written, by key, forever. The staging ref always points
 //! **directly at a tree object** (never a commit), and [`GitStorage::tip_tree`] hands back the
-//! tree the staging ref currently points at. This layer never creates a commit and never
+//! tree this instance last wrote or observed. This layer never creates a commit and never
 //! renders or reconstructs a tree for a size other than its current one: a past size is read by
 //! wrapping an earlier tip tree in a commit one layer up (the checkpoint library this crate is
 //! deliberately ignorant of), and by `eml` reading over the nodes the complete tip tree already
@@ -58,12 +58,21 @@ mod layout;
 mod read;
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 pub use error::GitStorageError;
 use gix::ObjectId;
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit};
 use gix::refs::{FullName, Target};
 use polydigest::{AlgorithmMetas, Storage};
+
+/// The bound `cas()`'s internal retry loop honors for a definitely-non-
+/// mismatch ref-update failure (SG19a): give up and return
+/// [`GitStorageError::RefUpdateTransient`] once this much wall-clock time
+/// has elapsed since the first attempt, rather than retrying forever. A
+/// genuine compare-mismatch is never retried internally regardless of this
+/// bound -- it returns [`GitStorageError::TipMoved`] on the first attempt.
+const RETRY_BOUND: Duration = Duration::from_secs(2);
 
 /// A `polydigest::Storage` backend over a git object database.
 ///
@@ -168,16 +177,17 @@ impl GitStorage {
         Self::new(repo, staging_ref, arity)
     }
 
-    /// The current tip: the complete checkpoint tree the staging ref points
-    /// at right now, or `None` for a fresh instance whose ref has never been
-    /// written (genesis).
+    /// The tree this instance last wrote or observed, or `None` for a fresh
+    /// instance whose ref has never been written (genesis).
     ///
     /// This is a pure read of [`Self::new`]'s last-observed value (or the
     /// value a subsequent write left behind) -- never a reconstruction, and
-    /// never anything other than the current `C(n)`. The checkpoint layer
-    /// above this crate commits this tree to anchor it; this crate itself
-    /// never renders or reconstructs a tree for any other size (see "The
-    /// tip-tree model" above).
+    /// never a re-read of the staging ref's own live value (a concurrent
+    /// writer may have moved it since; this instance would report that only
+    /// on its own next write's compare-and-swap, as [`GitStorageError::TipMoved`]).
+    /// The checkpoint layer above this crate commits this tree to anchor it;
+    /// this crate itself never renders or reconstructs a tree for any other
+    /// size (see "The tip-tree model" above).
     #[must_use]
     pub fn tip_tree(&self) -> Option<ObjectId> {
         self.observed_tip
@@ -207,35 +217,83 @@ impl GitStorage {
         self.repo.to_thread_local()
     }
 
+    /// Move the staging ref to `new_tree` under its compare-and-swap
+    /// precondition (SG17-SG19). A genuine compare-mismatch
+    /// (`ReferenceOutOfDate`/`MustNotExist`/`MustExist` -- the only
+    /// `gix_ref` transaction variants that ever reached the point of
+    /// comparing a value) returns [`GitStorageError::TipMoved`] immediately,
+    /// never retried: deciding what to write in light of someone else's
+    /// real change is the caller's job, not this layer's. Every other
+    /// failure shape (a lock a concurrent `git gc`/`pack-refs` briefly
+    /// holds, an I/O error, a packed-refs preparation failure) never
+    /// touched the ref's value at all, so it is safe to retry the identical
+    /// edit internally -- bounded by [`RETRY_BOUND`], past which this gives
+    /// up and returns [`GitStorageError::RefUpdateTransient`] rather than
+    /// retrying forever.
     fn cas(&self, repo: &gix::Repository, new_tree: ObjectId) -> Result<(), GitStorageError> {
         let expected = match self.observed_tip {
             Some(id) => PreviousValue::MustExistAndMatch(Target::Object(id)),
             None => PreviousValue::MustNotExist,
         };
-        let edit = RefEdit {
-            change: Change::Update {
-                log: LogChange::default(),
-                expected,
-                new: Target::Object(new_tree),
-            },
-            name: self.staging_ref.clone(),
-            deref: false,
-        };
-        match repo.edit_reference(edit) {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                let actual = repo
-                    .try_find_reference(self.staging_ref.as_ref())
-                    .ok()
-                    .flatten()
-                    .map(|r| r.target().id().to_owned().to_string());
-                Err(GitStorageError::TipMoved {
-                    expected: self.observed_tip.map(|id| id.to_string()),
-                    actual,
-                })
-            },
+        let start = Instant::now();
+        let mut backoff = Duration::from_millis(5);
+        loop {
+            let edit = RefEdit {
+                change: Change::Update {
+                    log: LogChange::default(),
+                    expected: expected.clone(),
+                    new: Target::Object(new_tree),
+                },
+                name: self.staging_ref.clone(),
+                deref: false,
+            };
+            match repo.edit_reference(edit) {
+                Ok(_) => return Ok(()),
+                Err(e) if is_genuine_cas_mismatch(&e) => {
+                    let actual = repo
+                        .try_find_reference(self.staging_ref.as_ref())
+                        .ok()
+                        .flatten()
+                        .map(|r| r.target().id().to_owned().to_string());
+                    return Err(GitStorageError::TipMoved {
+                        expected: self.observed_tip.map(|id| id.to_string()),
+                        actual,
+                    });
+                },
+                Err(e) => {
+                    let elapsed = start.elapsed();
+                    if elapsed >= RETRY_BOUND {
+                        return Err(GitStorageError::RefUpdateTransient(format!(
+                            "ref update to {:?} failed without a compare-mismatch after retrying \
+                             for {RETRY_BOUND:?}: {e}",
+                            self.staging_ref
+                        )));
+                    }
+                    std::thread::sleep(backoff.min(RETRY_BOUND - elapsed));
+                    backoff = (backoff * 2).min(Duration::from_millis(100));
+                },
+            }
         }
     }
+}
+
+/// SG19a: true only for the `gix_ref` transaction-preparation errors that
+/// mean "the ref's current value did not match what this write expected" --
+/// the only condition [`GitStorageError::TipMoved`] should ever report.
+/// Every other `edit_reference` failure shape (lock contention, I/O, a
+/// packed-refs preparation failure, or any `gix_ref::file::transaction::
+/// commit::Error` variant, which has no mismatch case at all) means the
+/// transaction never reached, or never completed, an actual value
+/// comparison.
+fn is_genuine_cas_mismatch(e: &gix::reference::edit::Error) -> bool {
+    matches!(
+        e,
+        gix::reference::edit::Error::FileTransactionPrepare(
+            gix::refs::file::transaction::prepare::Error::ReferenceOutOfDate { .. }
+                | gix::refs::file::transaction::prepare::Error::MustNotExist { .. }
+                | gix::refs::file::transaction::prepare::Error::MustExist { .. }
+        )
+    )
 }
 
 impl Storage for GitStorage {
