@@ -2463,7 +2463,7 @@ fn test_from_storage_initialization_errors() {
 
         // 5. Storage error propagation
         let storage_err = MockStorage {
-            metas: Err(eml::storage::MemoryStorageError {
+            metas: Err(eml::storage::MemoryStorageError::LeafNotFound {
                 index: 0,
                 stored: 0,
             }),
@@ -2474,7 +2474,7 @@ fn test_from_storage_initialization_errors() {
         assert!(matches!(
             res,
             Err(eml::error::Error::Storage(
-                eml::storage::MemoryStorageError {
+                eml::storage::MemoryStorageError::LeafNotFound {
                     index: 0,
                     stored: 0
                 }
