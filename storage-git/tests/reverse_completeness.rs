@@ -77,24 +77,25 @@ fn arb_ops(max_len: usize) -> impl Strategy<Value = Vec<Op>> {
     )
 }
 
-/// Every key actually stored under git's own `n`/`l` namespaces, decoded
-/// straight off the raw tree -- independent of `GitStorage`'s own read path
-/// (`get_node`/`get_leaf`), which could in principle agree with itself about
-/// a coordinate that a direct tree walk would show is not really there (or
-/// vice versa). `None` for either namespace's top-level entry is an empty
-/// set, not an error: a log with no leaves yet has no `l` entry at all.
+/// Every key actually stored under git's own `nodes`/`leaves` namespaces,
+/// decoded straight off the raw tree -- independent of `GitStorage`'s own
+/// read path (`get_node`/`get_leaf`), which could in principle agree with
+/// itself about a coordinate that a direct tree walk would show is not
+/// really there (or vice versa). `None` for either namespace's top-level
+/// entry is an empty set, not an error: a log with no leaves yet has no
+/// `leaves` entry at all.
 fn git_key_set(
     repo: &gix::Repository,
     tip: gix::ObjectId,
 ) -> (HashSet<u64>, HashSet<(u64, u64, u32)>) {
-    let leaves: HashSet<u64> = match find_child(repo, tip, "l") {
+    let leaves: HashSet<u64> = match find_child(repo, tip, "leaves") {
         Some(l) => enumerate_full_paths(repo, l.oid)
             .iter()
             .filter_map(|p| decode_leaf_path(p))
             .collect(),
         None => HashSet::new(),
     };
-    let nodes: HashSet<(u64, u64, u32)> = match find_child(repo, tip, "n") {
+    let nodes: HashSet<(u64, u64, u32)> = match find_child(repo, tip, "nodes") {
         Some(n) => enumerate_full_paths(repo, n.oid)
             .iter()
             .filter_map(|p| decode_node_path(p))
