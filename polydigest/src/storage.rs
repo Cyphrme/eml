@@ -300,20 +300,30 @@ impl MemoryStorage {
 
 /// Error type for [`MemoryStorage`] operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryStorageError {
-    /// The index that was requested.
-    pub index: u64,
-    /// The number of stored leaves.
-    pub stored: u64,
+pub enum MemoryStorageError {
+    /// The requested leaf index has no data in this store.
+    LeafNotFound {
+        /// The index that was requested.
+        index: u64,
+        /// The number of stored leaves.
+        stored: u64,
+    },
+    /// An [`WriteOp`] handed to [`Storage::apply`] violated its own
+    /// precondition: an append at a position other than the current count,
+    /// a duplicate algorithm registration, or a removal/resume naming an
+    /// algorithm this store has never registered.
+    InvalidOperation(String),
 }
 
 impl std::fmt::Display for MemoryStorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "leaf index {} not found (storage contains {} leaves)",
-            self.index, self.stored
-        )
+        match self {
+            Self::LeafNotFound { index, stored } => write!(
+                f,
+                "leaf index {index} not found (storage contains {stored} leaves)"
+            ),
+            Self::InvalidOperation(reason) => write!(f, "invalid apply operation: {reason}"),
+        }
     }
 }
 
@@ -326,7 +336,7 @@ impl Storage for MemoryStorage {
         self.leaves
             .get(index as usize)
             .cloned()
-            .ok_or(MemoryStorageError {
+            .ok_or(MemoryStorageError::LeafNotFound {
                 index,
                 stored: self.leaves.len() as u64,
             })
@@ -365,12 +375,114 @@ impl Storage for MemoryStorage {
             .collect())
     }
 
-    async fn apply(&mut self, _ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
-        // Deliberately unimplemented: the operation-enum write path (head's
-        // ruling 2026-09-17) has no landed implementation yet on any
-        // backend. Every test exercising a mutation is expected to fail
-        // here until an implementer fills this in.
-        unimplemented!("MemoryStorage::apply: the operation-enum write path is not implemented yet")
+    async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
+        // Validate every op's precondition against a running projection of
+        // this store's state *before* mutating anything, so a rejected
+        // batch leaves `self` exactly as it was (the all-or-nothing
+        // guarantee `Storage::apply` documents) -- a real transaction would
+        // do this properly; a two-pass validate-then-apply is sufficient
+        // for an in-memory reference store with no I/O to fail partway
+        // through.
+        let mut projected_count = self.count;
+        for op in ops {
+            match op {
+                WriteOp::AppendLeaf { at, .. } | WriteOp::AppendSubtree { at, .. } => {
+                    if *at != projected_count {
+                        return Err(MemoryStorageError::InvalidOperation(format!(
+                            "append at position {at}, expected the current count {projected_count}"
+                        )));
+                    }
+                    projected_count += 1;
+                },
+                WriteOp::AddAlgorithm { alg_id, .. } => {
+                    if self.algorithm_metas.contains_key(alg_id) {
+                        return Err(MemoryStorageError::InvalidOperation(format!(
+                            "algorithm {alg_id} is already registered"
+                        )));
+                    }
+                },
+                WriteOp::RemoveAlgorithm { alg_id, .. } | WriteOp::ResumeAlgorithm { alg_id, .. } => {
+                    if !self.algorithm_metas.contains_key(alg_id) {
+                        return Err(MemoryStorageError::InvalidOperation(format!(
+                            "algorithm {alg_id} is not registered"
+                        )));
+                    }
+                },
+                WriteOp::SeedFrontier { .. } => {},
+            }
+        }
+
+        for op in ops {
+            match op {
+                WriteOp::AppendLeaf {
+                    at: _,
+                    data,
+                    nodes,
+                    checkpoint_roots,
+                } => {
+                    self.leaves.push(data.to_vec());
+                    for n in *nodes {
+                        self.nodes
+                            .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
+                    }
+                    for r in *checkpoint_roots {
+                        self.checkpoint_roots.insert(r.alg_id, r.root.to_vec());
+                    }
+                    self.count += 1;
+                },
+                WriteOp::AppendSubtree {
+                    at: _,
+                    nodes,
+                    checkpoint_roots,
+                } => {
+                    for n in *nodes {
+                        self.nodes
+                            .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
+                    }
+                    for r in *checkpoint_roots {
+                        self.checkpoint_roots.insert(r.alg_id, r.root.to_vec());
+                    }
+                    self.count += 1;
+                },
+                WriteOp::AddAlgorithm { alg_id, epochs } => {
+                    self.algorithm_metas.insert(*alg_id, epochs.to_vec());
+                },
+                WriteOp::RemoveAlgorithm {
+                    alg_id,
+                    epochs,
+                    frozen_root,
+                } => {
+                    self.algorithm_metas.insert(*alg_id, epochs.to_vec());
+                    self.checkpoint_roots.insert(*alg_id, frozen_root.to_vec());
+                },
+                WriteOp::ResumeAlgorithm {
+                    alg_id,
+                    epochs,
+                    nodes,
+                    resumed_root,
+                } => {
+                    self.algorithm_metas.insert(*alg_id, epochs.to_vec());
+                    for n in *nodes {
+                        self.nodes
+                            .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
+                    }
+                    self.checkpoint_roots.insert(*alg_id, resumed_root.to_vec());
+                },
+                WriteOp::SeedFrontier { size, algorithms } => {
+                    self.count = *size;
+                    for seed in *algorithms {
+                        self.algorithm_metas.insert(seed.alg_id, seed.epochs.to_vec());
+                        for n in seed.nodes {
+                            self.nodes
+                                .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
+                        }
+                        self.checkpoint_roots
+                            .insert(seed.alg_id, seed.seeded_root.to_vec());
+                    }
+                },
+            }
+        }
+        Ok(())
     }
 }
 
