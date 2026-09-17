@@ -52,19 +52,28 @@ fn sg22_writing_an_already_existing_object_freshens_it() {
         // GitStorage now writes a leaf with the identical payload, so the
         // `leaf` blob it newly references is content-identical (and thus
         // id-identical) to the pre-aged object.
-        let before_write = SystemTime::now();
         let mut log = new_log(&repo, staging, 2, support::FixtureHasher::new(32)).await;
         support::append_leaf(log.storage_mut(), 0, payload)
             .await
             .unwrap();
 
+        // Compare against the aged sentinel captured above, not against a
+        // `SystemTime::now()` taken immediately before the write: that
+        // instrument races both wall-clock non-monotonicity and filesystem
+        // mtime granularity, neither of which has anything to do with the
+        // freshening behavior under test (this crate's own `gitutil.rs`
+        // freshening probe, `write_object_refreshes_an_existing_objects_
+        // mtime`, uses the identical deliberately-aged-sentinel pattern).
+        // The margin here is the same ~300-day one the sanity check above
+        // already established, wide enough that no non-freshening write
+        // could cross it by clock skew or rounding.
         let after_mtime = loose_object_mtime(&git_dir, blob_id)
             .expect("the object must still exist as a loose object after GitStorage's write");
         assert!(
-            after_mtime >= before_write,
+            after_mtime > aged_mtime + std::time::Duration::from_secs(3600 * 24 * 300),
             "SG22: GitStorage's write must freshen (rewrite) an object that already existed under \
-             the same id, not silently leave it exactly as old as it was (mtime before write: \
-             {aged_mtime:?}, after: {after_mtime:?})"
+             the same id, not silently leave it exactly as old as it was (aged sentinel: \
+             {aged_mtime:?}, after write: {after_mtime:?})"
         );
     });
 }
