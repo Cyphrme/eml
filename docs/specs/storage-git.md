@@ -9,9 +9,11 @@ the first of three layers a larger git-backed storage design decomposes into:
 
 1. **This layer.** Raw positional storage: leaves and sealed node digests,
    laid out as git objects, behind the unmodified `Storage` trait plus a small
-   set of git-native additions (compare-and-swap writes, historical reads, and
-   a tree-object accessor). No commits. No refs other than one staging ref per
-   log instance. No application policy.
+   set of git-native additions (compare-and-swap writes and a tip-tree
+   accessor). No commits. No refs other than one staging ref per log
+   instance. No application policy. This layer keeps the **complete**
+   checkpoint tree behind that ref, forever; it never renders or
+   reconstructs a tree for a past size.
 2. **A checkpoint library** (out of scope here). Wraps this layer's tree
    objects in commits, enforces the checkpoint chain's forward-only
    compare-and-swap, carries an application's retention parents and companion
@@ -271,10 +273,14 @@ One consequence of SG9 is worth stating precisely, because the exhibit's
 It is not: a size `n` reached before some later algorithm registration and
 the same size `n` reached after it are two different logical states and two
 different `C(n)` objects, related only by both truncating the same
-underlying epoch history to `n` via `epochs_at`. `tree_at(n)` (§4.3) always
-returns the object for the **current** state's projection to `n`, never a
-stale intermediate one, and any intermediate object a partial write left
-behind is simply unreferenced and eligible for collection (§5).
+underlying epoch history to `n` via `epochs_at`. This layer only ever holds
+one `C(n)` at a time -- the current size's, behind the staging ref (§4.2) --
+and never builds a `C(m)` for `m < n` on its own account; any intermediate
+object a partial write left behind is simply unreferenced and eligible for
+collection (§5). A past logical state is read by wrapping an earlier `C(m)`
+in a commit before this layer's own tree moves past it (the checkpoint
+library, out of scope here, §8) or by `eml` reading directly over the nodes
+the current, complete `C(n)` still contains (§2.6-§2.7).
 
 ### 2.6 Materialized versus opaque nodes
 
@@ -395,19 +401,18 @@ position). *Checked by: property test — comparing every coordinate a
 sequence's frontier has ever named against `MemoryStorage` (which never
 drops a node it was given) at every step, not just the current frontier.*
 
-**[SG29]** A reader resolving `(alg_id, left, h)` MUST descend from the
-current frontier's covering peak (§2.4) and answer from whatever
-`T(left, h)` it finds there — this is now the *only* path, live or
-historical (`tree_at`), and it always succeeds for a coordinate that was
-ever itself a frontier peak (SG28). The one case that remains genuinely
-unreconstructable is a coordinate strictly *beneath* a leaf-level opaque
-node (`h = 0` with no `leaf` blob) that was never itself a peak: SG4 forbids
-a height-0 opaque node from carrying anything to descend through, and no
-digest was ever given for a position beneath it in the first place, so
-`get_node` MUST answer `Ok(None)` and `tree_at` MUST answer a reconstruction
-error naming the coordinate. *Checked by: the same property test as SG28,
-extended to every historical size the sequence has passed through via
-`tree_at`.*
+**[SG29]** A reader resolving `(alg_id, left, h)` against the current tip
+MUST descend from the current frontier's covering peak (§2.4) and answer
+from whatever `T(left, h)` it finds there — this is the *only* path, and it
+always succeeds for a coordinate that was ever itself a frontier peak
+(SG28). The one case that remains genuinely unreachable this way is a
+coordinate strictly *beneath* a leaf-level opaque node (`h = 0` with no
+`leaf` blob) that was never itself a peak: SG4 forbids a height-0 opaque
+node from carrying anything to descend through, and no digest was ever
+given for a position beneath it in the first place, so `get_node` MUST
+answer `Ok(None)` for it. *Checked by: the same property test as SG28,
+extended to every size the sequence has passed through, compared at each
+step against `MemoryStorage`.*
 
 ## 3. Byte-exact encodings
 
@@ -444,14 +449,13 @@ histories diverge immediately afterward — one going flat, the other going
 subtree — still commit to byte-identical `C(0)` objects, since nothing
 about that later divergence exists yet at `n == 0`. `GitStorage::new`'s own
 genesis default (before any ref exists) and `NaryMerkleLog::new`'s in-memory
-starting `kind` are already `LogKind::Flat`/`0x00`, so this is not a new
-value introduced for `tree_at(0)` alone — it is the same constant every
-fresh log already starts from, now also the one `tree_at(0)`'s
-reconstruction uses regardless of what the log has become by the time it is
-called. *Checked by: property test — `tree_at(0)` for a log whose first
-append is `append_leaf` and a log whose first append is `append_subtree`,
-otherwise byte-identical (arity, empty content), MUST yield the identical
-`C(0)` object id.*
+starting `kind` are already `LogKind::Flat`/`0x00`, so any `C(0)` this layer
+actually writes — a resumption from an empty seal, or an `add_algorithm`
+before the first append — commits this same constant regardless of what the
+log goes on to become. *Checked by: property test — a genuine `C(0)` write
+for a log whose first append will be `append_leaf` and one whose first
+append will be `append_subtree`, otherwise byte-identical (arity, empty
+content), MUST yield the identical `C(0)` object id.*
 
 ### 3.2 An `epochs/hex(alg_id, 16)` blob
 
@@ -474,8 +478,10 @@ The algorithm's root digest at size `n`: exactly `Hasher::digest_len()`
 bytes for that algorithm, with no framing. Present only for algorithms
 active at `n` (`is_active()`, matching `NaryMerkleLog`'s own
 `checkpoint_roots` filter, `polydigest/src/tree.rs:409-415`); a frozen
-algorithm's terminal root is read from the `C(m)` at its freeze point `m`
-instead, via `tree_at(m)` (§4.3), never re-derived at a later `n`.
+algorithm's terminal root lives in the `C(m)` this layer wrote at its
+freeze point `m` — read through that past checkpoint's own commit (the
+checkpoint library, §8) or through `eml`'s own node-level read, never
+re-derived at a later `n` by this layer.
 
 **[SG14]** `roots/` MUST NOT carry an entry for an algorithm not active at
 `n`. *Checked by: property test.*
@@ -562,118 +568,38 @@ against another process or another instance — never against concurrent
 calls on the same instance, which Rust's `&mut self` on every mutating
 trait method already forecloses.
 
-### 4.3 `tree_at(n)` — an addition beyond the trait
+### 4.3 `tip_tree()` — an addition beyond the trait
 
-**[SG20]** `tree_at(n: u64) -> Result<ObjectId, Error>` MUST return `C(n)`'s
-object id for any `n` from `0` to the instance's current size, inclusive.
-For `n` equal to the current size, this is the staging ref's target read
-directly. For any earlier `n`, it MUST be **reconstructed** — never assumed
-already written as a standalone object — from: the sealed subtrees already
-present (every aligned block below the current size is sealed and
-unchanged, §2.4), and the current, full epoch history truncated to `n` via
-`epochs_at(n)` (§3.2, SG13). If the reconstructed object is not already
-present in the object database, `tree_at` MUST write it (idempotently — by
-SG9's purity, a repeated build always produces the same id) before
-returning its id. `tree_at` MUST NOT move the staging ref. *Checked by:
-property test — `tree_at(n)` for a range of past `n` MUST match a
-from-genesis rebuild's `C(n)` for the same log state.*
+**[SG20]** `tip_tree() -> Option<ObjectId>` MUST return the staging ref's
+current target verbatim: `Some(C(n))` for the instance's current size `n`,
+or `None` for a fresh instance whose staging ref has never been written
+(genesis). It is a pure read — it MUST NOT compute, write, or move
+anything, and it MUST NOT lag behind the ref's own target after any write
+this layer performs (`store_leaf`, `store_node`, `store_algorithm_meta`,
+`write_batch`) or after a plain reopen (`GitStorage::open`/`new` against an
+existing ref). `tip_tree` is the *only* tree id this layer ever hands out:
+there is no accessor, under any name, that takes a size argument and
+returns an object id for it — this layer holds the complete tree behind
+the tip, but it never renders or reconstructs one for a size other than
+its current one (see "The tip-tree model", `src/lib.rs`). *Checked by:
+property test — `tip_tree()` compared by direct equality against the
+staging ref's own target (an independent oracle, never a second call
+through this layer's own API) after every write shape this crate exposes,
+including a reopen from disk; a structural, rename-proof check (parsing
+`src/`'s own `.rs` files as syntax trees, keyed on method shape rather
+than name) that no other public method on `GitStorage` or
+`GitReadOnlyView` returns an object id while also taking an argument, and
+that no public method on either type accepts a hasher.*
 
-**Amendment — `roots/` reconstruction and `register_hasher`.** A
-historical `roots/hex(alg_id,16)` entry (§3.3, SG14) is a per-algorithm
-*member root*: the peak-bagging fold (`cml::mountain::bag_peaks`,
-the same fold `cml::engine::compute_root` uses to produce the live root this
-layer stores verbatim via `checkpoint_roots`) over that algorithm's frontier
-peak digests as they stood at `n`. Unlike `meta`/`epochs`/`peaks`, this fold
-is not recoverable from stored bytes alone — folding more than one peak
-digest into one root is a hash operation this layer does not otherwise
-perform, so reconstructing it needs the algorithm's own hash fold, not
-merely its already-stored digests. This does not relax SG26: the fold runs
-under a `spine::Hasher` **trait object** the caller registers per `alg_id`
-via `GitStorage::register_hasher(alg_id, Box<dyn Hasher>)` — an addition
-alongside `tree_at`/`open_at` — never a hash algorithm this crate names,
-links against by concrete type, or assumes a digest width for; the
-interface is exactly the opaque, caller-supplied shape SG26 already
-requires everywhere else. A `tree_at(n)` call reconstructs `roots/hex(alg_id,16)`
-correctly for every algorithm with a hasher registered this way. `tree_at`
-MUST NOT return a tree other than `C(n)`: for an algorithm active at `n`
-with **no** hasher registered, it MUST return an error naming the
-algorithm, never `Ok` with the entry silently omitted -- omitting the entry
-would turn a missing precondition into a well-formed but wrong tree that a
-consumer (for example an Axios view commit) could not distinguish from the
-genuine one. At `n = 0` the frontier is empty by construction (no item has
-ever been appended), so no algorithm's root has ever actually been computed
-by the combinator regardless of registration; `roots/` at `n = 0` is always
-the empty tree, matching the checkpoint tree this layer itself writes when
-an algorithm is first registered (§4, SG18: a registration alone never
-supplies `checkpoint_roots`), and this one case needs no hasher and never
-errors. *Checked by: property test — `tree_at(n)` for a range of past `n`,
-with every registered algorithm's hasher supplied, MUST be byte-identical
-to the checkpoint tree actually written at size `n`, including `roots/`;
-and `tree_at(n)` for an algorithm active at `n` with no hasher registered
-MUST return an error naming that algorithm, for every such `n`.*
-
-**Amendment — a registered hasher is trusted only on stored evidence.** A
-registered hasher of the wrong digest width, or of the right width but the
-wrong function, MUST be rejected rather than silently folded into a
-historical `roots/` entry that is then indistinguishable from a genuine
-one. `tree_at` MUST check a registered hasher against digests this layer
-already has on file for that algorithm before trusting it for any
-historical reconstruction, and MUST return an error rather than `Ok` on a
-mismatch, and draws on two forms of evidence, both computed over the
-*current*, live frontier regardless of which `n` is being reconstructed.
-First, bottom-up recomputation: a currently active, fully-covered node's own
-digest, recomputed via `spine::nary_mr` (`Hasher::leaf` at the leaves, the
-same promotion-and-collapse fold `cml::engine::carry` itself applies at each
-merge -- never `Hasher::node` called directly, which would reject a correct
-hasher wherever eml's own canonicalization has collapsed equal children to
-their shared value) and compared against the digest already stored at that
-exact coordinate. A peak the algorithm is not fully active over supplies no
-evidence either way -- it is simply not this algorithm's node to recompute,
-never a reason to distrust the hasher; a peak the algorithm fully owns but
-that turns out opaque is the genuine absence of evidence this check must
-not paper over. Second, frontier folding: where the current frontier
-carries two or more peaks, folding their stored digests via `bag_peaks`
-(the same fold `cml::engine::compute_root` uses) and comparing the result
-against the algorithm's already-stored `roots/` entry is evidence enough to
-catch a wrong function even when nothing can be recomputed bottom-up
-(`cml::mountain::bag_peaks` promotes a lone peak to itself, so a
-single-peak frontier never actually exercises a wrong hasher through this
-path -- this is why it takes two or more). Either form of demonstrated
-wrongness MUST be rejected unconditionally, regardless of which `n` is being
-reconstructed: a hasher already proven wrong is never safe to fold anything
-with. An algorithm with a fully-owned peak that turns out opaque, and fewer
-than two frontier peaks to fall back on, has no evidence either way -- and
-MUST NOT be silently trusted -- but only where reconstructing the requested
-`n` would actually need that trust: a fold is only ever needed to combine
-two or more of `n`'s *own* frontier peaks, so this refusal MUST NOT fire for
-`n` equal to the current size (served as the staging tip, needing no fold at
-all) nor for a target frontier of zero or one peak (`bag_peaks` promotes a
-lone peak to itself, and an empty frontier has no root to fold, mirroring
-the `n = 0` case above); it MUST still fire wherever reconstructing `n`
-genuinely needs a fold across two or more of its own peaks and no evidence
-exists anywhere to trust the hasher for it. *Checked by: property test — a
-hasher of a different digest width, and a hasher of the same width but a
-different function, registered for an algorithm with real,
-correctly-computed digests already stored, MUST both cause `tree_at` to
-return an error rather than `Ok`, including where every node is opaque and
-only a multi-peak frontier fold supplies the evidence; and a fork resumed at
-a single-peak size, with the correct hasher registered, MUST succeed at
-`tree_at(0)` and at `tree_at` of the current size, never refused for lack of
-evidence a query needing no fold was never going to use.*
-
-The rejected alternative — persisting each root as it is computed, rather
-than folding it back from stored peaks on demand — does not compose with
-SG9/SG18: a `write_batch` carry can seal several sizes' worth of internal
-merges in one call (SG18's frontier carry, §2.4), and most of the
-intermediate sizes it passes through are never themselves written as a
-standalone `C(m)` object at all (only the batch's final size is). A
-size-indexed root history would therefore need to persist a value for
-sizes this layer never otherwise materializes as anything, which is a new,
-unbounded, size-indexed structure outside §2.1's fixed four-entry schema —
-exactly the "size-indexed root history" §2.5 already names as something
-this layer's object model has no room for. Folding on demand from data
-this layer already reconstructs needs no such structure and costs nothing
-when a caller never calls `tree_at` for a historical `n`.
+A historical `roots/hex(alg_id,16)` entry (§3.3, SG14) for a size this
+layer no longer serves as its tip is not this layer's to produce: folding
+more than one frontier peak's stored digest into one root needs the
+algorithm's own hash fold (`bag_peaks`), a computation this layer performs
+nowhere in its live write/read path (SG26 — no hash algorithm is ever
+named or assumed here). A consumer that needs that historical root reads
+it from the `C(m)` the checkpoint layer committed at freeze point `m`
+(§8), or reconstructs it itself, outside this layer, from the complete
+tip tree's own materialized nodes.
 
 ### 4.4 `open_at(tree)` — an addition beyond the trait
 
@@ -682,18 +608,22 @@ return a read-only view exposing `get_leaf`, `get_node`,
 `load_algorithm_metas`, and `load_checkpoint_roots` against the supplied
 tree object, decoded exactly as §2–§3 specify, independent of this
 instance's own staging ref and current size. It MUST NOT accept or perform
-any mutation. Reading through a view returned by `open_at(tree_at(m))` for
-some past `m` MUST yield the same leaf and node values `get_leaf`/`get_node`
-returned when the log was actually at size `m` (durable-witness parity with
-`cml`'s own MMR guarantee that a proof generated before an append remains
-valid after it, `docs/architecture.md`, "Conformance and durability property
-tests"). *Checked by: property test.*
+any mutation. `tree` is supplied by the caller — a `tip_tree()` this layer
+recorded earlier and the caller kept, or a past checkpoint's tree the
+checkpoint layer resolved through its own commit history — never a value
+this layer derives internally for a size other than its current one.
+Reading through a view returned by `open_at` on a tree this layer's tip
+once was MUST yield the same leaf and node values `get_leaf`/`get_node`
+returned when the log was actually at that tree (durable-witness parity
+with `cml`'s own MMR guarantee that a proof generated before an append
+remains valid after it, `docs/architecture.md`, "Conformance and
+durability property tests"). *Checked by: property test.*
 
 ### 4.5 The tip-moved error
 
 Specified as part of SG19; repeated here because it is one of the named
-additions (§4.2–§4.4 and this section: `tree_at`, `open_at`,
-`register_hasher`, and the tip-moved error itself). It MUST
+additions (§4.2–§4.4 and this section: `tip_tree`, `open_at`, and the
+tip-moved error itself). It MUST
 be introspectable by the caller (a distinguishable
 variant or an `is_tip_moved()`-style predicate), never conflated with
 "object not found" or "corrupted", since the caller's correct response
@@ -805,7 +735,8 @@ Every `SG<n>` constraint above names its check inline. Summarized, a
 | :-- | :-- |
 | SG1–SG8 (layout, position lookup) | Property tests comparing this backend's reads against `MemoryStorage` over the same operation sequence, for a range of `k` and `n` |
 | SG7 (pre-sorted entries) | A release-mode unit test, since the failure mode is compiled out of `debug_assert!` |
-| SG9, SG20 (purity, `tree_at`) | Property tests over reordered-but-equivalent operation sequences and over historical `n` |
+| SG9 (purity) | Property tests over reordered-but-equivalent operation sequences reaching the same logical state |
+| SG20 (`tip_tree`) | Direct-equality check against the staging ref's own target after every write shape and after a reopen; a structural, rename-proof check that no public method returns an object id together with a size argument, and none accepts a hasher |
 | SG10–SG11 (opacity) | Property tests mixing flat, subtree, and resumed logs |
 | SG28–SG29 (permanent reachability by decomposition) | Property tests over fork lifecycles (seal, resume, forward leaf and subtree appends, reopen), comparing every coordinate and every historical size the sequence has ever named against `MemoryStorage` |
 | SG12–SG16 (byte-exact encodings) | Golden vectors: fixed `(k, leaves, algorithms)` inputs with pinned expected object ids, one per supported object-hash format |
@@ -822,13 +753,18 @@ left as prose alone.
 
 Named here so absence reads as a boundary, not a gap.
 
-- **Checkpoint commits, parents, and retention.** Wrapping `tree_at(n)` in a
-  commit, the checkpoint ref's own forward-only compare-and-swap, an
-  application's retention parents (holding a content or view commit alive
-  against garbage collection), and companion ref edits are the checkpoint
-  library's responsibility, one layer up. This layer's staging ref is not
-  that checkpoint ref, and its compare-and-swap (SG17–SG19) is not a
-  substitute for the checkpoint chain's.
+- **Checkpoint commits, parents, and retention.** Wrapping a `tip_tree()`
+  reading in a commit, the checkpoint ref's own forward-only
+  compare-and-swap, an application's retention parents (holding a content
+  or view commit alive against garbage collection), and companion ref
+  edits are the checkpoint library's responsibility, one layer up. This
+  layer's staging ref is not that checkpoint ref, and its
+  compare-and-swap (SG17–SG19) is not a substitute for the checkpoint
+  chain's.
+- **Reconstructing or rendering a tree for a past size.** This layer keeps
+  the complete tree behind its tip and reads a past size no other way than
+  through the checkpoint layer's own commits or through `eml` reading
+  directly over the nodes the current tip still contains (§2.5, §4.3).
 - **Content-tree ingestion and its Merkle commitment.** Computing a
   content commitment over an arbitrary, externally supplied git tree (for
   example a working directory's real files) — including the choice between
