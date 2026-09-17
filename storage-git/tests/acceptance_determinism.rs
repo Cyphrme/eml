@@ -12,9 +12,8 @@
 //! navigating `peaks/hex(height,2)/hex(q,2)` and asserting the
 //! materialized-node "keeps its children" shape -- both the navigation and
 //! the materialized/opaque concept it checked belong to the peak-and-
-//! children hierarchy the ratified key-derived layout ("THE DESIGN",
-//! `spike-report.md` and its prototype `storage-git-keyed/`) eliminates
-//! outright. The claim it was actually guarding -- the dropped-digest
+//! children hierarchy the key-derived layout (`docs/specs/storage-git.md`
+//! §2.1) eliminates outright. The claim it was actually guarding -- the dropped-digest
 //! defect where `resume_algorithm` revisiting an already-sealed,
 //! multi-algorithm coordinate silently lost a node -- is superseded by
 //! `completeness_property.rs`'s completeness property, which checks the

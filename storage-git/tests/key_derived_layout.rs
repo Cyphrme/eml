@@ -1,30 +1,17 @@
-//! KEY-DERIVED LAYOUT: the ratified layout, decided by two spikes --
-//! `spike-report.md` and its prototype crate `storage-git-keyed`
-//! (`.worktrees/spike-key-layout/storage-git-keyed/`).
+//! KEY-DERIVED LAYOUT: the layout documented in
+//! `docs/specs/storage-git.md` §2.1.
 //!
 //! Claim under test: every stored node and leaf's tree path is EXACTLY the
 //! `byte1-be-trim` path of its key (`(alg_id, height, left)` for a node,
 //! `index` for a leaf), with no other entries besides the named metadata
 //! files -- no peak/child wiring, no decomposition, no opacity bookkeeping.
 //!
-//! Assumed top-level namespace, taken from the prototype's own layout
-//! (`storage-git-keyed/src/build.rs::node_path`/`leaf_path`,
-//! `storage-git-keyed/src/lib.rs`'s own `write_batch`): node storage lives
-//! under `n`, keyed as `n/<hex16(alg_id)>/<hex2(height)>/<trimmed(left)>`;
-//! leaf storage lives under `l`, keyed as `l/<trimmed(index)>`; every other
-//! top-level entry (`meta`, and per-algorithm `e`/`r` once an algorithm is
-//! registered) is named metadata, never key-fanned-out. If a landed
-//! implementation chooses different top-level names, this file's assertions
-//! on those two literal names are what would need updating -- the
-//! underlying claim they check (every non-metadata entry sits at exactly
-//! `trimmed(key)`, nothing stray, no tree over 256 entries) does not depend
-//! on the choice of name.
-//!
-//! RED at 60f93fe: today's layout is peak-wired
-//! (`peaks/hex(height,2)/hex(q,2)/...`, `storage-git/src/build.rs::
-//! build_peaks`) -- there is no top-level `n` or `l` entry at all, so every
-//! lookup below fails outright, and `n_paths`/`l_paths` are computed as
-//! empty sets against a nonexistent tree.
+//! Top-level namespace, matching `storage-git/src/layout.rs`'s own
+//! `TOP_LEVEL_*` constants: node storage lives under `nodes`, keyed as
+//! `nodes/<hex16(alg_id)>/<hex2(height)>/<trimmed(left)>`; leaf storage
+//! lives under `leaves`, keyed as `leaves/<trimmed(index)>`; every other
+//! top-level entry (`meta`, and per-algorithm `epochs`/`roots` once an
+//! algorithm is registered) is named metadata, never key-fanned-out.
 
 mod common;
 
@@ -207,15 +194,14 @@ fn nodes_and_leaves_sit_exactly_at_their_derived_key_paths() {
         let widest = max_tree_width_recursive(&local, tip);
         assert!(
             widest <= 256,
-            "spike-report.md's byte1-be-trim bound: no tree object may exceed 256 entries, found \
-             a tree with {widest}"
+            "SG2's byte1-be-trim bound (docs/specs/storage-git.md §2.1): no tree object may \
+             exceed 256 entries, found a tree with {widest}"
         );
     });
 }
 
-// `trimmed_key_segments`'s own correctness -- ported test-for-test from
-// `storage-git-keyed::pathscheme::tests` -- checked once, here, rather than
-// once per `tests/*.rs` binary that pulls in `common`.
+// `trimmed_key_segments`'s own correctness -- checked once, here, rather
+// than once per `tests/*.rs` binary that pulls in `common`.
 #[cfg(test)]
 mod trimmed_key_segments_tests {
     use crate::common::trimmed_key_segments;

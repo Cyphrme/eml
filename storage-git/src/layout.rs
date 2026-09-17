@@ -50,8 +50,8 @@ pub fn parse_hex16(name: &str) -> Option<u64> {
     u64::from_str_radix(name, 16).ok()
 }
 
-/// The `byte1-be-trim` key path scheme (THE DESIGN, ratified by two spikes:
-/// `spike-report.md` and its prototype `storage-git-keyed/`). A key's
+/// The `byte1-be-trim` key path scheme (design rationale in
+/// `docs/specs/storage-git.md` §2.1). A key's
 /// leading zero bytes are stripped, a one-ASCII-digit length segment (the
 /// count of remaining significant bytes, `1..=8`) is prepended, and each
 /// remaining byte becomes its own two-lowercase-hex-digit segment,

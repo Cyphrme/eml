@@ -4,8 +4,8 @@
 //! `sg12_sg16_golden_bytes` each navigated `peaks/00/00` (via the now-
 //! removed `find`/`FindEntryId` helpers) to reach a node, and the first of
 //! the three asserted the materialized-vs-opaque `digest`/`leaf`/`hex(c,2)`
-//! shape directly. The ratified key-derived layout ("THE DESIGN",
-//! `spike-report.md` and its prototype `storage-git-keyed/`) eliminates
+//! shape directly. The key-derived layout (`docs/specs/storage-git.md`
+//! §2.1) eliminates
 //! both premises at once ("no peak/child wiring, no decomposition, no
 //! opacity bookkeeping anywhere"): there is no `peaks/` path to descend and
 //! no materialized/opaque node shape left to assert. Their remaining,

@@ -1,53 +1,38 @@
 //! CAS CLASSIFICATION: `storage-git`'s compare-and-swap step must
 //! distinguish a genuine ref-value mismatch from every other failure shape
-//! (`spike-report.md` §8).
+//! (SG19/SG19a, `docs/specs/storage-git.md`).
 //!
-//! `storage_git::GitStorage::cas` (`src/lib.rs`) is:
-//! ```ignore
-//! match repo.edit_reference(edit) {
-//!     Ok(_) => Ok(()),
-//!     Err(_) => { /* always builds a TipMoved, regardless of e */ }
-//! }
-//! ```
-//! `gix::reference::edit::Error` distinguishes a genuine compare-mismatch
-//! (`ReferenceOutOfDate`/`MustNotExist`/`MustExist` -- the only variants
-//! reached by actually comparing the ref's value against the precondition)
-//! from every other failure shape (`Io`, `LockAcquire`,
-//! `PackedTransactionAcquire`, a packed-refs preparation failure, ...),
-//! none of which ever reach a comparison at all. Collapsing both into
-//! `GitStorageError::TipMoved` erases the distinction the variant's own doc
-//! comment (`src/error.rs`) says it exists to preserve ("the caller ...
-//! knows to reload and retry rather than treat the write as a corruption or
-//! I/O failure"), and produces the "textually identical expected and
-//! actual" signature spike-report.md §1's original n=100,000 crash showed:
-//! a no-op failure re-reads the same untouched value twice.
+//! `storage_git::GitStorage::cas` (`src/lib.rs`) classifies an
+//! `edit_reference` failure via `is_genuine_cas_mismatch`, which matches
+//! only `gix::reference::edit::Error`'s three genuine compare-mismatch
+//! variants (`ReferenceOutOfDate`/`MustNotExist`/`MustExist` -- reached only
+//! by actually comparing the ref's value against the precondition) and
+//! returns `GitStorageError::TipMoved` for those; every other failure shape
+//! (`Io`, `LockAcquire`, `PackedTransactionAcquire`, a packed-refs
+//! preparation failure, ...) never reaches a comparison at all, and is
+//! returned as the distinct `GitStorageError::RefUpdateTransient` this file
+//! pins below, not `TipMoved`. Collapsing both into one `TipMoved` outcome
+//! (an earlier shape of this function, before the classification fix)
+//! erased the distinction the variant's own doc comment (`src/error.rs`)
+//! says it exists to preserve ("the caller ... knows to reload and retry
+//! rather than treat the write as a corruption or I/O failure"), and
+//! produced a "textually identical expected and actual" signature under
+//! disk-pressure testing during this layout's design exploration: a no-op
+//! failure re-reading the same untouched value twice.
 //!
-//! Ported from `storage-git-keyed`'s own `tests/cas_classification.rs`
-//! (`.worktrees/spike-key-layout/storage-git-keyed/`), which demonstrates
-//! the fix `storage-git` has not received: `is_genuine_cas_mismatch`
-//! (`storage-git-keyed/src/lib.rs`) matches only the three real
-//! compare-mismatch variants and reports everything else as
-//! `KeyedGitStorageError::Git(..)`, never `TipMoved`.
-//!
-//! **What this file requires beyond that port**: a non-mismatch failure must
-//! come back as a *specifically named* transient/retriable variant, not
-//! merely "anything other than `TipMoved`" -- collapsing it into the
-//! existing `GitStorageError::Git(String)` catch-all would make it
-//! indistinguishable from an unrelated, non-retriable I/O failure (a
-//! deleted repository, a permissions error), which a caller must NOT retry.
-//! The implementer must add a new variant -- e.g.
-//! `GitStorageError::RefUpdateTransient(String)` -- distinct from both
-//! `TipMoved` (a genuine compare-mismatch) and `Corruption` (a malformed
-//! stored layout). An `is_transient()` predicate alongside the existing
-//! `is_tip_moved()` is the natural way to expose that to a caller, and is
-//! recommended, but this file pins the REQUIRED shape without depending on
-//! that exact method existing: it asserts the returned error matches none
-//! of the six variants that exist at 60f93fe (`TipMoved`/`Corruption`/
-//! `Git`/`NotFound`/`InvalidRef`/`InvalidArity`), by exhaustive
-//! elimination -- a check that compiles today and can only be satisfied by
-//! a genuinely new variant, rather than calling a method that does not
-//! exist yet and would abort `cargo test`'s build for the whole package
-//! before any test in it could run (verified directly: a single
+//! **What this file pins**: a non-mismatch failure must come back as a
+//! *specifically named* transient/retriable variant, not merely "anything
+//! other than `TipMoved`" -- collapsing it into the existing
+//! `GitStorageError::Git(String)` catch-all would make it indistinguishable
+//! from an unrelated, non-retriable I/O failure (a deleted repository, a
+//! permissions error), which a caller must NOT retry. It asserts the
+//! returned error matches none of the six variants that existed before this
+//! fix (`TipMoved`/`Corruption`/`Git`/`NotFound`/`InvalidRef`/
+//! `InvalidArity`), by exhaustive elimination -- a check that compiles
+//! independently of the fix's own new variant's exact name, rather than
+//! calling a method that might not exist yet and would abort `cargo test`'s
+//! build for the whole package before any test in it could run (verified
+//! directly: a single
 //! non-compiling integration-test file blocks every test in the crate, not
 //! just its own).
 //!
@@ -68,11 +53,11 @@ use storage_git::GitStorage;
 /// take for this staging ref (`<gitdir>/<staging_ref>.lock`) before calling
 /// `store_leaf`, so the transaction can never acquire it and therefore
 /// never reaches the point of comparing `self.observed_tip` against
-/// anything. A mutation reverting `cas()` to its current, unconditional
-/// `Err(_) => TipMoved` is exactly what keeps this red; the fix is a `match`
-/// on the underlying `gix::reference::edit::Error` naming
-/// `ReferenceOutOfDate`/`MustNotExist`/`MustExist` as the only genuine-
-/// mismatch variants (`storage-git-keyed::is_genuine_cas_mismatch`).
+/// anything. A mutation reverting `cas()` to an unconditional
+/// `Err(_) => TipMoved` (collapsing every failure shape into one outcome,
+/// rather than matching `gix::reference::edit::Error` for the three genuine
+/// mismatch variants via `is_genuine_cas_mismatch`) is exactly what turns
+/// this red.
 #[test]
 fn lock_contention_before_any_compare_is_not_reported_as_tip_moved() {
     smol::block_on(async {

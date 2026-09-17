@@ -117,7 +117,7 @@ impl Hasher for NarrowHasher {
 
 // ============================================================================
 // Generic git-tree helpers and the byte1-be-trim key path scheme (the
-// ratified key-derived layout, per `spike-report.md`'s recommendation).
+// key-derived layout, `docs/specs/storage-git.md` §2.1).
 // Added independently of
 // `acceptance_support/mod.rs`, which is deliberately written from the spec
 // alone and never shares helpers with this module.
@@ -212,7 +212,7 @@ pub fn enumerate_full_paths(repo: &gix::Repository, tree: gix::ObjectId) -> Hash
 
 /// The largest number of direct entries any tree object reachable from
 /// `tree` carries -- the empirical form of "no tree object exceeds 256
-/// entries" (spike-report.md's confirmed `byte1-be-trim` bound).
+/// entries" (SG2's `byte1-be-trim` bound, `docs/specs/storage-git.md` §2.1).
 #[must_use]
 #[allow(dead_code)]
 pub fn max_tree_width_recursive(repo: &gix::Repository, tree: gix::ObjectId) -> usize {
@@ -236,16 +236,16 @@ pub fn max_tree_width_recursive(repo: &gix::Repository, tree: gix::ObjectId) -> 
     widest
 }
 
-/// The `byte1-be-trim` path scheme `spike-report.md` recommends and
-/// `storage-git-keyed::PathScheme::TrimmedFanout{width:1}`
-/// (`.worktrees/spike-key-layout/storage-git-keyed/src/pathscheme.rs`)
-/// implements: a numeric key's leading zero bytes are stripped, a one-ASCII-
-/// digit length segment (the count of remaining significant bytes, `1..=8`)
-/// is prepended, and each remaining byte becomes its own two-lowercase-hex-
-/// digit segment, most-significant byte first. `key == 0` is one
-/// significant (zero) byte, never zero segments, so every key gets a
-/// non-empty path. Ported test-for-test against
-/// `storage-git-keyed::pathscheme::tests` below.
+/// The `byte1-be-trim` path scheme this crate's own
+/// `storage_git::layout::trimmed_key_segments` implements (design rationale
+/// in `docs/specs/storage-git.md` §2.1): a numeric key's leading zero bytes
+/// are stripped, a one-ASCII-digit length segment (the count of remaining
+/// significant bytes, `1..=8`) is prepended, and each remaining byte
+/// becomes its own two-lowercase-hex-digit segment, most-significant byte
+/// first. `key == 0` is one significant (zero) byte, never zero segments,
+/// so every key gets a non-empty path. Checked test-for-test against the
+/// production implementation in `key_derived_layout.rs`'s own
+/// `#[cfg(test)]` block.
 #[must_use]
 #[allow(dead_code)]
 pub fn trimmed_key_segments(key: u64) -> Vec<String> {
@@ -280,7 +280,7 @@ pub fn untrim_key_segments(segs: &[&str]) -> Option<u64> {
     Some(u64::from_be_bytes(buf))
 }
 
-/// Decode a `/`-joined path found under the top-level `n` namespace
+/// Decode a `/`-joined path found under the top-level `nodes` namespace
 /// (`<hex16(alg_id)>/<hex2(height)>/<trimmed(left)...>`) back into
 /// `(alg_id, left, height)`, or `None` if it is not well-formed.
 #[must_use]
@@ -295,7 +295,7 @@ pub fn decode_node_path(path: &str) -> Option<(u64, u64, u32)> {
     Some((alg_id, left, height))
 }
 
-/// Decode a `/`-joined path found under the top-level `l` namespace
+/// Decode a `/`-joined path found under the top-level `leaves` namespace
 /// (`<trimmed(index)...>`) back into the leaf `index`, or `None` if it is
 /// not well-formed.
 #[must_use]
@@ -306,8 +306,7 @@ pub fn decode_leaf_path(path: &str) -> Option<u64> {
 }
 
 /// `hex(x, 16)` -- a `u64` rendered as 16 lowercase hex digits, matching
-/// `storage-git::layout::hex16` and `storage-git-keyed::layout::hex16`'s own
-/// encoding for an algorithm id.
+/// `storage_git::layout::hex16`'s own encoding for an algorithm id.
 #[must_use]
 #[allow(dead_code)]
 pub fn hex16(x: u64) -> String {
@@ -315,7 +314,7 @@ pub fn hex16(x: u64) -> String {
 }
 
 /// `hex(x, 2)` -- a value `0..=255` rendered as 2 lowercase hex digits,
-/// matching the height segment `storage-git-keyed::build::node_path` writes
+/// matching the height segment `storage_git::build`'s own node path writes
 /// (`format!("{height:02x}")`).
 #[must_use]
 #[allow(dead_code)]
@@ -323,8 +322,7 @@ pub fn hex2(x: u32) -> String {
     format!("{x:02x}")
 }
 
-// `trimmed_key_segments`'s own correctness (ported test-for-test from
-// `storage-git-keyed::pathscheme::tests`) is checked once, in
+// `trimmed_key_segments`'s own correctness is checked once, in
 // `key_derived_layout.rs`'s own `#[cfg(test)]` block -- not here, so it does
 // not recompile and re-run once per `tests/*.rs` binary that pulls in this
 // shared module.

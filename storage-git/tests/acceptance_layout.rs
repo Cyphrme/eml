@@ -5,16 +5,17 @@
 //! Retired from this file: SG1's "exactly four top-level entries, one of
 //! them `peaks`" and SG4's materialized-vs-opaque node shape, both
 //! navigated via `peaks/hex(height,2)/hex(q,2)/...` (`resolve_peak`, below
-//! no longer), encode the peak-and-children hierarchy the ratified
-//! key-derived layout ("THE DESIGN", `spike-report.md` and its prototype
-//! `storage-git-keyed/`) eliminates outright ("no peak/child wiring, no
-//! decomposition, no opacity bookkeeping anywhere") -- there is no `peaks/`
-//! tree to navigate under that design, and no materialized/opaque
-//! distinction left to assert, so both tests would need this file's own
-//! entire premise rewritten, not patched. `key_derived_layout.rs`'s
+//! no longer), encode the peak-and-children hierarchy the key-derived
+//! layout (`docs/specs/storage-git.md` §2.1) eliminates outright ("no
+//! peak/child wiring, no decomposition, no opacity bookkeeping anywhere")
+//! -- there is no `peaks/` tree to navigate under that design, and no
+//! materialized/opaque distinction left to assert, so both tests would need
+//! this file's own entire premise rewritten, not patched.
+//! `key_derived_layout.rs`'s
 //! `nodes_and_leaves_sit_exactly_at_their_derived_key_paths` supersedes
 //! SG1's top-level-shape claim with the new design's own (an exhaustive
-//! allow-list over `n`/`l`/`meta`/`e`/`r`), and the completeness property
+//! allow-list over `nodes`/`leaves`/`meta`/`epochs`/`roots`), and the
+//! completeness property
 //! (`completeness_property.rs`) supersedes SG4's "every digest given is
 //! present" concern with a stronger, MemoryStorage-backed oracle rather
 //! than a peak-shape inspection.

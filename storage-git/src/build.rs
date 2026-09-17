@@ -1,21 +1,30 @@
 //! Checkpoint-tree assembly: turning a [`polydigest::WriteOp`] batch into a
-//! new `C(n')` tree object (§2, §3), per THE DESIGN (`spike-report.md` and
-//! its prototype `storage-git-keyed/`): a node or leaf is placed at a path
+//! new `C(n')` tree object (§2, §3), per the key-derived layout
+//! (`docs/specs/storage-git.md` §2.1): a node or leaf is placed at a path
 //! derived *only* from its key, and nothing else is ever recomputed from it
 //! -- no peak/child wiring, no decomposition, no opacity bookkeeping. A
 //! write adds exactly the keys it is given, with nothing wired or carried
 //! forward by decision.
 //!
 //! `meta`/`epochs`/`roots` are the one exception: small, non-key-addressed
-//! metadata that is genuinely mutated (not just appended to) on each write,
-//! so every currently-registered algorithm's `epochs/`/`roots/` entries are
-//! projected forward on every call, touched by this batch or not -- the
-//! same freshening (SG22) a leaf or node write gets, and the shape
-//! `gc_safety.rs`'s own acceptance test pins.
+//! metadata this function rewrites on every call, whether this batch's own
+//! ops touched a given algorithm or not. For an algorithm this batch never
+//! names, that rewrite is byte-identical to what was already stored --
+//! `layout::epochs_at` returns the epoch history verbatim whenever the log
+//! has only moved forward, which it always has by the time `apply` runs --
+//! so the entry is not mutated in the sense of changing its content, only
+//! refreshed in the sense of being written again with a new object id and a
+//! fresh mtime (SG22). That refresh has no effect on an entry already
+//! reachable from the previous tip (it was never a prune candidate), so the
+//! only entries this refresh does real work for are the ones a newly
+//! *registered* algorithm needs written for the first time; the redundant
+//! rewrite of every other still-active algorithm's entry is a bounded,
+//! small O(algorithms) cost per `apply` call, not a correctness
+//! requirement.
 //!
 //! The whole batch is applied through one [`gix::object::tree::Editor`]
 //! session (every ancestor a call's ops touch more than once is written to
-//! the object database exactly once, on the single final `write()`, SG18a).
+//! the object database exactly once, on the single final `write()`, SG18).
 //! The detached, unvalidated raw editor is used deliberately for that final
 //! write -- the higher-level wrapper's `write()` re-validates every entry
 //! of every changed tree on every call (an `objects.has()` existence probe

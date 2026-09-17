@@ -4,11 +4,11 @@
 //! Retired from this file: `sg3_digest_entries_present_iff_active_and_match_the_fold` navigated
 //! `peaks/hex(height,2)/hex(q,2)/digest/hex(alg_id,16)` to check that a
 //! second algorithm's digest never leaks into a range where it is inactive.
-//! The ratified key-derived layout ("THE DESIGN", `spike-report.md` and its
-//! prototype `storage-git-keyed/`) makes this structurally trivial rather
-//! than something to verify by inspection: each algorithm's digest for a
-//! coordinate lives at its own top-level-alg-id-prefixed path
-//! (`n/hex16(alg_id)/hex2(height)/trimmed(left)`), so a different algorithm
+//! The key-derived layout (`docs/specs/storage-git.md` §2.1) makes this
+//! structurally trivial rather than something to verify by inspection: each
+//! algorithm's digest for a coordinate lives at its own
+//! top-level-alg-id-prefixed path
+//! (`nodes/hex16(alg_id)/hex2(height)/trimmed(left)`), so a different algorithm
 //! is a wholly different path, never a sibling entry inside a shared
 //! `digest/` subtree that a purity bug could pollute. The completeness
 //! property (`completeness_property.rs`) already checks every

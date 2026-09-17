@@ -9,12 +9,11 @@
 //!
 //! # The key-derived layout
 //!
-//! THE DESIGN, ratified by two spikes (`spike-report.md` and its prototype
-//! crate `storage-git-keyed/`, both under `.worktrees/spike-key-layout/`):
-//! every node and leaf lives at a git tree path derived **only** from its
-//! own key -- `n/hex16(alg_id)/hex2(height)/<trimmed(left)>` for a node,
-//! `l/<trimmed(index)>` for a leaf, where `trimmed` is the `byte1-be-trim`
-//! scheme (`src/layout.rs::trimmed_key_segments`). A write adds exactly the
+//! Every node and leaf lives at a git tree path derived **only** from its
+//! own key -- `nodes/hex16(alg_id)/hex2(height)/<trimmed(left)>` for a node,
+//! `leaves/<trimmed(index)>` for a leaf, where `trimmed` is the
+//! `byte1-be-trim` scheme (`src/layout.rs::trimmed_key_segments`; design
+//! rationale in `docs/specs/storage-git.md` §2.1). A write adds exactly the
 //! keys it is given: no peak-and-children hierarchy, no decomposition of a
 //! taller coordinate into its parts, no materialized-versus-opaque
 //! distinction, and nothing wired or carried forward by decision. This
@@ -36,10 +35,10 @@
 //! 2. **`apply`'s `AppendLeaf`/`AppendSubtree` ops require in-order positions.** A
 //!    [`polydigest::WriteOp::AppendLeaf`]/[`polydigest::WriteOp::AppendSubtree`]'s `at` is accepted
 //!    only at `at == append_count()`, matching the same append-only assumption `MemoryStorage`
-//!    already makes via its own `debug_assert_eq!`. Nothing about the key-derived layout itself
-//!    requires in-order writes -- every key is independent -- this constraint exists only to keep
-//!    `len()`/`meta.count` (which the layout does still track, §3.1) a faithful count of contiguous
-//!    leaves.
+//!    already makes via its own explicit precondition check in `apply`. Nothing about the
+//!    key-derived layout itself requires in-order writes -- every key is independent -- this
+//!    constraint exists only to keep `len()`/`meta.count` (which the layout does still track, §3.1)
+//!    a faithful count of contiguous leaves.
 //!
 //! # The tip-tree model
 //!

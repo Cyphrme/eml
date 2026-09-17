@@ -91,17 +91,57 @@ merely read from source or documentation.
 
 ## 2. The git object layout
 
-### 2.1 The checkpoint tree — THE DESIGN
+### 2.1 The checkpoint tree — key-derived placement
 
-Ratified by two spikes (`spike-report.md` and its prototype crate
-`storage-git-keyed/`, both under `.worktrees/spike-key-layout/`): every node
-and leaf lives at a git tree path derived **only** from its own key. There is
-no peak-and-children hierarchy, no decomposition of a taller coordinate into
-its parts, and no materialized-versus-opaque distinction — a write adds
-exactly the keys it is given, with nothing wired or carried forward by
-decision. `meta`/`epochs`/`roots` are the one exception: small,
+Every node and leaf lives at a git tree path derived **only** from its own
+key. There is no peak-and-children hierarchy, no decomposition of a taller
+coordinate into its parts, and no materialized-versus-opaque distinction — a
+write adds exactly the keys it is given, with nothing wired or carried
+forward by decision. `meta`/`epochs`/`roots` are the one exception: small,
 non-key-addressed metadata that is genuinely mutated (not merely appended
 to) on each write.
+
+**Design rationale.** This layout replaces an earlier peak-and-children
+scheme that wired each write into a decomposition of taller coordinates and
+had to re-decide, on every write, whether a coordinate was materialized or
+opaque; a wrong decision there silently dropped a materialized descendant
+the moment its parent stopped being a frontier peak (§2.6 recounts the
+defect this was built to eliminate structurally rather than patch). Two
+placement schemes were measured and rejected before settling on this one:
+
+- **A single flat directory per key space** (one `leaves/`/`nodes/` tree with
+  every key as a direct sibling) is unbounded: the same directory object is
+  fully re-read, re-sorted, and re-serialized on every write, so its
+  serialized size — and therefore the per-write cost — grows linearly with
+  the log's size forever.
+- **Byte-fanout in little-endian order** (least-significant byte first)
+  bounds directory width the same way big-endian fanout does, but places
+  each key's near-always-zero high-order bytes at the leaves rather than the
+  root. Those bytes are exactly the ones many keys share, so big-endian
+  fanout lets one ancestor object cover every key with the same high-order
+  prefix (git's own content addressing deduplicates it once), while
+  little-endian fanout gives every key its own private copy of an otherwise
+  identical ancestor chain — measured at roughly 7x more standing, `git
+  gc`-immune objects for the same logical content in an exploratory
+  prototype of this design.
+
+The scheme this layer implements — one-byte big-endian fanout with a key's
+leading zero bytes trimmed behind an explicit length segment (`trimmed`,
+§2.2) — keeps the bounded-width property (SG2: no tree object exceeds 256
+entries at any level) and the ancestor-sharing property of big-endian order,
+while keeping a small key's path shallow instead of paying the full 8-level
+depth unconditionally. The accepted cost, disclosed rather than hidden: a
+key's full path can be up to 8 levels deep, so a single write touches more
+objects, and orphans more superseded ancestors between `gc` runs, than the
+flat or peak-wired alternatives would. That cost buys the elimination of
+peak/child wiring entirely — SG2/SG3 hold by construction (a key's path is a
+pure function of the key alone), not by an ordering or decomposition
+invariant a future change could violate — and it is why every tree this
+layer writes is assembled through one `gix::object::tree::Editor` session
+per `apply` call (SG7) rather than one independent read-modify-write chain
+per key: batching the whole call's edits into a single editor session is
+what keeps the deeper path's per-write object count from also multiplying
+the number of intermediate tree rewrites.
 
 ```
 C(n)                          tree
@@ -284,8 +324,8 @@ its parent stopped being a frontier peak, which an `inherited/` archive and
 then a corrected all-or-nothing-per-slot decomposition rule (former SG10,
 SG11, SG28, SG29) were built to fix.
 
-THE DESIGN (§2.1) removes the defect at its root instead of patching around
-it: every coordinate this layer is ever given lives at its own permanent,
+The key-derived layout (§2.1) removes the defect at its root instead of
+patching around it: every coordinate this layer is ever given lives at its own permanent,
 independent key path (§2.2), forever, so there is no taller coordinate to
 decompose, no per-write decision about a node's shape, and no reachability
 argument to make -- a key that was ever written stays exactly where it was

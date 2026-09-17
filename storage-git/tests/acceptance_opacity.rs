@@ -4,8 +4,8 @@
 //! Retired from this file: this file's former header named SG10 (a subtree-kind or resumed node
 //! MUST be opaque: `digest/` only, no `leaf`/`hex(c,2)` children) and SG11
 //! (opacity is a property of provenance, never the log's `meta.kind` byte)
-//! as what it tests. The ratified key-derived layout ("THE DESIGN",
-//! `spike-report.md` and its prototype `storage-git-keyed/`) retires the
+//! as what it tests. The key-derived layout (`docs/specs/storage-git.md`
+//! §2.1) retires the
 //! materialized-vs-opaque distinction itself, not merely its `peaks/`-based
 //! check: "no peak/child wiring, no decomposition, no opacity bookkeeping
 //! anywhere" -- every node is a blob at its key path, full stop, with

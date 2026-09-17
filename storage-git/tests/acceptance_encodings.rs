@@ -208,9 +208,9 @@ fn sg14_roots_absent_for_inactive_algorithm() {
 /// [SG16] A leaf's stored bytes MUST be byte-identical to the argument
 /// `store_leaf` received, with no transformation, compression, or framing.
 ///
-/// Rewritten against the ratified key-derived layout's own leaf path ("THE DESIGN",
-/// `spike-report.md` and its prototype `storage-git-keyed/`:
-/// `leaves/<byte1-be-trim(index)>`) instead of the retired `peaks/hex(0,2)/
+/// Rewritten against the key-derived layout's own leaf path
+/// (`docs/specs/storage-git.md` §2.1: `leaves/<byte1-be-trim(index)>`)
+/// instead of the retired `peaks/hex(0,2)/
 /// hex(i,2)/leaf` navigation -- the claim under test (byte-for-byte
 /// fidelity) is unchanged; only the path used to reach the stored blob is.
 /// This is the sole place in the crate that checks byte fidelity straight

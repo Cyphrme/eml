@@ -3,8 +3,8 @@
 //!
 //! Retired from this file: SG2's peak index (`peaks/hex(j,2)/hex(q,2)` MUST equal
 //! `frontier_for_size`) is a claim about the peak-and-children hierarchy the
-//! ratified key-derived layout ("THE DESIGN", `spike-report.md` and its
-//! prototype `storage-git-keyed/`) eliminates outright -- there is no
+//! key-derived layout (`docs/specs/storage-git.md` §2.1) eliminates
+//! outright -- there is no
 //! `peaks/` tree, and no frontier-indexed group structure, left to check
 //! under that design. `key_derived_layout.rs` supersedes it with the new
 //! design's own indexing claim (every node/leaf path is exactly
