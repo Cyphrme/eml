@@ -294,6 +294,64 @@ async fn assert_root_at_parity(
     }
 }
 
+/// The staging ref's own current target, read directly via `gix` -- never
+/// through `storage-git`'s own API -- so [`assert_open_at_at_write_time`]'s
+/// "recorded at write time" tree is an independent oracle in its own right,
+/// not a value `GitStorage` handed back to itself.
+fn tip_of(repo: &gix::ThreadSafeRepository, staging: &str) -> gix::ObjectId {
+    repo.to_thread_local()
+        .try_find_reference(staging)
+        .ok()
+        .flatten()
+        .map(|r| r.target().id().to_owned())
+        .unwrap_or_else(|| panic!("{staging} must have a tip"))
+}
+
+/// [SG21, finding 3] Restores the `open_at` coverage lost when
+/// `assert_tree_at_open_at` was retired alongside the deleted `tree_at`
+/// (b10ebd5). Unlike a check scoped to only the tree this step's write just
+/// produced (functionally identical to the live `GitStorage` path, since at
+/// the instant of recording the view's tree and size equal the live
+/// instance's own), this replays EVERY tree the current generation has
+/// recorded so far -- `gen_trees` -- so a tree recorded several steps ago is
+/// opened well after the log has moved past it, exactly the shape the
+/// deleted `assert_tree_at_open_at` exercised via `tree_at`. Each such
+/// view's leaves (from `gen_start` up to that tree's own recorded size)
+/// must match `MemoryStorage` identically. Leaves from *before* the current
+/// generation are out of scope: a resume's fresh storage never receives its
+/// predecessor's leaf bytes at all (only the sealed frontier's peak
+/// digests), so neither backend can serve them, and that symmetric absence
+/// is already covered at the node level by [`assert_node_parity`]'s own
+/// `coord_history`.
+async fn assert_open_at_at_write_time(
+    git_log: &NaryMerkleLog<GitStorage>,
+    mem_log: &NaryMerkleLog<MemoryStorage>,
+    gen_start: u64,
+    gen_trees: &[(u64, gix::ObjectId)],
+    context: &str,
+) {
+    for &(size, tree) in gen_trees {
+        let view = git_log
+            .storage()
+            .open_at(tree)
+            .unwrap_or_else(|e| panic!("{context}: open_at(recorded tip {tree}) failed: {e}"));
+        assert_eq!(
+            view.tree(),
+            tree,
+            "{context}: open_at view reports the wrong tree"
+        );
+        for i in gen_start..size {
+            let expected = mem_log.storage().get_leaf(i).await.unwrap();
+            let got = view.get_leaf(i).await.unwrap();
+            assert_eq!(
+                got, expected,
+                "{context}: open_at(recorded tip at size {size}).get_leaf({i}) diverged from \
+                 MemoryStorage"
+            );
+        }
+    }
+}
+
 async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
     // Every git repo this sequence's forks create must outlive the run, so
     // its objects stay readable; dropped otherwise (SG17-adjacent: a fork
@@ -302,8 +360,9 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
 
     let (dir0, repo0) = init_repo(HashKind::Sha1);
     dirs.push(dir0);
-    let git_storage = GitStorage::new(repo0, "refs/eml/storage/fork-diff/0/staging", arity)
-        .expect("fresh git storage");
+    let mut current_repo = repo0.clone();
+    let mut current_staging = "refs/eml/storage/fork-diff/0/staging".to_string();
+    let git_storage = GitStorage::new(repo0, &current_staging, arity).expect("fresh git storage");
     let mut git_log = NaryMerkleLog::new(git_storage, Box::new(WideHasher), TreeConfig { arity })
         .await
         .unwrap();
@@ -318,6 +377,16 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
     let mut coord_history: HashSet<(u64, u32)> = HashSet::new();
     let mut sizes_seen: BTreeSet<u64> = BTreeSet::new();
     let mut fork_id: u32 = 0;
+    // The size at which the CURRENT generation (since the last fork, or
+    // genesis) began -- [`assert_open_at_at_write_time`]'s leaf-parity loop
+    // never looks below this, since a resumed generation's fresh storage
+    // never receives its predecessor's leaf bytes.
+    let mut gen_start: u64 = 0;
+    // Every (size, tree) this generation has recorded straight off the ref
+    // so far, reset on each fork -- [`assert_open_at_at_write_time`] replays
+    // ALL of them at every step, so a tree recorded several steps ago is
+    // opened well after the log has moved past it.
+    let mut gen_trees: Vec<(u64, gix::ObjectId)> = Vec::new();
 
     record_frontier(git_log.size(), arity, &mut coord_history, &mut sizes_seen);
 
@@ -356,7 +425,7 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
                 dirs.push(dir);
                 let staging = format!("refs/eml/storage/fork-diff/{fork_id}/staging");
                 let fresh_git_storage =
-                    GitStorage::new(repo, &staging, arity).expect("fresh fork storage");
+                    GitStorage::new(repo.clone(), &staging, arity).expect("fresh fork storage");
 
                 let git_hashers: Vec<(u64, Box<dyn Hasher>)> = git_sealed
                     .frontiers()
@@ -375,6 +444,19 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
                 mem_log = NaryMerkleLog::resume(&mem_sealed, MemoryStorage::new(), mem_hashers)
                     .await
                     .expect("resume mem log onto fresh storage");
+
+                // A fork starts a new generation: its fresh storage carries
+                // forward only the sealed frontier's peak digests, never any
+                // predecessor leaf bytes, so open_at's leaf-parity check
+                // below must not look below this size, its tree ids must
+                // now be read off the NEW repo/ref, and every tree recorded
+                // under the OLD generation is no longer relevant (its own
+                // repo's objects stay reachable in `dirs`, but this
+                // generation's own leaf range starts fresh).
+                current_repo = repo;
+                current_staging = staging;
+                gen_start = git_log.size();
+                gen_trees.clear();
             },
             ForkOp::Reopen => {
                 let git_metas = git_log
@@ -436,6 +518,13 @@ async fn run_fork_lifecycle(ops: &[ForkOp], arity: u64) {
 
         // Every size the sequence has ever passed through, not just today's.
         assert_root_at_parity(&git_log, &mem_log, &sizes_seen, &context).await;
+
+        // [finding 3] Record this step's tree straight off the ref, then
+        // replay open_at over every tree this generation has recorded so
+        // far -- restoring the coverage the deleted `tree_at`-based
+        // `assert_tree_at_open_at` gave before it was retired.
+        gen_trees.push((git_log.size(), tip_of(&current_repo, &current_staging)));
+        assert_open_at_at_write_time(&git_log, &mem_log, gen_start, &gen_trees, &context).await;
     }
 }
 
