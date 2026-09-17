@@ -30,7 +30,10 @@ use std::process::{Command, Stdio};
 use common::{WideHasher, init_repo};
 use gix::ObjectId;
 use gix::hash::Kind as HashKind;
-use polydigest::{Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig};
+use polydigest::{
+    AlgorithmRoot, Hasher, MemoryStorage, NaryMerkleLog, NodeWrite, Storage, Subtree, TreeConfig,
+    WriteOp,
+};
 use quote::ToTokens;
 use storage_git::GitStorage;
 use syn::visit::{self, Visit};
@@ -989,7 +992,6 @@ async fn assert_single_vs_batched_flat(k: u64, n: u64, tag: &str) {
             .unwrap();
     }
     let mem_storage = mem.into_storage();
-    let final_meta = mem_storage.load_log_meta().await.unwrap();
     let final_roots = mem_storage.load_checkpoint_roots().await.unwrap();
     let final_metas = mem_storage.load_algorithm_metas().await.unwrap();
 
@@ -1013,35 +1015,60 @@ async fn assert_single_vs_batched_flat(k: u64, n: u64, tag: &str) {
     let leaves: Vec<(u64, Vec<u8>)> = (0..n)
         .map(|i| (i, format!("leaf-{i}").into_bytes()))
         .collect();
-    let leaves_ref: Vec<(u64, &[u8])> = leaves.iter().map(|(i, d)| (*i, d.as_slice())).collect();
     let nodes_owned: Vec<(u64, u64, u32, Vec<u8>)> = mem_storage
         .nodes
         .iter()
         .map(|(&(alg, left, height), hash)| (alg, left, height, hash.clone()))
         .collect();
-    let nodes_ref: Vec<(u64, u64, u32, &[u8])> = nodes_owned
+    let node_writes: Vec<NodeWrite<'_>> = nodes_owned
         .iter()
-        .map(|(a, l, h, d)| (*a, *l, *h, d.as_slice()))
+        .map(|(a, l, h, d)| NodeWrite {
+            alg_id: *a,
+            left: *l,
+            height: *h,
+            hash: d.as_slice(),
+        })
         .collect();
-    let metas_ref: Vec<(u64, &[(u64, u64)])> = final_metas
+    let root_writes: Vec<AlgorithmRoot<'_>> = final_roots
         .iter()
-        .map(|(id, e)| (*id, e.as_slice()))
+        .map(|(id, r)| AlgorithmRoot {
+            alg_id: *id,
+            root: r.as_slice(),
+        })
         .collect();
-    let roots_ref: Vec<(u64, &[u8])> = final_roots
-        .iter()
-        .map(|(id, r)| (*id, r.as_slice()))
-        .collect();
-    git2.write_batch(&leaves_ref, &nodes_ref, &metas_ref, final_meta, &roots_ref)
-        .await
-        .unwrap();
+
+    // The "batched" side: one atomic `apply` call carrying every op this
+    // content ever needed -- registering algorithm 0 (never done on this
+    // raw `GitStorage`, unlike `NaryMerkleLog::new`'s eager registration)
+    // and every leaf, with the full accumulated node/checkpoint-root set
+    // attached to the final leaf op. Content-addressing means it does not
+    // matter which op in the batch nominally introduces a given
+    // coordinate -- only the final set of keys written.
+    let mut ops: Vec<WriteOp<'_>> = Vec::with_capacity(final_metas.len() + leaves.len());
+    for (alg_id, epochs) in &final_metas {
+        ops.push(WriteOp::AddAlgorithm {
+            alg_id: *alg_id,
+            epochs: epochs.as_slice(),
+        });
+    }
+    for (i, (index, data)) in leaves.iter().enumerate() {
+        let last = i + 1 == leaves.len();
+        ops.push(WriteOp::AppendLeaf {
+            at: *index,
+            data: data.as_slice(),
+            nodes: if last { &node_writes } else { &[] },
+            checkpoint_roots: if last { &root_writes } else { &[] },
+        });
+    }
+    git2.apply(&ops).await.unwrap();
     drop(git2);
     let tree_batched = tip_tree(&repo2, &staging2);
 
     assert_eq!(
         tree_incremental, tree_batched,
         "HISTORY INDEPENDENCE (k={k}, n={n}, {tag}): {n} incremental append_leaf calls \
-         (tip={tree_incremental}) must reach the identical tip tree as one batched write_batch \
-         call (tip={tree_batched})"
+         (tip={tree_incremental}) must reach the identical tip tree as one batched `apply` call \
+         (tip={tree_batched})"
     );
 }
 
