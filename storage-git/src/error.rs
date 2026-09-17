@@ -25,7 +25,7 @@ pub enum GitStorageError {
     #[error("not found: {0}")]
     NotFound(String),
 
-    /// SG19/SG4.5 — the staging ref's compare-and-swap precondition failed:
+    /// SG19 — the staging ref's compare-and-swap precondition failed:
     /// another writer moved the ref between this instance's last observed
     /// value and this write attempt. Distinguished from every other error
     /// shape so the caller (the `polydigest` combinator) knows to reload and
@@ -74,17 +74,9 @@ pub enum GitStorageError {
 }
 
 impl GitStorageError {
-    /// Whether this error is the distinguished tip-moved variant (SG4.5).
+    /// Whether this error is the distinguished tip-moved variant (SG19).
     #[must_use]
     pub fn is_tip_moved(&self) -> bool {
         matches!(self, Self::TipMoved { .. })
-    }
-
-    /// Whether this error is the distinguished transient/retriable variant
-    /// (SG19a): a compare-and-swap failure that never reached a genuine
-    /// value comparison.
-    #[must_use]
-    pub fn is_transient(&self) -> bool {
-        matches!(self, Self::RefUpdateTransient(_))
     }
 }

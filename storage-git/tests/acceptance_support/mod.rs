@@ -295,17 +295,3 @@ pub async fn new_memory_log(arity: u64, hasher: FixtureHasher) -> NaryMerkleLog<
         .await
         .expect("new memory log")
 }
-
-/// Base-`k` digits of `n`, least-significant first (index = height `j`).
-#[must_use]
-pub fn base_k_digits(mut n: u64, k: u64) -> Vec<u64> {
-    if n == 0 {
-        return Vec::new();
-    }
-    let mut digits = Vec::new();
-    while n > 0 {
-        digits.push(n % k);
-        n /= k;
-    }
-    digits
-}

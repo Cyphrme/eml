@@ -582,31 +582,31 @@ fn test_epoch_errors() {
         // Duplicate
         assert!(matches!(
             log.add_algorithm(0, Box::new(Sha256Hasher)).await,
-            Err(eml::error::Error::DuplicateAlgorithm(0))
+            Err(eml::Error::DuplicateAlgorithm(0))
         ));
         // Unknown remove
         assert!(matches!(
             log.remove_algorithm(999).await,
-            Err(eml::error::Error::UnknownAlgorithm(999))
+            Err(eml::Error::UnknownAlgorithm(999))
         ));
         // Unknown resume
         assert!(matches!(
             log.resume_algorithm(999).await,
-            Err(eml::error::Error::UnknownAlgorithm(999))
+            Err(eml::Error::UnknownAlgorithm(999))
         ));
 
         log.remove_algorithm(0).await.unwrap();
         // Already frozen
         assert!(matches!(
             log.remove_algorithm(0).await,
-            Err(eml::error::Error::FrozenAlgorithm(0))
+            Err(eml::Error::FrozenAlgorithm(0))
         ));
 
         log.resume_algorithm(0).await.unwrap();
         // Already active
         assert!(matches!(
             log.resume_algorithm(0).await,
-            Err(eml::error::Error::AlgorithmActive(0))
+            Err(eml::Error::AlgorithmActive(0))
         ));
     });
 }
@@ -2423,7 +2423,7 @@ fn test_from_storage_initialization_errors() {
         };
         let res =
             eml::NaryMerkleLog::from_storage(storage_dup, vec![(0, Box::new(Sha256Hasher))]).await;
-        assert!(matches!(res, Err(eml::error::Error::DuplicateAlgorithm(0))));
+        assert!(matches!(res, Err(eml::Error::DuplicateAlgorithm(0))));
 
         // 2. Orphaned metadata error (metas has alg 0, but no hasher for alg 0 is passed)
         let storage_orphaned = MockStorage {
@@ -2431,7 +2431,7 @@ fn test_from_storage_initialization_errors() {
             len: 0,
         };
         let res = eml::NaryMerkleLog::from_storage(storage_orphaned, Vec::new()).await;
-        assert!(matches!(res, Err(eml::error::Error::OrphanedMetadata(0))));
+        assert!(matches!(res, Err(eml::Error::OrphanedMetadata(0))));
 
         // 3. Unknown metadata error (hasher passed for alg 1, but metas only has alg 0)
         let storage_unknown = MockStorage {
@@ -2443,7 +2443,7 @@ fn test_from_storage_initialization_errors() {
             vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
         )
         .await;
-        assert!(matches!(res, Err(eml::error::Error::UnknownMetadata(1))));
+        assert!(matches!(res, Err(eml::Error::UnknownMetadata(1))));
 
         // 4. Corrupted metadata error (invalid log arity < 2)
         let storage_corrupt = MockStorage {
@@ -2458,7 +2458,7 @@ fn test_from_storage_initialization_errors() {
         .await;
         assert!(matches!(
             res,
-            Err(eml::error::Error::CorruptedMetadata { alg_id: 0, .. })
+            Err(eml::Error::CorruptedMetadata { alg_id: 0, .. })
         ));
 
         // 5. Storage error propagation
@@ -2473,7 +2473,7 @@ fn test_from_storage_initialization_errors() {
             eml::NaryMerkleLog::from_storage(storage_err, vec![(0, Box::new(Sha256Hasher))]).await;
         assert!(matches!(
             res,
-            Err(eml::error::Error::Storage(
+            Err(eml::Error::Storage(
                 eml::storage::MemoryStorageError::LeafNotFound {
                     index: 0,
                     stored: 0

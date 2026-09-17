@@ -42,14 +42,6 @@ pub use polydigest::{
 // non-parameterised snapshot `Error`, not re-exported under this name).
 pub use polydigest::{LogError as Error, LogResult as Result};
 
-/// The EML library's error surface, reached through `eml::error::*`. The
-/// driver's storage-parameterised [`polydigest::LogError`] is the public
-/// `Error`; this module preserves the `eml::error::Error` path the historical
-/// surface exposed.
-pub mod error {
-    pub use polydigest::{LogError as Error, LogResult as Result};
-}
-
 /// The log arity: binary (`k = 2`).
 pub const LOG_ARITY: u64 = 2;
 

@@ -162,25 +162,6 @@ pub fn find_child(repo: &gix::Repository, tree: gix::ObjectId, name: &str) -> Op
         .find(|e| e.name == name)
 }
 
-/// Resolve a sequence of path segments from `tree`, returning the final
-/// entry, or `None` if any segment along the way is missing.
-#[must_use]
-#[allow(dead_code)]
-pub fn resolve_segments(
-    repo: &gix::Repository,
-    tree: gix::ObjectId,
-    segments: &[String],
-) -> Option<RawEntry> {
-    let mut current = tree;
-    let mut last: Option<RawEntry> = None;
-    for seg in segments {
-        let entry = find_child(repo, current, seg)?;
-        current = entry.oid;
-        last = Some(entry);
-    }
-    last
-}
-
 /// Enumerate every `/`-joined path from `tree` down to a terminal (non-tree)
 /// entry -- a pure path-driven walk, never deduplicated by object id, so a
 /// coincidentally shared subtree object (e.g. two dedup'd identical blobs)
