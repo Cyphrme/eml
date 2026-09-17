@@ -335,8 +335,7 @@ impl Storage for FjallStorage {
                 WriteOp::AppendLeaf { at, .. } | WriteOp::AppendSubtree { at, .. } => {
                     if *at != projected_count {
                         return Err(FjallStorageError::InvalidOperation(format!(
-                            "append at position {at}, expected the current count \
-                             {projected_count}"
+                            "append at position {at}, expected the current count {projected_count}"
                         )));
                     }
                     projected_count += 1;
@@ -353,7 +352,8 @@ impl Storage for FjallStorage {
                         )));
                     }
                 },
-                WriteOp::RemoveAlgorithm { alg_id, .. } | WriteOp::ResumeAlgorithm { alg_id, .. } => {
+                WriteOp::RemoveAlgorithm { alg_id, .. }
+                | WriteOp::ResumeAlgorithm { alg_id, .. } => {
                     let known = self
                         .metadata
                         .get(alg_id.to_be_bytes())

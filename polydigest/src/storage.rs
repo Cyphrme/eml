@@ -401,7 +401,8 @@ impl Storage for MemoryStorage {
                         )));
                     }
                 },
-                WriteOp::RemoveAlgorithm { alg_id, .. } | WriteOp::ResumeAlgorithm { alg_id, .. } => {
+                WriteOp::RemoveAlgorithm { alg_id, .. }
+                | WriteOp::ResumeAlgorithm { alg_id, .. } => {
                     if !self.algorithm_metas.contains_key(alg_id) {
                         return Err(MemoryStorageError::InvalidOperation(format!(
                             "algorithm {alg_id} is not registered"
@@ -471,7 +472,8 @@ impl Storage for MemoryStorage {
                 WriteOp::SeedFrontier { size, algorithms } => {
                     self.count = *size;
                     for seed in *algorithms {
-                        self.algorithm_metas.insert(seed.alg_id, seed.epochs.to_vec());
+                        self.algorithm_metas
+                            .insert(seed.alg_id, seed.epochs.to_vec());
                         for n in seed.nodes {
                             self.nodes
                                 .insert((n.alg_id, n.left, n.height), n.hash.to_vec());

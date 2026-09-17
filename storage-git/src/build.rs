@@ -375,7 +375,9 @@ pub(crate) fn apply(
                     .map_err(git_err)?;
             }
         } else {
-            editor.remove(roots_path(alg_id).as_str()).map_err(git_err)?;
+            editor
+                .remove(roots_path(alg_id).as_str())
+                .map_err(git_err)?;
         }
     }
 
