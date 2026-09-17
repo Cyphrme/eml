@@ -204,19 +204,23 @@ fn sg14_roots_absent_for_inactive_algorithm() {
     });
 }
 
-/// [SG16] `leaf`'s bytes MUST be byte-identical to the argument
+/// [SG16] A leaf's stored bytes MUST be byte-identical to the argument
 /// `store_leaf` received, with no transformation, compression, or framing.
+///
+/// Rewritten (per the merge-gate dispatch,
+/// `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`)
+/// against the ratified key-derived layout's own leaf path ("THE DESIGN",
+/// `spike-report.md` and its prototype `storage-git-keyed/`:
+/// `l/<byte1-be-trim(index)>`) instead of the retired `peaks/hex(0,2)/
+/// hex(i,2)/leaf` navigation -- the claim under test (byte-for-byte
+/// fidelity) is unchanged; only the path used to reach the stored blob is.
 #[test]
 fn sg16_leaf_blob_is_byte_identical_to_input() {
     smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
         let staging = "refs/eml/storage/sg16/staging";
-        // A high arity keeps every one of these few leaves an isolated
-        // height-0 peak (no carry merges), so its ordinal under
-        // `peaks/00/` is just its leaf index -- this test is about SG16's
-        // byte-identity claim, not SG8's position-lookup algorithm.
-        let mut log = new_log(&repo, staging, 50, FixtureHasher::new(32)).await;
+        let mut log = new_log(&repo, staging, 2, FixtureHasher::new(32)).await;
 
         // Payloads chosen to catch any accidental framing: empty, binary
         // with embedded NUL, and bytes that look like a length prefix.
@@ -233,13 +237,29 @@ fn sg16_leaf_blob_is_byte_identical_to_input() {
         let local = repo.to_thread_local();
         let tip = support::ref_target(&local, staging).unwrap();
         for (i, payload) in payloads.iter().enumerate() {
-            let leaf_path = format!("peaks/{}/{}/leaf", hex(0, 2), hex(i as u64, 2));
-            let entry = support::resolve_path(&local, tip, &leaf_path)
-                .unwrap_or_else(|| panic!("no leaf at {leaf_path}"));
+            let mut segments = vec!["l".to_string()];
+            segments.extend(trimmed_key_segments(i as u64));
+            let entry = support::resolve_path(&local, tip, &segments.join("/"))
+                .unwrap_or_else(|| panic!("no leaf at {}", segments.join("/")));
             let bytes = support::read_blob(&local, entry.oid);
             assert_eq!(&bytes, payload, "leaf {i} must round-trip byte-identically");
         }
     });
+}
+
+/// The `byte1-be-trim` path scheme's own segment derivation, an independent
+/// copy for this file alone (`acceptance_support/mod.rs` stays written from
+/// `docs/specs/storage-git.md` alone; this scheme comes from the ratified
+/// design instead, so it does not belong there) -- see
+/// `key_derived_layout.rs`'s identical copy and its own doc comment for the
+/// full derivation and citation.
+fn trimmed_key_segments(key: u64) -> Vec<String> {
+    let be = key.to_be_bytes();
+    let first_nonzero = be.iter().position(|&b| b != 0).unwrap_or(7);
+    let sig = &be[first_nonzero..];
+    let mut segs = vec![sig.len().to_string()];
+    segs.extend(sig.iter().map(|b| format!("{b:02x}")));
+    segs
 }
 
 // [SG15] is not tested here. A digest blob's length must equal the writing
