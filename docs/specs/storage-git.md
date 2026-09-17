@@ -73,8 +73,8 @@ mistake omission for oversight.
 - `alg_id` — a `u64` algorithm identifier, opaque to this layer.
 - `T(left, h)` — the sealed perfect `k`-ary subtree covering item indices
   `[left, left + k^h)`. `T(left, 0)` is a single item's node; its digest for
-  algorithm `a` is the raw bytes `Storage::store_node`/`write_batch` was
-  given for `(a, left, h)`, with no further internal structure (§2.2).
+  algorithm `a` is the raw bytes a [`polydigest::WriteOp`]'s `nodes` field
+  carried for `(a, left, h)`, with no further internal structure (§2.2).
 - `C(n)` — the checkpoint tree: the complete, self-describing git tree
   recording the log's state at size `n` (§2.1).
 - `trimmed(x)` — the `byte1-be-trim` key path scheme (§2.2): a sequence of
@@ -99,34 +99,36 @@ and leaf lives at a git tree path derived **only** from its own key. There is
 no peak-and-children hierarchy, no decomposition of a taller coordinate into
 its parts, and no materialized-versus-opaque distinction — a write adds
 exactly the keys it is given, with nothing wired or carried forward by
-decision. `meta`/`e`/`r` are the one exception: small, non-key-addressed
-metadata that is genuinely mutated (not merely appended to) on each write.
+decision. `meta`/`epochs`/`roots` are the one exception: small,
+non-key-addressed metadata that is genuinely mutated (not merely appended
+to) on each write.
 
 ```
 C(n)                          tree
   meta                        blob    §3.1
-  e/                          tree    one blob per ever-registered algorithm
+  epochs/                     tree    one blob per ever-registered algorithm
     hex(alg_id, 16)           blob    §3.2
-  r/                          tree    one blob per algorithm active at n
+  roots/                      tree    one blob per algorithm active at n
     hex(alg_id, 16)           blob    §3.3
-  n/                          tree    every sealed node digest, by key
+  nodes/                      tree    every sealed node digest, by key
     hex(alg_id, 16)/          tree
       hex(h, 2)/              tree
         trimmed(left)         blob    §2.2, §3.4
-  l/                          tree    every leaf, by key
+  leaves/                     tree    every leaf, by key
     trimmed(index)            blob    §2.2, §3.5
 ```
 
 **[SG1]** `C(n)`'s top-level entries MUST be an exhaustive subset of exactly
-`{meta, e, r, n, l}` — `meta` present always; `e`/`n`/`l` present once
-anything has ever been written under them; `r` present once at least one
-algorithm is both active at `n` and has been given a checkpoint root (§3.3).
-No other top-level entry MUST ever exist. *Checked by: structural — an
-exhaustive allow-list walk of `C(n)`'s direct entries.*
+`{meta, epochs, roots, nodes, leaves}` — `meta` present always;
+`epochs`/`nodes`/`leaves` present once anything has ever been written under
+them; `roots` present once at least one algorithm is both active at `n` and
+has been given a checkpoint root (§3.3). No other top-level entry MUST ever
+exist. *Checked by: structural — an exhaustive allow-list walk of `C(n)`'s
+direct entries.*
 
 **[SG2]** A node's digest for algorithm `a` at `(left, h)` lives at exactly
-`n/hex(a,16)/hex(h,2)/trimmed(left)`; a leaf's raw bytes at exactly
-`l/trimmed(index)`. `trimmed(x)` (`byte1-be-trim`,
+`nodes/hex(a,16)/hex(h,2)/trimmed(left)`; a leaf's raw bytes at exactly
+`leaves/trimmed(index)`. `trimmed(x)` (`byte1-be-trim`,
 `src/layout.rs::trimmed_key_segments`) strips `x`'s leading zero bytes,
 prepends a one-ASCII-digit length segment (`1..=8`, the count of remaining
 significant bytes), and renders each remaining byte as its own
@@ -135,15 +137,16 @@ significant (zero) byte, never zero segments. Distinct keys always produce
 distinct segment sequences — the length segment keeps two keys of different
 significant-byte-length from ever sharing a directory, and fixed-width
 hex-pair segments keep two keys of the same length from ever sharing one
-once their bytes differ — so no tree object this scheme builds under `n/` or
-`l/` ever exceeds 256 entries (one byte's worth of fan-out at any single
-level). *Checked by: property test — every scheme-generated path is
+once their bytes differ — so no tree object this scheme builds under
+`nodes/` or `leaves/` ever exceeds 256 entries (one byte's worth of fan-out
+at any single level). *Checked by: property test — every scheme-generated path is
 injective over a representative key set (`tests/key_derived_layout.rs`'s
 `trimmed_key_segments_tests`); the exhaustive-set-equality check in SG3
 below empirically confirms the 256-entry bound.*
 
-**[SG3]** For a driven operation sequence, the exact set of paths under `n/`
-(respectively `l/`) MUST equal the exact set of `trimmed`-derived paths for
+**[SG3]** For a driven operation sequence, the exact set of paths under
+`nodes/` (respectively `leaves/`) MUST equal the exact set of
+`trimmed`-derived paths for
 every `(alg_id, left, height)` node coordinate (respectively every leaf
 `index`) an independent, non-git reference implementation (`MemoryStorage`)
 was ever given for that sequence — catching a missing entry, a stray entry,
@@ -175,7 +178,7 @@ already addressed by its own complete key.
 
 This layer does not interpret or validate which algorithms *should* have a
 digest at a given coordinate (the retired layout's SG3 active-range
-enforcement) — it stores exactly the digests `write_batch`/`store_node` was
+enforcement) — it stores exactly the digests a `WriteOp`'s `nodes` field was
 given, at exactly their keys, and nothing more. Whether an absent key means
 "never given" or "corruption" is a question for the caller's own epoch
 tracking (`polydigest`/`cml`), not something this storage layer's object
@@ -183,33 +186,35 @@ model encodes or enforces.
 
 ### 2.3 Entry modes and canonical order
 
-**[SG5]** Every blob entry (`meta`, an `e`/`r`/`n`/`l` leaf) MUST use mode
-`100644` (regular, non-executable). Every tree entry (`e`, `r`, `n`, `l`, and
-every intermediate `hex(alg_id,16)`/`hex(h,2)`/length-segment directory
-`trimmed(x)` builds) MUST use mode `40000`. Nothing this layer writes is
+**[SG5]** Every blob entry (`meta`, an `epochs`/`roots`/`nodes`/`leaves`
+leaf) MUST use mode `100644` (regular, non-executable). Every tree entry
+(`epochs`, `roots`, `nodes`, `leaves`, and every intermediate
+`hex(alg_id,16)`/`hex(h,2)`/length-segment directory `trimmed(x)` builds)
+MUST use mode `40000`. Nothing this layer writes is
 ever a symlink or a gitlink. *Checked by: structural; `gix::objs::tree::
 EntryKind::{Blob,Tree}` already normalize to exactly these two canonical
 mode strings (`gix-object/src/tree/mod.rs`, confirmed by compiling a check
 against the pinned tag).*
 
-**[SG6]** The five top-level literals (`meta`, `e`, `r`, `n`, `l`) are
-mutually distinct and never sit as siblings of a hex- or `trimmed`-encoded
-entry at the same tree level (`e`/`r`/`n`/`l` hold only key-fanned-out or
-`hex(alg_id,16)`-named subtrees; `meta`/`e`/`r` never coexist with a
-`trimmed`-keyed sibling) — unlike the retired peak-and-children layout,
-where literal names like `leaf`/`digest` had to avoid looking like a hex
-string themselves because they sat beside `hex(alg_id,16)`-named siblings,
-no such ambiguity is possible here by construction. Every sibling group
-within one `n/`/`l` bucket is a `trimmed`-derived length-digit or hex-pair
+**[SG6]** The five top-level literals (`meta`, `epochs`, `roots`, `nodes`,
+`leaves`) are mutually distinct and never sit as siblings of a hex- or
+`trimmed`-encoded entry at the same tree level (`epochs`/`roots`/`nodes`/
+`leaves` hold only key-fanned-out or `hex(alg_id,16)`-named subtrees;
+`meta`/`epochs`/`roots` never coexist with a `trimmed`-keyed sibling) —
+unlike the retired peak-and-children layout, where literal names like
+`leaf`/`digest` had to avoid looking like a hex string themselves because
+they sat beside `hex(alg_id,16)`-named siblings, no such ambiguity is
+possible here by construction. Every sibling group within one
+`nodes/`/`leaves` bucket is a `trimmed`-derived length-digit or hex-pair
 segment (SG2's injectivity), never mixed with a literal name. *Checked by:
 structural — the five top-level literals checked pairwise-distinct
 (`src/layout.rs`'s own unit test), plus SG2's injectivity property.*
 
 **[SG7]** Every tree object this layer writes is assembled through
-`gix_object::tree::Editor` (`src/build.rs::apply_write`, one editor session
-per `write_batch` call), which maintains each tree's entries in git's
-canonical sorted order internally as `upsert`/`remove` calls are applied —
-this layer never hand-assembles or hand-sorts a `Tree`'s `entries` itself.
+`gix::object::tree::Editor` (`src/build.rs::apply`, one editor session per
+`apply` call), which maintains each tree's entries in git's canonical
+sorted order internally as `upsert`/`remove` calls are applied — this layer
+never hand-assembles or hand-sorts a `Tree`'s `entries` itself.
 *Checked by: structural — the same acceptance walk SG5 uses also confirms
 every sibling group in a real written tree is canonically sorted
 (`tests/acceptance_layout.rs::sg6_sg7_sibling_entries_are_canonically_sorted`).*
@@ -217,8 +222,8 @@ every sibling group in a real written tree is canonically sorted
 ### 2.4 Position lookup
 
 **[SG8]** To read item `i`, or a node digest at `(alg_id, left, height)`,
-resolve the derived key path (§2.2) directly under `l/` (respectively
-`n/hex(alg_id,16)/hex(height,2)`) — no frontier computation, no descent, no
+resolve the derived key path (§2.2) directly under `leaves/` (respectively
+`nodes/hex(alg_id,16)/hex(height,2)`) — no frontier computation, no descent, no
 arity dependence at read time. A path that does not resolve means the key
 was never written: `get_node` answers `Ok(None)`; `get_leaf` answers
 `Err(NotFound)`. *Checked by: property test — for every valid `(n, i)` a
@@ -229,12 +234,11 @@ key.*
 ### 2.5 Purity
 
 **[SG9]** `C(n)`'s object id (per object-hash format) MUST be a pure
-function of exactly: `k`, the item sequence `0..n`, the **currently known**
-epoch history of every registered algorithm truncated to `n`
-(`cml::engine::AlgView::epochs_at`, `cml/src/engine.rs:196-217`), and the log
-kind byte (§3.1) — except at `n == 0`, where `meta.kind` is fixed to the
-canonical value `0x00` for every log, regardless of what kind it is bound
-to or will ever be bound to (§3.1's note). It MUST NOT depend on insertion
+function of exactly: `k`, the item sequence `0..n`, and the **currently
+known** epoch history of every registered algorithm truncated to `n`
+(`cml::engine::AlgView::epochs_at`, `cml/src/engine.rs:196-217`) — a log's
+kind is never part of that function at all, since it is derived from
+content rather than stored (§3.1). It MUST NOT depend on insertion
 order among operations that do not change `n` (for example two algorithm
 registrations at the same size, in either order, yield the same `C(n)` once
 both are known), on wall-clock time, on writer identity — including *how
@@ -249,11 +253,10 @@ identical operation sequence must reach byte-identical `C(n)` for every
 `n == 0` must reach the identical `C(0)` even when one log's first-ever
 append is a leaf and the other's is a subtree.*
 
-The same reasoning extends to `r/` (§3.3): a checkpoint root supplied at
-`new_count == 0` is exactly as observationally meaningless as the kind byte
-is there, so the write side never persists an `r/` entry at `n == 0`
-regardless of what a batch supplies, mirroring the kind canonicalization
-above.
+The same reasoning extends to `roots/` (§3.3): a checkpoint root supplied at
+`new_count == 0` is exactly as observationally meaningless as any other
+n=0-only signal, so the write side never persists a `roots/` entry at
+`n == 0` regardless of what a batch supplies.
 
 One consequence of SG9 is worth stating precisely, because the exhibit's
 `C(n)` notation can otherwise be misread as "one object per size, forever."
@@ -287,8 +290,9 @@ independent key path (§2.2), forever, so there is no taller coordinate to
 decompose, no per-write decision about a node's shape, and no reachability
 argument to make -- a key that was ever written stays exactly where it was
 written, for the life of the log. `resume`'s freshness requirement
-(`Storage::load_log_meta` returning `Some` refuses a resumption target
-before anything is written) is unchanged and still matters for the same
+(a nonzero `Storage::append_count` or a non-empty `load_algorithm_metas`
+refuses a resumption target before anything is written) is unchanged and
+still matters for the same
 reason it always did: it forecloses the one case a backend would otherwise
 have to reconcile a touched coordinate's prior occupant against -- a stale,
 unrelated value left over from something else. With per-key storage,
@@ -302,82 +306,79 @@ are big-endian throughout, matching the encoding `storage-fjall` already
 uses for the same fields (`storage-fjall/src/lib.rs:163-252`), so a
 migration between backends never has to reconcile endianness.
 
-### 3.1 `meta` (fixed 11 bytes)
+### 3.1 `meta` (fixed 10 bytes)
 
 | Offset | Width | Field | Value |
 | --: | --: | :-- | :-- |
 | 0 | 2 | arity | `k` as `u16` BE |
 | 2 | 8 | count | `n` as `u64` BE |
-| 10 | 1 | kind | `0x00` = flat, `0x01` = subtree (`cml::LogKind::to_byte`, `cml/src/lib.rs`) |
 
-**[SG12]** `meta` MUST be exactly these 11 bytes in this order, with no
+**[SG12]** `meta` MUST be exactly these 10 bytes in this order, with no
 trailing padding, the same fixed shape for every log regardless of resume
 history: there is nothing this early to stay compatible with, so no wider,
 resume-carrying shape and no version byte exist to distinguish a shape that
 has never had a second variant. A reader MUST reject any other length.
 *Checked by: golden vector; structural length check.*
 
-At `n == 0`, `kind` MUST always be `0x00`, never a value read off the log's
-current or eventual kind. `polydigest`'s own contract already says an empty
-log accepts either kind (`NaryMerkleLog::append_leaf`'s comment, "an empty
-log ... accepts either kind", `polydigest/src/tree.rs:777`) — there is no
-committed append at `n == 0` to bind a kind to at all, flat or subtree, so
-`0x00` here is a fixed constant, not a claim about what either log's first
-real append will be. Fixing it to one value (rather than, say, omitting the
-byte or deriving it from some other n=0-only signal) means `C(0)` is
-identical for every log with the same arity and content: two logs whose
-histories diverge immediately afterward — one going flat, the other going
-subtree — still commit to byte-identical `C(0)` objects, since nothing
-about that later divergence exists yet at `n == 0`. `GitStorage::new`'s own
-genesis default (before any ref exists) and `NaryMerkleLog::new`'s in-memory
-starting `kind` are already `LogKind::Flat`/`0x00`, so any `C(0)` this layer
-actually writes — a resumption from an empty seal, or an `add_algorithm`
-before the first append — commits this same constant regardless of what the
-log goes on to become. *Checked by: property test — a genuine `C(0)` write
-for a log whose first append will be `append_leaf` and one whose first
-append will be `append_subtree`, otherwise byte-identical (arity, empty
-content), MUST yield the identical `C(0)` object id.*
+**Kind derivation.** `meta` carries no kind field at all: a log's kind
+(flat vs. subtree) is never persisted anywhere in `C(n)` — it is derived
+from content, the same way `polydigest::Storage::len`'s own doc comment
+specifies for every backend. `GitStorage::metadata()`/
+`GitReadOnlyView::metadata()` (§4.6) derive it as `LogKind::Flat` whenever
+`n == 0` (either kind is equally valid there — there is no committed append
+yet to bind a kind to) or whenever `leaves/` has ever gained an entry;
+`LogKind::Subtree` otherwise (a nonzero `n` with no `leaves/` entry — a
+resumed or subtree-appended-from-genesis log). Since `meta` never encodes
+kind, two logs whose histories diverge immediately after `n == 0` — one
+going flat, the other going subtree — commit to byte-identical `C(0)`
+objects as a structural consequence, not a canonicalized special case.
+*Checked by: property test — a genuine `C(0)` write for a log whose first
+append will be `append_leaf` and one whose first append will be
+`append_subtree`, otherwise byte-identical (arity, empty content), MUST
+yield the identical `C(0)` object id.*
 
-### 3.2 An `e/hex(alg_id, 16)` blob
+### 3.2 An `epochs/hex(alg_id, 16)` blob
 
 A sequence of `(start, end)` pairs, each 16 bytes: `start` as `u64` BE,
 `end` as `u64` BE, with `end = 0xFFFF_FFFF_FFFF_FFFF` (`u64::MAX`) denoting
 an open (still-active) epoch. The blob is exactly `16 * len(epochs)` bytes;
 zero epochs is not a valid state (an algorithm is only ever recorded here
-once registered, with at least one epoch). Named `e/` (not `epochs/`) under
-the key-derived layout's top-level namespace (§2.1); the byte encoding is
-unchanged from the retired layout's `epochs/hex(alg_id,16)`.
+once registered, with at least one epoch).
 
-**[SG13]** The epoch list committed at `e/hex(alg_id, 16)` inside `C(n)`
-MUST equal `AlgView::epochs_at(n)` (`cml/src/engine.rs:196-217`) applied to
-that algorithm's full, currently-known epoch history — never the raw,
-untruncated history, and never a history frozen at some earlier write.
+**[SG13]** The epoch list committed at `epochs/hex(alg_id, 16)` inside
+`C(n)` MUST equal `AlgView::epochs_at(n)` (`cml/src/engine.rs:196-217`)
+applied to that algorithm's full, currently-known epoch history — never the
+raw, untruncated history, and never a history frozen at some earlier
+write. Every currently-registered algorithm's `epochs/` entry is
+re-projected against the batch's own final `n` and rewritten on every
+`apply` call, whether that call's own ops named the algorithm or not, so an
+unchanged blob is freshened (§5, SG22) exactly as a touched one is.
 *Checked by: property test — decode the blob and compare against
 `epochs_at(n)` computed independently.*
 
-### 3.3 An `r/hex(alg_id, 16)` blob
+### 3.3 A `roots/hex(alg_id, 16)` blob
 
 The algorithm's root digest at size `n`: exactly `Hasher::digest_len()`
 bytes for that algorithm, with no framing. Present only for algorithms
-active at `n` (`is_active()`, matching `NaryMerkleLog`'s own
-`checkpoint_roots` filter, `polydigest/src/tree.rs:409-415`) **and** `n > 0`
-(§2.5's note extends the kind canonicalization to roots); a frozen
-algorithm's terminal root lives in the `C(m)` this layer wrote at its
-freeze point `m` — read through that past checkpoint's own commit (the
-checkpoint library, §8) or through `eml`'s own node-level read, never
-re-derived at a later `n` by this layer. Named `r/` (not `roots/`) under
-the key-derived layout's top-level namespace (§2.1); the byte encoding is
-unchanged from the retired layout's `roots/hex(alg_id,16)`.
+active at `n` — meaning still open, accepting future appends, per the
+projected epoch timeline (§3.2) — **and** `n > 0` (a checkpoint root
+supplied at `n == 0` is exactly as observationally meaningless as the rest
+of §2.5's purity argument). The moment `RemoveAlgorithm` closes an
+algorithm's epoch, its `roots/` entry is retired in that SAME write, at
+the freeze point itself — a frozen algorithm's terminal root is not
+carried in `roots/` at any `n`, including its own freeze point; it is
+reconstructed, if ever needed, from the `nodes/` digests this layer keeps
+forever (§2.2), never re-derived or cached by this layer itself.
 
-**[SG14]** `r/` MUST NOT carry an entry for an algorithm not active at `n`,
-nor any entry at all when `n == 0`. *Checked by: property test.*
+**[SG14]** `roots/` MUST NOT carry an entry for an algorithm not active at
+`n`, nor any entry at all when `n == 0`. *Checked by: property test.*
 
-### 3.4 A node's blob (`n/hex(alg_id,16)/hex(height,2)/trimmed(left)`)
+### 3.4 A node's blob (`nodes/hex(alg_id,16)/hex(height,2)/trimmed(left)`)
 
 Exactly `Hasher::digest_len()` bytes for that algorithm: `H_a(leaf bytes)`
 at `height = 0`, or the folded node digest at `height > 0`, with no framing
-and no length prefix — the same raw digest bytes `Storage::store_node`'s
-caller already computed. Since `alg_id` is itself the blob's own path
+and no length prefix — the same raw digest bytes a `WriteOp`'s `nodes`
+field already carried. Since `alg_id` is itself the blob's own path
 prefix (§2.1, §2.2), there is no wrapping `digest/` subtree left to key by
 algorithm the way the retired layout needed.
 
@@ -386,32 +387,34 @@ algorithm the way the retired layout needed.
 length as corruption, mirroring `get_node_hash`'s own check
 (`cml/src/engine.rs:283-291`). *Checked by: property test.*
 
-### 3.5 A leaf's blob (`l/trimmed(index)`)
+### 3.5 A leaf's blob (`leaves/trimmed(index)`)
 
-The item's raw payload bytes, verbatim, with no framing — exactly what
-`Storage::store_leaf(index, data)` was called with. Present iff this layer
-was ever given that leaf's own bytes (`store_leaf`/`write_batch`'s `leaves`
-argument); a subtree-kind append's own node commits only a digest, never
-raw payload bytes, so it never creates an `l/` entry.
+The item's raw payload bytes, verbatim, with no framing — exactly what a
+`WriteOp::AppendLeaf`'s `data` field was called with. Present iff this
+layer was ever given that leaf's own bytes (an `AppendLeaf` op's `data`
+argument); a subtree-kind append (`AppendSubtree`) commits only a digest,
+never raw payload bytes, so it never creates a `leaves/` entry.
 
 **[SG16]** A leaf's blob MUST be byte-identical to the argument
-`store_leaf` received; this layer MUST NOT transform, compress, or frame
-the payload in any way. *Checked by: golden vector; property test round-trip.*
+`WriteOp::AppendLeaf::data` carried; this layer MUST NOT transform,
+compress, or frame the payload in any way. *Checked by: golden vector;
+property test round-trip.*
 
 ## 4. Storage-trait mapping and additions
 
-`polydigest::Storage` is unchanged by this backend (`polydigest/src/storage.rs:13-115`);
-every method below is a mapping onto the layout in §2–§3, plus the four
-git-native additions §4.2–§4.5 the trait does not and should not carry,
-because they are meaningful only for a backend with a git-shaped history.
+`polydigest::Storage` is unchanged by this backend (`polydigest/src/storage.rs`);
+every method below is a mapping onto the layout in §2–§3, plus the git-native
+additions §4.2–§4.6 the trait does not and should not carry, because they
+are meaningful only for a backend with a git-shaped history.
 
 ### 4.1 Read methods
 
-`len`, `get_leaf`, `get_node`, `load_algorithm_metas`, `load_log_meta`, and
+`len`, `get_leaf`, `get_node`, `load_algorithm_metas`, `append_count`, and
 `load_checkpoint_roots` all read from the **staged tree** — the tree the
 staging ref (§4.2) currently points at — via the position-lookup algorithm
-of §2.4 and the decodings of §3. `is_empty` keeps the trait's default
-(`len() == 0`) unchanged.
+of §2.4 and the decodings of §3. `len` reports `0` for a subtree-kind log
+regardless of its nonzero `append_count` (§3.1's kind derivation); `is_empty`
+keeps the trait's default (`len() == 0`) unchanged.
 
 ### 4.2 The staging ref and compare-and-swap writes
 
@@ -424,20 +427,23 @@ ref's target MUST always be a tree object, `C(n)` for the instance's current
 `n`; it MUST NOT be a commit. *Checked by: structural; a compiled check against the pinned tag confirms `gix`
 places no kind restriction on a `RefEdit`'s target.*
 
-**[SG18]** `store_leaf`, `store_node`, `store_algorithm_meta`, and
-`write_batch` each MUST: (a) build the new `C(n')` tree object per §2–§3
-through exactly one batched `gix_object::tree::Editor` session covering
-every key this call touches, never one independent read-modify-write chain
-per key — an ancestor path touched by more than one key in the same call is
-written to the object database exactly once, on that session's single
-final `write()`; (b) write every newly-referenced object through the object
-database's writer (§5, SG22), never through a `Repository`-level
-convenience method; (c) move the staging ref from the tree id this instance
-last observed (or require `MustNotExist` for a fresh instance's genesis
-write) to the new `C(n')`, in one `gix` reference-edit transaction (§4.2's
-CAS, SG19/SG19a); (d) treat every non-batched method as a one-item batch
-through the identical compare-and-swap path, so no method bypasses it.
-*Checked by: property test; a compiled check against the pinned tag
+**[SG18]** `Storage::apply`, given any batch of one or more
+[`polydigest::WriteOp`]s, MUST: (a) build the new `C(n')` tree object per
+§2–§3 through exactly one batched `gix::object::tree::Editor` session
+covering every key the batch touches, never one independent
+read-modify-write chain per key — an ancestor path touched by more than one
+key in the same call is written to the object database exactly once, on
+that session's single final `write()`; (b) write every newly-referenced
+object through the object database's writer (§5, SG22), never through a
+`Repository`-level convenience method; (c) move the staging ref from the
+tree id this instance last observed (or require `MustNotExist` for a fresh
+instance's genesis write) to the new `C(n')`, in one `gix` reference-edit
+transaction (§4.2's CAS, SG19/SG19a); (d) reject, without writing anything,
+an `AppendLeaf`/`AppendSubtree` op whose `at` is not the current count, an
+`AddAlgorithm`/`SeedFrontier` op naming an already-registered algorithm, or
+a `RemoveAlgorithm`/`ResumeAlgorithm` op naming one that is not registered
+— returning the distinguished `InvalidOperation` error, never panicking
+(§4.5). *Checked by: property test; a compiled check against the pinned tag
 confirms `gix::Repository::edit_references` rolls back every edit in a
 transaction atomically on any single precondition failure.*
 
@@ -496,8 +502,7 @@ value (a concurrent writer may have moved it since this instance last
 looked; this instance learns that only on its own next write's
 compare-and-swap, SG19). It is a pure read — it MUST NOT compute, write, or
 move anything, and it MUST NOT lag behind *this instance's own* view after
-any write this layer performs (`store_leaf`, `store_node`,
-`store_algorithm_meta`, `write_batch`) or after a plain reopen
+any write this layer performs (a call to `Storage::apply`) or after a plain reopen
 (`GitStorage::open`/`new` against an existing ref, which populates it from
 one lookup of the ref at open time). `tip_tree` is the *only* tree id this
 layer ever hands out:
@@ -514,7 +519,7 @@ than name) that no other public method on `GitStorage` or
 `GitReadOnlyView` returns an object id while also taking an argument, and
 that no public method on either type accepts a hasher.*
 
-A historical `r/hex(alg_id,16)` entry (§3.3, SG14) for a size this
+A historical `roots/hex(alg_id,16)` entry (§3.3, SG14) for a size this
 layer no longer serves as its tip is not this layer's to produce: folding
 more than one frontier peak's stored digest into one root needs the
 algorithm's own hash fold (`bag_peaks`), a computation this layer performs
@@ -555,7 +560,25 @@ concurrent write actually landed); **transient** means retry the identical
 write, since nothing was ever compared or lost (`cas()` already retried
 this one internally up to `RETRY_BOUND` before giving up, so a caller
 seeing it at all means that bound was exhausted); neither means the stored
-layout is malformed.
+layout is malformed. A third, `InvalidOperation` (§4.2, SG18d), means the
+batch itself was refused before anything was written because a `WriteOp`'s
+own precondition did not hold; it is likewise never conflated with the
+other two.
+
+### 4.6 `metadata()` — an addition beyond the trait
+
+**[SG30]** `GitStorage::metadata() -> LogMetadata` and
+`GitReadOnlyView::metadata() -> LogMetadata` MUST each report `{ count,
+kind }` for their respective tree, derived from exactly the same
+`(count, has-any-`leaves/`-entry)` pair (§3.1's kind derivation) through
+one shared private helper — never by decoding `meta`'s raw bytes a second
+time, and never by two independently-written derivations that could drift
+apart. This is the mechanism by which a caller one layer up (the
+checkpoint library, §8) reads a checkpoint's kind without decoding `meta`
+or reasoning about kind derivation itself. *Checked by: property test —
+compared by direct equality against `NaryMerkleLog::count()`/`kind()` (the
+live instance) and against the same pair recomputed independently (the
+read-only view), after every write shape this crate exposes.*
 
 ## 5. Garbage-collection safety
 
@@ -613,8 +636,8 @@ documentation, not silently assumed.*
 
 **[SG25]** The staging ref's move (SG18c) is the sole commit point. A crash
 at any point **before** that reference edit lands leaves only unreferenced
-objects — the exact "no partial state" contract `Storage::write_batch`
-already requires (`polydigest/src/storage.rs:96-98`) — and a crash **after**
+objects — the exact "no partial state" contract `Storage::apply`
+already requires — and a crash **after**
 it lands leaves a fully valid `C(n')` with everything SG22–SG23 required
 already reachable. There is no partial-batch state a reader can observe
 through the staging ref. *Checked by: property test — kill the process at
@@ -661,19 +684,21 @@ Every `SG<n>` constraint above names its check inline. Summarized, a
 
 | Constraint group | Test shape |
 | :-- | :-- |
-| SG1–SG3 (key-derived layout) | Exhaustive top-level allow-list check; property tests comparing the exact set of paths under `n/`/`l/` against an independent `MemoryStorage` oracle's key set, both directions (nothing missing, nothing extra), across the full operation vocabulary and arities 2–4 |
+| SG1–SG3 (key-derived layout) | Exhaustive top-level allow-list check; property tests comparing the exact set of paths under `nodes/`/`leaves/` against an independent `MemoryStorage` oracle's key set, both directions (nothing missing, nothing extra), across the full operation vocabulary and arities 2–4 |
 | SG2 (`trimmed` injectivity, 256-entry bound) | Unit tests over representative keys (`0`, small, boundary, `u64::MAX`); the exhaustive set-equality property above empirically confirms the bound |
 | SG6–SG7 (canonical order) | Unit test over the five top-level literals; structural walk of a real written tree confirming every sibling group is canonically sorted |
 | SG8 (key-derived position lookup) | Property tests comparing this backend's reads against `MemoryStorage` over the same operation sequence, for a range of `k` and `n` |
-| SG9 (purity, incl. the size-0 kind/root canonicalization) | Property tests over reordered-but-equivalent operation sequences reaching the same logical state; a genesis `C(0)` write compared across differing requested kinds |
+| SG9 (purity, incl. the size-0 kind/root canonicalization) | Property tests over reordered-but-equivalent operation sequences reaching the same logical state; a genesis `C(0)` write compared across differing eventual kinds |
 | SG12–SG16 (byte-exact encodings) | Golden vectors: fixed `(k, leaves, algorithms)` inputs with pinned expected object ids, one per supported object-hash format |
 | SG17–SG18, SG25 (staging ref, batched write, crash safety) | Property/integration tests using two `storage-git` instances against one bare repository, one racing the other's write |
+| SG18d (precondition rejection) | Direct `Storage::apply` calls asserting `InvalidOperation` for an out-of-order append, a duplicate registration, and an unregistered removal/resume, with the ref left untouched |
 | SG19 (tip-moved classification) | A forced lock-contention failure (pre-created lock file) MUST NOT be reported as `TipMoved`; a genuine concurrent-writer race MUST be |
 | SG19a (transient retry, bound) | A lock released within the bound lets the write succeed; a lock held past the bound forces the write to give up and return the transient variant within a generous external ceiling, never hang |
 | SG20 (`tip_tree`) | Direct-equality check against this instance's own last-observed value after every write shape and after a reopen; a structural, rename-proof check that no public method returns an object id together with a size argument, and none accepts a hasher |
 | SG21 (`open_at`) | Durability property test mirroring `docs/architecture.md`'s existing MMR durable-witness test pattern |
 | SG22–SG24 (GC safety) | A test asserting the exact `write_buf_with_known_id` call path is used (SG22); a simulated missing-object recovery test (SG23); SG24 is documented, not tested |
 | SG26–SG27 (algorithm and object-hash parametricity) | The full property-test suite run parametrized over at least two `Hasher` implementations of different digest widths and over both git object-hash formats |
+| SG30 (`metadata()`) | Direct-equality check against `NaryMerkleLog::count()`/`kind()` on the live instance and against an independently recomputed `(count, kind)` on a read-only view |
 
 This is the CONNECT mapping the specification workflow requires: every
 normative constraint above has a named, deterministic evaluator. None is
