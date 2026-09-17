@@ -29,15 +29,6 @@ polydigest = { version = "0.1", path = "../polydigest" }
 # rest of the log stack -- already a transitive dependency via polydigest, so
 # depending on it directly names no new layer.
 spine      = { package = "merkle-spine", path = "../spine" }
-# `cml::mountain::bag_peaks` is the peak-bagging fold `tree_at`'s historical
-# reconstruction needs to recompute a superseded `roots/` entry (§4.3, SG20)
-# under a caller-registered `spine::Hasher` -- the same fold
-# `NaryMerkleLog`/`cml::engine::compute_root` uses to produce the live root
-# this layer stores verbatim via `checkpoint_roots`. `cml` depends on
-# `spine` alone (no epoch/application concept crosses this boundary), so
-# this is a foundational-math dependency, not the checkpoint library or an
-# application concern §8 excludes.
-cml        = { package = "canonical-ml", path = "../cml" }
 gix        = { version = "=0.87.1", features = ["sha256"] }
 thiserror  = "2"
 
@@ -46,6 +37,13 @@ sha2      = "0.10"
 tempfile  = "3"
 smol      = "2"
 proptest  = "1"
+# `cml::engine::AlgView` is a test-only parity oracle now (`src/layout.rs`'s
+# `epochs_at` unit tests, and the acceptance suite's SG3/SG8/SG13 checks
+# against `cml::engine`) -- this crate's own write/read path never links
+# `cml` at all, since `tree_at`'s `roots/`-folding reconstruction (the one
+# thing that needed `cml::mountain::bag_peaks`) is deleted outright (SG26:
+# this layer computes no digest and folds no root).
+cml       = { package = "canonical-ml", path = "../cml" }
 # The NO RECONSTRUCTION lint (tip_tree_contract.rs) parses `src/`'s own
 # `.rs` files as syntax trees to enumerate GitStorage's/GitReadOnlyView's
 # public methods by structural shape (impl block + fn signature), not by

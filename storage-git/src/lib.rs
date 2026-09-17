@@ -24,14 +24,14 @@
 //!    count-changing append (it always goes through `write_batch`, which carries the combinator's
 //!    own computed node digests alongside the leaf); this limitation is only reachable by a caller
 //!    driving the trait directly, bypassing the combinator.
-//! 3. **`get_node`/`tree_at` are scoped to peaks and their descendants, decomposed once every child
-//!    slot has a known occupant (§2.6, §2.7, SG28/SG29).** An earlier revision built a taller peak
-//!    opaque (`digest/` only, no children at all) the moment *any* child it would need to attach
-//!    was not fully materialized -- which silently dropped a materialized descendant sitting right
-//!    next to an opaque one, permanently, the instant its parent left `peaks/`; a side `inherited/`
-//!    archive patched around that loss for the one case it *could* still recover (a coordinate that
-//!    had itself once been a peak). `build::resolve_node` now wires a `hex(c,2)` child entry for
-//!    every slot at once, as soon as this layer has a known occupant for *all* of them -- opaque or
+//! 3. **`get_node` is scoped to peaks and their descendants, decomposed once every child slot has a
+//!    known occupant (§2.6, §2.7, SG28/SG29).** An earlier revision built a taller peak opaque
+//!    (`digest/` only, no children at all) the moment *any* child it would need to attach was not
+//!    fully materialized -- which silently dropped a materialized descendant sitting right next to
+//!    an opaque one, permanently, the instant its parent left `peaks/`; a side `inherited/` archive
+//!    patched around that loss for the one case it *could* still recover (a coordinate that had
+//!    itself once been a peak). `build::resolve_node` now wires a `hex(c,2)` child entry for every
+//!    slot at once, as soon as this layer has a known occupant for *all* of them -- opaque or
 //!    materialized, reused by object id (SG18a) or freshly built -- never gated on whether a known
 //!    occupant is itself opaque, so a coordinate that was ever a frontier peak stays reachable by
 //!    ordinary descent from whatever taller peak now covers it, for the life of the log, with no
@@ -43,8 +43,8 @@
 //!    been removed from (so `write_batch` is handed no digest for it by anyone, most reachably
 //!    through `polydigest::NaryMerkleLog::resume`'s per-algorithm epoch gate) is built as an
 //!    empty-`digest/`, opaque node rather than rejected as `Corruption` -- a legitimate frontier
-//!    position with nothing live behind it, not a missing-data bug. See `src/build.rs`,
-//!    `src/read.rs`, and `src/historical.rs` for the full argument.
+//!    position with nothing live behind it, not a missing-data bug. See `src/build.rs` and
+//!    `src/read.rs` for the full argument.
 //! 4. **A resumption's storage MUST be fresh, so a resumed seal's opacity is decided purely by what
 //!    is stored plus what the write supplies.** `polydigest::NaryMerkleLog::resume` refuses a
 //!    `storage` that already carries a committed log of its own (`Storage::load_log_meta` returns
@@ -58,30 +58,23 @@
 //!    carries its prior digests, leaf, and children forward from whatever this same log's own
 //!    history already gave it (§2.6, SG10/SG11), with no separate resume-open constructor and no
 //!    committed provenance field needed to tell the two cases apart.
-//! 5. **`tree_at(n)` for `n < len()` needs a registered hasher to fold `roots/` correctly, and
-//!    never returns a tree other than `C(n)` (SG20's amendment).** A past member root needs the
-//!    algorithm's hash fold over its historical frontier peaks; [`GitStorage::register_hasher`]
-//!    lets a caller supply that fold (an opaque `spine::Hasher` trait object, keyed by the same
-//!    opaque `alg_id` every other method already uses -- SG26 names no algorithm regardless).
-//!    Omitting an active algorithm's `roots/` entry when no hasher was registered for it would
-//!    return a well-formed but wrong tree a consumer could not tell from the genuine one, so
-//!    `tree_at` returns an error naming the algorithm instead of `Ok`. A registered hasher is
-//!    likewise trusted only on stored evidence: it is rejected before any historical root is
-//!    trusted if it fails to reproduce a digest this layer already has on file for it, and an
-//!    algorithm with no such evidence anywhere -- nothing materialized to recompute, and fewer than
-//!    two frontier peaks to fold -- is refused outright rather than silently trusted, but only
-//!    where reconstructing the requested `n` would actually need that trust: never for `n` equal to
-//!    the current size served as the staging tip, and never for a target frontier of zero or one
-//!    peak, since a fold is only ever needed to combine two or more peaks. See `src/historical.rs`.
+//!
+//! # The tip-tree model
+//!
+//! This layer keeps the **complete** checkpoint tree behind its staging ref: every leaf and
+//! sealed node ever written, by coordinate, forever (§2.6-§2.7). The staging ref always points
+//! **directly at a tree object** (never a commit), and [`GitStorage::tip_tree`] hands that object
+//! id back verbatim. This layer never creates a commit and never renders or reconstructs a tree
+//! for a size other than its current one: a past size is read by wrapping an earlier tip tree in
+//! a commit one layer up (the checkpoint library this crate is deliberately ignorant of), and by
+//! `eml` reading over the nodes the complete tip tree already contains.
 
 mod build;
 mod error;
 mod gitutil;
-mod historical;
 mod layout;
 mod read;
 
-use std::collections::HashMap;
 use std::path::Path;
 
 pub use error::GitStorageError;
@@ -89,7 +82,6 @@ use gix::ObjectId;
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit};
 use gix::refs::{FullName, Target};
 use polydigest::{AlgorithmMetas, Storage};
-use spine::Hasher;
 
 /// A `polydigest::Storage` backend over a git object database.
 ///
@@ -113,11 +105,6 @@ pub struct GitStorage {
     observed_tip: Option<ObjectId>,
     count: u64,
     kind_byte: u8,
-    /// Per-algorithm hash folds registered via [`Self::register_hasher`],
-    /// consulted only by [`Self::tree_at`] to reconstruct a historical
-    /// `roots/` entry (§4.3, SG20). Empty by default -- this crate never
-    /// assumes or requires one (SG26).
-    hashers: HashMap<u64, Box<dyn Hasher>>,
 }
 
 impl GitStorage {
@@ -180,22 +167,7 @@ impl GitStorage {
             observed_tip,
             count,
             kind_byte,
-            hashers: HashMap::new(),
         })
-    }
-
-    /// Register `hasher` as `alg_id`'s fold, for [`Self::tree_at`]'s
-    /// historical `roots/` reconstruction only (§4.3, SG20 amendment).
-    ///
-    /// Names no algorithm to this crate (SG26): `hasher` is an opaque
-    /// `spine::Hasher` trait object the caller owns and chooses, keyed by
-    /// the same opaque `alg_id` every other method already treats it as. A
-    /// `tree_at(n)` call for an algorithm active at `n` with no hasher
-    /// registered here -- or with one that cannot be verified against any
-    /// stored evidence -- returns an error naming the algorithm rather than
-    /// fabricating or silently omitting its `roots/hex(alg_id,16)` entry.
-    pub fn register_hasher(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) {
-        self.hashers.insert(alg_id, hasher);
     }
 
     /// Open a `storage-git` instance against the repository at `path`
@@ -214,43 +186,19 @@ impl GitStorage {
         Self::new(repo, staging_ref, arity)
     }
 
-    /// `C(n)`'s object id for any `n` from `0` to this instance's current
-    /// size, inclusive (§4.3, SG20).
+    /// The current tip: the complete checkpoint tree the staging ref points
+    /// at right now, or `None` for a fresh instance whose ref has never been
+    /// written (genesis).
     ///
-    /// # Errors
-    ///
-    /// Returns [`GitStorageError::Corruption`] if `n` exceeds the current
-    /// size, if a historical coordinate below `n` is not reconstructable
-    /// (Departure 3 above: a coordinate strictly beneath a leaf-level opaque
-    /// node that was never itself a peak), if an
-    /// algorithm active at `n` has no hasher registered, or if a registered
-    /// hasher cannot be trusted -- because it fails to reproduce a digest
-    /// this layer already has on file for it, or because reconstructing `n`
-    /// actually needs to fold two or more peaks together and no stored
-    /// evidence exists anywhere to check it against (Departure 5 above,
-    /// SG20's amendment).
-    pub fn tree_at(&self, n: u64) -> Result<ObjectId, GitStorageError> {
-        if n > self.count {
-            return Err(GitStorageError::Corruption(format!(
-                "tree_at({n}): exceeds current size {}",
-                self.count
-            )));
-        }
-        let repo = self.repo.to_thread_local();
-        if let Some(tree) = self.observed_tip {
-            historical::validate_hashers(&repo, self.arity, tree, self.count, n, &self.hashers)?;
-        }
-        if n == self.count {
-            if let Some(id) = self.observed_tip {
-                return Ok(id);
-            }
-        }
-        let current = historical::CurrentState {
-            tree: self.observed_tip,
-            size: self.count,
-            kind_byte: self.kind_byte,
-        };
-        historical::reconstruct(&repo, self.arity, current, n, &self.hashers)
+    /// This is a pure read of [`Self::new`]'s last-observed value (or the
+    /// value a subsequent write left behind) -- never a reconstruction, and
+    /// never anything other than the current `C(n)`. The checkpoint layer
+    /// above this crate commits this tree to anchor it; this crate itself
+    /// never renders or reconstructs a tree for any other size (see "The
+    /// tip-tree model" above).
+    #[must_use]
+    pub fn tip_tree(&self) -> Option<ObjectId> {
+        self.observed_tip
     }
 
     /// A read-only view over an arbitrary checkpoint tree (§4.4, SG21),

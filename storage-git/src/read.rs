@@ -12,9 +12,8 @@
 //! *beneath* an opaque leaf-level node that was never itself a peak --
 //! interior structure that was simply never given -- has no reachable path:
 //! SG4 still forbids a height-0 opaque node from carrying a `leaf` blob, and
-//! nothing was ever given to decompose it further. `get_node` and `tree_at`
-//! both report this honestly (`Ok(None)` / a reconstruction error) rather
-//! than fabricating a value.
+//! nothing was ever given to decompose it further. `get_node` reports this
+//! honestly (`Ok(None)`) rather than fabricating a value.
 
 use gix::ObjectId;
 use spine::frontier_for_size;
