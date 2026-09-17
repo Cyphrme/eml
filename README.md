@@ -162,11 +162,24 @@ permanence across appends.
 
 ## Building and testing
 
-Rust workspace:
+The full acceptance check -- everything that must pass before a branch is
+considered green -- is one script:
+
+```sh
+./check_acceptance.sh
+```
+
+It exists because `cargo test --workspace` alone is not sufficient: `fuzz/`
+opens its own `[workspace]` table and is invisible to that command, and
+`eml/tests/complexity.rs` only compiles under a release profile. Running the
+pieces individually:
 
 ```sh
 cargo test --workspace                   # all unit, property, and fault-injection tests
 cargo test --release --test complexity   # complexity regression (release profile)
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+(cd fuzz && cargo check --all-targets)   # the fuzz crate builds against the current Storage trait
 ```
 
 Lean proofs (from `proofs/lean/`):
@@ -175,7 +188,7 @@ Lean proofs (from `proofs/lean/`):
 lake build
 ```
 
-Fuzz targets (nightly Rust):
+Fuzz targets (nightly Rust, requires `cargo-fuzz`):
 
 ```sh
 cargo +nightly fuzz run <target>
