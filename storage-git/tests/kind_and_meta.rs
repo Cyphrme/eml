@@ -6,10 +6,13 @@
 
 mod common;
 
+use std::path::Path;
+use std::process::Command;
+
 use common::{WideHasher, init_repo};
 use gix::hash::Kind as HashKind;
 use polydigest::{Hasher, LogError, LogKind, NaryMerkleLog, Storage, Subtree, TreeConfig};
-use storage_git::GitStorage;
+use storage_git::{GitStorage, LogMetadata};
 
 fn hashers(ids: impl IntoIterator<Item = u64>) -> Vec<(u64, Box<dyn Hasher>)> {
     ids.into_iter()
@@ -330,5 +333,238 @@ fn git_read_only_view_metadata_accessor_matches_the_checkpoint() {
         let meta = view.metadata();
         assert_eq!(meta.count, expected_count);
         assert_eq!(meta.kind, expected_kind);
+    });
+}
+
+// ============================================================================
+// [DERIVATION SURFACE] Merge-gate condition AC30
+// (`.ledger/deposits/git-backend/lead-maintainer/storage-git-apply-contract-gate.md`):
+// `derive_log_metadata`'s `count == 0 || has_leaves` condition -- this
+// branch's headline contract -- was found to redden exactly one test when
+// mutated to `count == 0` alone
+// (`git_storage_metadata_accessor_matches_the_live_log` above), because
+// `NaryMerkleLog::from_storage`/`::kind()` compute their own kind
+// independently and never consult `GitStorage::metadata()` at all. Every
+// test below asserts on `.metadata()`/`GitReadOnlyView::metadata()`
+// directly -- never on `log.kind()` -- across genesis, both append kinds,
+// reopen, gc, and resume, so a wrong derivation is caught at each of those
+// points rather than through a single accessor-parity check.
+// ============================================================================
+
+fn gc(dir: &Path) {
+    let out = Command::new("git")
+        .arg("--git-dir")
+        .arg(dir)
+        .args(["gc", "--prune=now", "--aggressive", "-q"])
+        .output()
+        .expect("run git gc");
+    assert!(
+        out.status.success(),
+        "git gc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// [DERIVATION SURFACE] A fresh instance's own `.metadata()`, before any
+/// write, is `{count: 0, kind: Flat}` -- read directly, never through a log.
+#[test]
+fn git_storage_metadata_is_flat_at_genesis_before_any_write() {
+    let (_dir, repo) = init_repo(HashKind::Sha1);
+    let storage = GitStorage::new(
+        repo,
+        "refs/eml/storage/kind-meta/derivation/genesis/staging",
+        2,
+    )
+    .unwrap();
+    assert_eq!(
+        storage.metadata(),
+        LogMetadata {
+            count: 0,
+            kind: LogKind::Flat
+        }
+    );
+}
+
+/// [DERIVATION SURFACE] Reopening a flat log through `GitStorage::open`
+/// alone (never through `NaryMerkleLog`) reports `.metadata().kind ==
+/// Flat` directly.
+#[test]
+fn git_storage_metadata_is_flat_directly_after_reopen_of_a_flat_log() {
+    smol::block_on(async {
+        let (dir, repo) = init_repo(HashKind::Sha1);
+        let staging = "refs/eml/storage/kind-meta/derivation/flat-reopen/staging";
+        let mut log = NaryMerkleLog::new(
+            GitStorage::new(repo, staging, 2).unwrap(),
+            Box::new(WideHasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
+        for i in 0..3u32 {
+            log.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        drop(log);
+
+        let reopened = GitStorage::open(dir.path(), staging, 2).unwrap();
+        assert_eq!(
+            reopened.metadata(),
+            LogMetadata {
+                count: 3,
+                kind: LogKind::Flat
+            }
+        );
+    });
+}
+
+/// [DERIVATION SURFACE] Reopening a subtree-from-genesis log through
+/// `GitStorage::open` alone reports `.metadata().kind == Subtree` directly.
+#[test]
+fn git_storage_metadata_is_subtree_directly_after_reopen_of_a_subtree_log() {
+    smol::block_on(async {
+        let (dir, repo) = init_repo(HashKind::Sha1);
+        let staging = "refs/eml/storage/kind-meta/derivation/subtree-reopen/staging";
+        let mut log = NaryMerkleLog::new(
+            GitStorage::new(repo, staging, 2).unwrap(),
+            Box::new(WideHasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
+        for i in 0..3u32 {
+            log.append_subtree(&Subtree::Leaf(format!("s-{i}").into_bytes()))
+                .await
+                .unwrap();
+        }
+        drop(log);
+
+        let reopened = GitStorage::open(dir.path(), staging, 2).unwrap();
+        assert_eq!(
+            reopened.metadata(),
+            LogMetadata {
+                count: 3,
+                kind: LogKind::Subtree
+            }
+        );
+    });
+}
+
+/// [DERIVATION SURFACE] Reopening a resumed log through `GitStorage::open`
+/// alone reports `.metadata().kind == Subtree` directly -- the inherited
+/// prefix never populates the leaf keyspace.
+#[test]
+fn git_storage_metadata_is_subtree_directly_after_reopen_of_a_resumed_log() {
+    smol::block_on(async {
+        let (_dir_src, repo_src) = init_repo(HashKind::Sha1);
+        let mut src = NaryMerkleLog::new(
+            GitStorage::new(
+                repo_src,
+                "refs/eml/storage/kind-meta/derivation/resume-src/staging",
+                2,
+            )
+            .unwrap(),
+            Box::new(WideHasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
+        for i in 0..3u32 {
+            src.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        let sealed = src.seal().await.unwrap();
+
+        let (dir_dst, repo_dst) = init_repo(HashKind::Sha1);
+        let staging_dst = "refs/eml/storage/kind-meta/derivation/resume-dst/staging";
+        let resumed = NaryMerkleLog::resume(
+            &sealed,
+            GitStorage::new(repo_dst, staging_dst, 2).unwrap(),
+            hashers([0]),
+        )
+        .await
+        .unwrap();
+        drop(resumed);
+
+        let reopened = GitStorage::open(dir_dst.path(), staging_dst, 2).unwrap();
+        assert_eq!(
+            reopened.metadata(),
+            LogMetadata {
+                count: 3,
+                kind: LogKind::Subtree
+            }
+        );
+    });
+}
+
+/// [DERIVATION SURFACE] A flat log's derived kind survives a `git gc
+/// --prune=now`: gc only reclaims unreachable objects, and every leaf/node
+/// this layer ever wrote stays reachable from the staging ref (the
+/// tip-tree model), so `.metadata()` read after gc must agree with the one
+/// read before it.
+#[test]
+fn git_storage_metadata_is_flat_directly_after_gc() {
+    smol::block_on(async {
+        let (dir, repo) = init_repo(HashKind::Sha1);
+        let staging = "refs/eml/storage/kind-meta/derivation/gc/staging";
+        let mut log = NaryMerkleLog::new(
+            GitStorage::new(repo, staging, 2).unwrap(),
+            Box::new(WideHasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
+        for i in 0..3u32 {
+            log.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        drop(log);
+
+        gc(dir.path());
+
+        let reopened = GitStorage::open(dir.path(), staging, 2).unwrap();
+        assert_eq!(
+            reopened.metadata(),
+            LogMetadata {
+                count: 3,
+                kind: LogKind::Flat
+            }
+        );
+    });
+}
+
+/// [DERIVATION SURFACE] `GitReadOnlyView::metadata()` reports `Flat` for a
+/// flat checkpoint, read directly -- the existing
+/// `git_read_only_view_metadata_accessor_matches_the_checkpoint` test above
+/// only exercises the subtree case.
+#[test]
+fn git_read_only_view_metadata_is_flat_for_a_flat_checkpoint() {
+    smol::block_on(async {
+        let (_dir, repo) = init_repo(HashKind::Sha1);
+        let staging = "refs/eml/storage/kind-meta/derivation/view-flat/staging";
+        let mut log = NaryMerkleLog::new(
+            GitStorage::new(repo, staging, 2).unwrap(),
+            Box::new(WideHasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
+        for i in 0..3u32 {
+            log.append_leaf(format!("leaf-{i}").as_bytes())
+                .await
+                .unwrap();
+        }
+        let tip = log.storage().tip_tree().unwrap();
+
+        let view = log.storage().open_at(tip).unwrap();
+        assert_eq!(
+            view.metadata(),
+            LogMetadata {
+                count: 3,
+                kind: LogKind::Flat
+            }
+        );
     });
 }
