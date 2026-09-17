@@ -94,10 +94,9 @@ impl Hasher for NarrowHasher {
 }
 
 // ============================================================================
-// Generic git-tree helpers and the byte1-be-trim key path scheme (`[TT20]`/
-// `[TT21]`,
-// `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`,
-// and `spike-report.md`'s recommended layout). Added independently of
+// Generic git-tree helpers and the byte1-be-trim key path scheme (the
+// ratified key-derived layout, per `spike-report.md`'s recommendation).
+// Added independently of
 // `acceptance_support/mod.rs`, which is deliberately written from the spec
 // alone and never shares helpers with this module.
 // ============================================================================
@@ -234,6 +233,54 @@ pub fn trimmed_key_segments(key: u64) -> Vec<String> {
     let mut segs = vec![sig.len().to_string()];
     segs.extend(sig.iter().map(|b| format!("{b:02x}")));
     segs
+}
+
+/// The inverse of [`trimmed_key_segments`]: given the segments found under a
+/// `byte1-be-trim` path (the length digit plus its hex-pair bytes),
+/// reconstruct the original `u64` key, or `None` if the segments are not a
+/// well-formed encoding (wrong count, non-hex byte, out-of-range length).
+/// Used by the reverse-completeness property to turn git's own actual
+/// stored paths back into keys comparable against an independent oracle's
+/// key set -- the direction [`trimmed_key_segments`] alone cannot check.
+#[must_use]
+#[allow(dead_code)]
+pub fn untrim_key_segments(segs: &[&str]) -> Option<u64> {
+    let (len_seg, byte_segs) = segs.split_first()?;
+    let len: usize = len_seg.parse().ok()?;
+    if !(1..=8).contains(&len) || byte_segs.len() != len {
+        return None;
+    }
+    let mut buf = [0u8; 8];
+    let start = 8 - len;
+    for (i, seg) in byte_segs.iter().enumerate() {
+        buf[start + i] = u8::from_str_radix(seg, 16).ok()?;
+    }
+    Some(u64::from_be_bytes(buf))
+}
+
+/// Decode a `/`-joined path found under the top-level `n` namespace
+/// (`<hex16(alg_id)>/<hex2(height)>/<trimmed(left)...>`) back into
+/// `(alg_id, left, height)`, or `None` if it is not well-formed.
+#[must_use]
+#[allow(dead_code)]
+pub fn decode_node_path(path: &str) -> Option<(u64, u64, u32)> {
+    let segs: Vec<&str> = path.split('/').collect();
+    let (alg_seg, rest) = segs.split_first()?;
+    let (height_seg, key_segs) = rest.split_first()?;
+    let alg_id = u64::from_str_radix(alg_seg, 16).ok()?;
+    let height = u32::from_str_radix(height_seg, 16).ok()?;
+    let left = untrim_key_segments(key_segs)?;
+    Some((alg_id, left, height))
+}
+
+/// Decode a `/`-joined path found under the top-level `l` namespace
+/// (`<trimmed(index)...>`) back into the leaf `index`, or `None` if it is
+/// not well-formed.
+#[must_use]
+#[allow(dead_code)]
+pub fn decode_leaf_path(path: &str) -> Option<u64> {
+    let segs: Vec<&str> = path.split('/').collect();
+    untrim_key_segments(&segs)
 }
 
 /// `hex(x, 16)` -- a `u64` rendered as 16 lowercase hex digits, matching
