@@ -22,7 +22,7 @@ use crate::log_error::{LogError, LogResult as Result};
 use crate::root::{
     combined_root, committed_active_algs, committed_active_at, validate_committed_epochs,
 };
-use crate::storage::{Storage, StorageReader};
+use crate::storage::{AlgorithmRoot, AlgorithmSeed, NodeWrite, Storage, StorageReader, WriteOp};
 
 /// Configuration for the n-ary Merkle tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,14 +58,23 @@ pub struct NaryMerkleLog<S: Storage> {
 
 /// Owned batch data computed by `build_append_state`.
 ///
-/// Passed verbatim to `write_batch`; assembled before any state mutation so
-/// a storage failure leaves `self.algs` and `self.count` unchanged.
-/// Leaf payloads are not included here — `append_leaf` passes them directly
-/// to `write_batch` because the raw bytes are also stored separately.
+/// Assembled into a [`WriteOp::AppendLeaf`]/[`WriteOp::AppendSubtree`] and
+/// passed to [`Storage::apply`]; assembled before any state mutation so a
+/// storage failure leaves `self.algs` and `self.count` unchanged. Leaf
+/// payloads are not included here — `append_leaf` carries them directly in
+/// its own `WriteOp` because the raw bytes are also stored separately.
 struct OwnedBatch {
     nodes: Vec<(u64, u64, u32, Vec<u8>)>,
-    log_meta: Option<(u64, u8)>,
     checkpoint_roots: Vec<(u64, Vec<u8>)>,
+}
+
+/// One algorithm's owned genesis-seed data, assembled in [`NaryMerkleLog::resume`]
+/// before any borrow into a [`crate::storage::AlgorithmSeed`] is built.
+struct OwnedAlgorithmSeed {
+    alg_id: u64,
+    epochs: Vec<(u64, u64)>,
+    nodes: Vec<(u64, u32, Vec<u8>)>,
+    checkpoint_root: Vec<u8>,
 }
 
 impl<S: Storage> NaryMerkleLog<S> {
@@ -123,14 +132,15 @@ impl<S: Storage> NaryMerkleLog<S> {
     ///
     /// `storage` MUST be a fresh backend the resumed log writes forward
     /// into: one that carries no committed log of its own yet. A `storage`
-    /// that already holds one -- `Storage::load_log_meta` returns
-    /// `Some((count, _))` -- is refused before anything is written, since a
+    /// that already holds one -- `Storage::append_count` is nonzero, or it
+    /// already has a registered algorithm -- is refused before anything is
+    /// written, since a
     /// resumption's genesis frontier is not a way to reopen or splice onto
     /// an existing log's own committed state. Freshness is scoped to
     /// whatever coordinate space `storage` itself observes, never to some
     /// wider store it might share with other logs: a backend that hosts
     /// several logs side by side under distinct keys (e.g. one git
-    /// repository with several staging refs) must answer `load_log_meta`
+    /// repository with several staging refs) must answer `append_count`
     /// per key, so forking a project -- sealing one log and resuming into a
     /// brand-new key in that same underlying store -- is exactly the
     /// supported, fresh case, and resuming back onto the key that still
@@ -153,8 +163,13 @@ impl<S: Storage> NaryMerkleLog<S> {
         mut storage: S,
         hashers: Vec<(u64, Box<dyn Hasher>)>,
     ) -> Result<Self, S::Error> {
-        if let Some((count, _kind)) = storage.load_log_meta().await.map_err(LogError::Storage)? {
-            return Err(LogError::ResumeTargetNotFresh(count));
+        let existing_count = storage.append_count().await.map_err(LogError::Storage)?;
+        let existing_metas = storage
+            .load_algorithm_metas()
+            .await
+            .map_err(LogError::Storage)?;
+        if existing_count > 0 || !existing_metas.is_empty() {
+            return Err(LogError::ResumeTargetNotFresh(existing_count));
         }
 
         let k = sealed.arity();
@@ -171,9 +186,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut hasher_map: HashMap<u64, Box<dyn Hasher>> = hashers.into_iter().collect();
 
         let mut algs = HashMap::new();
-        let mut node_batch: Vec<(u64, u64, u32, Vec<u8>)> = Vec::new();
-        let mut meta_batch: Vec<(u64, Vec<(u64, u64)>)> = Vec::new();
-        let mut checkpoint_batch: Vec<(u64, Vec<u8>)> = Vec::new();
+        // Owned per-algorithm seed data, assembled before any borrow into
+        // `WriteOp::SeedFrontier` is built.
+        let mut owned_seeds: Vec<OwnedAlgorithmSeed> = Vec::new();
 
         for (alg_id, peaks) in sealed.frontiers() {
             let hasher = hasher_map
@@ -200,39 +215,53 @@ impl<S: Storage> NaryMerkleLog<S> {
             // Persist the genesis frontier peaks (active ranges only) and the
             // checkpoint root so the resumed log is reloadable and forward
             // appends read a consistent frontier back.
+            let mut alg_nodes: Vec<(u64, u32, Vec<u8>)> = Vec::new();
             for (&(left, height), peak) in coords.iter().zip(peaks.iter()) {
                 let cap = k.pow(height);
                 if view.active_range(left, left + cap) {
-                    node_batch.push((*alg_id, left, height, peak.clone()));
+                    alg_nodes.push((left, height, peak.clone()));
                 }
             }
             let root = engine::compute_root(&view, k as usize);
-            checkpoint_batch.push((*alg_id, root));
-            meta_batch.push((*alg_id, epochs));
+            owned_seeds.push(OwnedAlgorithmSeed {
+                alg_id: *alg_id,
+                epochs,
+                nodes: alg_nodes,
+                checkpoint_root: root,
+            });
             algs.insert(*alg_id, view);
         }
 
-        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = node_batch
+        let node_writes: Vec<Vec<NodeWrite<'_>>> = owned_seeds
             .iter()
-            .map(|(id, left, height, h)| (*id, *left, *height, h.as_slice()))
+            .map(|seed| {
+                seed.nodes
+                    .iter()
+                    .map(|(left, height, hash)| NodeWrite {
+                        alg_id: seed.alg_id,
+                        left: *left,
+                        height: *height,
+                        hash: hash.as_slice(),
+                    })
+                    .collect()
+            })
             .collect();
-        let metas_ref: Vec<(u64, &[(u64, u64)])> = meta_batch
+        let seeds: Vec<AlgorithmSeed<'_>> = owned_seeds
             .iter()
-            .map(|(id, e)| (*id, e.as_slice()))
-            .collect();
-        let checkpoints_ref: Vec<(u64, &[u8])> = checkpoint_batch
-            .iter()
-            .map(|(id, r)| (*id, r.as_slice()))
+            .zip(node_writes.iter())
+            .map(|(seed, nodes)| AlgorithmSeed {
+                alg_id: seed.alg_id,
+                epochs: seed.epochs.as_slice(),
+                nodes: nodes.as_slice(),
+                checkpoint_root: seed.checkpoint_root.as_slice(),
+            })
             .collect();
 
         storage
-            .write_batch(
-                &[],
-                &nodes_ref,
-                &metas_ref,
-                Some((size, LogKind::Subtree.to_byte())),
-                &checkpoints_ref,
-            )
+            .apply(&[WriteOp::SeedFrontier {
+                size,
+                algorithms: &seeds,
+            }])
             .await
             .map_err(LogError::Storage)?;
 
@@ -307,26 +336,19 @@ impl<S: Storage> NaryMerkleLog<S> {
             }
         }
 
-        // Recover authoritative (count, kind) from persisted log metadata when
-        // available; fall back to deterministic probing for legacy stores.
-        let (global_size, kind) = match storage.load_log_meta().await.map_err(LogError::Storage)? {
-            Some((count, kind_byte)) => {
-                let kind =
-                    LogKind::from_byte(kind_byte).ok_or_else(|| LogError::CorruptedMetadata {
-                        alg_id: 0,
-                        reason: format!("unknown LogKind byte: {kind_byte}"),
-                    })?;
-                (count, kind)
-            },
-            None => {
-                let size = Self::determine_global_size(&storage, &metas).await?;
-                let kind = if storage.len().await.map_err(LogError::Storage)? > 0 {
-                    LogKind::Flat
-                } else {
-                    LogKind::Subtree
-                };
-                (size, kind)
-            },
+        // The append count is authoritative and always present (never
+        // `Option`); the kind is never stored -- it is derived from content
+        // (head's ruling, 2026-09-17): a store holding any leaf is flat, a
+        // store with a nonzero append count and no leaves is subtree-kind
+        // (a resumed or subtree-appended-from-genesis log). At count 0
+        // there is no kind yet -- either derivation is harmless, since
+        // `append_leaf`/`append_subtree`'s own conflict guards are
+        // themselves gated on `count > 0`.
+        let global_size = storage.append_count().await.map_err(LogError::Storage)?;
+        let kind = if storage.len().await.map_err(LogError::Storage)? > 0 {
+            LogKind::Flat
+        } else {
+            LogKind::Subtree
         };
 
         let mut algs = HashMap::new();
@@ -386,12 +408,12 @@ impl<S: Storage> NaryMerkleLog<S> {
     ///
     /// `digest_fn(alg_id, view)` returns the per-algorithm digest for the item
     /// being appended and any leaf-level node to persist. Returns the proposed
-    /// new algorithm map and an [`OwnedBatch`] ready to pass directly to
-    /// `write_batch`. The caller MUST write the batch to storage before swapping
-    /// the returned map into `self.algs`.
+    /// new algorithm map and an [`OwnedBatch`] the caller assembles into a
+    /// [`WriteOp::AppendLeaf`]/[`WriteOp::AppendSubtree`]. The caller MUST
+    /// write the batch to storage before swapping the returned map into
+    /// `self.algs`.
     fn build_append_state<F>(
         &self,
-        kind: LogKind,
         digest_fn: F,
     ) -> Result<(HashMap<u64, AlgView>, OwnedBatch), S::Error>
     where
@@ -400,7 +422,6 @@ impl<S: Storage> NaryMerkleLog<S> {
     {
         let mut new_algs = self.algs.clone();
         let mut batch_nodes: Vec<(u64, u64, u32, Vec<u8>)> = Vec::new();
-        let log_meta_kind = kind;
 
         for (&alg_id, view) in &mut new_algs {
             if !view.is_active() {
@@ -424,7 +445,6 @@ impl<S: Storage> NaryMerkleLog<S> {
             )?;
         }
 
-        let new_count = self.count + 1;
         let checkpoint_roots: Vec<(u64, Vec<u8>)> = new_algs
             .iter()
             .filter(|(_, s)| s.is_active())
@@ -436,64 +456,10 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         let batch = OwnedBatch {
             nodes: batch_nodes,
-            log_meta: Some((new_count, log_meta_kind.to_byte())),
             checkpoint_roots,
         };
 
         Ok((new_algs, batch))
-    }
-
-    /// Probe storage to estimate the current global size (legacy fallback only).
-    ///
-    /// Called only when no authoritative log metadata has been persisted. Sorts
-    /// algorithms by ID before probing so the result is deterministic across
-    /// replicas regardless of `HashMap` iteration order. Uses a linear scan
-    /// rather than binary search because level-0 node presence is not guaranteed
-    /// to be monotonic across deactivation/reactivation gaps.
-    async fn determine_global_size(
-        storage: &S,
-        metas: &[(u64, Vec<(u64, u64)>)],
-    ) -> Result<u64, S::Error> {
-        let leaf_len = storage.len().await.map_err(LogError::Storage)?;
-        if leaf_len > 0 {
-            return Ok(leaf_len);
-        }
-
-        let mut max_frozen_end = 0u64;
-        let mut active_algs: Vec<(u64, u64)> = Vec::new();
-        for &(alg_id, ref epochs) in metas {
-            if let Some(&(start, end)) = epochs.last() {
-                if end == u64::MAX {
-                    active_algs.push((alg_id, start));
-                } else if end > max_frozen_end {
-                    max_frozen_end = end;
-                }
-            }
-        }
-
-        if active_algs.is_empty() {
-            return Ok(max_frozen_end);
-        }
-
-        // Deterministic probe target: lowest alg_id avoids HashMap ordering dependency.
-        active_algs.sort_unstable_by_key(|&(id, _)| id);
-        let (alg_id, start) = active_algs[0];
-
-        // Linear scan: binary search is unsafe here because level-0 node presence
-        // is non-monotonic across deactivation/reactivation gaps.
-        let mut size = start;
-        loop {
-            if storage
-                .get_node(alg_id, size, 0)
-                .await
-                .map_err(LogError::Storage)?
-                .is_none()
-            {
-                break;
-            }
-            size += 1;
-        }
-        Ok(size)
     }
 
     /// Retrieve the tree configuration.
@@ -604,7 +570,10 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // Persist metadata BEFORE committing in-memory state.
         self.storage
-            .store_algorithm_meta(alg_id, &epochs)
+            .apply(&[WriteOp::AddAlgorithm {
+                alg_id,
+                epochs: &epochs,
+            }])
             .await
             .map_err(LogError::Storage)?;
 
@@ -659,16 +628,13 @@ impl<S: Storage> NaryMerkleLog<S> {
             engine::compute_root(&frozen, self.config.arity as usize)
         };
 
-        let epochs_ref: &[(u64, u64)] = &new_epochs;
         // Commit epoch update + checkpoint root atomically (mirrors resume_algorithm).
         self.storage
-            .write_batch(
-                &[],
-                &[],
-                &[(alg_id, epochs_ref)],
-                None,
-                &[(alg_id, frozen_root.as_slice())],
-            )
+            .apply(&[WriteOp::RemoveAlgorithm {
+                alg_id,
+                epochs: &new_epochs,
+                checkpoint_root: frozen_root.as_slice(),
+            }])
             .await
             .map_err(LogError::Storage)?;
 
@@ -736,9 +702,14 @@ impl<S: Storage> NaryMerkleLog<S> {
             mixed_to_store.extend(mixed);
         }
 
-        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = mixed_to_store
+        let nodes_ref: Vec<NodeWrite<'_>> = mixed_to_store
             .iter()
-            .map(|&(left, height, ref hash)| (alg_id, left, height, hash.as_slice()))
+            .map(|&(left, height, ref hash)| NodeWrite {
+                alg_id,
+                left,
+                height,
+                hash: hash.as_slice(),
+            })
             .collect();
 
         // Compute the checkpoint root for the resumed algorithm from its new frontier.
@@ -750,16 +721,14 @@ impl<S: Storage> NaryMerkleLog<S> {
         };
         let resumed_root = engine::compute_root(&resumed_view, self.config.arity as usize);
 
-        let epochs_ref: &[(u64, u64)] = &new_epochs;
         // Commit nodes + epoch update + checkpoint root atomically (closes V13).
         self.storage
-            .write_batch(
-                &[],
-                &nodes_ref,
-                &[(alg_id, epochs_ref)],
-                None,
-                &[(alg_id, resumed_root.as_slice())],
-            )
+            .apply(&[WriteOp::ResumeAlgorithm {
+                alg_id,
+                epochs: &new_epochs,
+                nodes: &nodes_ref,
+                checkpoint_root: resumed_root.as_slice(),
+            }])
             .await
             .map_err(LogError::Storage)?;
 
@@ -803,44 +772,50 @@ impl<S: Storage> NaryMerkleLog<S> {
 
         // `build_append_state` takes &self: the new alg map and batch are
         // assembled without touching self.algs; the swap happens only after
-        // write_batch succeeds (structural rollback guarantee).
-        let (new_algs, batch) = self.build_append_state(LogKind::Flat, |alg_id, view| {
-            if view.is_active_at(self.count) {
+        // `apply` succeeds (structural rollback guarantee).
+        let at = self.count;
+        let (new_algs, batch) = self.build_append_state(|alg_id, view| {
+            if view.is_active_at(at) {
                 let leaf_hash = view.hasher.leaf(data);
-                let node = (alg_id, self.count, 0u32, leaf_hash.clone());
+                let node = (alg_id, at, 0u32, leaf_hash.clone());
                 (leaf_hash, Some(node))
             } else {
                 (view.hasher.null(), None)
             }
         })?;
 
-        let leaf_entry = (self.count, data.to_vec());
-        let leaves_ref: &[(u64, &[u8])] = &[(leaf_entry.0, leaf_entry.1.as_slice())];
-        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch
+        let nodes_ref: Vec<NodeWrite<'_>> = batch
             .nodes
             .iter()
-            .map(|(a, l, h, hash)| (*a, *l, *h, hash.as_slice()))
+            .map(|(a, l, h, hash)| NodeWrite {
+                alg_id: *a,
+                left: *l,
+                height: *h,
+                hash: hash.as_slice(),
+            })
             .collect();
-        let checkpoint_refs: Vec<(u64, &[u8])> = batch
+        let checkpoint_refs: Vec<AlgorithmRoot<'_>> = batch
             .checkpoint_roots
             .iter()
-            .map(|(id, r)| (*id, r.as_slice()))
+            .map(|(id, r)| AlgorithmRoot {
+                alg_id: *id,
+                root: r.as_slice(),
+            })
             .collect();
 
         self.storage
-            .write_batch(
-                leaves_ref,
-                &nodes_ref,
-                &[],
-                batch.log_meta,
-                &checkpoint_refs,
-            )
+            .apply(&[WriteOp::AppendLeaf {
+                at,
+                data,
+                nodes: &nodes_ref,
+                checkpoint_roots: &checkpoint_refs,
+            }])
             .await
             .map_err(LogError::Storage)?;
 
         // Storage committed: safe to update in-memory state.
         self.algs = new_algs;
-        self.count = batch.log_meta.unwrap().0;
+        self.count = at + 1;
         self.kind = LogKind::Flat;
         Ok(())
     }
@@ -870,35 +845,48 @@ impl<S: Storage> NaryMerkleLog<S> {
             return Err(LogError::NoActiveAlgorithms);
         }
 
-        let (new_algs, batch) = self.build_append_state(LogKind::Subtree, |alg_id, view| {
-            if view.is_active_at(self.count) {
+        let at = self.count;
+        let (new_algs, batch) = self.build_append_state(|alg_id, view| {
+            if view.is_active_at(at) {
                 let root_hash = evaluate(view.hasher.as_ref(), subtree);
-                let node = (alg_id, self.count, 0u32, root_hash.clone());
+                let node = (alg_id, at, 0u32, root_hash.clone());
                 (root_hash, Some(node))
             } else {
                 (view.hasher.null(), None)
             }
         })?;
 
-        let nodes_ref: Vec<(u64, u64, u32, &[u8])> = batch
+        let nodes_ref: Vec<NodeWrite<'_>> = batch
             .nodes
             .iter()
-            .map(|(a, l, h, hash)| (*a, *l, *h, hash.as_slice()))
+            .map(|(a, l, h, hash)| NodeWrite {
+                alg_id: *a,
+                left: *l,
+                height: *h,
+                hash: hash.as_slice(),
+            })
             .collect();
-        let checkpoint_refs: Vec<(u64, &[u8])> = batch
+        let checkpoint_refs: Vec<AlgorithmRoot<'_>> = batch
             .checkpoint_roots
             .iter()
-            .map(|(id, r)| (*id, r.as_slice()))
+            .map(|(id, r)| AlgorithmRoot {
+                alg_id: *id,
+                root: r.as_slice(),
+            })
             .collect();
 
         self.storage
-            .write_batch(&[], &nodes_ref, &[], batch.log_meta, &checkpoint_refs)
+            .apply(&[WriteOp::AppendSubtree {
+                at,
+                nodes: &nodes_ref,
+                checkpoint_roots: &checkpoint_refs,
+            }])
             .await
             .map_err(LogError::Storage)?;
 
         // Storage committed: safe to update in-memory state.
         self.algs = new_algs;
-        self.count = batch.log_meta.unwrap().0;
+        self.count = at + 1;
         self.kind = LogKind::Subtree;
         Ok(())
     }
@@ -1899,8 +1887,8 @@ mod resume_freshness_tests {
     }
 
     /// `resume`'s contract is a fresh backend only: storage that already
-    /// carries its own committed log -- `load_log_meta` returns
-    /// `Some((count, _))` -- must be refused before anything is written,
+    /// carries its own committed log -- a nonzero `append_count`, or a
+    /// registered algorithm -- must be refused before anything is written,
     /// never silently folded into a new tree.
     #[test]
     fn resume_onto_a_non_fresh_storage_is_refused() {

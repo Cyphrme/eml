@@ -49,10 +49,10 @@ pub enum LogError<E> {
     /// sealed size).
     MalformedSeal,
     /// [`crate::NaryMerkleLog::resume`] was handed storage that already
-    /// carries a committed log (`Storage::load_log_meta` returned
-    /// `Some((count, _))`). A resumed log writes forward into a fresh
-    /// backend only; the size already committed there is included for
-    /// diagnostics.
+    /// carries a committed log (`Storage::append_count` is nonzero, or it
+    /// already has a registered algorithm). A resumed log writes forward
+    /// into a fresh backend only; the size already committed there is
+    /// included for diagnostics.
     ResumeTargetNotFresh(u64),
     /// [`crate::NaryMerkleLog::verify_non_divergence`] was asked to start
     /// from a checkpoint at or after this algorithm's first activation, but
