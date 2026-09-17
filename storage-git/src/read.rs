@@ -24,7 +24,7 @@ pub(crate) fn get_leaf(
     if index >= size {
         return Err(Error::NotFound(format!("leaf index {index} (size {size})")));
     }
-    let Some(l) = gitutil::find_entry(repo, tree_id, "l")? else {
+    let Some(l) = gitutil::find_entry(repo, tree_id, "leaves")? else {
         return Err(Error::NotFound(format!("leaf {index} (no leaves written)")));
     };
     match gitutil::resolve_at_path(repo, l, &trimmed_key_segments(index))? {
@@ -44,7 +44,7 @@ pub(crate) fn get_node(
     left: u64,
     height: u32,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let Some(n) = gitutil::find_entry(repo, tree_id, "n")? else {
+    let Some(n) = gitutil::find_entry(repo, tree_id, "nodes")? else {
         return Ok(None);
     };
     let mut segments = vec![hex16(alg_id), hex2(u64::from(height))];
@@ -60,14 +60,14 @@ pub(crate) fn load_algorithm_metas(
     repo: &gix::Repository,
     tree_id: ObjectId,
 ) -> Result<polydigest::AlgorithmMetas, Error> {
-    let Some(e) = gitutil::find_entry(repo, tree_id, "e")? else {
+    let Some(e) = gitutil::find_entry(repo, tree_id, "epochs")? else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
     for entry in gitutil::read_tree(repo, e)? {
         let alg = crate::layout::parse_hex16(&entry.filename.to_string()).ok_or_else(|| {
             Error::Corruption(format!(
-                "e/ entry {} is not a hex(alg_id,16) name",
+                "epochs/ entry {} is not a hex(alg_id,16) name",
                 entry.filename
             ))
         })?;
@@ -82,14 +82,14 @@ pub(crate) fn load_checkpoint_roots(
     repo: &gix::Repository,
     tree_id: ObjectId,
 ) -> Result<Vec<(u64, Vec<u8>)>, Error> {
-    let Some(r) = gitutil::find_entry(repo, tree_id, "r")? else {
+    let Some(r) = gitutil::find_entry(repo, tree_id, "roots")? else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
     for entry in gitutil::read_tree(repo, r)? {
         let alg = crate::layout::parse_hex16(&entry.filename.to_string()).ok_or_else(|| {
             Error::Corruption(format!(
-                "r/ entry {} is not a hex(alg_id,16) name",
+                "roots/ entry {} is not a hex(alg_id,16) name",
                 entry.filename
             ))
         })?;
