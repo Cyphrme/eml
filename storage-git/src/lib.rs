@@ -110,6 +110,11 @@ pub struct GitStorage {
     /// per ref -- one ref's committed log is never visible through another.
     observed_tip: Option<ObjectId>,
     count: u64,
+    /// Whether the observed tree has any `leaves/` entry at all -- the
+    /// signal [`Self::metadata`] derives `LogKind` from (see
+    /// [`derive_log_metadata`]), maintained alongside `count` rather than
+    /// re-walked from the tree on every call.
+    has_leaves: bool,
 }
 
 impl GitStorage {
@@ -141,11 +146,11 @@ impl GitStorage {
             .map_err(|_| GitStorageError::InvalidRef(staging_ref.as_ref().to_string()))?;
 
         let local = repo.to_thread_local();
-        let (observed_tip, count) = match local
+        let (observed_tip, count, has_leaves) = match local
             .try_find_reference(staging_ref.as_ref())
             .map_err(|e| GitStorageError::Git(e.to_string()))?
         {
-            None => (None, 0),
+            None => (None, 0, false),
             Some(mut r) => {
                 let tree_id = r
                     .peel_to_id()
@@ -155,16 +160,14 @@ impl GitStorage {
                     GitStorageError::Corruption("staging ref's tree has no meta".into())
                 })?;
                 let bytes = gitutil::read_blob(&local, meta_id)?;
-                // `_kind_byte`: meta's stored kind byte is on its way out
-                // (a log's kind is derived, never persisted); nothing here
-                // depends on it until `layout::decode_meta` drops it.
-                let (stored_arity, count, _kind_byte) = layout::decode_meta(&bytes)?;
+                let (stored_arity, count) = layout::decode_meta(&bytes)?;
                 if stored_arity != arity {
                     return Err(GitStorageError::InvalidArity(format!(
                         "instance arity {arity} disagrees with stored meta.arity {stored_arity}"
                     )));
                 }
-                (Some(tree_id), count)
+                let has_leaves = gitutil::find_entry(&local, tree_id, "leaves")?.is_some();
+                (Some(tree_id), count, has_leaves)
             },
         };
 
@@ -174,6 +177,7 @@ impl GitStorage {
             arity,
             observed_tip,
             count,
+            has_leaves,
         })
     }
 
@@ -215,11 +219,7 @@ impl GitStorage {
     /// kind itself.
     #[must_use]
     pub fn metadata(&self) -> LogMetadata {
-        // Deliberately unimplemented: this reads exactly the same
-        // (`len`, `append_count`) pair `Storage::apply`/`from_storage`
-        // already derive kind from, and has no implementation on this
-        // backend yet.
-        unimplemented!("GitStorage::metadata: pending the operation-enum write path landing")
+        derive_log_metadata(self.count, self.has_leaves)
     }
 
     /// A read-only view over an arbitrary checkpoint tree (§4.4, SG21),
@@ -234,16 +234,27 @@ impl GitStorage {
         let meta_id = gitutil::find_entry(&repo, tree, "meta")?
             .ok_or_else(|| GitStorageError::Corruption("tree has no meta".into()))?;
         let bytes = gitutil::read_blob(&repo, meta_id)?;
-        let (_arity, count, _kind) = layout::decode_meta(&bytes)?;
+        let (_arity, count) = layout::decode_meta(&bytes)?;
+        let has_leaves = gitutil::find_entry(&repo, tree, "leaves")?.is_some();
         Ok(GitReadOnlyView {
             repo: self.repo.clone(),
             tree,
             size: count,
+            has_leaves,
         })
     }
 
     fn thread_local(&self) -> gix::Repository {
         self.repo.to_thread_local()
+    }
+
+    /// The leaf-specific count [`Storage::len`] must report: `count` for a
+    /// flat log, `0` for a subtree-kind log regardless of its append count
+    /// (see that method's own doc comment) -- a log is monotonically one or
+    /// the other once it has ever appended, so `has_leaves` alone decides
+    /// it.
+    fn leaf_len(&self) -> u64 {
+        if self.has_leaves { self.count } else { 0 }
     }
 
     /// Move the staging ref to `new_tree` under its compare-and-swap
@@ -335,11 +346,11 @@ impl Storage for GitStorage {
             )));
         };
         let repo = self.thread_local();
-        read::get_leaf(&repo, tree, self.count, index)
+        read::get_leaf(&repo, tree, self.leaf_len(), index)
     }
 
     async fn len(&self) -> Result<u64, Self::Error> {
-        Ok(self.count)
+        Ok(self.leaf_len())
     }
 
     async fn get_node(
@@ -376,21 +387,35 @@ impl Storage for GitStorage {
     }
 
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
-        // Deliberately unimplemented: the operation-enum write path (head's
-        // ruling 2026-09-17, plus the readable top-level names and the
-        // dropped kind byte) has no landed implementation on this backend
-        // yet. `build::apply` is the stub the implementer fills in.
         let repo = self.thread_local();
         let old = build::OldState {
             tree: self.observed_tip,
             count: self.count,
+            has_leaves: self.has_leaves,
         };
         let applied = build::apply(&repo, self.arity, old, ops)?;
         self.cas(&repo, applied.tree_id)?;
         self.observed_tip = Some(applied.tree_id);
         self.count = applied.count;
+        self.has_leaves = applied.has_leaves;
         Ok(())
     }
+}
+
+/// Derive a checkpoint's [`LogMetadata`] from exactly the `(count,
+/// has_leaves)` pair [`GitStorage::metadata`] and
+/// [`GitReadOnlyView::metadata`] both carry, so the two never duplicate the
+/// derivation: `LogKind::Flat` at `count == 0` (either kind is equally
+/// valid there) or whenever any leaf has ever been written; `LogKind::Subtree`
+/// otherwise (a nonzero count with no leaves -- a resumed or
+/// subtree-appended-from-genesis log).
+fn derive_log_metadata(count: u64, has_leaves: bool) -> LogMetadata {
+    let kind = if count == 0 || has_leaves {
+        LogKind::Flat
+    } else {
+        LogKind::Subtree
+    };
+    LogMetadata { count, kind }
 }
 
 /// A read-only view over one checkpoint tree, returned by
@@ -401,6 +426,7 @@ pub struct GitReadOnlyView {
     repo: gix::ThreadSafeRepository,
     tree: ObjectId,
     size: u64,
+    has_leaves: bool,
 }
 
 impl GitReadOnlyView {
@@ -414,7 +440,7 @@ impl GitReadOnlyView {
     /// ruling, 2026-09-17, requirement E) -- see [`GitStorage::metadata`].
     #[must_use]
     pub fn metadata(&self) -> LogMetadata {
-        unimplemented!("GitReadOnlyView::metadata: pending the operation-enum write path landing")
+        derive_log_metadata(self.size, self.has_leaves)
     }
 
     /// Read item `index`'s raw leaf payload.
