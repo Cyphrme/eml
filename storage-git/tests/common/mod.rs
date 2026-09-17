@@ -2,6 +2,8 @@
 //! of different digest widths (SG26), used across this crate's structural,
 //! differential, and parametric tests.
 
+use std::collections::HashSet;
+
 use gix::ThreadSafeRepository;
 use gix::create::{Kind as CreateKind, Options as CreateOptions};
 use gix::hash::Kind as HashKind;
@@ -90,3 +92,170 @@ impl Hasher for NarrowHasher {
         Box::new(NarrowHasher)
     }
 }
+
+// ============================================================================
+// Generic git-tree helpers and the byte1-be-trim key path scheme (the merge
+// gate's TT20/TT21 dispatch: `.ledger/deposits/git-backend/lead-maintainer/
+// storage-git-tip-tree-gate.md`, and `spike-report.md`'s recommended
+// layout). Added independently of `acceptance_support/mod.rs`, which is
+// deliberately written from the spec alone and never shares helpers with
+// this module.
+// ============================================================================
+
+/// One entry read directly out of a decoded git tree, independent of
+/// `storage-git`'s own decoding.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RawEntry {
+    pub name: String,
+    pub mode: gix::objs::tree::EntryMode,
+    pub oid: gix::ObjectId,
+}
+
+/// Decode a tree object's direct children, in git's own stored (already
+/// canonically sorted) order.
+#[must_use]
+#[allow(dead_code)]
+pub fn read_tree_entries(repo: &gix::Repository, tree: gix::ObjectId) -> Vec<RawEntry> {
+    let t = repo
+        .find_tree(tree)
+        .unwrap_or_else(|e| panic!("{tree}: not a tree: {e}"));
+    let decoded = t.decode().expect("tree decodes");
+    decoded
+        .entries
+        .iter()
+        .map(|e| RawEntry {
+            name: e.filename.to_string(),
+            mode: e.mode,
+            oid: e.oid.to_owned(),
+        })
+        .collect()
+}
+
+/// Find one named entry directly under `tree`, or `None`.
+#[must_use]
+#[allow(dead_code)]
+pub fn find_child(repo: &gix::Repository, tree: gix::ObjectId, name: &str) -> Option<RawEntry> {
+    read_tree_entries(repo, tree)
+        .into_iter()
+        .find(|e| e.name == name)
+}
+
+/// Resolve a sequence of path segments from `tree`, returning the final
+/// entry, or `None` if any segment along the way is missing.
+#[must_use]
+#[allow(dead_code)]
+pub fn resolve_segments(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    segments: &[String],
+) -> Option<RawEntry> {
+    let mut current = tree;
+    let mut last: Option<RawEntry> = None;
+    for seg in segments {
+        let entry = find_child(repo, current, seg)?;
+        current = entry.oid;
+        last = Some(entry);
+    }
+    last
+}
+
+/// Enumerate every `/`-joined path from `tree` down to a terminal (non-tree)
+/// entry -- a pure path-driven walk, never deduplicated by object id, so a
+/// coincidentally shared subtree object (e.g. two dedup'd identical blobs)
+/// is still enumerated once per path that reaches it. Depth is bounded by
+/// the key schemes this crate's tests drive (at most ~11 segments), so no
+/// cycle guard is needed: a git tree is acyclic by construction.
+#[allow(dead_code)]
+pub fn enumerate_full_paths(repo: &gix::Repository, tree: gix::ObjectId) -> HashSet<String> {
+    fn walk(
+        repo: &gix::Repository,
+        tree: gix::ObjectId,
+        prefix: &mut Vec<String>,
+        out: &mut HashSet<String>,
+    ) {
+        for e in read_tree_entries(repo, tree) {
+            prefix.push(e.name.clone());
+            if e.mode.is_tree() {
+                walk(repo, e.oid, prefix, out);
+            } else {
+                out.insert(prefix.join("/"));
+            }
+            prefix.pop();
+        }
+    }
+    let mut out = HashSet::new();
+    walk(repo, tree, &mut Vec::new(), &mut out);
+    out
+}
+
+/// The largest number of direct entries any tree object reachable from
+/// `tree` carries -- the empirical form of "no tree object exceeds 256
+/// entries" (spike-report.md's confirmed `byte1-be-trim` bound).
+#[must_use]
+#[allow(dead_code)]
+pub fn max_tree_width_recursive(repo: &gix::Repository, tree: gix::ObjectId) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![tree];
+    let mut widest = 0usize;
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if repo.find_tree(id).is_ok() {
+            let entries = read_tree_entries(repo, id);
+            widest = widest.max(entries.len());
+            for e in &entries {
+                if e.mode.is_tree() {
+                    stack.push(e.oid);
+                }
+            }
+        }
+    }
+    widest
+}
+
+/// The `byte1-be-trim` path scheme `spike-report.md` recommends and
+/// `storage-git-keyed::PathScheme::TrimmedFanout{width:1}`
+/// (`.worktrees/spike-key-layout/storage-git-keyed/src/pathscheme.rs`)
+/// implements: a numeric key's leading zero bytes are stripped, a one-ASCII-
+/// digit length segment (the count of remaining significant bytes, `1..=8`)
+/// is prepended, and each remaining byte becomes its own two-lowercase-hex-
+/// digit segment, most-significant byte first. `key == 0` is one
+/// significant (zero) byte, never zero segments, so every key gets a
+/// non-empty path. Ported test-for-test against
+/// `storage-git-keyed::pathscheme::tests` below.
+#[must_use]
+#[allow(dead_code)]
+pub fn trimmed_key_segments(key: u64) -> Vec<String> {
+    let be = key.to_be_bytes();
+    let first_nonzero = be.iter().position(|&b| b != 0).unwrap_or(7);
+    let sig = &be[first_nonzero..];
+    let mut segs = vec![sig.len().to_string()];
+    segs.extend(sig.iter().map(|b| format!("{b:02x}")));
+    segs
+}
+
+/// `hex(x, 16)` -- a `u64` rendered as 16 lowercase hex digits, matching
+/// `storage-git::layout::hex16` and `storage-git-keyed::layout::hex16`'s own
+/// encoding for an algorithm id.
+#[must_use]
+#[allow(dead_code)]
+pub fn hex16(x: u64) -> String {
+    format!("{x:016x}")
+}
+
+/// `hex(x, 2)` -- a value `0..=255` rendered as 2 lowercase hex digits,
+/// matching the height segment `storage-git-keyed::build::node_path` writes
+/// (`format!("{height:02x}")`).
+#[must_use]
+#[allow(dead_code)]
+pub fn hex2(x: u32) -> String {
+    format!("{x:02x}")
+}
+
+// `trimmed_key_segments`'s own correctness (ported test-for-test from
+// `storage-git-keyed::pathscheme::tests`) is checked once, in
+// `key_derived_layout.rs`'s own `#[cfg(test)]` block -- not here, so it does
+// not recompile and re-run once per `tests/*.rs` binary that pulls in this
+// shared module.
