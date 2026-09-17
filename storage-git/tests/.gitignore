@@ -1,0 +1,6 @@
+# A fuzz test's failing case must be reproducible for everyone who runs
+# these tests, not rediscovered by luck depending on whichever random seed a
+# given session happens to draw. Un-ignore the seed files the root
+# .gitignore otherwise excludes, scoped to this directory alone, and commit
+# them deliberately.
+!*.proptest-regressions
