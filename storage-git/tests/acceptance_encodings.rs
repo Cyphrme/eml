@@ -341,10 +341,10 @@ fn meta_blob_has_one_fixed_shape_regardless_of_resume_history() {
              resumed -- meta has exactly one shape"
         );
         assert_eq!(
-            plain_meta_len, 11,
-            "meta's one fixed shape carries no per-log resume marker and no version byte: arity, \
-             count, and kind alone -- 11 bytes, the same for every log regardless of resume \
-             history"
+            plain_meta_len, 10,
+            "meta's one fixed shape carries no per-log resume marker, no version byte, and no \
+             kind byte: arity and count alone -- 10 bytes, the same for every log regardless of \
+             resume history"
         );
     });
 }
