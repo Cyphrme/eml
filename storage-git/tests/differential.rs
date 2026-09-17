@@ -140,6 +140,13 @@ proptest! {
     fn differential_arity_3(ops in arb_ops()) {
         smol::block_on(run(&ops, 3));
     }
+
+    /// [OPERATION ENUM] Arity 4, completing the head's ruling's "fuzzed
+    /// across the five [operations], arities 2-4" requirement.
+    #[test]
+    fn differential_arity_4(ops in arb_ops()) {
+        smol::block_on(run(&ops, 4));
+    }
 }
 
 /// A fixed, hand-picked scenario mixing add/remove/resume so SG10/SG11's
