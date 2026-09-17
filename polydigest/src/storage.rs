@@ -384,6 +384,13 @@ impl Storage for MemoryStorage {
         // for an in-memory reference store with no I/O to fail partway
         // through.
         let mut projected_count = self.count;
+        // Algorithms this same batch has already registered, so a later op
+        // in the batch is validated against what earlier ops just did, not
+        // only against `self`'s state before the batch started -- mirroring
+        // `GitStorage::build::apply`'s `known()` closure, per the composer's
+        // ruling that a batch is validated as a unit.
+        let mut registered_this_batch: std::collections::HashSet<u64> =
+            std::collections::HashSet::new();
         for op in ops {
             match op {
                 WriteOp::AppendLeaf { at, .. } | WriteOp::AppendSubtree { at, .. } => {
@@ -395,21 +402,50 @@ impl Storage for MemoryStorage {
                     projected_count += 1;
                 },
                 WriteOp::AddAlgorithm { alg_id, .. } => {
-                    if self.algorithm_metas.contains_key(alg_id) {
+                    if registered_this_batch.contains(alg_id)
+                        || self.algorithm_metas.contains_key(alg_id)
+                    {
                         return Err(MemoryStorageError::InvalidOperation(format!(
                             "algorithm {alg_id} is already registered"
                         )));
                     }
+                    registered_this_batch.insert(*alg_id);
                 },
                 WriteOp::RemoveAlgorithm { alg_id, .. }
                 | WriteOp::ResumeAlgorithm { alg_id, .. } => {
-                    if !self.algorithm_metas.contains_key(alg_id) {
+                    if !registered_this_batch.contains(alg_id)
+                        && !self.algorithm_metas.contains_key(alg_id)
+                    {
                         return Err(MemoryStorageError::InvalidOperation(format!(
                             "algorithm {alg_id} is not registered"
                         )));
                     }
                 },
-                WriteOp::SeedFrontier { .. } => {},
+                WriteOp::SeedFrontier { size, algorithms } => {
+                    if projected_count != 0 || !registered_this_batch.is_empty() {
+                        return Err(MemoryStorageError::InvalidOperation(
+                            "SeedFrontier requires a fresh store: append_count must be 0 and no \
+                             algorithm registered by an earlier op in this batch"
+                                .to_string(),
+                        ));
+                    }
+                    if !self.algorithm_metas.is_empty() {
+                        return Err(MemoryStorageError::InvalidOperation(
+                            "SeedFrontier requires a fresh store: no algorithm may already be \
+                             registered"
+                                .to_string(),
+                        ));
+                    }
+                    for seed in *algorithms {
+                        if !registered_this_batch.insert(seed.alg_id) {
+                            return Err(MemoryStorageError::InvalidOperation(format!(
+                                "algorithm {} is named twice in one SeedFrontier batch",
+                                seed.alg_id
+                            )));
+                        }
+                    }
+                    projected_count = *size;
+                },
             }
         }
 

@@ -315,6 +315,20 @@ pub(crate) fn apply(
                 root_overrides.insert(*alg_id, resumed_root.to_vec());
             },
             WriteOp::SeedFrontier { size, algorithms } => {
+                if count != 0 || !registered_this_batch.is_empty() {
+                    return Err(invalid(
+                        "SeedFrontier requires a fresh store: append_count must be 0 and no \
+                         algorithm registered by an earlier op in this batch"
+                            .to_string(),
+                    ));
+                }
+                if !known_algorithm_ids(repo, old.tree)?.is_empty() {
+                    return Err(invalid(
+                        "SeedFrontier requires a fresh store: no algorithm may already be \
+                         registered"
+                            .to_string(),
+                    ));
+                }
                 count = *size;
                 for seed in *algorithms {
                     if known(&registered_this_batch, seed.alg_id)? {
