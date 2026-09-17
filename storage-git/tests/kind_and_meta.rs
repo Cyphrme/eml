@@ -148,30 +148,65 @@ fn resumed_log_reopens_as_subtree() {
 
 /// [KIND DERIVATION] An empty log (`append_count == 0`) accepts either
 /// append kind on reopen, same as a freshly constructed one.
+///
+/// Re-expressed against two INDEPENDENTLY INITIALIZED staging refs, never
+/// two `open` calls against the same ref: `GitStorage` is deliberately
+/// `!Clone` for single-writer ownership, and `observed_tip` is captured
+/// once, in `Self::new`, from a lookup of `staging_ref` alone (`lib.rs`'s
+/// own doc comment on that field, `lib.rs:100-111`, states the isolation
+/// this relies on -- "a repository that hosts several logs side by side,
+/// each under its own staging ref ... reports freshness correctly per
+/// ref -- one ref's committed log is never visible through another"). Two
+/// opens on ONE shared ref cannot fork independent empty handles that each
+/// accept a different kind: whichever leg writes first moves that ref, and
+/// the second leg's own `apply` then hits a genuine CAS conflict
+/// (`TipMoved`) before it ever gets to observe which kind was rejected --
+/// there is no ordering of two opens on one ref that reaches the intended
+/// outcome. Two distinct refs in the same repository, each independently
+/// carried genesis -> drop -> reopen -> first append, is what actually
+/// exercises the property, and nothing else in this crate reopens a
+/// still-empty ref through `open`/`from_storage` before the first append.
 #[test]
 fn empty_log_reopens_accepting_either_append() {
     smol::block_on(async {
         let (dir, repo) = init_repo(HashKind::Sha1);
-        let staging = "refs/eml/storage/kind-meta/empty/staging";
-        let src = NaryMerkleLog::new(
-            GitStorage::new(repo, staging, 2).unwrap(),
+
+        // Leg 1: its own ref, genesis -> drop -> reopen -> first append is
+        // a LEAF.
+        let staging_leaf = "refs/eml/storage/kind-meta/empty/leaf/staging";
+        let src_leaf = NaryMerkleLog::new(
+            GitStorage::new(repo.clone(), staging_leaf, 2).unwrap(),
             Box::new(WideHasher),
             TreeConfig { arity: 2 },
         )
         .await
         .unwrap();
-        drop(src);
+        drop(src_leaf);
 
-        let storage = GitStorage::open(dir.path(), staging, 2).unwrap();
-        assert_eq!(storage.append_count().await.unwrap(), 0);
-        let mut flat_leg = NaryMerkleLog::from_storage(storage, hashers([0]))
+        let storage_leaf = GitStorage::open(dir.path(), staging_leaf, 2).unwrap();
+        assert_eq!(storage_leaf.append_count().await.unwrap(), 0);
+        let mut flat_leg = NaryMerkleLog::from_storage(storage_leaf, hashers([0]))
             .await
             .unwrap();
         flat_leg.append_leaf(b"a").await.unwrap();
         assert_eq!(flat_leg.kind(), LogKind::Flat);
 
-        let storage2 = GitStorage::open(dir.path(), staging, 2).unwrap();
-        let mut subtree_leg = NaryMerkleLog::from_storage(storage2, hashers([0]))
+        // Leg 2: a SEPARATE, independently initialized ref in the same
+        // repository, genesis -> drop -> reopen -> first append is a
+        // SUBTREE.
+        let staging_subtree = "refs/eml/storage/kind-meta/empty/subtree/staging";
+        let src_subtree = NaryMerkleLog::new(
+            GitStorage::new(repo.clone(), staging_subtree, 2).unwrap(),
+            Box::new(WideHasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
+        drop(src_subtree);
+
+        let storage_subtree = GitStorage::open(dir.path(), staging_subtree, 2).unwrap();
+        assert_eq!(storage_subtree.append_count().await.unwrap(), 0);
+        let mut subtree_leg = NaryMerkleLog::from_storage(storage_subtree, hashers([0]))
             .await
             .unwrap();
         subtree_leg
