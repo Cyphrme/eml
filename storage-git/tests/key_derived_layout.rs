@@ -1,7 +1,5 @@
-//! KEY-DERIVED LAYOUT (`[TT20]`/`[TT21]`,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
-//! the ratified layout, decided by two spikes -- `spike-report.md` and its
-//! prototype crate `storage-git-keyed`
+//! KEY-DERIVED LAYOUT: the ratified layout, decided by two spikes --
+//! `spike-report.md` and its prototype crate `storage-git-keyed`
 //! (`.worktrees/spike-key-layout/storage-git-keyed/`).
 //!
 //! Claim under test: every stored node and leaf's tree path is EXACTLY the
@@ -34,7 +32,7 @@ use std::collections::HashSet;
 
 use common::{WideHasher, hex2, hex16, init_repo, max_tree_width_recursive, trimmed_key_segments};
 use gix::hash::Kind as HashKind;
-use polydigest::{NaryMerkleLog, Storage, TreeConfig};
+use polydigest::{NaryMerkleLog, TreeConfig};
 use storage_git::GitStorage;
 
 /// Every leaf index and `(alg_id, left, height)` node coordinate a driven
@@ -122,8 +120,19 @@ fn assert_top_level_is_exactly_namespaces_and_metadata(repo: &gix::Repository, t
 /// [KEY-DERIVED LAYOUT] Fixed sequence exercising both namespaces: several
 /// leaves (populating `l`), a second algorithm added, removed and resumed
 /// across leaf boundaries (populating `n` at more than one height and more
-/// than one algorithm, including a merge into an existing peak -- the same
-/// shape TT20's completeness property drives), at arity 2.
+/// than one algorithm, including a merge into an existing peak), at arity 2.
+///
+/// [finding 6] The expected key set is derived from an INDEPENDENT
+/// `MemoryStorage` oracle driven through the identical operation sequence,
+/// never from querying the `GitStorage` instance under test -- deriving
+/// "what should exist" from the same backend the assertion is about would
+/// make a dropped node invisible to both sides of the comparison at once (a
+/// node `GitStorage` silently drops is a node this file would then never
+/// expect to find either, since the old query-the-backend-under-test
+/// approach could only ever notice a key it itself believes it holds).
+/// `MemoryStorage` never drops a node it is given, so `mem.leaves`/
+/// `mem.nodes` are the ground truth for every key that MUST exist,
+/// independent of whatever `GitStorage` actually did with it.
 #[test]
 fn nodes_and_leaves_sit_exactly_at_their_derived_key_paths() {
     smol::block_on(async {
@@ -133,53 +142,53 @@ fn nodes_and_leaves_sit_exactly_at_their_derived_key_paths() {
         let mut log = NaryMerkleLog::new(git, Box::new(WideHasher), TreeConfig { arity: 2 })
             .await
             .unwrap();
+        let mut mem_log = NaryMerkleLog::new(
+            polydigest::MemoryStorage::new(),
+            Box::new(WideHasher),
+            TreeConfig { arity: 2 },
+        )
+        .await
+        .unwrap();
 
-        let mut written = Written::default();
         for i in 0..4u32 {
-            log.append_leaf(format!("leaf-{i}").as_bytes())
-                .await
-                .unwrap();
-            written.leaves.insert(u64::from(i));
+            let leaf = format!("leaf-{i}").into_bytes();
+            log.append_leaf(&leaf).await.unwrap();
+            mem_log.append_leaf(&leaf).await.unwrap();
         }
         log.add_algorithm(1, Box::new(WideHasher)).await.unwrap();
+        mem_log
+            .add_algorithm(1, Box::new(WideHasher))
+            .await
+            .unwrap();
         for i in 4..7u32 {
-            log.append_leaf(format!("leaf-{i}").as_bytes())
-                .await
-                .unwrap();
-            written.leaves.insert(u64::from(i));
+            let leaf = format!("leaf-{i}").into_bytes();
+            log.append_leaf(&leaf).await.unwrap();
+            mem_log.append_leaf(&leaf).await.unwrap();
         }
         log.remove_algorithm(0).await.unwrap();
+        mem_log.remove_algorithm(0).await.unwrap();
         log.append_leaf(b"leaf-7").await.unwrap();
-        written.leaves.insert(7);
+        mem_log.append_leaf(b"leaf-7").await.unwrap();
         log.resume_algorithm(0).await.unwrap();
+        mem_log.resume_algorithm(0).await.unwrap();
         for i in 8..13u32 {
-            log.append_leaf(format!("leaf-{i}").as_bytes())
-                .await
-                .unwrap();
-            written.leaves.insert(u64::from(i));
+            let leaf = format!("leaf-{i}").into_bytes();
+            log.append_leaf(&leaf).await.unwrap();
+            mem_log.append_leaf(&leaf).await.unwrap();
         }
 
-        // Ground truth for `n`'s expected keys: every `(alg, left, height)`
-        // coordinate `frontier_for_size` names at any size this sequence
-        // passed through, for every algorithm still (or ever) registered --
-        // an independent enumeration of what MUST have been given a digest
-        // at some point, not a re-derivation of storage-git's own internal
-        // bookkeeping.
-        for size in [4u64, 7, 8, 13] {
-            for &(left, height) in &spine::frontier_for_size(size, 2) {
-                for alg in [0u64, 1] {
-                    if log
-                        .storage()
-                        .get_node(alg, left, height)
-                        .await
-                        .unwrap()
-                        .is_some()
-                    {
-                        written.nodes.insert((alg, left, height));
-                    }
-                }
-            }
-        }
+        assert_eq!(
+            log.size(),
+            mem_log.size(),
+            "fixture sanity: git and memory must agree on size before deriving the oracle"
+        );
+
+        // Ground truth, straight from the independent MemoryStorage oracle's
+        // own fields -- never from asking GitStorage what it thinks it holds.
+        let written = Written {
+            leaves: (0..mem_log.storage().leaves.len() as u64).collect(),
+            nodes: mem_log.storage().nodes.keys().copied().collect(),
+        };
 
         let local = repo.to_thread_local();
         let tip = local
