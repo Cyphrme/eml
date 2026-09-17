@@ -58,7 +58,7 @@ pub(crate) fn get_node(
     }
 }
 
-/// Decode `load_algorithm_metas`'s result from `tree_id`'s `e/`.
+/// Decode `load_algorithm_metas`'s result from `tree_id`'s `epochs/`.
 pub(crate) fn load_algorithm_metas(
     repo: &gix::Repository,
     tree_id: ObjectId,
@@ -80,7 +80,7 @@ pub(crate) fn load_algorithm_metas(
     Ok(out)
 }
 
-/// Decode `load_checkpoint_roots`'s result from `tree_id`'s `r/`.
+/// Decode `load_checkpoint_roots`'s result from `tree_id`'s `roots/`.
 pub(crate) fn load_checkpoint_roots(
     repo: &gix::Repository,
     tree_id: ObjectId,

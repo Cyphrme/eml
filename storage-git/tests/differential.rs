@@ -1,5 +1,5 @@
 //! Differential property tests against `MemoryStorage`: SG2, SG3, SG8, SG9,
-//! SG10, SG11, SG13, SG14, SG15 -- mirroring `storage-fjall`'s own
+//! SG13, SG14, SG15 -- mirroring `storage-fjall`'s own
 //! `tests/proptests.rs` pattern (`storage-fjall/tests/proptests.rs`) and
 //! `polydigest`'s reference oracle.
 
@@ -149,12 +149,15 @@ proptest! {
     }
 }
 
-/// A fixed, hand-picked scenario mixing add/remove/resume so SG10/SG11's
-/// opacity-by-provenance claim (not by the log-wide kind byte) is exercised
-/// deterministically at least once, independent of what proptest happens to
-/// generate.
+/// A fixed, hand-picked scenario mixing add/remove/resume so `run`'s SG9
+/// purity checks (size and every algorithm's root staying in step with
+/// `MemoryStorage` after each op) are exercised deterministically across
+/// that specific mix at least once, independent of what proptest happens to
+/// generate. Formerly named for SG10/SG11 (opacity-by-provenance), which
+/// the key-derived layout retired along with the materialized/opaque
+/// distinction those invariants were about.
 #[test]
-fn sg11_mixed_provenance_fixed_scenario() {
+fn sg9_purity_across_mixed_add_remove_resume_fixed_scenario() {
     smol::block_on(run(
         &[
             Op::Append(b"a".to_vec()),

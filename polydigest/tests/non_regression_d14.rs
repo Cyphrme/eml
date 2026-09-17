@@ -136,7 +136,7 @@ fn leaf_data_is_stored_once_not_per_algorithm() {
     });
 }
 
-/// A `Storage` decorator that counts how many `write_batch` calls happen and the
+/// A `Storage` decorator that counts how many `apply` calls happen and the
 /// max number of distinct algorithms touched in any single batch. Wraps
 /// `MemoryStorage` and forwards everything.
 struct CountingStorage {
