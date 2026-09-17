@@ -46,3 +46,12 @@ sha2      = "0.10"
 tempfile  = "3"
 smol      = "2"
 proptest  = "1"
+# The NO RECONSTRUCTION lint (tip_tree_contract.rs) parses `src/`'s own
+# `.rs` files as syntax trees to enumerate GitStorage's/GitReadOnlyView's
+# public methods by structural shape (impl block + fn signature), not by
+# matching literal names -- a textual grep is evaded by a rename, an AST
+# walk over `impl GitStorage` is not, since renaming a method or its
+# containing module changes neither the type it is inherently implemented
+# on nor the `pub` keyword the check keys on.
+syn       = { version = "2", features = ["full", "visit"] }
+quote     = "1"
