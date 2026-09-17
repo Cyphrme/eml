@@ -188,6 +188,7 @@ fn empty_log_reopens_accepting_either_append() {
         let mut flat_leg = NaryMerkleLog::from_storage(storage_leaf, hashers([0]))
             .await
             .unwrap();
+        let genesis_tip_leaf = flat_leg.storage().tip_tree();
         flat_leg.append_leaf(b"a").await.unwrap();
         assert_eq!(flat_leg.kind(), LogKind::Flat);
 
@@ -209,6 +210,21 @@ fn empty_log_reopens_accepting_either_append() {
         let mut subtree_leg = NaryMerkleLog::from_storage(storage_subtree, hashers([0]))
             .await
             .unwrap();
+        let genesis_tip_subtree = subtree_leg.storage().tip_tree();
+
+        // [EITHER] The word "either" in this test's own name means the two
+        // legs' empty states are the SAME state, not merely two states that
+        // each separately accept one kind -- so the two genesis tips must be
+        // byte-identical before either leg's first append. Restores a
+        // property fd6955c's two-ref re-expression asserted implicitly in
+        // its name but never actually checked (found at this branch's merge
+        // gate, AC17).
+        assert_eq!(
+            genesis_tip_leaf, genesis_tip_subtree,
+            "the two independently-initialized empty logs must be the identical genesis state, \
+             not merely two separate states that happen to each accept one kind"
+        );
+
         subtree_leg
             .append_subtree(&Subtree::Leaf(b"b".to_vec()))
             .await
