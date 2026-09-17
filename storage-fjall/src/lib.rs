@@ -5,19 +5,27 @@
 
 use std::path::Path;
 
-use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
-use polydigest::{AlgorithmMetas, Storage};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions};
+use polydigest::{AlgorithmMetas, Storage, WriteOp};
 
 /// Reserved 9-byte key for log metadata in the `eml_metadata` keyspace.
 ///
 /// All algorithm-epoch keys are exactly 8 bytes (alg_id as big-endian u64), so
-/// this 9-byte key never collides with any valid algorithm entry.
+/// this 9-byte key never collides with any valid algorithm entry. The
+/// trailing byte was the now-dropped kind byte (a log's kind is derived,
+/// never persisted); [`FjallStorage::append_count`] reads only the leading
+/// 8 bytes.
 const LOG_META_KEY: [u8; 9] = *b"_logmeta_";
 
 /// 10-byte key prefix for per-algorithm checkpoint roots in `eml_metadata`.
 ///
 /// Format: `[b'r', b'o', alg_id_be_bytes[0..8]]` — does not collide with the
 /// 8-byte epoch keys or the 9-byte LOG_META_KEY.
+#[allow(
+    dead_code,
+    reason = "unreachable from the crate's own (stubbed) apply() until it lands; the key scheme \
+              itself is unchanged by the operation-enum redesign"
+)]
 fn checkpoint_root_key(alg_id: u64) -> [u8; 10] {
     let mut key = [0u8; 10];
     key[0] = b'r';
@@ -160,14 +168,6 @@ impl FjallStorage {
 impl Storage for FjallStorage {
     type Error = FjallStorageError;
 
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        let key = index.to_be_bytes();
-        self.leaves
-            .insert(key, data)
-            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-        Ok(())
-    }
-
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         let key = index.to_be_bytes();
         let value = self
@@ -198,24 +198,6 @@ impl Storage for FjallStorage {
         }
     }
 
-    async fn store_node(
-        &mut self,
-        alg_id: u64,
-        left: u64,
-        height: u32,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        let mut key = [0u8; 20];
-        key[0..8].copy_from_slice(&alg_id.to_be_bytes());
-        key[8..16].copy_from_slice(&left.to_be_bytes());
-        key[16..20].copy_from_slice(&height.to_be_bytes());
-
-        self.nodes
-            .insert(key, hash)
-            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-        Ok(())
-    }
-
     async fn get_node(
         &self,
         alg_id: u64,
@@ -232,23 +214,6 @@ impl Storage for FjallStorage {
             .get(key)
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(value.map(|bytes| bytes.to_vec()))
-    }
-
-    async fn store_algorithm_meta(
-        &mut self,
-        alg_id: u64,
-        epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        let key = alg_id.to_be_bytes();
-        let mut bytes = Vec::with_capacity(epochs.len() * 16);
-        for &(start, end) in epochs {
-            bytes.extend_from_slice(&start.to_be_bytes());
-            bytes.extend_from_slice(&end.to_be_bytes());
-        }
-        self.metadata
-            .insert(key, bytes)
-            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-        Ok(())
     }
 
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
@@ -300,22 +265,20 @@ impl Storage for FjallStorage {
         Ok(metas)
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+    async fn append_count(&self) -> Result<u64, Self::Error> {
         let value = self
             .metadata
             .get(LOG_META_KEY)
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         match value {
-            None => Ok(None),
+            None => Ok(0),
             Some(bytes) => {
                 if bytes.len() != 9 {
                     return Err(FjallStorageError::MetadataCorruption(
                         "log_meta value must be 9 bytes".to_string(),
                     ));
                 }
-                let count = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-                let kind = bytes[8];
-                Ok(Some((count, kind)))
+                Ok(u64::from_be_bytes(bytes[0..8].try_into().unwrap()))
             },
         }
     }
@@ -340,56 +303,13 @@ impl Storage for FjallStorage {
         Ok(roots)
     }
 
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-        algorithm_metas: &[(u64, &[(u64, u64)])],
-        log_meta: Option<(u64, u8)>,
-        checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
-        let mut batch = self.db.batch();
-
-        for &(index, data) in leaves {
-            let key = index.to_be_bytes();
-            batch.insert(&self.leaves, key, data);
-        }
-
-        for &(alg_id, left, height, hash) in nodes {
-            let mut key = [0u8; 20];
-            key[0..8].copy_from_slice(&alg_id.to_be_bytes());
-            key[8..16].copy_from_slice(&left.to_be_bytes());
-            key[16..20].copy_from_slice(&height.to_be_bytes());
-            batch.insert(&self.nodes, key, hash);
-        }
-
-        for &(alg_id, epochs) in algorithm_metas {
-            let key = alg_id.to_be_bytes();
-            let mut bytes = Vec::with_capacity(epochs.len() * 16);
-            for &(start, end) in epochs {
-                bytes.extend_from_slice(&start.to_be_bytes());
-                bytes.extend_from_slice(&end.to_be_bytes());
-            }
-            batch.insert(&self.metadata, key, bytes);
-        }
-
-        if let Some((count, kind)) = log_meta {
-            let mut value = [0u8; 9];
-            value[0..8].copy_from_slice(&count.to_be_bytes());
-            value[8] = kind;
-            batch.insert(&self.metadata, LOG_META_KEY, value);
-        }
-
-        for &(alg_id, root) in checkpoint_roots {
-            let key = checkpoint_root_key(alg_id);
-            batch.insert(&self.metadata, key, root);
-        }
-
-        batch
-            .durability(Some(PersistMode::SyncAll))
-            .commit()
-            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-
-        Ok(())
+    async fn apply(&mut self, _ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
+        // Deliberately unimplemented: the operation-enum write path (head's
+        // ruling 2026-09-17) has no landed implementation on this backend
+        // yet. The previous five-parameter `write_batch` assembly this file
+        // held is gone with it rather than left as dead code nothing calls
+        // -- see `git log` for that version if it is useful as a starting
+        // point.
+        unimplemented!("FjallStorage::apply: the operation-enum write path is not implemented yet")
     }
 }
