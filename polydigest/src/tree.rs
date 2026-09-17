@@ -475,6 +475,10 @@ impl<S: Storage> NaryMerkleLog<S> {
     }
 
     /// Whether this log uses flat leaf or subtree appends.
+    ///
+    /// At `count() == 0` there is no kind yet -- either value is equally
+    /// valid, since nothing has committed either way and the first append,
+    /// whichever shape it takes, is what actually binds it.
     #[must_use]
     pub fn kind(&self) -> LogKind {
         self.kind
