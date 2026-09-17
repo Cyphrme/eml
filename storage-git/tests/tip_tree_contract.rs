@@ -1182,93 +1182,90 @@ fn history_independence_reopen_midway_matches_straight_through_subtree_across_ar
 // ============================================================================
 // 7. CANONICAL SIZE ZERO
 //
-// The spec's SG9 states that at n == 0, `meta.kind` is fixed to the
-// canonical value 0x00 for every log, independent of whether it is a fresh
-// log or an empty-seal resume -- every `polydigest` accessor is
-// observationally identical between the two at count 0 (`kind()`'s only
-// effect gates `flat_leaf_count`/`subtree_leaf_count`, both 0 regardless of
-// kind at count 0; `begin_flat`/`begin_subtree`'s own conflict check is
-// itself count>0-gated). The write side was never made to honor this:
-// a fresh log's `C(0)` carries kind 0, a resume from an empty seal commits
-// kind 1, and identical (arity, count=0, key set) content therefore gets
-// two different tree ids -- a history-independence gap at exactly the one
-// size every log passes through.
+// Restated per the head's ruling (2026-09-17, requirement F): the previous
+// version of this property compared a FRESH log (algorithm 0 registered,
+// one `e/` entry) against a resume from an EMPTY seal -- but
+// `NaryMerkleLog::resume` carries no algorithm into its own `algs` map for a
+// seal at tree size 0 (`tree.rs::resume`'s own doc comment: "a virgin resume
+// ... carries no algorithm into its own algs map"), so that comparison's two
+// sides never had identical content in the first place: one has algorithm
+// 0's epoch entry, the other has none at all. With kind derived rather than
+// stored, there is no size-0 kind-byte divergence left to canonicalize away
+// -- the property worth stating instead is the general one requirement F
+// names: two logs with IDENTICAL content (the same algorithms registered,
+// count 0) commit the identical tree however that content was reached.
 // ============================================================================
 
-/// [CANONICAL SIZE ZERO] RED at 60f93fe: a fresh log and a log
-/// resumed from an empty seal, both at count 0 with algorithm 0 the only
-/// registered algorithm, must commit the identical `C(0)` -- kind is
-/// observationally meaningless at count 0, so encoding the caller's
-/// requested kind there makes two provenance-different-but-content-
-/// identical logs diverge for no benefit. Once each takes one real forward
-/// step (a flat leaf vs. a forward subtree leaf), the trees MUST
-/// (correctly) diverge: kind genuinely distinguishes history once count
-/// exceeds 0, so this canonicalization must never bleed forward past it.
+/// [CANONICAL SIZE ZERO] Two count-0 checkpoints with the identical
+/// registered-algorithm content -- one reached through
+/// `NaryMerkleLog::new`'s eager registration, the other through a single
+/// direct `Storage::apply(&[WriteOp::AddAlgorithm])` call that never went
+/// through `NaryMerkleLog` at all -- must commit the identical `C(0)`.
+/// Once each takes one real forward step, the trees MUST (correctly)
+/// diverge: history independence holds exactly at identical content, never
+/// as a blanket "every count-0 tree is the same" rule.
 #[test]
-fn canonical_size_zero_tree_is_independent_of_requested_kind() {
+fn identical_registered_algorithm_content_at_count_zero_yields_the_identical_tree() {
     smol::block_on(async {
         let k = 2u64;
 
-        // A fresh log: `NaryMerkleLog::new` eagerly registers algorithm 0,
-        // writing `meta` at count 0 with kind fixed at its default (0).
-        let (_dir_fresh, repo_fresh) = init_repo(HashKind::Sha1);
-        let staging_fresh = "refs/eml/storage/canonical-zero/fresh";
-        let fresh_storage = GitStorage::new(repo_fresh.clone(), staging_fresh, k).unwrap();
-        let mut fresh_log =
-            NaryMerkleLog::new(fresh_storage, Box::new(WideHasher), TreeConfig { arity: k })
-                .await
-                .unwrap();
-
-        // A log resumed from an EMPTY seal: `NaryMerkleLog::resume` always
-        // writes `log_meta = Some((size, LogKind::Subtree.to_byte()))`, even
-        // at size 0 -- the exact divergence this test pins.
-        let empty_src = NaryMerkleLog::new(
-            MemoryStorage::new(),
+        // Side A: a fresh log. `NaryMerkleLog::new` eagerly registers
+        // algorithm 0 with epoch [(0, MAX)] at count 0.
+        let (_dir_a, repo_a) = init_repo(HashKind::Sha1);
+        let staging_a = "refs/eml/storage/canonical-zero/via-new";
+        let mut log_a = NaryMerkleLog::new(
+            GitStorage::new(repo_a.clone(), staging_a, k).unwrap(),
             Box::new(WideHasher),
             TreeConfig { arity: k },
         )
         .await
         .unwrap();
-        let empty_sealed = empty_src.seal().await.unwrap();
 
-        let (_dir_resumed, repo_resumed) = init_repo(HashKind::Sha1);
-        let staging_resumed = "refs/eml/storage/canonical-zero/resumed";
-        let resumed_storage = GitStorage::new(repo_resumed.clone(), staging_resumed, k).unwrap();
-        let mut resumed_log = NaryMerkleLog::resume(
-            &empty_sealed,
-            resumed_storage,
-            vec![(0, Box::new(WideHasher) as Box<dyn Hasher>)],
-        )
-        .await
-        .unwrap();
-
-        let tip_fresh = ref_target(&repo_fresh.to_thread_local(), staging_fresh)
-            .expect("a fresh log with algorithm 0 registered must have a tip at count 0");
-        let tip_resumed = ref_target(&repo_resumed.to_thread_local(), staging_resumed)
-            .expect("a resume from an empty seal must commit a genesis tree at count 0");
-        assert_eq!(
-            tip_fresh, tip_resumed,
-            "CANONICAL SIZE ZERO: a fresh log and a resume from an empty seal, both at count 0 \
-             with only algorithm 0 registered, must commit the identical C(0) regardless of the \
-             requested kind byte"
-        );
-
-        // One real forward step each -- the trees must now (correctly)
-        // diverge: kind is no longer observationally meaningless once count
-        // exceeds 0.
-        fresh_log.append_leaf(b"x").await.unwrap();
-        resumed_log
-            .append_subtree(&Subtree::Leaf(b"x".to_vec()))
+        // Side B: the identical content -- algorithm 0, epoch [(0, MAX)],
+        // count 0 -- reached by one direct `apply` call against raw
+        // `GitStorage`, bypassing `NaryMerkleLog` entirely.
+        let (_dir_b, repo_b) = init_repo(HashKind::Sha1);
+        let staging_b = "refs/eml/storage/canonical-zero/via-direct-apply";
+        let mut storage_b = GitStorage::new(repo_b.clone(), staging_b, k).unwrap();
+        storage_b
+            .apply(&[WriteOp::AddAlgorithm {
+                alg_id: 0,
+                epochs: &[(0, u64::MAX)],
+            }])
             .await
             .unwrap();
 
-        let tip_fresh_after = ref_target(&repo_fresh.to_thread_local(), staging_fresh).unwrap();
-        let tip_resumed_after =
-            ref_target(&repo_resumed.to_thread_local(), staging_resumed).unwrap();
+        let tip_a = ref_target(&repo_a.to_thread_local(), staging_a)
+            .expect("side A must have a tip at count 0");
+        let tip_b = ref_target(&repo_b.to_thread_local(), staging_b)
+            .expect("side B must have a tip at count 0");
+        assert_eq!(
+            tip_a, tip_b,
+            "CANONICAL SIZE ZERO: identical registered-algorithm content at count 0 must commit \
+             the identical C(0) regardless of provenance (via NaryMerkleLog::new vs. a direct \
+             apply call)"
+        );
+
+        // One real forward step each -- the trees must now (correctly)
+        // diverge: a flat leaf append is different content from no append
+        // at all.
+        log_a.append_leaf(b"x").await.unwrap();
+        storage_b
+            .apply(&[WriteOp::AppendLeaf {
+                at: 0,
+                data: b"y",
+                nodes: &[],
+                checkpoint_roots: &[],
+            }])
+            .await
+            .unwrap();
+
+        let tip_a_after = ref_target(&repo_a.to_thread_local(), staging_a).unwrap();
+        let tip_b_after = ref_target(&repo_b.to_thread_local(), staging_b).unwrap();
         assert_ne!(
-            tip_fresh_after, tip_resumed_after,
-            "kind must genuinely distinguish histories once count exceeds 0 -- the size-zero \
-             canonicalization must not bleed forward"
+            tip_a_after, tip_b_after,
+            "different leaf content at count 1 must diverge -- identical-content canonicalization \
+             is not a blanket rule"
         );
     });
 }
