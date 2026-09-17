@@ -215,6 +215,11 @@ pub trait Storage: Send + Sync {
     /// The implementation MUST guarantee all-or-nothing semantics: a crash
     /// between any two ops, or between any two of one op's own component
     /// writes, must leave no partial state.
+    ///
+    /// The implementation MUST return an error and MUST NOT panic when a
+    /// variant's precondition is violated -- an unregistered algorithm
+    /// removed, a duplicate registration, or an append whose position is
+    /// not the current count.
     fn apply(
         &mut self,
         ops: &[WriteOp<'_>],
