@@ -1,45 +1,399 @@
 //! Checkpoint-tree assembly: turning a [`polydigest::WriteOp`] batch into a
-//! new `C(n')` tree object (§2, §3).
+//! new `C(n')` tree object (§2, §3), per THE DESIGN (`spike-report.md` and
+//! its prototype `storage-git-keyed/`): a node or leaf is placed at a path
+//! derived *only* from its key, and nothing else is ever recomputed from it
+//! -- no peak/child wiring, no decomposition, no opacity bookkeeping. A
+//! write adds exactly the keys it is given, with nothing wired or carried
+//! forward by decision.
 //!
-//! Deliberately unimplemented (head's ruling, 2026-09-17): the operation
-//! enum, the dropped kind byte, and the readable top-level names (`nodes`/
-//! `leaves`/`epochs`/`roots` in place of `n`/`l`/`e`/`r`) all land together
-//! in one rewrite of this file, which has no implementation yet. The
-//! previous five-parameter `write_batch` assembly this file held (per-key
-//! `n/l` fan-out, `e`/`r` projection) is gone with it rather than left as
-//! dead code nothing calls -- see `git log` for that version if it is
-//! useful as a starting point.
+//! `meta`/`epochs`/`roots` are the one exception: small, non-key-addressed
+//! metadata that is genuinely mutated (not just appended to) on each write,
+//! so every currently-registered algorithm's `epochs/`/`roots/` entries are
+//! projected forward on every call, touched by this batch or not -- the
+//! same freshening (SG22) a leaf or node write gets, and the shape
+//! `gc_safety.rs`'s own acceptance test pins.
+//!
+//! The whole batch is applied through one [`gix::object::tree::Editor`]
+//! session (every ancestor a call's ops touch more than once is written to
+//! the object database exactly once, on the single final `write()`, SG18a).
+//! The detached, unvalidated raw editor is used deliberately for that final
+//! write -- the higher-level wrapper's `write()` re-validates every entry
+//! of every changed tree on every call (an `objects.has()` existence probe
+//! per entry, scaling with bucket width), which the spike measured as
+//! slower wall-clock than a per-key write despite writing fewer objects;
+//! every entry upserted here was already produced by this crate's own
+//! [`crate::gitutil::write_blob`] a few lines above, so that validation is
+//! redundant for this crate's own writes.
+
+use std::collections::{HashMap, HashSet};
 
 use gix::ObjectId;
+use gix::objs::WriteTo as _;
+use gix::objs::tree::EntryKind;
+use polydigest::WriteOp;
 
 use crate::error::GitStorageError as Error;
+use crate::gitutil;
+use crate::layout::{self, hex2, hex16, trimmed_key_segments};
+
+fn invalid(msg: impl Into<String>) -> Error {
+    Error::InvalidOperation(msg.into())
+}
+
+fn corrupt(msg: impl Into<String>) -> Error {
+    Error::Corruption(msg.into())
+}
+
+fn git_err(e: impl std::fmt::Display) -> Error {
+    Error::Git(e.to_string())
+}
 
 /// The result of assembling and writing a new `C(n')`.
 pub(crate) struct Applied {
     pub tree_id: ObjectId,
     pub count: u64,
+    /// Whether `C(n')` has any `leaves/` entry at all -- the signal
+    /// [`crate::GitStorage::metadata`]/[`crate::GitReadOnlyView::metadata`]
+    /// derive `LogKind` from, carried forward here so neither has to
+    /// re-walk the tree to answer it.
+    pub has_leaves: bool,
 }
 
-/// The instance's committed state as of its last observed write. Unread by
-/// [`apply`]'s stub body; a real implementation reads both fields to decide
-/// what to project forward.
+/// The instance's committed state as of its last observed write: every
+/// field [`apply`] reads once and projects forward (unless this write
+/// replaces it).
 #[derive(Clone, Copy)]
-#[allow(dead_code, reason = "read by apply() once the write path lands")]
 pub(crate) struct OldState {
     pub tree: Option<ObjectId>,
     pub count: u64,
+    pub has_leaves: bool,
+}
+
+fn node_path(alg_id: u64, height: u32, left: u64) -> String {
+    let mut segs = vec!["nodes".to_string(), hex16(alg_id), hex2(u64::from(height))];
+    segs.extend(trimmed_key_segments(left));
+    segs.join("/")
+}
+
+fn leaf_path(index: u64) -> String {
+    let mut segs = vec!["leaves".to_string()];
+    segs.extend(trimmed_key_segments(index));
+    segs.join("/")
+}
+
+fn epochs_path(alg_id: u64) -> String {
+    format!("epochs/{}", hex16(alg_id))
+}
+
+fn roots_path(alg_id: u64) -> String {
+    format!("roots/{}", hex16(alg_id))
+}
+
+/// Whether `alg_id` already has an `epochs/` entry in `tree` -- the
+/// "already registered" oracle [`apply`]'s precondition checks read.
+fn epochs_entry_exists(
+    repo: &gix::Repository,
+    tree: Option<ObjectId>,
+    alg_id: u64,
+) -> Result<bool, Error> {
+    let Some(tree) = tree else {
+        return Ok(false);
+    };
+    let Some(epochs_tree) = gitutil::find_entry(repo, tree, "epochs")? else {
+        return Ok(false);
+    };
+    Ok(gitutil::find_entry(repo, epochs_tree, &hex16(alg_id))?.is_some())
+}
+
+/// Every algorithm id `tree` has an `epochs/` entry for -- the base set
+/// [`apply`]'s final refresh pass projects forward, whether this batch's
+/// ops touched them or not.
+fn known_algorithm_ids(repo: &gix::Repository, tree: Option<ObjectId>) -> Result<Vec<u64>, Error> {
+    let Some(tree) = tree else {
+        return Ok(Vec::new());
+    };
+    let Some(epochs_tree) = gitutil::find_entry(repo, tree, "epochs")? else {
+        return Ok(Vec::new());
+    };
+    gitutil::read_tree(repo, epochs_tree)?
+        .into_iter()
+        .map(|e| {
+            layout::parse_hex16(&e.filename.to_string()).ok_or_else(|| {
+                corrupt(format!(
+                    "epochs/ entry {} is not a hex(alg_id,16) name",
+                    e.filename
+                ))
+            })
+        })
+        .collect()
+}
+
+/// Read and decode one algorithm's currently-stored `epochs/hex16(alg_id)`
+/// blob from `tree` -- the "carry forward unchanged" source for an
+/// algorithm this batch's ops never mention.
+fn read_stored_epochs(
+    repo: &gix::Repository,
+    tree: Option<ObjectId>,
+    alg_id: u64,
+) -> Result<Vec<(u64, u64)>, Error> {
+    let Some(tree) = tree else {
+        return Err(corrupt(format!(
+            "algorithm {alg_id} has no epochs/ entry to carry forward (no prior tree)"
+        )));
+    };
+    let epochs_tree = gitutil::find_entry(repo, tree, "epochs")?
+        .ok_or_else(|| corrupt("tree has no epochs/ section"))?;
+    let blob_id = gitutil::find_entry(repo, epochs_tree, &hex16(alg_id))?.ok_or_else(|| {
+        corrupt(format!(
+            "algorithm {alg_id} has no epochs/{} entry to carry forward",
+            hex16(alg_id)
+        ))
+    })?;
+    layout::decode_epochs(&gitutil::read_blob(repo, blob_id)?)
+}
+
+/// Read one algorithm's currently-stored `roots/hex16(alg_id)` blob from
+/// `tree`, or `None` if it has none (never registered a root yet, or
+/// already inactive there).
+fn read_stored_root(
+    repo: &gix::Repository,
+    tree: Option<ObjectId>,
+    alg_id: u64,
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some(tree) = tree else { return Ok(None) };
+    let Some(roots_tree) = gitutil::find_entry(repo, tree, "roots")? else {
+        return Ok(None);
+    };
+    match gitutil::find_entry(repo, roots_tree, &hex16(alg_id))? {
+        Some(id) => Ok(Some(gitutil::read_blob(repo, id)?)),
+        None => Ok(None),
+    }
 }
 
 /// Assemble and write the new checkpoint tree for one atomic batch of
 /// [`polydigest::WriteOp`]s. Does not touch the staging ref; the caller
 /// performs the compare-and-swap once this returns.
 pub(crate) fn apply(
-    _repo: &gix::Repository,
-    _arity: u64,
-    _old: OldState,
-    _ops: &[polydigest::WriteOp<'_>],
+    repo: &gix::Repository,
+    arity: u64,
+    old: OldState,
+    ops: &[WriteOp<'_>],
 ) -> Result<Applied, Error> {
-    unimplemented!(
-        "storage-git::build::apply: the operation-enum write path is not implemented yet"
-    )
+    let root_tree = match old.tree {
+        Some(id) => repo.find_tree(id).map_err(git_err)?,
+        None => repo.empty_tree(),
+    };
+    let mut editor = root_tree.edit().map_err(git_err)?;
+
+    let mut count = old.count;
+    let mut has_leaves = old.has_leaves;
+
+    // Per-algorithm effects this batch's ops carry, collected as the ops
+    // are walked and applied to `epochs`/`roots` in one final pass below --
+    // deferred because that pass must know every OTHER currently-known
+    // algorithm too (to refresh their unchanged entries, SG22), which is
+    // only knowable once this batch's own registrations are complete.
+    let mut registered_this_batch: HashSet<u64> = HashSet::new();
+    let mut epoch_overrides: HashMap<u64, Vec<(u64, u64)>> = HashMap::new();
+    let mut root_overrides: HashMap<u64, Vec<u8>> = HashMap::new();
+    let mut frozen_this_batch: HashSet<u64> = HashSet::new();
+
+    let known = |registered_this_batch: &HashSet<u64>, alg_id: u64| -> Result<bool, Error> {
+        Ok(registered_this_batch.contains(&alg_id) || epochs_entry_exists(repo, old.tree, alg_id)?)
+    };
+
+    for op in ops {
+        match op {
+            WriteOp::AppendLeaf {
+                at,
+                data,
+                nodes,
+                checkpoint_roots,
+            } => {
+                if *at != count {
+                    return Err(invalid(format!(
+                        "AppendLeaf at position {at}, expected the current count {count}"
+                    )));
+                }
+                let blob = gitutil::write_blob(repo, data)?;
+                editor
+                    .upsert(leaf_path(*at).as_str(), EntryKind::Blob, blob)
+                    .map_err(git_err)?;
+                for n in *nodes {
+                    let node_blob = gitutil::write_blob(repo, n.hash)?;
+                    editor
+                        .upsert(
+                            node_path(n.alg_id, n.height, n.left).as_str(),
+                            EntryKind::Blob,
+                            node_blob,
+                        )
+                        .map_err(git_err)?;
+                }
+                for r in *checkpoint_roots {
+                    root_overrides.insert(r.alg_id, r.root.to_vec());
+                }
+                count += 1;
+                has_leaves = true;
+            },
+            WriteOp::AppendSubtree {
+                at,
+                nodes,
+                checkpoint_roots,
+            } => {
+                if *at != count {
+                    return Err(invalid(format!(
+                        "AppendSubtree at position {at}, expected the current count {count}"
+                    )));
+                }
+                for n in *nodes {
+                    let node_blob = gitutil::write_blob(repo, n.hash)?;
+                    editor
+                        .upsert(
+                            node_path(n.alg_id, n.height, n.left).as_str(),
+                            EntryKind::Blob,
+                            node_blob,
+                        )
+                        .map_err(git_err)?;
+                }
+                for r in *checkpoint_roots {
+                    root_overrides.insert(r.alg_id, r.root.to_vec());
+                }
+                count += 1;
+            },
+            WriteOp::AddAlgorithm { alg_id, epochs } => {
+                if known(&registered_this_batch, *alg_id)? {
+                    return Err(invalid(format!("algorithm {alg_id} is already registered")));
+                }
+                epoch_overrides.insert(*alg_id, epochs.to_vec());
+                registered_this_batch.insert(*alg_id);
+            },
+            WriteOp::RemoveAlgorithm {
+                alg_id,
+                epochs,
+                frozen_root: _,
+            } => {
+                if !known(&registered_this_batch, *alg_id)? {
+                    return Err(invalid(format!("algorithm {alg_id} is not registered")));
+                }
+                // `frozen_root` is deliberately never written anywhere: a
+                // frozen algorithm's roots/ entry -- valid only for
+                // algorithms active at this exact size (SG14) -- is
+                // retired at the freeze point itself; the terminal state
+                // this coordinate held is still reachable through the
+                // nodes/ digests this tree keeps forever (§2.5).
+                epoch_overrides.insert(*alg_id, epochs.to_vec());
+                frozen_this_batch.insert(*alg_id);
+                root_overrides.remove(alg_id);
+            },
+            WriteOp::ResumeAlgorithm {
+                alg_id,
+                epochs,
+                nodes,
+                resumed_root,
+            } => {
+                if !known(&registered_this_batch, *alg_id)? {
+                    return Err(invalid(format!("algorithm {alg_id} is not registered")));
+                }
+                epoch_overrides.insert(*alg_id, epochs.to_vec());
+                for n in *nodes {
+                    let node_blob = gitutil::write_blob(repo, n.hash)?;
+                    editor
+                        .upsert(
+                            node_path(n.alg_id, n.height, n.left).as_str(),
+                            EntryKind::Blob,
+                            node_blob,
+                        )
+                        .map_err(git_err)?;
+                }
+                root_overrides.insert(*alg_id, resumed_root.to_vec());
+            },
+            WriteOp::SeedFrontier { size, algorithms } => {
+                count = *size;
+                for seed in *algorithms {
+                    if known(&registered_this_batch, seed.alg_id)? {
+                        return Err(invalid(format!(
+                            "algorithm {} is already registered",
+                            seed.alg_id
+                        )));
+                    }
+                    epoch_overrides.insert(seed.alg_id, seed.epochs.to_vec());
+                    for n in seed.nodes {
+                        let node_blob = gitutil::write_blob(repo, n.hash)?;
+                        editor
+                            .upsert(
+                                node_path(n.alg_id, n.height, n.left).as_str(),
+                                EntryKind::Blob,
+                                node_blob,
+                            )
+                            .map_err(git_err)?;
+                    }
+                    root_overrides.insert(seed.alg_id, seed.seeded_root.to_vec());
+                    registered_this_batch.insert(seed.alg_id);
+                }
+            },
+        }
+    }
+
+    // Project epochs/ and roots/ forward for every currently-known
+    // algorithm -- old ones this batch never mentioned, plus any it just
+    // registered -- applying this batch's own overrides where it has one.
+    // This refreshes an otherwise-unchanged blob's object on every write
+    // (SG22), exactly as every leaf/node write already does.
+    let mut all_ids = known_algorithm_ids(repo, old.tree)?;
+    for &id in &registered_this_batch {
+        if !all_ids.contains(&id) {
+            all_ids.push(id);
+        }
+    }
+
+    for alg_id in all_ids {
+        let epochs = match epoch_overrides.get(&alg_id) {
+            Some(e) => e.clone(),
+            None => read_stored_epochs(repo, old.tree, alg_id)?,
+        };
+        let projected = layout::epochs_at(&epochs, count).ok_or_else(|| {
+            corrupt(format!(
+                "algorithm {alg_id}'s epoch history does not cover size {count}"
+            ))
+        })?;
+        let active = layout::is_active_at(&projected);
+        let epochs_blob = gitutil::write_blob(repo, &layout::encode_epochs(&projected))?;
+        editor
+            .upsert(epochs_path(alg_id).as_str(), EntryKind::Blob, epochs_blob)
+            .map_err(git_err)?;
+
+        let keep_root = !frozen_this_batch.contains(&alg_id) && active && count > 0;
+        if keep_root {
+            let root = match root_overrides.get(&alg_id) {
+                Some(r) => Some(r.clone()),
+                None => read_stored_root(repo, old.tree, alg_id)?,
+            };
+            if let Some(root) = root {
+                let root_blob = gitutil::write_blob(repo, &root)?;
+                editor
+                    .upsert(roots_path(alg_id).as_str(), EntryKind::Blob, root_blob)
+                    .map_err(git_err)?;
+            }
+        } else {
+            editor.remove(roots_path(alg_id).as_str()).map_err(git_err)?;
+        }
+    }
+
+    let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, count))?;
+    editor
+        .upsert("meta", EntryKind::Blob, meta_blob)
+        .map_err(git_err)?;
+
+    let mut raw = editor.detach();
+    let tree_id: ObjectId = raw.write(|tree| {
+        let mut buf = Vec::new();
+        tree.write_to(&mut buf).map_err(git_err)?;
+        gitutil::write_object(repo, gix::objs::Kind::Tree, &buf)
+    })?;
+
+    Ok(Applied {
+        tree_id,
+        count,
+        has_leaves,
+    })
 }

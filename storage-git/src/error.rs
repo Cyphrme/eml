@@ -63,6 +63,13 @@ pub enum GitStorageError {
     /// condition had not cleared.
     #[error("ref update transient failure (gave up retrying): {0}")]
     RefUpdateTransient(String),
+
+    /// A [`polydigest::WriteOp`] handed to [`crate::GitStorage::apply`]
+    /// violated its own precondition: an append at a position other than
+    /// the current count, a duplicate algorithm registration, or a
+    /// removal/resume naming an algorithm this store has never registered.
+    #[error("invalid apply operation: {0}")]
+    InvalidOperation(String),
 }
 
 impl GitStorageError {
