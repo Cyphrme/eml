@@ -74,7 +74,7 @@ struct OwnedAlgorithmSeed {
     alg_id: u64,
     epochs: Vec<(u64, u64)>,
     nodes: Vec<(u64, u32, Vec<u8>)>,
-    checkpoint_root: Vec<u8>,
+    seeded_root: Vec<u8>,
 }
 
 impl<S: Storage> NaryMerkleLog<S> {
@@ -227,7 +227,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 alg_id: *alg_id,
                 epochs,
                 nodes: alg_nodes,
-                checkpoint_root: root,
+                seeded_root: root,
             });
             algs.insert(*alg_id, view);
         }
@@ -253,7 +253,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 alg_id: seed.alg_id,
                 epochs: seed.epochs.as_slice(),
                 nodes: nodes.as_slice(),
-                checkpoint_root: seed.checkpoint_root.as_slice(),
+                seeded_root: seed.seeded_root.as_slice(),
             })
             .collect();
 
@@ -633,7 +633,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             .apply(&[WriteOp::RemoveAlgorithm {
                 alg_id,
                 epochs: &new_epochs,
-                checkpoint_root: frozen_root.as_slice(),
+                frozen_root: frozen_root.as_slice(),
             }])
             .await
             .map_err(LogError::Storage)?;
@@ -727,7 +727,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                 alg_id,
                 epochs: &new_epochs,
                 nodes: &nodes_ref,
-                checkpoint_root: resumed_root.as_slice(),
+                resumed_root: resumed_root.as_slice(),
             }])
             .await
             .map_err(LogError::Storage)?;

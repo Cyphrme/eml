@@ -81,8 +81,11 @@ pub struct AlgorithmSeed<'a> {
     pub epochs: &'a [(u64, u64)],
     /// The frontier peaks to materialize as nodes (active ranges only).
     pub nodes: &'a [NodeWrite<'a>],
-    /// The checkpoint root folded from the seeded frontier.
-    pub checkpoint_root: &'a [u8],
+    /// The checkpoint root folded from the seeded frontier. Named distinctly
+    /// from [`AppendLeaf`](WriteOp::AppendLeaf)/[`AppendSubtree`](WriteOp::AppendSubtree)'s
+    /// plural `checkpoint_roots` so the two cannot be typo'd into each other
+    /// at a call site.
+    pub seeded_root: &'a [u8],
 }
 
 /// One atomic storage mutation. Every field on every variant is always
@@ -127,8 +130,10 @@ pub enum WriteOp<'a> {
         alg_id: u64,
         /// Its epoch history with the final epoch now closed.
         epochs: &'a [(u64, u64)],
-        /// The checkpoint root at the freeze point.
-        checkpoint_root: &'a [u8],
+        /// The checkpoint root at the freeze point. Named distinctly from
+        /// the append variants' plural `checkpoint_roots` so the two cannot
+        /// be typo'd into each other at a call site.
+        frozen_root: &'a [u8],
     },
     /// Reactivate a previously frozen algorithm, replaying its frontier
     /// forward across the gap.
@@ -139,8 +144,10 @@ pub enum WriteOp<'a> {
         epochs: &'a [(u64, u64)],
         /// Any mixed (frozen/live) nodes reconstructed across the gap.
         nodes: &'a [NodeWrite<'a>],
-        /// The checkpoint root after reactivation.
-        checkpoint_root: &'a [u8],
+        /// The checkpoint root after reactivation. Named distinctly from
+        /// the append variants' plural `checkpoint_roots` so the two cannot
+        /// be typo'd into each other at a call site.
+        resumed_root: &'a [u8],
     },
     /// Seed one or more algorithms' genesis frontier state atomically, at
     /// caller-chosen size `size` -- [`crate::tree::NaryMerkleLog::resume`]'s
