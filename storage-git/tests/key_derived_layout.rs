@@ -65,7 +65,7 @@ fn assert_layout_matches_written_keys(
     tip: gix::ObjectId,
     written: &Written,
 ) {
-    let n_paths: HashSet<String> = match common::find_child(repo, tip, "n") {
+    let n_paths: HashSet<String> = match common::find_child(repo, tip, "nodes") {
         Some(n) => common::enumerate_full_paths(repo, n.oid),
         None => HashSet::new(),
     };
@@ -83,7 +83,7 @@ fn assert_layout_matches_written_keys(
         n_paths.difference(&expected_n_paths).collect::<Vec<_>>()
     );
 
-    let l_paths: HashSet<String> = match common::find_child(repo, tip, "l") {
+    let l_paths: HashSet<String> = match common::find_child(repo, tip, "leaves") {
         Some(l) => common::enumerate_full_paths(repo, l.oid),
         None => HashSet::new(),
     };
@@ -106,7 +106,9 @@ fn assert_layout_matches_written_keys(
 /// namespaces (`n`, `l`) and named metadata (`meta`, `e`, `r`) -- an
 /// exhaustive allow-list, not a sample.
 fn assert_top_level_is_exactly_namespaces_and_metadata(repo: &gix::Repository, tip: gix::ObjectId) {
-    let allowed: HashSet<&str> = ["n", "l", "meta", "e", "r"].into_iter().collect();
+    let allowed: HashSet<&str> = ["nodes", "leaves", "meta", "epochs", "roots"]
+        .into_iter()
+        .collect();
     for entry in common::read_tree_entries(repo, tip) {
         assert!(
             allowed.contains(entry.name.as_str()),
