@@ -1,9 +1,7 @@
 //! Acceptance tests for §2.4's position-lookup algorithm (SG8), from
 //! `docs/specs/storage-git.md` alone.
 //!
-//! Retired from this file, with justification (per the merge-gate dispatch,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
-//! SG2's peak index (`peaks/hex(j,2)/hex(q,2)` MUST equal
+//! Retired from this file: SG2's peak index (`peaks/hex(j,2)/hex(q,2)` MUST equal
 //! `frontier_for_size`) is a claim about the peak-and-children hierarchy the
 //! ratified key-derived layout ("THE DESIGN", `spike-report.md` and its
 //! prototype `storage-git-keyed/`) eliminates outright -- there is no

@@ -55,7 +55,7 @@ fn sg12_meta_blob_is_11_exact_bytes_with_no_version_byte() {
 /// `AlgView::epochs_at(n)` applied to the algorithm's full, currently-known
 /// epoch history.
 ///
-/// Rewritten in this dispatch to stop calling `tree_at` (deleted outright
+/// Rewritten to stop calling `tree_at` (deleted outright
 /// per the head's 2026-09-16 design ruling): each checked size's tree is
 /// now recorded straight off the staging ref at the exact moment its epoch
 /// state stops changing -- right after `new_log`'s own genesis write (n=0),
@@ -207,9 +207,7 @@ fn sg14_roots_absent_for_inactive_algorithm() {
 /// [SG16] A leaf's stored bytes MUST be byte-identical to the argument
 /// `store_leaf` received, with no transformation, compression, or framing.
 ///
-/// Rewritten (per the merge-gate dispatch,
-/// `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`)
-/// against the ratified key-derived layout's own leaf path ("THE DESIGN",
+/// Rewritten against the ratified key-derived layout's own leaf path ("THE DESIGN",
 /// `spike-report.md` and its prototype `storage-git-keyed/`:
 /// `l/<byte1-be-trim(index)>`) instead of the retired `peaks/hex(0,2)/
 /// hex(i,2)/leaf` navigation -- the claim under test (byte-for-byte

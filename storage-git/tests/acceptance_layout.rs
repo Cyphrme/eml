@@ -2,13 +2,11 @@
 //! SG5 (entry modes) and the observable consequence of SG6/SG7 (canonical,
 //! collision-free sibling order).
 //!
-//! Retired from this file, with justification (per the merge-gate dispatch,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
-//! SG1's "exactly four top-level entries, one of them `peaks`" and SG4's
-//! materialized-vs-opaque node shape, both navigated via
-//! `peaks/hex(height,2)/hex(q,2)/...` (`resolve_peak`, below no longer),
-//! encode the peak-and-children hierarchy the ratified key-derived layout
-//! ("THE DESIGN", `spike-report.md` and its prototype
+//! Retired from this file: SG1's "exactly four top-level entries, one of
+//! them `peaks`" and SG4's materialized-vs-opaque node shape, both
+//! navigated via `peaks/hex(height,2)/hex(q,2)/...` (`resolve_peak`, below
+//! no longer), encode the peak-and-children hierarchy the ratified
+//! key-derived layout ("THE DESIGN", `spike-report.md` and its prototype
 //! `storage-git-keyed/`) eliminates outright ("no peak/child wiring, no
 //! decomposition, no opacity bookkeeping anywhere") -- there is no `peaks/`
 //! tree to navigate under that design, and no materialized/opaque
@@ -16,7 +14,7 @@
 //! entire premise rewritten, not patched. `key_derived_layout.rs`'s
 //! `nodes_and_leaves_sit_exactly_at_their_derived_key_paths` supersedes
 //! SG1's top-level-shape claim with the new design's own (an exhaustive
-//! allow-list over `n`/`l`/`meta`/`e`/`r`), and TT20's completeness property
+//! allow-list over `n`/`l`/`meta`/`e`/`r`), and the completeness property
 //! (`completeness_property.rs`) supersedes SG4's "every digest given is
 //! present" concern with a stronger, MemoryStorage-backed oracle rather
 //! than a peak-shape inspection.
@@ -95,8 +93,8 @@ fn assert_modes_recursive(repo: &gix::Repository, tree: gix::ObjectId) {
 /// writes is byte-lexicographically sorted in git's own canonical order, and
 /// no name collides with or prefixes a sibling's. `storage-git`'s internal
 /// tree-builder (the function SG7 actually names) is a private
-/// implementation detail this suite has no access to (its bodies are
-/// off-limits by dispatch), so this test checks the artifact SG7 exists to
+/// implementation detail this suite deliberately never reads, so this test
+/// checks the artifact SG7 exists to
 /// protect — every tree this layer ever produced, walked recursively — not
 /// SG7's own release-mode-only failure mode against a deliberately
 /// unsorted input, which requires calling the private builder directly.

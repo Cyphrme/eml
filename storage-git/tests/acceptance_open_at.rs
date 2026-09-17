@@ -1,7 +1,7 @@
 //! Acceptance test for §4.4's `open_at(tree)` (SG21), from
 //! `docs/specs/storage-git.md` alone.
 //!
-//! Rewritten in this dispatch to stop calling `tree_at` (deleted outright
+//! Rewritten to stop calling `tree_at` (deleted outright
 //! per the head's 2026-09-16 design ruling -- storage-git never renders or
 //! reconstructs a tree for a past size): each size's tree id is now
 //! recorded directly off the staging ref the instant that size is reached,
@@ -36,8 +36,8 @@ fn sg21_open_at_yields_durable_witness_parity() {
         // could possibly move the log past it.
         //
         // Lint-only fix: a type alias for the (alg, left, height) -> digest
-        // recording, requested by the dispatch that named this file's
-        // clippy::type_complexity lint -- no assertion changes.
+        // recording, silencing a clippy::type_complexity warning -- no
+        // assertion changes.
         type NodeRecording = Vec<((u64, u64, u32), Option<Vec<u8>>)>;
         struct Recorded {
             m: u64,

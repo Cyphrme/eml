@@ -1,9 +1,7 @@
 //! Acceptance tests for resumption refusal and construction-independence,
 //! from `docs/specs/storage-git.md` alone.
 //!
-//! Retired from this file, with justification (per the merge-gate dispatch,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
-//! this file's former header named SG10 (a subtree-kind or resumed node
+//! Retired from this file: this file's former header named SG10 (a subtree-kind or resumed node
 //! MUST be opaque: `digest/` only, no `leaf`/`hex(c,2)` children) and SG11
 //! (opacity is a property of provenance, never the log's `meta.kind` byte)
 //! as what it tests. The ratified key-derived layout ("THE DESIGN",

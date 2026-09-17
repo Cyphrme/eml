@@ -10,8 +10,8 @@
 //! is made, so it carries no storage-git-specific behavior and needs no test
 //! here (its refusal is exercised at the `polydigest` level instead).
 //!
-//! 1. GB71: a node created and folded away within one write -- a chained, double resume triggers it
-//!    -- must not be lost by `storage-git`, unlike the old `inherited/`-archive design. `086c181`
+//! 1. A node created and folded away within one write -- a chained, double resume triggers it --
+//!    must not be lost by `storage-git`, unlike the old `inherited/`-archive design. `086c181`
 //!    (`fix(storage-git): decompose children per slot`) fixed the general case this pins; kept here
 //!    as a regression guard, not as new coverage.
 //! 2. `verify_audit_payload` and `verify_non_divergence` on a resumed log with forward subtree
@@ -61,18 +61,19 @@ async fn seal_mem(n: u64, k: u64) -> polydigest::Sealed {
 }
 
 // ============================================================================
-// 1. GB71: a node created and folded away within one write -- reproduced with `append_subtree`
-//    alone (a resumed log's only forward-append path), via a *double* resume: seal, resume, append
-//    to size 3, reseal from that live frontier, resume a second instance, append once more to size
-//    4. `MemoryStorage` never drops a node it was given, so it is the parity oracle this test's
-//    every assertion is checked against.
+// 1. The double-resume fold defect: a node created and folded away within one write -- reproduced
+//    with `append_subtree` alone (a resumed log's only forward-append path), via a *double* resume:
+//    seal, resume, append to size 3, reseal from that live frontier, resume a second instance,
+//    append once more to size 4. `MemoryStorage` never drops a node it was given, so it is the
+//    parity oracle this test's every assertion is checked against.
 // ============================================================================
 
-/// The double-resume GB71 sequence, applied identically to a git-backed and
-/// a memory-backed log; returns `(git_log, mem_log)` for the caller to
-/// assert against. `_dirs` must be named (not `_`) by the caller so the
-/// temporary repositories outlive the reads.
-async fn run_gb71_sequence() -> (
+/// The double-resume sequence that reproduces the fold defect, applied
+/// identically to a git-backed and a memory-backed log; returns
+/// `(git_log, mem_log)` for the caller to assert against. `_dirs` must be
+/// named (not `_`) by the caller so the temporary repositories outlive the
+/// reads.
+async fn run_double_resume_fold_sequence() -> (
     NaryMerkleLog<GitStorage>,
     NaryMerkleLog<MemoryStorage>,
     Vec<tempfile::TempDir>,
@@ -162,12 +163,12 @@ async fn run_gb71_sequence() -> (
     (git_log2, mem_log2, dirs)
 }
 
-/// GB71: `get_node(0, 3, 0)` -- the just-appended leaf's own coordinate --
+/// `get_node(0, 3, 0)` -- the just-appended leaf's own coordinate --
 /// must read back identically on both backends.
 #[test]
-fn gb71_new_leaf_node_folded_away_within_one_write_matches_memory() {
+fn double_resume_new_leaf_node_folded_away_within_one_write_matches_memory() {
     smol::block_on(async {
-        let (git_log, mem_log, _dirs) = run_gb71_sequence().await;
+        let (git_log, mem_log, _dirs) = run_double_resume_fold_sequence().await;
         let g = git_log.storage().get_node(0, 3, 0).await.unwrap();
         let m = mem_log.storage().get_node(0, 3, 0).await.unwrap();
         assert_eq!(
@@ -177,12 +178,12 @@ fn gb71_new_leaf_node_folded_away_within_one_write_matches_memory() {
     });
 }
 
-/// GB71: a consistency proof from the pre-merge size (3) to the post-merge
+/// A consistency proof from the pre-merge size (3) to the post-merge
 /// size (4) must succeed on both backends alike.
 #[test]
-fn gb71_consistency_proof_across_the_merge_matches_memory() {
+fn double_resume_consistency_proof_across_the_merge_matches_memory() {
     smol::block_on(async {
-        let (git_log, mem_log, _dirs) = run_gb71_sequence().await;
+        let (git_log, mem_log, _dirs) = run_double_resume_fold_sequence().await;
         let g = git_log.consistency_proof_for(0, 3, 4).await;
         let m = mem_log.consistency_proof_for(0, 3, 4).await;
         match (&g, &m) {
@@ -213,8 +214,8 @@ fn gb71_consistency_proof_across_the_merge_matches_memory() {
 //      active_set.contains(&alg_id) => return Ok(false)` -- a false "diverged" verdict, not an
 //      honest failure. This is a `polydigest`-level behavior, identical on both backends, pinned
 //      here as today's actual result rather than the fork's (reverted) `Err` expectation; it is not
-//      a `storage-git` defect, but is flagged in this dispatch's report as a discrepancy worth the
-//      head's attention.
+//      a `storage-git` defect, but is worth flagging as a discrepancy for whoever owns the
+//      log-level combinator.
 //    - a checkpoint-start replay still returns `Err(MissingTrustedRoot)`, never the misleading
 //      `UnknownAlgorithm`, exactly as before.
 // ============================================================================
@@ -307,8 +308,7 @@ fn verify_non_divergence_from_genesis_errors_on_resumed_log_with_forward_leaves(
 /// opaque inherited prefix's missing height-0 nodes as a divergence rather
 /// than surfacing the storage error `verify_non_divergence` does. Pinned as
 /// today's actual, parity-checked behavior -- not endorsed as correct; see
-/// this file's module doc and the dispatch report for the discrepancy this
-/// surfaces.
+/// this file's module doc for the discrepancy this surfaces.
 #[test]
 fn verify_audit_payload_reports_false_verdict_on_resumed_log_with_forward_leaves() {
     smol::block_on(async {

@@ -3,18 +3,16 @@
 //! ever written, by coordinate), one tip ref points DIRECTLY at that tree
 //! object (never a commit), it NEVER creates commits, and it NEVER renders
 //! or reconstructs a tree for a past size -- that reconstruction is exactly
-//! the defect class the merge gate's latest refusal names (RV20/RV21,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-regate-after-revert.md`):
-//! storage making its own commits, and storage rebuilding history it should
-//! simply have kept. None of the properties below calls `tree_at` or
+//! the defect class an earlier revert refusal names: storage making its own
+//! commits, and storage rebuilding history it should simply have kept. None
+//! of the properties below calls `tree_at` or
 //! `register_hasher` -- both scoped to the historical-reconstruction path
 //! [`no_reconstruction_no_public_tree_id_accessor_takes_an_argument`] and
 //! [`no_reconstruction_no_public_api_accepts_a_hasher`] pin as absent, each
 //! by a narrow, named tripwire over the crate's own parsed source (not a
-//! general no-reconstruction guarantee -- see `[TT21]`,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`,
-//! and each test's own doc comment for exactly what it catches and what it
-//! does not) -- and none compares a derived value
+//! general no-reconstruction guarantee -- see each test's own doc comment
+//! for exactly what it catches and what it does not) -- and none compares a
+//! derived value
 //! against another derivation of the same value: every assertion below is
 //! checked against an independent oracle (`MemoryStorage`, a tree id
 //! recorded straight off the ref at write time, or a `git` command run
@@ -22,7 +20,7 @@
 //! itself. That last failure mode is not hypothetical: the previous round's
 //! stability property compared `tree_at` before gc against `tree_at` after
 //! gc -- a reconstruction against a reconstruction -- and was green by
-//! construction (RV6).
+//! construction regardless of whether the design underneath actually held.
 
 mod common;
 
@@ -95,8 +93,7 @@ fn hasher_pairs(ids: impl IntoIterator<Item = u64>) -> Vec<(u64, Box<dyn Hasher>
 // the binary case alone.
 // ============================================================================
 
-/// [NO COMMITS] Mutation demonstrated in this dispatch's report (see the
-/// final turn): wrapping the tip in a `git commit-tree` object inside
+/// [NO COMMITS] Demonstrated by mutation: wrapping the tip in a `git commit-tree` object inside
 /// `GitStorage::write_batch` turns this red immediately, on the very first
 /// write, both by the exhaustive object-type scan and by the per-ref kind
 /// check below.
@@ -223,14 +220,14 @@ fn no_commits_created_and_every_staging_ref_targets_a_tree() {
 // 2. COMPLETENESS
 //
 // An implementation could plausibly drop a digest for every algorithm but
-// the first it happens to handle -- exactly RV21's mutation M2 (dropping
-// internal-node digests for algorithms other than 0 in `resolve_node`),
-// which the gate found `content_addressing.rs`'s own fidelity property (RV6)
-// too narrow to catch: it left `content_addressing` and `resume_forward_leaf`
+// the first it happens to handle -- a defect actually seen once, dropping
+// internal-node digests for algorithms other than 0 in `resolve_node`,
+// which a narrower fidelity property (`content_addressing.rs`) was too
+// narrow to catch: it left `content_addressing` and `resume_forward_leaf`
 // green, and only `differential` caught it. This property widens exactly
 // that gap: every algorithm, every key `MemoryStorage` holds (not merely
 // frontier coordinates), across a double resume, a mid-lifecycle reopen from
-// disk, and gc -- swept across arities 2, 3 and 4 (finding 4).
+// disk, and gc -- swept across arities 2, 3 and 4.
 // ============================================================================
 
 /// Compare `git` against `mem` at every leaf/node key `mem` holds -- an
@@ -255,9 +252,9 @@ async fn assert_completeness(git: &GitStorage, mem: &MemoryStorage, context: &st
     }
 }
 
-/// [COMPLETENESS] Mutation demonstrated in this dispatch's report: skipping
-/// non-zero algorithms in `build::resolve_node`'s digest-map assembly (RV21's
-/// M2) turns this red -- `get_node` for algorithm 1 returns `None` where
+/// [COMPLETENESS] Demonstrated by mutation: skipping
+/// non-zero algorithms in `build::resolve_node`'s digest-map assembly
+/// turns this red -- `get_node` for algorithm 1 returns `None` where
 /// `MemoryStorage` holds a value.
 async fn assert_completeness_across_double_resume(k: u64) {
     // Generation 0: a flat log, algorithm 0 from genesis, algorithm 1
@@ -545,14 +542,13 @@ fn written_is_kept_after_growth_reopen_and_gc() {
 
 /// [WRITTEN IS KEPT] The genesis write of a resume from an EMPTY seal is
 /// preserved exactly the same way -- the case the previous,
-/// reconstruction-based stability property could not even state cleanly
-/// (RV4: a resumed empty log's size-0 tree carried a kind byte only a
+/// reconstruction-based stability property could not even state cleanly (a
+/// resumed empty log's size-0 tree carried a kind byte only a
 /// *reconstruction* ever disagreed with). Recording and checking the tree
 /// the ref actually holds, with no reconstruction involved, needs no such
-/// special case.
-/// [finding 5] Same reopen fix as
+/// special case. Same reopen fix as
 /// [`assert_written_is_kept_after_growth_reopen_and_gc`], for the
-/// resumed-from-empty lifecycle: the reopened handle's [finding 2]
+/// resumed-from-empty lifecycle: the reopened handle's
 /// `tip_tree()` and every leaf it holds are asserted, not discarded.
 async fn assert_written_is_kept_for_a_resume_from_an_empty_seal(k: u64) {
     let src = NaryMerkleLog::new(
@@ -637,11 +633,10 @@ fn written_is_kept_for_a_resume_from_an_empty_seal() {
 // ============================================================================
 // 4. TWO NAMED TRIPWIRES, NOT A NO-RECONSTRUCTION GUARANTEE
 //
-// [TT21] (`.ledger/deposits/git-backend/lead-maintainer/
-// storage-git-tip-tree-gate.md`) found that the two checks below, despite
+// An earlier review found that the two checks below, despite
 // this section's former header calling them "a structural, rename-proof
 // check," catch exactly ONE historical shape each -- not reconstruction in
-// general. `[TT5]` demonstrated eight compiling evasions of the design's
+// general. That review demonstrated eight compiling evasions of the design's
 // own "never renders or reconstructs a tree for a past size" rule that both
 // checks let straight through: a free `pub fn` in a `pub mod` (module
 // privacy gates ordinary item paths, not this lint, which only walks
@@ -660,10 +655,12 @@ fn written_is_kept_for_a_resume_from_an_empty_seal() {
 // impls) for a `pub fn` whose SHAPE matches one of two named patterns --
 // see each test's own doc comment for which. This does survive a rename of
 // the METHOD or its containing MODULE while the shape stays the same
-// (demonstrated in an earlier dispatch's report): renaming changes neither
-// the type an inherent impl is on nor the `pub` keyword on the method
-// itself. It does not survive a DIFFERENT shape carrying the same
-// capability, which is exactly what TT5's eight evasions are.
+// (demonstrated by that same review, against `tree_at` renamed to
+// `checkpoint_at` with `historical.rs` renamed to `reconstruction.rs`):
+// renaming changes neither the type an inherent impl is on nor the `pub`
+// keyword on the method itself. It does not survive a DIFFERENT shape
+// carrying the same capability, which is exactly what those eight evasions
+// were.
 // ============================================================================
 
 /// One `pub fn` found inside an inherent `impl <target-type> { .. }` block
@@ -772,19 +769,20 @@ fn format_methods(methods: &[&PubMethod]) -> String {
         .join("\n")
 }
 
-/// [TT21 TRIPWIRE, narrow] Catches exactly this shape: an inherent
+/// [NARROW TRIPWIRE] Catches exactly this shape: an inherent
 /// `GitStorage` method whose return type's tokens mention `ObjectId` AND
 /// which takes at least one argument beyond `&self` -- e.g. the deleted
 /// `GitStorage::tree_at(&self, n: u64) -> Result<ObjectId, GitStorageError>`,
 /// under that name or any rename of the method or its containing module
-/// (demonstrated in an earlier dispatch's report against `tree_at` ->
+/// (demonstrated by an earlier review against `tree_at` ->
 /// `checkpoint_at`, `historical.rs` -> `reconstruction.rs`). It does NOT
-/// catch a same-capability accessor in a different shape: `[TT5]` showed a
+/// catch a same-capability accessor in a different shape: that review also
+/// showed a
 /// free `pub fn` outside any inherent impl, a wrapper return type whose
 /// tokens do not contain the literal string `ObjectId` (e.g. a `TreeId`
 /// newtype), or a `pub trait` implemented for `GitStorage` all compile and
 /// leave this test green. Green today would mean the only method returning
-/// a tree id is finding 2's parameterless `tip_tree` -- there is no
+/// a tree id is the parameterless `tip_tree` -- there is no
 /// argument-taking accessor of this exact shape to find.
 #[test]
 fn no_reconstruction_no_public_tree_id_accessor_takes_an_argument() {
@@ -809,13 +807,13 @@ fn no_reconstruction_no_public_tree_id_accessor_takes_an_argument() {
     );
 }
 
-/// [TT21 TRIPWIRE, narrow] Catches exactly this shape: an inherent
+/// [NARROW TRIPWIRE] Catches exactly this shape: an inherent
 /// `GitStorage`/`GitReadOnlyView` method with a parameter whose type tokens
 /// contain the literal substring `Hasher` -- e.g. the deleted
 /// `GitStorage::register_hasher(&mut self, alg_id: u64, hasher: Box<dyn
 /// Hasher>)`, under any rename of the method itself (this check is keyed on
 /// the parameter's TYPE, not the method's name). It does NOT catch the same
-/// capability spelled differently: `[TT5]` showed a parameter whose type is
+/// capability spelled differently: that same review showed a parameter whose type is
 /// aliased away from the literal name `Hasher` (`use spine::Hasher as
 /// Fold;` and a parameter typed `Box<dyn Fold>`) compiles and leaves this
 /// test green. Green today would mean this crate's live write/read path
@@ -841,15 +839,15 @@ fn no_reconstruction_no_public_api_accepts_a_hasher() {
 // ============================================================================
 // 5. TIP ACCESSOR
 //
-// [finding 2] Once `tree_at` is deleted, `GitStorage` has no public
+// Once `tree_at` is deleted, `GitStorage` has no public
 // accessor for the current tip tree at all -- and the checkpoint layer the
 // head's design assigns commit-wrapping responsibility to needs exactly
 // that (it "commits the tree storage already wrote"). This pins the method
 // the implementer must add: `pub fn tip_tree(&self) -> Option<ObjectId>`
 // (`None` only for a genesis instance whose staging ref has never been
 // written). Calling it here, on a method that does not exist yet, is a
-// compile failure until it is added -- the "compile or test failure" the
-// dispatch asks for; a stub that never updates, or that caches a stale
+// compile failure until it is added; a stub that never updates, or that
+// caches a stale
 // value, is caught by the equality assertion against `ref_target` (an
 // independent oracle, the ref itself) after every write shape this crate's
 // public API exposes.
@@ -1163,16 +1161,14 @@ fn history_independence_reopen_midway_matches_straight_through_subtree_across_ar
 // observationally identical between the two at count 0 (`kind()`'s only
 // effect gates `flat_leaf_count`/`subtree_leaf_count`, both 0 regardless of
 // kind at count 0; `begin_flat`/`begin_subtree`'s own conflict check is
-// itself count>0-gated). The write side was never made to honor this
-// (`[TT4]`,
-// `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
+// itself count>0-gated). The write side was never made to honor this:
 // a fresh log's `C(0)` carries kind 0, a resume from an empty seal commits
 // kind 1, and identical (arity, count=0, key set) content therefore gets
 // two different tree ids -- a history-independence gap at exactly the one
 // size every log passes through.
 // ============================================================================
 
-/// [CANONICAL SIZE ZERO] RED at 60f93fe (TT4): a fresh log and a log
+/// [CANONICAL SIZE ZERO] RED at 60f93fe: a fresh log and a log
 /// resumed from an empty seal, both at count 0 with algorithm 0 the only
 /// registered algorithm, must commit the identical `C(0)` -- kind is
 /// observationally meaningless at count 0, so encoding the caller's
@@ -1198,7 +1194,7 @@ fn canonical_size_zero_tree_is_independent_of_requested_kind() {
 
         // A log resumed from an EMPTY seal: `NaryMerkleLog::resume` always
         // writes `log_meta = Some((size, LogKind::Subtree.to_byte()))`, even
-        // at size 0 -- TT4's exact divergence.
+        // at size 0 -- the exact divergence this test pins.
         let empty_src = NaryMerkleLog::new(
             MemoryStorage::new(),
             Box::new(WideHasher),

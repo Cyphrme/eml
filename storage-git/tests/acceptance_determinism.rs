@@ -7,20 +7,18 @@
 //! private modules (`build.rs`, `historical.rs`, ...) or from its existing
 //! test suite.
 //!
-//! Retired from this file, with justification (per the merge-gate dispatch,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
-//! `resume_algorithm_on_reopened_log_keeps_prior_digests_and_children`
+//! Retired from this file: `resume_algorithm_on_reopened_log_keeps_prior_digests_and_children`
 //! checked "a touched node keeps its stored digests (SG3/SG10/SG11)" by
 //! navigating `peaks/hex(height,2)/hex(q,2)` and asserting the
 //! materialized-node "keeps its children" shape -- both the navigation and
 //! the materialized/opaque concept it checked belong to the peak-and-
 //! children hierarchy the ratified key-derived layout ("THE DESIGN",
 //! `spike-report.md` and its prototype `storage-git-keyed/`) eliminates
-//! outright. The claim it was actually guarding -- TT3/TT20's exact
-//! dropped-digest defect, resume_algorithm revisiting an already-sealed,
-//! multi-algorithm coordinate -- is superseded by
-//! `completeness_property.rs`'s TT20 property, which checks the same
-//! shape of scenario against an independent `MemoryStorage` oracle at
+//! outright. The claim it was actually guarding -- the dropped-digest
+//! defect where `resume_algorithm` revisiting an already-sealed,
+//! multi-algorithm coordinate silently lost a node -- is superseded by
+//! `completeness_property.rs`'s completeness property, which checks the
+//! same shape of scenario against an independent `MemoryStorage` oracle at
 //! arities 2 through 4, live, after reopen, and after gc, rather than by
 //! inspecting one node's peak shape by hand.
 

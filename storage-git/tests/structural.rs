@@ -1,8 +1,6 @@
 //! Structural tests: SG9.
 //!
-//! Retired from this file, with justification (per the merge-gate dispatch,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
-//! `sg4_sg10_materialized_vs_opaque_leaf_node`, `sg5_entry_modes`, and
+//! Retired from this file: `sg4_sg10_materialized_vs_opaque_leaf_node`, `sg5_entry_modes`, and
 //! `sg12_sg16_golden_bytes` each navigated `peaks/00/00` (via the now-
 //! removed `find`/`FindEntryId` helpers) to reach a node, and the first of
 //! the three asserted the materialized-vs-opaque `digest`/`leaf`/`hex(c,2)`
