@@ -146,7 +146,9 @@ pub enum WriteOp<'a> {
     /// caller-chosen size `size` -- [`crate::tree::NaryMerkleLog::resume`]'s
     /// write. Never used by an already-running log's own methods.
     SeedFrontier {
-        /// The append count every seeded algorithm starts from.
+        /// The append count every seeded algorithm starts from -- a
+        /// frontier seed moves [`Storage::append_count`] to this value
+        /// directly, never additively.
         size: u64,
         /// Each algorithm's inherited frontier state.
         algorithms: &'a [AlgorithmSeed<'a>],
@@ -198,6 +200,9 @@ pub trait Storage: Send + Sync {
     /// flat log, subtrees for a subtree log) -- `0` for a fresh store,
     /// always present. A log's kind is never stored; it is derived from this
     /// value together with [`Storage::len`] (see that method's doc comment).
+    /// An append moves this count forward by exactly one; a
+    /// [`WriteOp::SeedFrontier`] moves it directly to its own `size`
+    /// instead; nothing else touches it.
     fn append_count(&self) -> impl std::future::Future<Output = Result<u64, Self::Error>> + Send;
 
     /// Load per-algorithm checkpoint roots last written by [`Storage::apply`].
