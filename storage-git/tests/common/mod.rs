@@ -94,12 +94,12 @@ impl Hasher for NarrowHasher {
 }
 
 // ============================================================================
-// Generic git-tree helpers and the byte1-be-trim key path scheme (the merge
-// gate's TT20/TT21 dispatch: `.ledger/deposits/git-backend/lead-maintainer/
-// storage-git-tip-tree-gate.md`, and `spike-report.md`'s recommended
-// layout). Added independently of `acceptance_support/mod.rs`, which is
-// deliberately written from the spec alone and never shares helpers with
-// this module.
+// Generic git-tree helpers and the byte1-be-trim key path scheme (`[TT20]`/
+// `[TT21]`,
+// `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`,
+// and `spike-report.md`'s recommended layout). Added independently of
+// `acceptance_support/mod.rs`, which is deliberately written from the spec
+// alone and never shares helpers with this module.
 // ============================================================================
 
 /// One entry read directly out of a decoded git tree, independent of

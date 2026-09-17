@@ -1,7 +1,7 @@
-//! Merge-gate dispatch item 2 (KEY-DERIVED LAYOUT):
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`
-//! TT20/TT21, and "THE DESIGN" the dispatch names -- `spike-report.md` and
-//! its prototype crate `storage-git-keyed`
+//! KEY-DERIVED LAYOUT (`[TT20]`/`[TT21]`,
+//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
+//! the ratified layout, decided by two spikes -- `spike-report.md` and its
+//! prototype crate `storage-git-keyed`
 //! (`.worktrees/spike-key-layout/storage-git-keyed/`).
 //!
 //! Claim under test: every stored node and leaf's tree path is EXACTLY the
@@ -9,8 +9,7 @@
 //! `index` for a leaf), with no other entries besides the named metadata
 //! files -- no peak/child wiring, no decomposition, no opacity bookkeeping.
 //!
-//! Assumed top-level namespace, taken from the prototype the dispatch names
-//! as "the design, decided by two spikes"
+//! Assumed top-level namespace, taken from the prototype's own layout
 //! (`storage-git-keyed/src/build.rs::node_path`/`leaf_path`,
 //! `storage-git-keyed/src/lib.rs`'s own `write_batch`): node storage lives
 //! under `n`, keyed as `n/<hex16(alg_id)>/<hex2(height)>/<trimmed(left)>`;

@@ -1,8 +1,9 @@
-//! Merge-gate dispatch item 5 (GC RACE):
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`
-//! and `spike-report.md` §8, ported (at a small size, per this dispatch's
-//! disk-pressure constraint) from `storage-git-keyed`'s own
-//! `tests/gc_race.rs` (`.worktrees/spike-key-layout/storage-git-keyed/`).
+//! GC RACE: a single writer's append must survive git's own housekeeping
+//! racing it (`[TT1]`,
+//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`),
+//! ported (at a small size, to keep this disk-constrained sandbox's object
+//! count small) from `storage-git-keyed`'s own `tests/gc_race.rs`
+//! (`.worktrees/spike-key-layout/storage-git-keyed/`).
 //!
 //! ## The contract this file decides, with evidence
 //!
@@ -12,10 +13,10 @@
 //! non-mismatch failure from git's OWN housekeeping (a lock
 //! `git gc --auto`/`git pack-refs` briefly holds, or the loose-to-packed ref
 //! representation changing underneath a read) that never compared a value
-//! at all. Item 4 (CAS CLASSIFICATION) requires telling these apart. This
-//! item asks further, for the single-writer case these tests drive (no
-//! second LOGICAL writer ever exists here -- only git's own housekeeping is
-//! the "second" thread): must the append still fail?
+//! at all. `cas_classification.rs` requires telling these apart. This file
+//! asks further, for the single-writer case these tests drive (no second
+//! LOGICAL writer ever exists here -- only git's own housekeeping is the
+//! "second" thread): must the append still fail?
 //!
 //! **Decision: for a definitely-non-mismatch failure, the append must not
 //! fail at all -- `GitStorage`'s write path must retry the ref-update step

@@ -1,5 +1,6 @@
-//! Merge-gate dispatch item 1 (EVERY KEY PERSISTED, TT20):
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`.
+//! EVERY KEY PERSISTED: `storage-git` must not drop a digest it was handed
+//! (`[TT20]`,
+//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`).
 //!
 //! `[TT3]`'s finding: `storage-git`'s `resolve_node` (`src/build.rs`)
 //! overlays a touched coordinate's fresh digest onto its existing node, then
@@ -84,9 +85,9 @@ async fn assert_survives_reopen_and_gc(
     assert_every_key_matches(&reopened2, mem, &format!("{context}: after gc and reopen")).await;
 }
 
-/// The gate's exact failing scenario, verbatim from the dispatch: k=2,
-/// `add_algorithm(1)` at size 4, `remove_algorithm(0)` at size 7, append to
-/// 8, `resume_algorithm(0)` at 8, append 5 more (to 13).
+/// `[TT3]`'s exact failing scenario: k=2, `add_algorithm(1)` at size 4,
+/// `remove_algorithm(0)` at size 7, append to 8, `resume_algorithm(0)` at
+/// 8, append 5 more (to 13).
 #[test]
 fn gate_scenario_k2_merge_into_existing_peak_persists_every_node() {
     smol::block_on(async {

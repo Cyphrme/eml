@@ -1,6 +1,8 @@
-//! Merge-gate dispatch item 4 (CAS CLASSIFICATION):
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`
-//! and `spike-report.md` §8.
+//! CAS CLASSIFICATION: `storage-git`'s compare-and-swap step must
+//! distinguish a genuine ref-value mismatch from every other failure shape
+//! (`[TT3]`/`[TT8]`,
+//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`,
+//! and `spike-report.md` §8).
 //!
 //! `storage_git::GitStorage::cas` (`src/lib.rs`) is:
 //! ```ignore
