@@ -210,9 +210,20 @@ fn sg14_roots_absent_for_inactive_algorithm() {
 ///
 /// Rewritten against the ratified key-derived layout's own leaf path ("THE DESIGN",
 /// `spike-report.md` and its prototype `storage-git-keyed/`:
-/// `l/<byte1-be-trim(index)>`) instead of the retired `peaks/hex(0,2)/
+/// `leaves/<byte1-be-trim(index)>`) instead of the retired `peaks/hex(0,2)/
 /// hex(i,2)/leaf` navigation -- the claim under test (byte-for-byte
 /// fidelity) is unchanged; only the path used to reach the stored blob is.
+/// This is the sole place in the crate that checks byte fidelity straight
+/// off the raw git blob, independent of `storage-git`'s own read path, with
+/// adversarial payloads (embedded NUL, a length-prefix lookalike) chosen to
+/// catch accidental framing: `key_derived_layout.rs`'s
+/// `nodes_and_leaves_sit_exactly_at_their_derived_key_paths` checks only
+/// that the *path set* under `leaves/` matches the written indices, never
+/// blob content; `completeness_property.rs`'s `assert_every_key_matches`
+/// compares `GitStorage::get_leaf`'s own decoded return value against
+/// `MemoryStorage`, which goes through this crate's own read path rather
+/// than the raw blob and so could not catch a framing bug applied
+/// symmetrically on write and read.
 #[test]
 fn sg16_leaf_blob_is_byte_identical_to_input() {
     smol::block_on(async {
@@ -236,7 +247,7 @@ fn sg16_leaf_blob_is_byte_identical_to_input() {
         let local = repo.to_thread_local();
         let tip = support::ref_target(&local, staging).unwrap();
         for (i, payload) in payloads.iter().enumerate() {
-            let mut segments = vec!["l".to_string()];
+            let mut segments = vec!["leaves".to_string()];
             segments.extend(trimmed_key_segments(i as u64));
             let entry = support::resolve_path(&local, tip, &segments.join("/"))
                 .unwrap_or_else(|| panic!("no leaf at {}", segments.join("/")));
