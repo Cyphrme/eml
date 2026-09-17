@@ -9,11 +9,12 @@
 //! simply have kept. None of the properties below calls `tree_at` or
 //! `register_hasher` -- both scoped to the historical-reconstruction path
 //! [`no_reconstruction_no_public_tree_id_accessor_takes_an_argument`] and
-//! [`no_reconstruction_no_public_api_accepts_a_hasher`] pin as absent by a
-//! structural, rename-proof check over the crate's own parsed source (a
-//! purely textual name lint here survived a mutation that copied
-//! `historical.rs` to a freshly-named module and renamed `tree_at` itself --
-//! see those tests' own doc comments) -- and none compares a derived value
+//! [`no_reconstruction_no_public_api_accepts_a_hasher`] pin as absent, each
+//! by a narrow, named tripwire over the crate's own parsed source (not a
+//! general no-reconstruction guarantee -- see `[TT21]`,
+//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`,
+//! and each test's own doc comment for exactly what it catches and what it
+//! does not) -- and none compares a derived value
 //! against another derivation of the same value: every assertion below is
 //! checked against an independent oracle (`MemoryStorage`, a tree id
 //! recorded straight off the ref at write time, or a `git` command run
@@ -634,29 +635,35 @@ fn written_is_kept_for_a_resume_from_an_empty_seal() {
 }
 
 // ============================================================================
-// 4. NO RECONSTRUCTION
+// 4. TWO NAMED TRIPWIRES, NOT A NO-RECONSTRUCTION GUARANTEE
 //
-// The design's own words: "it NEVER renders or reconstructs a tree for a
-// past size." A textual name lint (`text.contains("fn tree_at")` and
-// friends) is exactly as strong as the literal spelling it greps for: the
-// independent review's own evasion -- copy `historical.rs` to a
-// freshly-named `reconstruction.rs`, rename `mod historical` to `mod
-// reconstruction`, rename `tree_at` to `checkpoint_at`, update the call
-// sites -- passes every needle in that lint outright while changing nothing
-// about what the crate can actually do. The two checks below instead parse
-// every `.rs` file under `src/` as a syntax tree (`syn::parse_file`) and
-// walk its `impl GitStorage { .. }` / `impl GitReadOnlyView { .. }` blocks
-// structurally: by the TYPE the impl is on and the SHAPE of each `pub fn`'s
-// signature (parameter count, parameter types, return type), never by any
-// item's chosen name. Renaming a method or its containing module changes
-// neither the type it is inherently implemented on nor the `pub` keyword on
-// the method itself, so this survives the exact rename mutation above (and
-// any other rename) -- demonstrated in this dispatch's report. Every `.rs`
-// file in `src/` is scanned, not just `lib.rs`: Rust lets an inherent impl's
-// `pub fn` live in any module of the crate and still be reachable by
-// method-call syntax on a value of that type (module privacy gates ordinary
-// item paths, not inherent-method resolution), so a relocated impl block is
-// covered too, not merely a relocated free function.
+// [TT21] (`.ledger/deposits/git-backend/lead-maintainer/
+// storage-git-tip-tree-gate.md`) found that the two checks below, despite
+// this section's former header calling them "a structural, rename-proof
+// check," catch exactly ONE historical shape each -- not reconstruction in
+// general. `[TT5]` demonstrated eight compiling evasions of the design's
+// own "never renders or reconstructs a tree for a past size" rule that both
+// checks let straight through: a free `pub fn` in a `pub mod` (module
+// privacy gates ordinary item paths, not this lint, which only walks
+// INHERENT impls on named types), a wrapper return type (`TreeId`,
+// `TreeRef`) instead of `ObjectId` in the token text, a `pub trait
+// Checkpoints` implemented for `GitStorage`, and a parameter type aliased
+// away from the literal name `Hasher`. A textual name lint on `tree_at`
+// alone would have been weaker still (renaming the method name defeats it
+// outright); this lint is stronger than that but not "rename-proof" against
+// anything except the two specific narrow shapes it names below, and its
+// own doc comments say so rather than implying more.
+//
+// What each check actually does: parse every `.rs` file under `src/` as a
+// syntax tree (`syn::parse_file`) and walk its `impl GitStorage { .. }` /
+// `impl GitReadOnlyView { .. }` blocks (inherent impls only, not trait
+// impls) for a `pub fn` whose SHAPE matches one of two named patterns --
+// see each test's own doc comment for which. This does survive a rename of
+// the METHOD or its containing MODULE while the shape stays the same
+// (demonstrated in an earlier dispatch's report): renaming changes neither
+// the type an inherent impl is on nor the `pub` keyword on the method
+// itself. It does not survive a DIFFERENT shape carrying the same
+// capability, which is exactly what TT5's eight evasions are.
 // ============================================================================
 
 /// One `pub fn` found inside an inherent `impl <target-type> { .. }` block
@@ -765,18 +772,20 @@ fn format_methods(methods: &[&PubMethod]) -> String {
         .join("\n")
 }
 
-/// [NO RECONSTRUCTION] Red today: `GitStorage::tree_at(&self, n: u64) ->
-/// Result<ObjectId, GitStorageError>` returns a type whose tokens mention
-/// `ObjectId` and takes one argument beyond `&self` -- exactly the shape a
-/// historical-reconstruction accessor structurally needs, under any name,
-/// since it must say WHICH past tree to build. The tip -- the only tree id
-/// this layer may ever hand out (finding 2's `tip_tree` accessor) -- needs
-/// no argument to name it: it is *the* current one. Demonstrated in this
-/// dispatch's report to stay red against the reviewer's rename mutation
-/// (`tree_at` -> `checkpoint_at`, `historical.rs` -> `reconstruction.rs`),
-/// and to turn green once `tree_at`/`historical.rs` are deleted and
-/// finding 2's parameterless accessor is the only method left returning a
-/// tree id.
+/// [TT21 TRIPWIRE, narrow] Catches exactly this shape: an inherent
+/// `GitStorage` method whose return type's tokens mention `ObjectId` AND
+/// which takes at least one argument beyond `&self` -- e.g. the deleted
+/// `GitStorage::tree_at(&self, n: u64) -> Result<ObjectId, GitStorageError>`,
+/// under that name or any rename of the method or its containing module
+/// (demonstrated in an earlier dispatch's report against `tree_at` ->
+/// `checkpoint_at`, `historical.rs` -> `reconstruction.rs`). It does NOT
+/// catch a same-capability accessor in a different shape: `[TT5]` showed a
+/// free `pub fn` outside any inherent impl, a wrapper return type whose
+/// tokens do not contain the literal string `ObjectId` (e.g. a `TreeId`
+/// newtype), or a `pub trait` implemented for `GitStorage` all compile and
+/// leave this test green. Green today would mean the only method returning
+/// a tree id is finding 2's parameterless `tip_tree` -- there is no
+/// argument-taking accessor of this exact shape to find.
 #[test]
 fn no_reconstruction_no_public_tree_id_accessor_takes_an_argument() {
     let methods = public_methods_on(&["GitStorage"]);
@@ -800,15 +809,18 @@ fn no_reconstruction_no_public_tree_id_accessor_takes_an_argument() {
     );
 }
 
-/// [NO RECONSTRUCTION] Red today: `GitStorage::register_hasher(&mut self,
-/// alg_id: u64, hasher: Box<dyn Hasher>)` accepts a hasher, existing solely
-/// to feed `tree_at`'s `roots/` fold (SG20's amendment) -- this crate's live
-/// write/read path never computes a digest or folds a root (SG26), so no
-/// public method may accept one under any name. Demonstrated in this
-/// dispatch's report to stay red against the reviewer's rename mutation
-/// (the mutation as described leaves `register_hasher` itself unrenamed,
-/// but this check is keyed on the parameter's TYPE, not the method's name,
-/// so it would catch a renamed `register_hasher` just the same).
+/// [TT21 TRIPWIRE, narrow] Catches exactly this shape: an inherent
+/// `GitStorage`/`GitReadOnlyView` method with a parameter whose type tokens
+/// contain the literal substring `Hasher` -- e.g. the deleted
+/// `GitStorage::register_hasher(&mut self, alg_id: u64, hasher: Box<dyn
+/// Hasher>)`, under any rename of the method itself (this check is keyed on
+/// the parameter's TYPE, not the method's name). It does NOT catch the same
+/// capability spelled differently: `[TT5]` showed a parameter whose type is
+/// aliased away from the literal name `Hasher` (`use spine::Hasher as
+/// Fold;` and a parameter typed `Box<dyn Fold>`) compiles and leaves this
+/// test green. Green today would mean this crate's live write/read path
+/// still never computes a digest or folds a root (SG26) -- there is no
+/// method of this exact shape to find.
 #[test]
 fn no_reconstruction_no_public_api_accepts_a_hasher() {
     let methods = public_methods_on(&["GitStorage", "GitReadOnlyView"]);
