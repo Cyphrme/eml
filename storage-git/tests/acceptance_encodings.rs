@@ -10,13 +10,17 @@ use polydigest::NaryMerkleLog;
 use storage_git::GitStorage;
 use support::{FixtureHasher, bare_repo, hex, new_log};
 
-/// [SG12] `meta` MUST be exactly 11 bytes: arity (u16 BE), count (u64 BE),
-/// kind (0x00 flat / 0x01 subtree), with no trailing padding and no version
-/// byte -- there is nothing this early in the format's life to stay
-/// compatible with, so no discriminator field exists to distinguish a shape
-/// that has never had a second variant.
+/// [SG12] `meta` MUST be exactly 10 bytes: arity (u16 BE), count (u64 BE),
+/// with no trailing padding and no version byte -- there is nothing this
+/// early in the format's life to stay compatible with, so no discriminator
+/// field exists to distinguish a shape that has never had a second variant.
+/// No kind byte either: a log's kind is derived from content, never stored
+/// (head's ruling, 2026-09-17) -- `tests/no_stored_kind.rs` is this crate's
+/// pinned statement of that derivation; this test's own claim is narrower
+/// and purely about width and slack, so it stops at the two fields meta
+/// actually carries rather than re-asserting kind derivation here too.
 #[test]
-fn sg12_meta_blob_is_11_exact_bytes_with_no_version_byte() {
+fn sg12_meta_blob_is_10_exact_bytes_with_no_version_byte_and_no_kind_byte() {
     smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
@@ -31,18 +35,15 @@ fn sg12_meta_blob_is_11_exact_bytes_with_no_version_byte() {
             let bytes = support::read_blob(&local, meta_id);
             assert_eq!(
                 bytes.len(),
-                11,
-                "n={n}: meta must be exactly 11 bytes (no version byte), got {}",
+                10,
+                "n={n}: meta must be exactly 10 bytes (arity + count, no version byte, no kind \
+                 byte), got {}",
                 bytes.len()
             );
             let arity = u16::from_be_bytes([bytes[0], bytes[1]]);
             assert_eq!(arity as u64, k, "n={n}: meta.arity must be {k}");
             let count = u64::from_be_bytes(bytes[2..10].try_into().unwrap());
             assert_eq!(count, n as u64, "n={n}: meta.count must be {n}");
-            assert_eq!(
-                bytes[10], 0x00,
-                "n={n}: meta.kind must be 0x00 (flat) for a flat log"
-            );
 
             log.append_leaf(format!("leaf-{n}").as_bytes())
                 .await
