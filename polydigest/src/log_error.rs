@@ -98,7 +98,8 @@ impl<E: fmt::Display> fmt::Display for LogError<E> {
             Self::MalformedSeal => write!(f, "spine rejected the timeline while sealing"),
             Self::ResumeTargetNotFresh(count) => write!(
                 f,
-                "resume target is not a fresh backend: it already holds a committed log of size \
+                "resume target is not a fresh backend: a fresh backend must have a zero append \
+                 count and no registered algorithms, but this one reports an append count of \
                  {count}"
             ),
             Self::MissingTrustedRoot(id) => write!(
