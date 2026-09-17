@@ -553,11 +553,17 @@ its current one (see "The tip-tree model", `src/lib.rs`). *Checked by:
 property test — `tip_tree()` compared by direct equality against the
 staging ref's own target (an independent oracle, never a second call
 through this layer's own API) after every write shape this crate exposes,
-including a reopen from disk; a structural, rename-proof check (parsing
-`src/`'s own `.rs` files as syntax trees, keyed on method shape rather
-than name) that no other public method on `GitStorage` or
-`GitReadOnlyView` returns an object id while also taking an argument, and
-that no public method on either type accepts a hasher.*
+including a reopen from disk; two structural syntax-tree checks (parsing
+`src/`'s own `.rs` files with `syn` and walking each type's inherent impl
+blocks) naming exactly two shapes: no other public method on `GitStorage`
+or `GitReadOnlyView` returns an object id while also taking an argument,
+and no public method on either type accepts a hasher. These checks survive
+a rename of the method or its containing module (the shape they match does
+not depend on either name), but they guard only those two specific narrow
+shapes, not reconstruction in general -- a wrapper return type, a
+trait impl instead of an inherent one, or an aliased parameter type would
+each evade them; `tests/tip_tree_contract.rs`'s own header documents the
+eight such evasions found and not guarded against.*
 
 A historical `roots/hex(alg_id,16)` entry (§3.3, SG14) for a size this
 layer no longer serves as its tip is not this layer's to produce: folding
@@ -734,7 +740,7 @@ Every `SG<n>` constraint above names its check inline. Summarized, a
 | SG18d (precondition rejection) | Direct `Storage::apply` calls asserting `InvalidOperation` for an out-of-order append, a duplicate registration, and an unregistered removal/resume, with the ref left untouched |
 | SG19 (tip-moved classification) | A forced lock-contention failure (pre-created lock file) MUST NOT be reported as `TipMoved`; a genuine concurrent-writer race MUST be |
 | SG19a (transient retry, bound) | A lock released within the bound lets the write succeed; a lock held past the bound forces the write to give up and return the transient variant within a generous external ceiling, never hang |
-| SG20 (`tip_tree`) | Direct-equality check against this instance's own last-observed value after every write shape and after a reopen; a structural, rename-proof check that no public method returns an object id together with a size argument, and none accepts a hasher |
+| SG20 (`tip_tree`) | Direct-equality check against this instance's own last-observed value after every write shape and after a reopen; two structural syntax-tree checks naming exactly two shapes -- no public method returns an object id together with a size argument, and none accepts a hasher -- survives a method/module rename but not a different shape carrying the same capability |
 | SG21 (`open_at`) | Durability property test mirroring `docs/architecture.md`'s existing MMR durable-witness test pattern |
 | SG22–SG24 (GC safety) | A test asserting the exact `write_buf_with_known_id` call path is used (SG22); a simulated missing-object recovery test (SG23); SG24 is documented, not tested |
 | SG26–SG27 (algorithm and object-hash parametricity) | The full property-test suite run parametrized over at least two `Hasher` implementations of different digest widths and over both git object-hash formats |
