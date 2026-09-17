@@ -1,11 +1,28 @@
-//! Acceptance tests guarding purity under reopen, corruption-freedom after
-//! reopen, and digest/child retention on a touched node.
+//! Acceptance tests guarding purity under reopen and corruption-freedom
+//! after reopen.
 //!
-//! Written from `docs/specs/storage-git.md` (SG9-SG11, SG18, SG25), against
+//! Written from `docs/specs/storage-git.md` (SG9, SG18, SG25), against
 //! `storage-git`'s public API alone (`GitStorage`, `GitStorageError`) plus
 //! `polydigest`'s combinator surface. Not derived from `storage-git`'s
 //! private modules (`build.rs`, `historical.rs`, ...) or from its existing
 //! test suite.
+//!
+//! Retired from this file, with justification (per the merge-gate dispatch,
+//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
+//! `resume_algorithm_on_reopened_log_keeps_prior_digests_and_children`
+//! checked "a touched node keeps its stored digests (SG3/SG10/SG11)" by
+//! navigating `peaks/hex(height,2)/hex(q,2)` and asserting the
+//! materialized-node "keeps its children" shape -- both the navigation and
+//! the materialized/opaque concept it checked belong to the peak-and-
+//! children hierarchy the ratified key-derived layout ("THE DESIGN",
+//! `spike-report.md` and its prototype `storage-git-keyed/`) eliminates
+//! outright. The claim it was actually guarding -- TT3/TT20's exact
+//! dropped-digest defect, resume_algorithm revisiting an already-sealed,
+//! multi-algorithm coordinate -- is superseded by
+//! `completeness_property.rs`'s TT20 property, which checks the same
+//! shape of scenario against an independent `MemoryStorage` oracle at
+//! arities 2 through 4, live, after reopen, and after gc, rather than by
+//! inspecting one node's peak shape by hand.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
@@ -338,99 +355,6 @@ fn reopen_after_resume_on_a_reopened_log_stays_clean() {
             },
             Err(e) => Err(format!("second reopen must succeed cleanly, got {e:?}")),
         }
-    });
-
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
-}
-
-/// **A touched node keeps its stored digests (SG3/SG10/SG11).** After
-/// `resume_algorithm` on a reopened log, every algorithm's digest
-/// previously stored at a frontier node is still present, and a
-/// materialized node keeps its children. This is the smallest divergent
-/// case this guards against: arity 2, algorithm 0 baseline, algorithm 1
-/// added then removed before a leaf each, reopened, then resumed.
-#[test]
-fn resume_algorithm_on_reopened_log_keeps_prior_digests_and_children() {
-    let result: Result<(), String> = smol::block_on(async {
-        let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
-        let staging_ref = "refs/eml/storage/resume-keeps-digests/staging";
-        let repo = support::bare_repo(dir.path(), gix::hash::Kind::Sha1);
-
-        let storage =
-            GitStorage::new(repo, staging_ref, ARITY).map_err(|e| format!("open: {e}"))?;
-        let mut log = NaryMerkleLog::new(storage, Box::new(hasher()), TreeConfig { arity: ARITY })
-            .await
-            .map_err(|e| format!("new: {e:?}"))?;
-
-        // a0 = 0, a1 = 1, a2 = 1 -- the smallest divergent case this guards.
-        log.add_algorithm(1, Box::new(hasher()))
-            .await
-            .map_err(|e| format!("add_algorithm(1): {e:?}"))?;
-        log.append_leaf(b"leaf-0")
-            .await
-            .map_err(|e| format!("append leaf-0: {e:?}"))?;
-        log.remove_algorithm(1)
-            .await
-            .map_err(|e| format!("remove_algorithm(1): {e:?}"))?;
-        log.append_leaf(b"leaf-1")
-            .await
-            .map_err(|e| format!("append leaf-1: {e:?}"))?;
-        drop(log);
-
-        // Reopen through polydigest's from-storage path before resuming --
-        // exactly the provenance boundary opacity must survive.
-        let repo2 = support::reopen_repo(dir.path());
-        let storage2 =
-            GitStorage::new(repo2, staging_ref, ARITY).map_err(|e| format!("reopen: {e}"))?;
-        let hashers: Vec<(u64, Box<dyn Hasher>)> = vec![
-            (0, Box::new(hasher()) as Box<dyn Hasher>),
-            (1, Box::new(hasher())),
-        ];
-        let mut reopened =
-            NaryMerkleLog::from_storage_with_config(storage2, hashers, TreeConfig { arity: ARITY })
-                .await
-                .map_err(|e| format!("reconstruct: {e:?}"))?;
-
-        reopened
-            .resume_algorithm(1)
-            .await
-            .map_err(|e| format!("resume_algorithm(1): {e:?}"))?;
-
-        let repo3 = support::reopen_repo(dir.path()).to_thread_local();
-        let tip = support::ref_target(&repo3, staging_ref)
-            .ok_or_else(|| "staging ref missing after resume".to_string())?;
-
-        // n = 2, arity 2: one peak, T(0,1), at peaks/01/00.
-        let peak_path = format!("peaks/{}/{}", support::hex(1, 2), support::hex(0, 2));
-        let peak = support::resolve_path(&repo3, tip, &peak_path)
-            .ok_or_else(|| format!("{peak_path} missing"))?;
-
-        // Materialized: still carries both children (SG4/SG10).
-        for child in [support::hex(0, 2), support::hex(1, 2)] {
-            if support::find_entry(&repo3, peak.oid, &child).is_none() {
-                return Err(format!(
-                    "{peak_path} lost child {child} after resume_algorithm"
-                ));
-            }
-        }
-
-        // Every algorithm previously stored at this node keeps its digest
-        // (SG3/SG11): algorithm 0's digest must survive alongside
-        // algorithm 1's freshly written one.
-        let digest_tree = support::find_entry(&repo3, peak.oid, "digest")
-            .ok_or_else(|| format!("{peak_path} has no digest/ subtree"))?;
-        for alg_id in [0u64, 1u64] {
-            let name = support::hex(alg_id, 16);
-            if support::find_entry(&repo3, digest_tree.oid, &name).is_none() {
-                return Err(format!(
-                    "{peak_path}/digest lost algorithm {alg_id}'s entry after resume_algorithm"
-                ));
-            }
-        }
-
-        Ok(())
     });
 
     if let Err(msg) = result {

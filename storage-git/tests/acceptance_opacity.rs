@@ -1,18 +1,29 @@
-//! Acceptance tests for §2.6's materialized-vs-opaque distinction:
-//! SG10 (a subtree-kind or resumed node MUST be opaque) and SG11 (opacity is
-//! a property of the node's own provenance, never inferred from the log's
-//! `meta.kind` byte), from `docs/specs/storage-git.md` alone.
+//! Acceptance tests for resumption refusal and construction-independence,
+//! from `docs/specs/storage-git.md` alone.
 //!
-//! A seal resumption's own contract (`polydigest::NaryMerkleLog::resume`'s
-//! doc comment: "storage is a fresh backend the resumed log writes forward
-//! into") already excludes reopening a ref that still holds a log's own
-//! committed objects -- that is not a way to continue a log, it is a
-//! contract violation. So that case is refused outright, before anything is
-//! written, rather than reconciled into an opaque tree: this file used to
-//! assert the latter, and the tests below replace that assertion with the
-//! refusal, while keeping SG10/SG11's opacity guarantee for the case the
-//! contract actually supports -- resuming onto a genuinely fresh, empty
-//! ref.
+//! Retired from this file, with justification (per the merge-gate dispatch,
+//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`):
+//! this file's former header named SG10 (a subtree-kind or resumed node
+//! MUST be opaque: `digest/` only, no `leaf`/`hex(c,2)` children) and SG11
+//! (opacity is a property of provenance, never the log's `meta.kind` byte)
+//! as what it tests. The ratified key-derived layout ("THE DESIGN",
+//! `spike-report.md` and its prototype `storage-git-keyed/`) retires the
+//! materialized-vs-opaque distinction itself, not merely its `peaks/`-based
+//! check: "no peak/child wiring, no decomposition, no opacity bookkeeping
+//! anywhere" -- every node is a blob at its key path, full stop, with
+//! nothing to decompose and no partial/whole-subtree state to distinguish.
+//! `sg10_subtree_kind_append_is_opaque` and
+//! `resume_onto_an_empty_ref_still_yields_opaque_peaks` (both navigated
+//! `peaks/hex(height,2)/hex(q,2)` directly to assert that shape) are cut
+//! outright rather than rewritten, since the property they checked no
+//! longer has a target to check under the new design.
+//! `resume_forks_into_a_new_ref_within_the_same_repository`'s own opacity-
+//! check block is trimmed the same way; its layout-agnostic behavioral
+//! assertions (ref A stays untouched, a consistency proof bridges the fork,
+//! the stale-ref refusal still holds) are kept, since none of them depend
+//! on peak/child shape. `resume_onto_a_ref_that_already_holds_a_log_is_refused`
+//! and `resume_onto_a_fresh_ref_is_independent_of_how_the_storage_was_constructed`
+//! carry no peak-wired assumption at all and are kept unchanged.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
@@ -20,46 +31,7 @@ mod support;
 use polydigest::{NaryMerkleLog, verify_consistency};
 use spine::Subtree;
 use storage_git::GitStorage;
-use support::{FixtureHasher, bare_repo, hex, new_log};
-
-/// [SG10] A `T(left, 0)` node built from `Storage::store_node` with no
-/// corresponding `store_leaf` call -- exactly what happens for every
-/// subtree-kind append -- MUST be opaque: `digest/` only, no `leaf`.
-#[test]
-fn sg10_subtree_kind_append_is_opaque() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
-        let staging = "refs/eml/storage/sg10-subtree/staging";
-        // High arity: every append stays an isolated height-0 peak, so its
-        // ordinal under peaks/00/ is just its index.
-        let mut log = new_log(&repo, staging, 50, FixtureHasher::new(32)).await;
-
-        for i in 0..3u32 {
-            log.append_subtree(&Subtree::Leaf(format!("subtree-leaf-{i}").into_bytes()))
-                .await
-                .unwrap();
-        }
-
-        let local = repo.to_thread_local();
-        let tip = support::ref_target(&local, staging).unwrap();
-        for i in 0..3u64 {
-            let path = format!("peaks/{}/{}", hex(0, 2), hex(i, 2));
-            let node = support::resolve_path(&local, tip, &path)
-                .unwrap_or_else(|| panic!("no peak at {path}"))
-                .oid;
-            let entries = support::read_tree(&local, node);
-            assert!(
-                !entries.iter().any(|e| e.name == "leaf"),
-                "T({i},0) built via append_subtree must not carry a materialized leaf blob"
-            );
-            assert!(
-                entries.iter().any(|e| e.name == "digest"),
-                "T({i},0) must still carry digest/"
-            );
-        }
-    });
-}
+use support::{FixtureHasher, bare_repo, new_log};
 
 /// A resumption's `storage` must be a fresh backend: a ref that still holds
 /// a log's own committed objects -- e.g. the very ref a source log was just
@@ -190,76 +162,6 @@ fn resume_onto_a_fresh_ref_is_independent_of_how_the_storage_was_constructed() {
     });
 }
 
-/// [SG10]/[SG11] Resuming onto a genuinely fresh (empty) ref must still
-/// yield opaque peaks -- digest only, no leaf, no children -- and so must
-/// every forward `append_subtree` on the resumed log.
-#[test]
-fn resume_onto_an_empty_ref_still_yields_opaque_peaks() {
-    smol::block_on(async {
-        let dir_src = tempfile::tempdir().unwrap();
-        let staging_src = "refs/eml/storage/resume-empty-src/staging";
-        let repo_src = bare_repo(dir_src.path(), gix::hash::Kind::Sha256);
-        let k = 2u64;
-        let real = FixtureHasher::new(32);
-
-        let mut log = new_log(&repo_src, staging_src, k, real.clone()).await;
-        for i in 0..4u32 {
-            log.append_leaf(format!("leaf-{i}").as_bytes())
-                .await
-                .unwrap();
-        }
-        let sealed = log.seal().await.unwrap();
-
-        let dir_dst = tempfile::tempdir().unwrap();
-        let staging_dst = "refs/eml/storage/resume-empty-dst/staging";
-        let repo_dst = bare_repo(dir_dst.path(), gix::hash::Kind::Sha256);
-        let storage_dst = GitStorage::new(repo_dst.clone(), staging_dst, k)
-            .expect("the plain constructor must open an empty ref");
-        let mut resumed =
-            NaryMerkleLog::resume(&sealed, storage_dst, vec![(0, Box::new(real.clone()))])
-                .await
-                .expect("resume onto an empty ref");
-
-        let local_dst = repo_dst.to_thread_local();
-        let tip = support::ref_target(&local_dst, staging_dst).unwrap();
-        // n=4, arity 2: one peak, T(0,2).
-        let peak_path = format!("peaks/{}/{}", hex(2, 2), hex(0, 2));
-        let peak = support::resolve_path(&local_dst, tip, &peak_path)
-            .unwrap_or_else(|| panic!("no peak at {peak_path}"));
-        let entries = support::read_tree(&local_dst, peak.oid);
-        assert!(
-            !entries.iter().any(|e| e.name == "leaf"),
-            "T(0,2) resumed onto an empty ref must carry no leaf"
-        );
-        assert!(
-            !entries.iter().any(|e| e.name == hex(0, 2))
-                && !entries.iter().any(|e| e.name == hex(1, 2)),
-            "T(0,2) resumed onto an empty ref must be opaque: no hex(c,2) children"
-        );
-        assert!(
-            entries.iter().any(|e| e.name == "digest"),
-            "T(0,2) resumed onto an empty ref must still carry digest/"
-        );
-
-        // Forward appends on a resumed (Subtree-kind) log go through
-        // append_subtree and must themselves be opaque too (SG10 again, on
-        // the same instance that just inherited an opaque peak).
-        resumed
-            .append_subtree(&Subtree::Leaf(b"forward-1".to_vec()))
-            .await
-            .unwrap();
-        let after_forward_tip = support::ref_target(&local_dst, staging_dst).unwrap();
-        let forward_path = format!("peaks/{}/{}", hex(0, 2), hex(0, 2));
-        let forward_node = support::resolve_path(&local_dst, after_forward_tip, &forward_path)
-            .unwrap_or_else(|| panic!("no peak at {forward_path}"));
-        let forward_entries = support::read_tree(&local_dst, forward_node.oid);
-        assert!(
-            !forward_entries.iter().any(|e| e.name == "leaf"),
-            "a forward subtree append on a resumed log must be opaque too"
-        );
-    });
-}
-
 /// A fork: sealing a log under one ref and resuming into a brand-new ref in
 /// the SAME repository is a fresh-target resume like any other. Freshness
 /// is scoped to the target ref's own committed state, never to the
@@ -307,26 +209,6 @@ fn resume_forks_into_a_new_ref_within_the_same_repository() {
         assert_eq!(
             ref_a_before, ref_a_after_fork,
             "forking into ref B must leave ref A's log byte-for-byte untouched"
-        );
-
-        // B's inherited peak is opaque (n=4, arity 2: one peak, T(0,2)).
-        let tip_b = support::ref_target(&local, staging_b).unwrap();
-        let peak_path = format!("peaks/{}/{}", hex(2, 2), hex(0, 2));
-        let peak = support::resolve_path(&local, tip_b, &peak_path)
-            .unwrap_or_else(|| panic!("no peak at {peak_path}"));
-        let entries = support::read_tree(&local, peak.oid);
-        assert!(
-            !entries.iter().any(|e| e.name == "leaf"),
-            "B's inherited peak must carry no leaf"
-        );
-        assert!(
-            !entries.iter().any(|e| e.name == hex(0, 2))
-                && !entries.iter().any(|e| e.name == hex(1, 2)),
-            "B's inherited peak must be opaque: no hex(c,2) children"
-        );
-        assert!(
-            entries.iter().any(|e| e.name == "digest"),
-            "B's inherited peak must still carry digest/"
         );
 
         // Appends to B work.
