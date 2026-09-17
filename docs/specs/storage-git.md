@@ -597,9 +597,9 @@ durability property tests"). *Checked by: property test.*
 
 Specified as part of SG19/SG19a; repeated here because they are among the
 named additions (§4.2–§4.4 and this section: `tip_tree`, `open_at`, and
-these two errors). Both MUST be introspectable by the caller (a
-distinguishable variant or an `is_tip_moved()`/`is_transient()`-style
-predicate each), and MUST never be conflated with each other, with "object
+these two errors). Both MUST be introspectable by the caller (each its own
+distinguishable variant, an `is_tip_moved()`-style predicate optional on
+top of that), and MUST never be conflated with each other, with "object
 not found", or with "corrupted" — a caller's correct response differs for
 each: **tip-moved** means reload and retry with fresh content (a real
 concurrent write actually landed); **transient** means retry the identical
