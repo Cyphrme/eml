@@ -514,16 +514,21 @@ impl<S: Storage> NaryMerkleLog<S> {
         self.kind
     }
 
-    /// Number of flat leaf appends: `0` for a subtree-kind log. A
-    /// **resumed** log is always subtree-kind, and eml's restored contract
-    /// refuses [`Self::append_leaf`] outright once it has any inherited
-    /// (non-empty) sealed history (`count > 0`), so a resume onto a
-    /// non-empty seal can never go flat -- `size()` stays `0` for its whole
-    /// life. Only a **virgin** resume (a seal at tree size `0`, nothing yet
-    /// inherited) can still call `append_leaf` and turn flat, exactly like
-    /// a freshly-created log; there `size()` is simply `count()`, since
-    /// there is no inherited prefix to add on top of the forward appends
-    /// (see [`Self::count`]).
+    /// Number of flat leaf appends: `0` for a subtree-kind log. [`Self::resume`]
+    /// always returns a subtree-kind log, unconditionally -- including a
+    /// **virgin** resume (a seal at tree size `0`, nothing yet inherited) --
+    /// so `size()` stays `0` for the whole life of *any* resumed log,
+    /// [`Self::append_leaf`] is refused on every resumed log regardless of
+    /// how much history it inherited, and a virgin resume does not behave
+    /// "like a freshly-created log": [`Self::resume`] also carries no
+    /// algorithm into its own `algs` map for a seal at tree size `0` (its
+    /// frontier is empty, so nothing in `hashers` is ever consumed), so
+    /// [`Self::append_subtree`] itself returns [`LogError::NoActiveAlgorithms`]
+    /// until [`Self::add_algorithm`] registers one, and reconstructing such a
+    /// log before that registration (e.g. [`Self::from_storage`]) fails with
+    /// `UnknownMetadata(0)`. `size()`'s own `Flat` branch is therefore
+    /// reachable only by a plain [`Self::new`] log that never went through
+    /// [`Self::resume`] at all, never by a virgin resume.
     #[must_use]
     pub fn size(&self) -> u64 {
         if self.kind == LogKind::Flat {
@@ -1208,11 +1213,13 @@ impl<S: Storage> NaryMerkleLog<S> {
     ///
     /// Step 2 always streams from index `0`, so on a **resumed** log this
     /// returns `Err`, never a verdict, whenever `tree_size` reaches past the
-    /// inherited prefix: the leaves under `0..sealed_prefix` were never
-    /// stored (only the sealed frontier's combined digests were), so reading
-    /// one back is a storage error rather than a cell to check. Replaying
-    /// the inherited prefix so this can return a verdict on a resumed log is
-    /// a routed follow-up, not implemented here.
+    /// inherited prefix: the leaves under the resumed log's inherited
+    /// prefix — the size the sealed frontier committed to at the moment
+    /// [`Self::resume`] consumed it — were never stored (only the sealed
+    /// frontier's combined digests were), so reading one back is a storage
+    /// error rather than a cell to check. Replaying the inherited prefix so
+    /// this can return a verdict on a resumed log is a routed follow-up,
+    /// not implemented here.
     ///
     /// # Errors
     ///
