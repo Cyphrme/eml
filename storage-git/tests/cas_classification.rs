@@ -1,8 +1,6 @@
 //! CAS CLASSIFICATION: `storage-git`'s compare-and-swap step must
 //! distinguish a genuine ref-value mismatch from every other failure shape
-//! (`[TT3]`/`[TT8]`,
-//! `.ledger/deposits/git-backend/lead-maintainer/storage-git-tip-tree-gate.md`,
-//! and `spike-report.md` §8).
+//! (`spike-report.md` §8).
 //!
 //! `storage_git::GitStorage::cas` (`src/lib.rs`) is:
 //! ```ignore
@@ -31,8 +29,31 @@
 //! compare-mismatch variants and reports everything else as
 //! `KeyedGitStorageError::Git(..)`, never `TipMoved`.
 //!
+//! **What this file requires beyond that port**: a non-mismatch failure must
+//! come back as a *specifically named* transient/retriable variant, not
+//! merely "anything other than `TipMoved`" -- collapsing it into the
+//! existing `GitStorageError::Git(String)` catch-all would make it
+//! indistinguishable from an unrelated, non-retriable I/O failure (a
+//! deleted repository, a permissions error), which a caller must NOT retry.
+//! The implementer must add a new variant -- e.g.
+//! `GitStorageError::RefUpdateTransient(String)` -- distinct from both
+//! `TipMoved` (a genuine compare-mismatch) and `Corruption` (a malformed
+//! stored layout). An `is_transient()` predicate alongside the existing
+//! `is_tip_moved()` is the natural way to expose that to a caller, and is
+//! recommended, but this file pins the REQUIRED shape without depending on
+//! that exact method existing: it asserts the returned error matches none
+//! of the six variants that exist at 60f93fe (`TipMoved`/`Corruption`/
+//! `Git`/`NotFound`/`InvalidRef`/`InvalidArity`), by exhaustive
+//! elimination -- a check that compiles today and can only be satisfied by
+//! a genuinely new variant, rather than calling a method that does not
+//! exist yet and would abort `cargo test`'s build for the whole package
+//! before any test in it could run (verified directly: a single
+//! non-compiling integration-test file blocks every test in the crate, not
+//! just its own).
+//!
 //! RED at 60f93fe: a lock-contention failure that never compared a value at
-//! all still comes back as `GitStorageError::TipMoved`.
+//! all still comes back as `GitStorageError::TipMoved`, which the
+//! elimination above matches on its first arm.
 
 mod common;
 
@@ -72,6 +93,32 @@ fn lock_contention_before_any_compare_is_not_reported_as_tip_moved() {
             "a lock-contention failure that never reached a value comparison must never be \
              reported as the compare-mismatch variant (TipMoved); got: {err}"
         );
+        assert!(
+            !matches!(err, storage_git::GitStorageError::Corruption(_)),
+            "a lock-contention failure that never reached a value comparison, and never touched a \
+             stored layout, must never be reported as Corruption either; got: {err}"
+        );
+        // Exhaustive elimination against every variant that exists at 60f93fe: the
+        // only way to make this pass is for the implementer to add a NEW, specifically
+        // named transient/retriable variant (e.g. GitStorageError::RefUpdateTransient) --
+        // reusing the existing `Git(String)` catch-all is not enough, since a caller could
+        // never tell a retriable lock race apart from an unrelated, non-retriable I/O
+        // failure (a deleted repository, a permissions error) through that one variant.
+        assert!(
+            !matches!(
+                err,
+                storage_git::GitStorageError::TipMoved { .. }
+                    | storage_git::GitStorageError::Corruption(_)
+                    | storage_git::GitStorageError::Git(_)
+                    | storage_git::GitStorageError::NotFound(_)
+                    | storage_git::GitStorageError::InvalidRef(_)
+                    | storage_git::GitStorageError::InvalidArity(_)
+            ),
+            "a lock-contention failure that never reached a value comparison must be reported as \
+             a new, specifically named transient/retriable variant, distinct from every variant \
+             that exists at 60f93fe -- none of \
+             TipMoved/Corruption/Git/NotFound/InvalidRef/InvalidArity qualify; got: {err}"
+        );
 
         fs::remove_file(&lock_path).ok();
     });
@@ -101,6 +148,27 @@ fn lock_contention_at_genesis_is_not_reported_as_tip_moved() {
             !err.is_tip_moved(),
             "a genesis-write lock-contention failure must never be reported as TipMoved; got: \
              {err}"
+        );
+        assert!(
+            !matches!(err, storage_git::GitStorageError::Corruption(_)),
+            "a genesis-write lock-contention failure must never be reported as Corruption either; \
+             got: {err}"
+        );
+        // Same exhaustive elimination as the populated-ref case above -- genesis must not
+        // be a special case a caller has to handle differently.
+        assert!(
+            !matches!(
+                err,
+                storage_git::GitStorageError::TipMoved { .. }
+                    | storage_git::GitStorageError::Corruption(_)
+                    | storage_git::GitStorageError::Git(_)
+                    | storage_git::GitStorageError::NotFound(_)
+                    | storage_git::GitStorageError::InvalidRef(_)
+                    | storage_git::GitStorageError::InvalidArity(_)
+            ),
+            "a genesis-write lock-contention failure must be reported as the same new, \
+             specifically named transient/retriable variant as the populated-ref case, distinct \
+             from every variant that exists at 60f93fe; got: {err}"
         );
 
         fs::remove_file(&lock_path).ok();
