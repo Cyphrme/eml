@@ -8,6 +8,19 @@
 
 use crate::error::GitStorageError as Error;
 
+/// The five fixed top-level literals a checkpoint tree ever carries (§2,
+/// §3): `nodes`/`leaves` hold only key-fanned-out subtrees; `meta`/`epochs`/
+/// `roots` hold only named metadata. `build.rs` and `read.rs` reference
+/// these constants rather than bare string literals so production's actual
+/// names and this module's own distinctness test
+/// (`tests::top_level_literal_names_are_mutually_distinct`) can never
+/// silently diverge -- there is exactly one name per role, not a copy of it.
+pub(crate) const TOP_LEVEL_NODES: &str = "nodes";
+pub(crate) const TOP_LEVEL_LEAVES: &str = "leaves";
+pub(crate) const TOP_LEVEL_META: &str = "meta";
+pub(crate) const TOP_LEVEL_EPOCHS: &str = "epochs";
+pub(crate) const TOP_LEVEL_ROOTS: &str = "roots";
+
 /// `hex(x, 16)` — a `u64` rendered as 16 lowercase hex digits.
 #[must_use]
 pub fn hex16(x: u64) -> String {
@@ -270,14 +283,25 @@ mod tests {
 
     /// SG6: the five fixed top-level literals are mutually distinct and
     /// never sit as siblings of a hex- or trimmed-key-encoded entry under
-    /// the key-derived layout (`n`/`l` hold only key-fanned-out subtrees;
-    /// `meta`/`e`/`r` hold only named metadata) -- so, unlike the retired
-    /// peak-and-children layout, no literal name needs to avoid looking
-    /// like a hex string at all: this test only needs the five literals
-    /// distinct from one another, checked exhaustively.
+    /// the key-derived layout (`nodes`/`leaves` hold only key-fanned-out
+    /// subtrees; `meta`/`epochs`/`roots` hold only named metadata) -- so,
+    /// unlike the retired peak-and-children layout, no literal name needs to
+    /// avoid looking like a hex string at all: this test only needs the five
+    /// literals distinct from one another, checked exhaustively.
+    ///
+    /// Asserted over the same `TOP_LEVEL_*` constants `build.rs`/`read.rs`
+    /// write and read -- not a copy of their names -- so this test cannot
+    /// pass while production uses a different set: there is only one string
+    /// per role for it to diverge from.
     #[test]
     fn top_level_literal_names_are_mutually_distinct() {
-        let names = ["meta", "n", "l", "e", "r"];
+        let names = [
+            TOP_LEVEL_META,
+            TOP_LEVEL_NODES,
+            TOP_LEVEL_LEAVES,
+            TOP_LEVEL_EPOCHS,
+            TOP_LEVEL_ROOTS,
+        ];
         for (i, a) in names.iter().enumerate() {
             for b in &names[i + 1..] {
                 assert_ne!(a, b, "top-level literal names must be mutually distinct");

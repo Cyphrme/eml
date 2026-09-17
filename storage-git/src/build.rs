@@ -34,7 +34,10 @@ use polydigest::WriteOp;
 
 use crate::error::GitStorageError as Error;
 use crate::gitutil;
-use crate::layout::{self, hex2, hex16, trimmed_key_segments};
+use crate::layout::{
+    self, TOP_LEVEL_EPOCHS, TOP_LEVEL_LEAVES, TOP_LEVEL_META, TOP_LEVEL_NODES, TOP_LEVEL_ROOTS,
+    hex2, hex16, trimmed_key_segments,
+};
 
 fn invalid(msg: impl Into<String>) -> Error {
     Error::InvalidOperation(msg.into())
@@ -70,23 +73,27 @@ pub(crate) struct OldState {
 }
 
 fn node_path(alg_id: u64, height: u32, left: u64) -> String {
-    let mut segs = vec!["nodes".to_string(), hex16(alg_id), hex2(u64::from(height))];
+    let mut segs = vec![
+        TOP_LEVEL_NODES.to_string(),
+        hex16(alg_id),
+        hex2(u64::from(height)),
+    ];
     segs.extend(trimmed_key_segments(left));
     segs.join("/")
 }
 
 fn leaf_path(index: u64) -> String {
-    let mut segs = vec!["leaves".to_string()];
+    let mut segs = vec![TOP_LEVEL_LEAVES.to_string()];
     segs.extend(trimmed_key_segments(index));
     segs.join("/")
 }
 
 fn epochs_path(alg_id: u64) -> String {
-    format!("epochs/{}", hex16(alg_id))
+    format!("{TOP_LEVEL_EPOCHS}/{}", hex16(alg_id))
 }
 
 fn roots_path(alg_id: u64) -> String {
-    format!("roots/{}", hex16(alg_id))
+    format!("{TOP_LEVEL_ROOTS}/{}", hex16(alg_id))
 }
 
 /// Whether `alg_id` already has an `epochs/` entry in `tree` -- the
@@ -99,7 +106,7 @@ fn epochs_entry_exists(
     let Some(tree) = tree else {
         return Ok(false);
     };
-    let Some(epochs_tree) = gitutil::find_entry(repo, tree, "epochs")? else {
+    let Some(epochs_tree) = gitutil::find_entry(repo, tree, TOP_LEVEL_EPOCHS)? else {
         return Ok(false);
     };
     Ok(gitutil::find_entry(repo, epochs_tree, &hex16(alg_id))?.is_some())
@@ -112,7 +119,7 @@ fn known_algorithm_ids(repo: &gix::Repository, tree: Option<ObjectId>) -> Result
     let Some(tree) = tree else {
         return Ok(Vec::new());
     };
-    let Some(epochs_tree) = gitutil::find_entry(repo, tree, "epochs")? else {
+    let Some(epochs_tree) = gitutil::find_entry(repo, tree, TOP_LEVEL_EPOCHS)? else {
         return Ok(Vec::new());
     };
     gitutil::read_tree(repo, epochs_tree)?
@@ -141,7 +148,7 @@ fn read_stored_epochs(
             "algorithm {alg_id} has no epochs/ entry to carry forward (no prior tree)"
         )));
     };
-    let epochs_tree = gitutil::find_entry(repo, tree, "epochs")?
+    let epochs_tree = gitutil::find_entry(repo, tree, TOP_LEVEL_EPOCHS)?
         .ok_or_else(|| corrupt("tree has no epochs/ section"))?;
     let blob_id = gitutil::find_entry(repo, epochs_tree, &hex16(alg_id))?.ok_or_else(|| {
         corrupt(format!(
@@ -161,7 +168,7 @@ fn read_stored_root(
     alg_id: u64,
 ) -> Result<Option<Vec<u8>>, Error> {
     let Some(tree) = tree else { return Ok(None) };
-    let Some(roots_tree) = gitutil::find_entry(repo, tree, "roots")? else {
+    let Some(roots_tree) = gitutil::find_entry(repo, tree, TOP_LEVEL_ROOTS)? else {
         return Ok(None);
     };
     match gitutil::find_entry(repo, roots_tree, &hex16(alg_id))? {
@@ -383,7 +390,7 @@ pub(crate) fn apply(
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, count))?;
     editor
-        .upsert("meta", EntryKind::Blob, meta_blob)
+        .upsert(TOP_LEVEL_META, EntryKind::Blob, meta_blob)
         .map_err(git_err)?;
 
     let mut raw = editor.detach();

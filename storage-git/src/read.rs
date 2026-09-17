@@ -11,7 +11,10 @@ use gix::ObjectId;
 
 use crate::error::GitStorageError as Error;
 use crate::gitutil;
-use crate::layout::{hex2, hex16, trimmed_key_segments};
+use crate::layout::{
+    TOP_LEVEL_EPOCHS, TOP_LEVEL_LEAVES, TOP_LEVEL_NODES, TOP_LEVEL_ROOTS, hex2, hex16,
+    trimmed_key_segments,
+};
 
 /// Read item `index`'s raw leaf payload out of the checkpoint tree at
 /// `tree_id` (currently `size` items).
@@ -24,7 +27,7 @@ pub(crate) fn get_leaf(
     if index >= size {
         return Err(Error::NotFound(format!("leaf index {index} (size {size})")));
     }
-    let Some(l) = gitutil::find_entry(repo, tree_id, "leaves")? else {
+    let Some(l) = gitutil::find_entry(repo, tree_id, TOP_LEVEL_LEAVES)? else {
         return Err(Error::NotFound(format!("leaf {index} (no leaves written)")));
     };
     match gitutil::resolve_at_path(repo, l, &trimmed_key_segments(index))? {
@@ -44,7 +47,7 @@ pub(crate) fn get_node(
     left: u64,
     height: u32,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let Some(n) = gitutil::find_entry(repo, tree_id, "nodes")? else {
+    let Some(n) = gitutil::find_entry(repo, tree_id, TOP_LEVEL_NODES)? else {
         return Ok(None);
     };
     let mut segments = vec![hex16(alg_id), hex2(u64::from(height))];
@@ -60,7 +63,7 @@ pub(crate) fn load_algorithm_metas(
     repo: &gix::Repository,
     tree_id: ObjectId,
 ) -> Result<polydigest::AlgorithmMetas, Error> {
-    let Some(e) = gitutil::find_entry(repo, tree_id, "epochs")? else {
+    let Some(e) = gitutil::find_entry(repo, tree_id, TOP_LEVEL_EPOCHS)? else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
@@ -82,7 +85,7 @@ pub(crate) fn load_checkpoint_roots(
     repo: &gix::Repository,
     tree_id: ObjectId,
 ) -> Result<Vec<(u64, Vec<u8>)>, Error> {
-    let Some(r) = gitutil::find_entry(repo, tree_id, "roots")? else {
+    let Some(r) = gitutil::find_entry(repo, tree_id, TOP_LEVEL_ROOTS)? else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
