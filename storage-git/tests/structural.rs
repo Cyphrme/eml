@@ -13,7 +13,7 @@
 //! navigation: entry-mode canonicality by
 //! `acceptance_layout.rs::sg5_entry_modes_are_canonical_blob_and_tree`
 //! (a full recursive walk from the tip, independent of any particular
-//! subtree shape); `meta`'s fixed 11-byte encoding (SG12) by
+//! subtree shape); `meta`'s fixed 10-byte encoding (SG12) by
 //! `acceptance_encodings.rs::meta_blob_has_one_fixed_shape_regardless_of_resume_history`;
 //! leaf byte-identity (SG16) by
 //! `acceptance_encodings.rs::sg16_leaf_blob_is_byte_identical_to_input`,
