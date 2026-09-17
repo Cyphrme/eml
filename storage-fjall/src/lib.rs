@@ -11,26 +11,43 @@ use polydigest::{AlgorithmMetas, Storage, WriteOp};
 /// Reserved 9-byte key for log metadata in the `eml_metadata` keyspace.
 ///
 /// All algorithm-epoch keys are exactly 8 bytes (alg_id as big-endian u64), so
-/// this 9-byte key never collides with any valid algorithm entry. The
-/// trailing byte was the now-dropped kind byte (a log's kind is derived,
-/// never persisted); [`FjallStorage::append_count`] reads only the leading
-/// 8 bytes.
+/// this 9-byte key never collides with any valid algorithm entry. The key
+/// itself keeps its historical 9-byte spelling; the VALUE stored under it is
+/// the append count alone, 8 bytes, big-endian -- no kind byte, since a
+/// log's kind is derived, never persisted.
 const LOG_META_KEY: [u8; 9] = *b"_logmeta_";
 
 /// 10-byte key prefix for per-algorithm checkpoint roots in `eml_metadata`.
 ///
 /// Format: `[b'r', b'o', alg_id_be_bytes[0..8]]` — does not collide with the
 /// 8-byte epoch keys or the 9-byte LOG_META_KEY.
-#[allow(
-    dead_code,
-    reason = "unreachable from the crate's own (stubbed) apply() until it lands; the key scheme \
-              itself is unchanged by the operation-enum redesign"
-)]
 fn checkpoint_root_key(alg_id: u64) -> [u8; 10] {
     let mut key = [0u8; 10];
     key[0] = b'r';
     key[1] = b'o';
     key[2..10].copy_from_slice(&alg_id.to_be_bytes());
+    key
+}
+
+/// Encode an epoch list as `eml_metadata`'s per-algorithm value: a sequence
+/// of `(start, end)` `u64` big-endian pairs, 16 bytes each -- the inverse of
+/// [`FjallStorage::load_algorithm_metas`]'s own decoding.
+fn encode_epochs(epochs: &[(u64, u64)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(epochs.len() * 16);
+    for &(start, end) in epochs {
+        out.extend_from_slice(&start.to_be_bytes());
+        out.extend_from_slice(&end.to_be_bytes());
+    }
+    out
+}
+
+/// The node key format `get_node`/`apply` share: `alg_id` (8 bytes) ++
+/// `left` (8 bytes) ++ `height` (4 bytes), all big-endian.
+fn node_key(alg_id: u64, left: u64, height: u32) -> [u8; 20] {
+    let mut key = [0u8; 20];
+    key[0..8].copy_from_slice(&alg_id.to_be_bytes());
+    key[8..16].copy_from_slice(&left.to_be_bytes());
+    key[16..20].copy_from_slice(&height.to_be_bytes());
     key
 }
 
@@ -52,6 +69,13 @@ pub enum FjallStorageError {
     /// The supplied keyspace-scoping prefix is invalid.
     #[error("invalid keyspace prefix: {0:?}")]
     InvalidPrefix(String),
+
+    /// A [`WriteOp`] handed to [`Storage::apply`] violated its own
+    /// precondition: an append at a position other than the current count,
+    /// a duplicate algorithm registration, or a removal/resume naming an
+    /// algorithm this store has never registered.
+    #[error("invalid apply operation: {0}")]
+    InvalidOperation(String),
 }
 
 /// A production-grade EML storage backend backed by a Fjall database.
@@ -59,7 +83,6 @@ pub enum FjallStorageError {
 /// Not `Clone` — enforces single-writer ownership so the tree-level
 /// read-count→write-at-count window cannot race across aliased handles.
 pub struct FjallStorage {
-    #[allow(dead_code)]
     db: Database,
     leaves: Keyspace,
     nodes: Keyspace,
@@ -204,14 +227,9 @@ impl Storage for FjallStorage {
         left: u64,
         height: u32,
     ) -> Result<Option<Vec<u8>>, Self::Error> {
-        let mut key = [0u8; 20];
-        key[0..8].copy_from_slice(&alg_id.to_be_bytes());
-        key[8..16].copy_from_slice(&left.to_be_bytes());
-        key[16..20].copy_from_slice(&height.to_be_bytes());
-
         let value = self
             .nodes
-            .get(key)
+            .get(node_key(alg_id, left, height))
             .map_err(|e| FjallStorageError::Database(e.to_string()))?;
         Ok(value.map(|bytes| bytes.to_vec()))
     }
@@ -273,9 +291,9 @@ impl Storage for FjallStorage {
         match value {
             None => Ok(0),
             Some(bytes) => {
-                if bytes.len() != 9 {
+                if bytes.len() != 8 {
                     return Err(FjallStorageError::MetadataCorruption(
-                        "log_meta value must be 9 bytes".to_string(),
+                        "log_meta value must be 8 bytes".to_string(),
                     ));
                 }
                 Ok(u64::from_be_bytes(bytes[0..8].try_into().unwrap()))
@@ -303,13 +321,138 @@ impl Storage for FjallStorage {
         Ok(roots)
     }
 
-    async fn apply(&mut self, _ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
-        // Deliberately unimplemented: the operation-enum write path (head's
-        // ruling 2026-09-17) has no landed implementation on this backend
-        // yet. The previous five-parameter `write_batch` assembly this file
-        // held is gone with it rather than left as dead code nothing calls
-        // -- see `git log` for that version if it is useful as a starting
-        // point.
-        unimplemented!("FjallStorage::apply: the operation-enum write path is not implemented yet")
+    async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
+        let mut count = self.append_count().await?;
+
+        // Validate every op's precondition against a running projection of
+        // this store's state before building the batch: an append at the
+        // wrong position, a duplicate registration, or a removal/resume
+        // naming an unregistered algorithm must be refused before anything
+        // is queued, so a rejected call leaves the database untouched.
+        let mut projected_count = count;
+        for op in ops {
+            match op {
+                WriteOp::AppendLeaf { at, .. } | WriteOp::AppendSubtree { at, .. } => {
+                    if *at != projected_count {
+                        return Err(FjallStorageError::InvalidOperation(format!(
+                            "append at position {at}, expected the current count \
+                             {projected_count}"
+                        )));
+                    }
+                    projected_count += 1;
+                },
+                WriteOp::AddAlgorithm { alg_id, .. } => {
+                    let known = self
+                        .metadata
+                        .get(alg_id.to_be_bytes())
+                        .map_err(|e| FjallStorageError::Database(e.to_string()))?
+                        .is_some();
+                    if known {
+                        return Err(FjallStorageError::InvalidOperation(format!(
+                            "algorithm {alg_id} is already registered"
+                        )));
+                    }
+                },
+                WriteOp::RemoveAlgorithm { alg_id, .. } | WriteOp::ResumeAlgorithm { alg_id, .. } => {
+                    let known = self
+                        .metadata
+                        .get(alg_id.to_be_bytes())
+                        .map_err(|e| FjallStorageError::Database(e.to_string()))?
+                        .is_some();
+                    if !known {
+                        return Err(FjallStorageError::InvalidOperation(format!(
+                            "algorithm {alg_id} is not registered"
+                        )));
+                    }
+                },
+                WriteOp::SeedFrontier { .. } => {},
+            }
+        }
+
+        // Every key this batch touches -- across the leaves, nodes and
+        // metadata keyspaces -- lands in one atomic `fjall::WriteBatch`, so
+        // a crash between any two ops (or between any two of one op's own
+        // component writes) leaves no partial state.
+        let mut batch = self.db.batch();
+
+        for op in ops {
+            match op {
+                WriteOp::AppendLeaf {
+                    at,
+                    data,
+                    nodes,
+                    checkpoint_roots,
+                } => {
+                    batch.insert(&self.leaves, at.to_be_bytes(), *data);
+                    for n in *nodes {
+                        batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
+                    }
+                    for r in *checkpoint_roots {
+                        batch.insert(&self.metadata, checkpoint_root_key(r.alg_id), r.root);
+                    }
+                    count += 1;
+                },
+                WriteOp::AppendSubtree {
+                    at: _,
+                    nodes,
+                    checkpoint_roots,
+                } => {
+                    for n in *nodes {
+                        batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
+                    }
+                    for r in *checkpoint_roots {
+                        batch.insert(&self.metadata, checkpoint_root_key(r.alg_id), r.root);
+                    }
+                    count += 1;
+                },
+                WriteOp::AddAlgorithm { alg_id, epochs } => {
+                    batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
+                },
+                WriteOp::RemoveAlgorithm {
+                    alg_id,
+                    epochs,
+                    frozen_root,
+                } => {
+                    batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
+                    batch.insert(&self.metadata, checkpoint_root_key(*alg_id), *frozen_root);
+                },
+                WriteOp::ResumeAlgorithm {
+                    alg_id,
+                    epochs,
+                    nodes,
+                    resumed_root,
+                } => {
+                    batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
+                    for n in *nodes {
+                        batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
+                    }
+                    batch.insert(&self.metadata, checkpoint_root_key(*alg_id), *resumed_root);
+                },
+                WriteOp::SeedFrontier { size, algorithms } => {
+                    count = *size;
+                    for seed in *algorithms {
+                        batch.insert(
+                            &self.metadata,
+                            seed.alg_id.to_be_bytes(),
+                            encode_epochs(seed.epochs),
+                        );
+                        for n in seed.nodes {
+                            batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
+                        }
+                        batch.insert(
+                            &self.metadata,
+                            checkpoint_root_key(seed.alg_id),
+                            seed.seeded_root,
+                        );
+                    }
+                },
+            }
+        }
+
+        batch.insert(&self.metadata, LOG_META_KEY, count.to_be_bytes());
+        batch
+            .commit()
+            .map_err(|e| FjallStorageError::Database(e.to_string()))?;
+        Ok(())
     }
 }
