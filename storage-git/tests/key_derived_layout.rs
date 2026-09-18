@@ -93,17 +93,17 @@ fn assert_layout_matches_written_keys(
 }
 
 /// No entry at the top level of `C(n)` besides the two key-fanned-out
-/// namespaces (`n`, `l`) and named metadata (`meta`, `e`) -- an exhaustive
-/// allow-list, not a sample. `roots` is deliberately absent from this list:
-/// no tree this layer commits ever carries one (head's ruling,
-/// 2026-09-17).
+/// namespaces (`nodes`, `leaves`) and named metadata (`meta`, `epochs`) --
+/// an exhaustive allow-list, not a sample. `roots` is deliberately absent
+/// from this list: no tree this layer commits ever carries one (head's
+/// ruling, 2026-09-17).
 fn assert_top_level_is_exactly_namespaces_and_metadata(repo: &gix::Repository, tip: gix::ObjectId) {
     let allowed: HashSet<&str> = ["nodes", "leaves", "meta", "epochs"].into_iter().collect();
     for entry in common::read_tree_entries(repo, tip) {
         assert!(
             allowed.contains(entry.name.as_str()),
-            "C(n) has an unexpected top-level entry {:?}: only n/l (key-fanned-out storage) and \
-             meta/e (named metadata) are permitted",
+            "C(n) has an unexpected top-level entry {:?}: only nodes/leaves (key-fanned-out \
+             storage) and meta/epochs (named metadata) are permitted",
             entry.name
         );
     }
