@@ -262,7 +262,12 @@ pub fn loose_object_mtime(git_dir: &Path, id: gix::ObjectId) -> Option<SystemTim
 /// unambiguously detectable.
 pub fn age_loose_object(git_dir: &Path, id: gix::ObjectId) {
     let path = loose_object_path(git_dir, id);
-    let ancient = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(60 * 60 * 24 * 365);
+    // Roughly a year *before now*, not a year after the Unix epoch: the
+    // callers' own sanity checks compare this sentinel against
+    // `SystemTime::now()` with a ~300-day margin, which is only a live
+    // assertion if the sentinel is actually recent-past rather than a fixed
+    // 1971 timestamp indistinguishable from "the past" at any margin.
+    let ancient = SystemTime::now() - std::time::Duration::from_secs(60 * 60 * 24 * 365);
     let file =
         std::fs::File::open(&path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
     let times = std::fs::FileTimes::new().set_modified(ancient);

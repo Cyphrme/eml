@@ -79,32 +79,39 @@ async fn apply_op(
     mem: &mut NaryMerkleLog<MemoryStorage>,
     op: &Op,
 ) {
-    match op {
-        // Every legal op must succeed identically on both backends; an
-        // illegal one (e.g. no active algorithms left) must fail identically
-        // too -- asserting rather than swallowing catches a divergence
-        // immediately instead of silently masking it.
-        Op::Append(data) => {
-            let _ = log.append_leaf(data).await;
-            let _ = mem.append_leaf(data).await;
-        },
-        Op::Add(id) => {
-            let _ = log.add_algorithm(*id, Box::new(Sha256Hasher)).await;
-            let _ = mem.add_algorithm(*id, Box::new(Sha256Hasher)).await;
-        },
-        Op::Remove(id) => {
-            let _ = log.remove_algorithm(*id).await;
-            let _ = mem.remove_algorithm(*id).await;
-        },
-        Op::Resume(id) => {
-            let _ = log.resume_algorithm(*id).await;
-            let _ = mem.resume_algorithm(*id).await;
-        },
+    // Every legal op must succeed identically on both backends; an illegal
+    // one (e.g. no active algorithms left) must fail identically too.
+    // Capture both outcomes and assert them equal immediately, rather than
+    // discarding them and relying on some later assertion to happen to be
+    // sensitive to the divergence.
+    let (log_ok, mem_ok) = match op {
+        Op::Append(data) => (
+            log.append_leaf(data).await.is_ok(),
+            mem.append_leaf(data).await.is_ok(),
+        ),
+        Op::Add(id) => (
+            log.add_algorithm(*id, Box::new(Sha256Hasher)).await.is_ok(),
+            mem.add_algorithm(*id, Box::new(Sha256Hasher)).await.is_ok(),
+        ),
+        Op::Remove(id) => (
+            log.remove_algorithm(*id).await.is_ok(),
+            mem.remove_algorithm(*id).await.is_ok(),
+        ),
+        Op::Resume(id) => (
+            log.resume_algorithm(*id).await.is_ok(),
+            mem.resume_algorithm(*id).await.is_ok(),
+        ),
         Op::Reopen => {
             // Handled by the caller: reopening needs to consume and rebuild
             // both `log` and `mem` by value, which a `&mut` helper cannot do.
+            return;
         },
-    }
+    };
+    assert_eq!(
+        log_ok, mem_ok,
+        "{op:?} succeeded on one backend and failed on the other (fjall: {log_ok}, memory: \
+         {mem_ok})"
+    );
 }
 
 async fn run(ops: &[Op], arity: u64) {

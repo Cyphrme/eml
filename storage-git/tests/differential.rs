@@ -35,28 +35,22 @@ fn arb_ops() -> impl Strategy<Value = Vec<Op>> {
     )
 }
 
-async fn apply<S: Storage>(log: &mut NaryMerkleLog<S>, op: &Op)
+/// Apply `op` to `log`, returning whether it succeeded -- the caller
+/// compares this against the other backend's outcome for the identical op,
+/// which is what actually catches a divergence immediately rather than
+/// only downstream, in whatever later assertion happens to be sensitive to
+/// it.
+async fn apply<S: Storage>(log: &mut NaryMerkleLog<S>, op: &Op) -> bool
 where
     S::Error: std::fmt::Debug,
 {
-    match op {
-        // Every legal append must succeed identically on both backends;
-        // an illegal one (e.g. no active algorithms left) must fail
-        // identically too -- asserting rather than swallowing catches a
-        // divergence immediately instead of silently masking it.
-        Op::Append(data) => {
-            let _ = log.append_leaf(data).await;
-        },
-        Op::Add(id) => {
-            let _ = log.add_algorithm(*id, Box::new(WideHasher)).await;
-        },
-        Op::Remove(id) => {
-            let _ = log.remove_algorithm(*id).await;
-        },
-        Op::Resume(id) => {
-            let _ = log.resume_algorithm(*id).await;
-        },
-    }
+    let result = match op {
+        Op::Append(data) => log.append_leaf(data).await,
+        Op::Add(id) => log.add_algorithm(*id, Box::new(WideHasher)).await,
+        Op::Remove(id) => log.remove_algorithm(*id).await,
+        Op::Resume(id) => log.resume_algorithm(*id).await,
+    };
+    result.is_ok()
 }
 
 async fn run(ops: &[Op], arity: u64) {
@@ -74,8 +68,13 @@ async fn run(ops: &[Op], arity: u64) {
     .unwrap();
 
     for op in ops {
-        apply(&mut git_log, op).await;
-        apply(&mut mem_log, op).await;
+        let git_ok = apply(&mut git_log, op).await;
+        let mem_ok = apply(&mut mem_log, op).await;
+        assert_eq!(
+            git_ok, mem_ok,
+            "{op:?} succeeded on one backend and failed on the other (git: {git_ok}, memory: \
+             {mem_ok})"
+        );
         assert_eq!(git_log.size(), mem_log.size(), "size diverged after {op:?}");
         for alg_id in 0u64..4 {
             let g = git_log.root_for(alg_id).ok();
