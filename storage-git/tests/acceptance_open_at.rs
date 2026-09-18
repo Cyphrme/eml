@@ -44,6 +44,7 @@ fn sg21_open_at_yields_durable_witness_parity() {
             tree: gix::ObjectId,
             leaves: Vec<(u64, Vec<u8>)>,
             nodes: NodeRecording,
+            metas: polydigest::AlgorithmMetas,
         }
         let mut recorded = Vec::new();
 
@@ -74,11 +75,15 @@ fn sg21_open_at_yields_durable_witness_parity() {
                     left += cap;
                 }
             }
+            let metas = polydigest::Storage::load_algorithm_metas(log.storage())
+                .await
+                .unwrap();
             recorded.push(Recorded {
                 m: m + 1,
                 tree,
                 leaves,
                 nodes,
+                metas,
             });
         }
 
@@ -105,6 +110,17 @@ fn sg21_open_at_yields_durable_witness_parity() {
                     r.m
                 );
             }
+
+            // SG21 mandates `load_algorithm_metas` on the read-only view
+            // returned by `open_at` alongside `get_leaf`/`get_node` -- this
+            // is the one assertion exercising it (it had zero callers
+            // anywhere in the workspace before this).
+            let got_metas = view.load_algorithm_metas().await.unwrap();
+            assert_eq!(
+                &got_metas, &r.metas,
+                "size {}: open_at(recorded tip).load_algorithm_metas() must match the live value",
+                r.m
+            );
         }
     });
 }
