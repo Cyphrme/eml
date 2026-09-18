@@ -34,9 +34,9 @@
 //!   batch naming the same `alg_id` twice in its own `algorithms` list returned `Ok(())` on
 //!   `MemoryStorage` (silently keeping only the last write) and `Err` on `GitStorage`.
 //! - `add_then_remove_same_algorithm_in_one_batch_matches_across_backends`: a single batch that
-//!   both registers and immediately freezes the same algorithm id was accepted on `GitStorage`
-//!   (its `known()` closure projects `registered_this_batch` forward within the call) but rejected
-//!   on `MemoryStorage` (whose two-pass validator checked `RemoveAlgorithm`'s precondition against
+//!   both registers and immediately freezes the same algorithm id was accepted on `GitStorage` (its
+//!   `known()` closure projects `registered_this_batch` forward within the call) but rejected on
+//!   `MemoryStorage` (whose two-pass validator checked `RemoveAlgorithm`'s precondition against
 //!   `self.algorithm_metas` alone, never against what the same batch just registered) -- the
 //!   opposite direction from the other three: `MemoryStorage` wrongly refused a batch `GitStorage`
 //!   correctly accepted.
