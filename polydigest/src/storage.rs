@@ -24,16 +24,15 @@
 //! state before any method runs). Modelling it as N independent
 //! `ResumeAlgorithm`-shaped calls would drop the atomicity a crash-safe
 //! genesis write needs across algorithms; modelling it as N `AddAlgorithm`
-//! calls cannot express the inherited frontier nodes or checkpoint roots at
-//! all. `SeedFrontier` is the smallest addition that keeps the invariant
+//! calls cannot express the inherited frontier nodes at all. `SeedFrontier`
+//! is the smallest addition that keeps the invariant
 //! "one op, one atomic write" without smuggling optionality back into the
 //! other five.
 //!
-//! Field-name collisions are handled by small named structs
-//! ([`NodeWrite`], [`AlgorithmRoot`], [`AlgorithmSeed`]) instead of
-//! positional tuples: `(u64, u64, u32, &[u8])` lets a caller transpose an
-//! algorithm id and a left coordinate (both `u64`) with no compiler
-//! complaint; a struct with named fields does not.
+//! Field-name collisions are handled by small named structs ([`NodeWrite`],
+//! [`AlgorithmSeed`]) instead of positional tuples: `(u64, u64, u32, &[u8])`
+//! lets a caller transpose an algorithm id and a left coordinate (both
+//! `u64`) with no compiler complaint; a struct with named fields does not.
 
 use std::collections::HashMap;
 
@@ -59,20 +58,10 @@ pub struct NodeWrite<'a> {
     pub hash: &'a [u8],
 }
 
-/// One algorithm's checkpoint root, as part of a batch spanning several
-/// active algorithms.
-#[derive(Debug, Clone, Copy)]
-pub struct AlgorithmRoot<'a> {
-    /// The algorithm this root belongs to.
-    pub alg_id: u64,
-    /// The root hash at the current tip.
-    pub root: &'a [u8],
-}
-
 /// One algorithm's inherited genesis state, as part of a
 /// [`WriteOp::SeedFrontier`] batch: its epoch history so far (carried from
-/// the sealed source), the frontier peaks [`crate::tree::NaryMerkleLog::resume`]
-/// materializes as nodes, and the checkpoint root folded from that frontier.
+/// the sealed source) and the frontier peaks
+/// [`crate::tree::NaryMerkleLog::resume`] materializes as nodes.
 #[derive(Debug, Clone, Copy)]
 pub struct AlgorithmSeed<'a> {
     /// The algorithm being seeded.
@@ -81,11 +70,6 @@ pub struct AlgorithmSeed<'a> {
     pub epochs: &'a [(u64, u64)],
     /// The frontier peaks to materialize as nodes (active ranges only).
     pub nodes: &'a [NodeWrite<'a>],
-    /// The checkpoint root folded from the seeded frontier. Named distinctly
-    /// from [`AppendLeaf`](WriteOp::AppendLeaf)/[`AppendSubtree`](WriteOp::AppendSubtree)'s
-    /// plural `checkpoint_roots` so the two cannot be typo'd into each other
-    /// at a call site.
-    pub seeded_root: &'a [u8],
 }
 
 /// One atomic storage mutation. Every field on every variant is always
@@ -104,8 +88,6 @@ pub enum WriteOp<'a> {
         data: &'a [u8],
         /// Per-active-algorithm leaf node(s) produced by this append.
         nodes: &'a [NodeWrite<'a>],
-        /// Per-active-algorithm checkpoint root after this append.
-        checkpoint_roots: &'a [AlgorithmRoot<'a>],
     },
     /// Append a structured subtree at log position `at`: no leaf payload is
     /// stored, only the per-algorithm subtree-root node(s).
@@ -114,8 +96,6 @@ pub enum WriteOp<'a> {
         at: u64,
         /// Per-active-algorithm subtree-root node(s) produced by this append.
         nodes: &'a [NodeWrite<'a>],
-        /// Per-active-algorithm checkpoint root after this append.
-        checkpoint_roots: &'a [AlgorithmRoot<'a>],
     },
     /// Register a new algorithm, active from the current append count.
     AddAlgorithm {
@@ -130,10 +110,6 @@ pub enum WriteOp<'a> {
         alg_id: u64,
         /// Its epoch history with the final epoch now closed.
         epochs: &'a [(u64, u64)],
-        /// The checkpoint root at the freeze point. Named distinctly from
-        /// the append variants' plural `checkpoint_roots` so the two cannot
-        /// be typo'd into each other at a call site.
-        frozen_root: &'a [u8],
     },
     /// Reactivate a previously frozen algorithm, replaying its frontier
     /// forward across the gap.
@@ -144,10 +120,6 @@ pub enum WriteOp<'a> {
         epochs: &'a [(u64, u64)],
         /// Any mixed (frozen/live) nodes reconstructed across the gap.
         nodes: &'a [NodeWrite<'a>],
-        /// The checkpoint root after reactivation. Named distinctly from
-        /// the append variants' plural `checkpoint_roots` so the two cannot
-        /// be typo'd into each other at a call site.
-        resumed_root: &'a [u8],
     },
     /// Seed one or more algorithms' genesis frontier state atomically, at
     /// caller-chosen size `size` -- [`crate::tree::NaryMerkleLog::resume`]'s
@@ -212,15 +184,6 @@ pub trait Storage: Send + Sync {
     /// instead; nothing else touches it.
     fn append_count(&self) -> impl std::future::Future<Output = Result<u64, Self::Error>> + Send;
 
-    /// Load per-algorithm checkpoint roots last written by [`Storage::apply`].
-    ///
-    /// Used by `from_storage` to verify frontier integrity: the root
-    /// recomputed from the loaded frontier must match the stored checkpoint.
-    /// Returns an empty list for a fresh store.
-    fn load_checkpoint_roots(
-        &self,
-    ) -> impl std::future::Future<Output = Result<Vec<(u64, Vec<u8>)>, Self::Error>> + Send;
-
     /// Atomically commit one or more [`WriteOp`]s in a single durable
     /// transaction -- the *only* way to mutate a [`Storage`] backend.
     ///
@@ -280,8 +243,6 @@ pub struct MemoryStorage {
     pub algorithm_metas: HashMap<u64, Vec<(u64, u64)>>,
     /// The total append count. Never `Option`: `0` for a fresh store.
     pub count: u64,
-    /// Per-algorithm checkpoint roots: the root hash at the last append.
-    pub checkpoint_roots: HashMap<u64, Vec<u8>>,
 }
 
 impl MemoryStorage {
@@ -293,7 +254,6 @@ impl MemoryStorage {
             nodes: HashMap::new(),
             algorithm_metas: HashMap::new(),
             count: 0,
-            checkpoint_roots: HashMap::new(),
         }
     }
 }
@@ -365,14 +325,6 @@ impl Storage for MemoryStorage {
 
     async fn append_count(&self) -> Result<u64, Self::Error> {
         Ok(self.count)
-    }
-
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        Ok(self
-            .checkpoint_roots
-            .iter()
-            .map(|(&id, r)| (id, r.clone()))
-            .collect())
     }
 
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
@@ -451,59 +403,37 @@ impl Storage for MemoryStorage {
 
         for op in ops {
             match op {
-                WriteOp::AppendLeaf {
-                    at: _,
-                    data,
-                    nodes,
-                    checkpoint_roots,
-                } => {
+                WriteOp::AppendLeaf { at: _, data, nodes } => {
                     self.leaves.push(data.to_vec());
                     for n in *nodes {
                         self.nodes
                             .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
                     }
-                    for r in *checkpoint_roots {
-                        self.checkpoint_roots.insert(r.alg_id, r.root.to_vec());
-                    }
                     self.count += 1;
                 },
-                WriteOp::AppendSubtree {
-                    at: _,
-                    nodes,
-                    checkpoint_roots,
-                } => {
+                WriteOp::AppendSubtree { at: _, nodes } => {
                     for n in *nodes {
                         self.nodes
                             .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
-                    }
-                    for r in *checkpoint_roots {
-                        self.checkpoint_roots.insert(r.alg_id, r.root.to_vec());
                     }
                     self.count += 1;
                 },
                 WriteOp::AddAlgorithm { alg_id, epochs } => {
                     self.algorithm_metas.insert(*alg_id, epochs.to_vec());
                 },
-                WriteOp::RemoveAlgorithm {
-                    alg_id,
-                    epochs,
-                    frozen_root,
-                } => {
+                WriteOp::RemoveAlgorithm { alg_id, epochs } => {
                     self.algorithm_metas.insert(*alg_id, epochs.to_vec());
-                    self.checkpoint_roots.insert(*alg_id, frozen_root.to_vec());
                 },
                 WriteOp::ResumeAlgorithm {
                     alg_id,
                     epochs,
                     nodes,
-                    resumed_root,
                 } => {
                     self.algorithm_metas.insert(*alg_id, epochs.to_vec());
                     for n in *nodes {
                         self.nodes
                             .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
                     }
-                    self.checkpoint_roots.insert(*alg_id, resumed_root.to_vec());
                 },
                 WriteOp::SeedFrontier { size, algorithms } => {
                     self.count = *size;
@@ -514,8 +444,6 @@ impl Storage for MemoryStorage {
                             self.nodes
                                 .insert((n.alg_id, n.left, n.height), n.hash.to_vec());
                         }
-                        self.checkpoint_roots
-                            .insert(seed.alg_id, seed.seeded_root.to_vec());
                     }
                 },
             }

@@ -196,17 +196,7 @@ pub(crate) fn apply(
 
     for op in ops {
         match op {
-            WriteOp::AppendLeaf {
-                at,
-                data,
-                nodes,
-                // A per-algorithm checkpoint root is an index over this
-                // layer's own data (the frontier already stored under
-                // `nodes/`); an index over this layer's own data belongs at
-                // the application layer, not here (head's ruling,
-                // 2026-09-17), so this layer never persists it.
-                checkpoint_roots: _,
-            } => {
+            WriteOp::AppendLeaf { at, data, nodes } => {
                 if *at != count {
                     return Err(invalid(format!(
                         "AppendLeaf at position {at}, expected the current count {count}"
@@ -229,11 +219,7 @@ pub(crate) fn apply(
                 count += 1;
                 has_leaves = true;
             },
-            WriteOp::AppendSubtree {
-                at,
-                nodes,
-                checkpoint_roots: _,
-            } => {
+            WriteOp::AppendSubtree { at, nodes } => {
                 if *at != count {
                     return Err(invalid(format!(
                         "AppendSubtree at position {at}, expected the current count {count}"
@@ -258,17 +244,7 @@ pub(crate) fn apply(
                 epoch_overrides.insert(*alg_id, epochs.to_vec());
                 registered_this_batch.insert(*alg_id);
             },
-            WriteOp::RemoveAlgorithm {
-                alg_id,
-                epochs,
-                // Deliberately never written anywhere: a checkpoint root is
-                // an index over this layer's own data, which belongs at the
-                // application layer, not here (head's ruling, 2026-09-17).
-                // The terminal state this coordinate held at freeze is still
-                // reachable through the nodes/ digests this tree keeps
-                // forever (§2.5).
-                frozen_root: _,
-            } => {
+            WriteOp::RemoveAlgorithm { alg_id, epochs } => {
                 if !known(&registered_this_batch, *alg_id)? {
                     return Err(invalid(format!("algorithm {alg_id} is not registered")));
                 }
@@ -278,7 +254,6 @@ pub(crate) fn apply(
                 alg_id,
                 epochs,
                 nodes,
-                resumed_root: _,
             } => {
                 if !known(&registered_this_batch, *alg_id)? {
                     return Err(invalid(format!("algorithm {alg_id} is not registered")));
@@ -329,9 +304,6 @@ pub(crate) fn apply(
                             )
                             .map_err(git_err)?;
                     }
-                    // `seed.seeded_root` is deliberately never written: same
-                    // application-layer-index argument as every other root
-                    // (head's ruling, 2026-09-17).
                     registered_this_batch.insert(seed.alg_id);
                 }
             },

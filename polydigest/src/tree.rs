@@ -22,7 +22,7 @@ use crate::log_error::{LogError, LogResult as Result};
 use crate::root::{
     combined_root, committed_active_algs, committed_active_at, validate_committed_epochs,
 };
-use crate::storage::{AlgorithmRoot, AlgorithmSeed, NodeWrite, Storage, StorageReader, WriteOp};
+use crate::storage::{AlgorithmSeed, NodeWrite, Storage, StorageReader, WriteOp};
 
 /// Configuration for the n-ary Merkle tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +65,6 @@ pub struct NaryMerkleLog<S: Storage> {
 /// its own `WriteOp` because the raw bytes are also stored separately.
 struct OwnedBatch {
     nodes: Vec<(u64, u64, u32, Vec<u8>)>,
-    checkpoint_roots: Vec<(u64, Vec<u8>)>,
 }
 
 /// One algorithm's owned genesis-seed data, assembled in [`NaryMerkleLog::resume`]
@@ -74,7 +73,6 @@ struct OwnedAlgorithmSeed {
     alg_id: u64,
     epochs: Vec<(u64, u64)>,
     nodes: Vec<(u64, u32, Vec<u8>)>,
-    seeded_root: Vec<u8>,
 }
 
 impl<S: Storage> NaryMerkleLog<S> {
@@ -212,9 +210,9 @@ impl<S: Storage> NaryMerkleLog<S> {
                 frontier_coords: coords.clone(),
             };
 
-            // Persist the genesis frontier peaks (active ranges only) and the
-            // checkpoint root so the resumed log is reloadable and forward
-            // appends read a consistent frontier back.
+            // Persist the genesis frontier peaks (active ranges only) so the
+            // resumed log is reloadable and forward appends read a
+            // consistent frontier back.
             let mut alg_nodes: Vec<(u64, u32, Vec<u8>)> = Vec::new();
             for (&(left, height), peak) in coords.iter().zip(peaks.iter()) {
                 let cap = k.pow(height);
@@ -222,12 +220,10 @@ impl<S: Storage> NaryMerkleLog<S> {
                     alg_nodes.push((left, height, peak.clone()));
                 }
             }
-            let root = engine::compute_root(&view, k as usize);
             owned_seeds.push(OwnedAlgorithmSeed {
                 alg_id: *alg_id,
                 epochs,
                 nodes: alg_nodes,
-                seeded_root: root,
             });
             algs.insert(*alg_id, view);
         }
@@ -253,7 +249,6 @@ impl<S: Storage> NaryMerkleLog<S> {
                 alg_id: seed.alg_id,
                 epochs: seed.epochs.as_slice(),
                 nodes: nodes.as_slice(),
-                seeded_root: seed.seeded_root.as_slice(),
             })
             .collect();
 
@@ -369,31 +364,6 @@ impl<S: Storage> NaryMerkleLog<S> {
             algs.insert(alg_id, view);
         }
 
-        // V6: verify loaded frontier against stored checkpoint roots.
-        // A corrupted frontier node will produce a different root from the one
-        // committed at write time, detecting the corruption before the log is used.
-        let stored_roots: HashMap<u64, Vec<u8>> = storage
-            .load_checkpoint_roots()
-            .await
-            .map_err(LogError::Storage)?
-            .into_iter()
-            .collect();
-
-        for (&alg_id, view) in &algs {
-            if let Some(stored_root) = stored_roots.get(&alg_id) {
-                let actual_root = engine::compute_root(view, config.arity as usize);
-                if &actual_root != stored_root {
-                    return Err(LogError::CorruptedMetadata {
-                        alg_id,
-                        reason: format!(
-                            "checkpoint root mismatch for algorithm {alg_id}: recomputed root \
-                             differs from stored checkpoint"
-                        ),
-                    });
-                }
-            }
-        }
-
         Ok(Self {
             storage,
             config,
@@ -445,19 +415,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             )?;
         }
 
-        let checkpoint_roots: Vec<(u64, Vec<u8>)> = new_algs
-            .iter()
-            .filter(|(_, s)| s.is_active())
-            .map(|(&alg_id, s)| {
-                let root = engine::compute_root(s, self.config.arity as usize);
-                (alg_id, root)
-            })
-            .collect();
-
-        let batch = OwnedBatch {
-            nodes: batch_nodes,
-            checkpoint_roots,
-        };
+        let batch = OwnedBatch { nodes: batch_nodes };
 
         Ok((new_algs, batch))
     }
@@ -621,23 +579,10 @@ impl<S: Storage> NaryMerkleLog<S> {
             last.1 = current_size;
         }
 
-        // Build updated state for checkpoint root computation.
-        let frozen_root = {
-            let frozen = AlgView {
-                hasher: view.hasher.clone_box(),
-                epochs: new_epochs.clone(),
-                frontier: view.frontier.clone(),
-                frontier_coords: view.frontier_coords.clone(),
-            };
-            engine::compute_root(&frozen, self.config.arity as usize)
-        };
-
-        // Commit epoch update + checkpoint root atomically (mirrors resume_algorithm).
         self.storage
             .apply(&[WriteOp::RemoveAlgorithm {
                 alg_id,
                 epochs: &new_epochs,
-                frozen_root: frozen_root.as_slice(),
             }])
             .await
             .map_err(LogError::Storage)?;
@@ -716,22 +661,12 @@ impl<S: Storage> NaryMerkleLog<S> {
             })
             .collect();
 
-        // Compute the checkpoint root for the resumed algorithm from its new frontier.
-        let resumed_view = AlgView {
-            hasher: self.algs[&alg_id].hasher.clone_box(),
-            epochs: new_epochs.clone(),
-            frontier: frontier.clone(),
-            frontier_coords: coords.clone(),
-        };
-        let resumed_root = engine::compute_root(&resumed_view, self.config.arity as usize);
-
-        // Commit nodes + epoch update + checkpoint root atomically (closes V13).
+        // Commit nodes + epoch update atomically (closes V13).
         self.storage
             .apply(&[WriteOp::ResumeAlgorithm {
                 alg_id,
                 epochs: &new_epochs,
                 nodes: &nodes_ref,
-                resumed_root: resumed_root.as_slice(),
             }])
             .await
             .map_err(LogError::Storage)?;
@@ -798,21 +733,12 @@ impl<S: Storage> NaryMerkleLog<S> {
                 hash: hash.as_slice(),
             })
             .collect();
-        let checkpoint_refs: Vec<AlgorithmRoot<'_>> = batch
-            .checkpoint_roots
-            .iter()
-            .map(|(id, r)| AlgorithmRoot {
-                alg_id: *id,
-                root: r.as_slice(),
-            })
-            .collect();
 
         self.storage
             .apply(&[WriteOp::AppendLeaf {
                 at,
                 data,
                 nodes: &nodes_ref,
-                checkpoint_roots: &checkpoint_refs,
             }])
             .await
             .map_err(LogError::Storage)?;
@@ -870,20 +796,11 @@ impl<S: Storage> NaryMerkleLog<S> {
                 hash: hash.as_slice(),
             })
             .collect();
-        let checkpoint_refs: Vec<AlgorithmRoot<'_>> = batch
-            .checkpoint_roots
-            .iter()
-            .map(|(id, r)| AlgorithmRoot {
-                alg_id: *id,
-                root: r.as_slice(),
-            })
-            .collect();
 
         self.storage
             .apply(&[WriteOp::AppendSubtree {
                 at,
                 nodes: &nodes_ref,
-                checkpoint_roots: &checkpoint_refs,
             }])
             .await
             .map_err(LogError::Storage)?;

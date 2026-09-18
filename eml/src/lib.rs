@@ -24,8 +24,8 @@
 // `storage::MemoryStorageError` that way, and polydigest documents
 // `eml::proof::*` as the supported path to its append-only proof surface.
 pub use polydigest::{
-    AlgorithmMetas, AlgorithmRoot, AlgorithmSeed, AuditPayload, BindingProof, BoundSnapshot,
-    ClaimedLeaf, ConsistencyProof, CouplingProof, Epochs, FillError, FillKind, FilledTree, Hasher,
+    AlgorithmMetas, AlgorithmSeed, AuditPayload, BindingProof, BoundSnapshot, ClaimedLeaf,
+    ConsistencyProof, CouplingProof, Epochs, FillError, FillKind, FilledTree, Hasher,
     InclusionProof, LeafProof, LogError, LogKind, LogResult, MemoryStorage, Meta, NaryMerkleLog,
     NodeWrite, NullRun, ProofStep, RunExtent, Seal, Sealed, SkeletonStep, SnapshotProof, Storage,
     Subtree, TreeConfig, TrustedBindingRoot, VerifierConfig, WriteOp, all_null_runs, bag_peaks,

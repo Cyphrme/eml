@@ -287,16 +287,6 @@ impl Storage for FjallStorage {
         }
     }
 
-    /// This backend never persists a per-algorithm checkpoint root: a root
-    /// recomputed from the stored frontier is an index over this layer's
-    /// own data, which belongs at the application layer, not here (head's
-    /// ruling, 2026-09-17). The trait method itself is retired in a
-    /// follow-up commit; until then this satisfies it honestly with the
-    /// only answer that can ever be true.
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        Ok(Vec::new())
-    }
-
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         let mut count = self.append_count().await?;
 
@@ -353,27 +343,14 @@ impl Storage for FjallStorage {
 
         for op in ops {
             match op {
-                WriteOp::AppendLeaf {
-                    at,
-                    data,
-                    nodes,
-                    // A per-algorithm checkpoint root is an index over this
-                    // layer's own data; the index belongs at the
-                    // application layer, not here (head's ruling,
-                    // 2026-09-17), so this backend never persists it.
-                    checkpoint_roots: _,
-                } => {
+                WriteOp::AppendLeaf { at, data, nodes } => {
                     batch.insert(&self.leaves, at.to_be_bytes(), *data);
                     for n in *nodes {
                         batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
                     }
                     count += 1;
                 },
-                WriteOp::AppendSubtree {
-                    at: _,
-                    nodes,
-                    checkpoint_roots: _,
-                } => {
+                WriteOp::AppendSubtree { at: _, nodes } => {
                     for n in *nodes {
                         batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
                     }
@@ -382,18 +359,13 @@ impl Storage for FjallStorage {
                 WriteOp::AddAlgorithm { alg_id, epochs } => {
                     batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
                 },
-                WriteOp::RemoveAlgorithm {
-                    alg_id,
-                    epochs,
-                    frozen_root: _,
-                } => {
+                WriteOp::RemoveAlgorithm { alg_id, epochs } => {
                     batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
                 },
                 WriteOp::ResumeAlgorithm {
                     alg_id,
                     epochs,
                     nodes,
-                    resumed_root: _,
                 } => {
                     batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
                     for n in *nodes {

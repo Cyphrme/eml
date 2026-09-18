@@ -78,17 +78,3 @@ pub(crate) fn load_algorithm_metas(
     }
     Ok(out)
 }
-
-/// `Storage::load_checkpoint_roots`'s implementation, interim to this
-/// dispatch: this layer no longer writes a `roots/` entry at all -- a
-/// per-algorithm root is an index over this layer's own data, which belongs
-/// at the application layer, not here (head's ruling, 2026-09-17) -- so
-/// there is nothing to decode. The trait method itself is removed in the
-/// same dispatch's polydigest pass; until then this satisfies it honestly
-/// with the only answer that can ever be true.
-pub(crate) fn load_checkpoint_roots(
-    _repo: &gix::Repository,
-    _tree_id: ObjectId,
-) -> Result<Vec<(u64, Vec<u8>)>, Error> {
-    Ok(Vec::new())
-}

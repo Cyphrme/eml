@@ -377,14 +377,6 @@ impl Storage for GitStorage {
         Ok(self.count)
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        let Some(tree) = self.observed_tip else {
-            return Ok(Vec::new());
-        };
-        let repo = self.thread_local();
-        read::load_checkpoint_roots(&repo, tree)
-    }
-
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         let repo = self.thread_local();
         let old = build::OldState {
@@ -477,15 +469,5 @@ impl GitReadOnlyView {
     pub async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, GitStorageError> {
         let repo = self.repo.to_thread_local();
         read::load_algorithm_metas(&repo, self.tree)
-    }
-
-    /// Load every active-at-this-tree algorithm's checkpoint root.
-    ///
-    /// # Errors
-    ///
-    /// Propagates a decode/corruption error.
-    pub async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, GitStorageError> {
-        let repo = self.repo.to_thread_local();
-        read::load_checkpoint_roots(&repo, self.tree)
     }
 }

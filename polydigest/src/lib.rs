@@ -67,8 +67,7 @@ pub use sealed::Sealed;
 pub use snapshot::BoundSnapshot;
 pub use snapshot_proof::{ClaimedLeaf, SnapshotProof};
 pub use storage::{
-    AlgorithmMetas, AlgorithmRoot, AlgorithmSeed, Epochs, MemoryStorage, NodeWrite, Storage,
-    WriteOp,
+    AlgorithmMetas, AlgorithmSeed, Epochs, MemoryStorage, NodeWrite, Storage, WriteOp,
 };
 pub use tree::{NaryMerkleLog, TreeConfig};
 
