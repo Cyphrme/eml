@@ -17,18 +17,6 @@ use polydigest::{AlgorithmMetas, Storage, WriteOp};
 /// log's kind is derived, never persisted.
 const LOG_META_KEY: [u8; 9] = *b"_logmeta_";
 
-/// 10-byte key prefix for per-algorithm checkpoint roots in `eml_metadata`.
-///
-/// Format: `[b'r', b'o', alg_id_be_bytes[0..8]]` — does not collide with the
-/// 8-byte epoch keys or the 9-byte LOG_META_KEY.
-fn checkpoint_root_key(alg_id: u64) -> [u8; 10] {
-    let mut key = [0u8; 10];
-    key[0] = b'r';
-    key[1] = b'o';
-    key[2..10].copy_from_slice(&alg_id.to_be_bytes());
-    key
-}
-
 /// Encode an epoch list as `eml_metadata`'s per-algorithm value: a sequence
 /// of `(start, end)` `u64` big-endian pairs, 16 bytes each -- the inverse of
 /// [`FjallStorage::load_algorithm_metas`]'s own decoding.
@@ -240,11 +228,9 @@ impl Storage for FjallStorage {
             let (key_bytes, val_bytes) = item
                 .into_inner()
                 .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-            // Skip reserved entries: log-metadata (9 bytes) and checkpoint roots (10 bytes).
+            // Skip the reserved log-metadata entry (9 bytes).
             let key_ref = key_bytes.as_ref();
-            if key_ref == LOG_META_KEY
-                || (key_ref.len() == 10 && key_ref[0] == b'r' && key_ref[1] == b'o')
-            {
+            if key_ref == LOG_META_KEY {
                 continue;
             }
             let alg_id = {
@@ -301,24 +287,14 @@ impl Storage for FjallStorage {
         }
     }
 
+    /// This backend never persists a per-algorithm checkpoint root: a root
+    /// recomputed from the stored frontier is an index over this layer's
+    /// own data, which belongs at the application layer, not here (head's
+    /// ruling, 2026-09-17). The trait method itself is retired in a
+    /// follow-up commit; until then this satisfies it honestly with the
+    /// only answer that can ever be true.
     async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        let mut roots = Vec::new();
-        for item in self.metadata.iter() {
-            let (key_bytes, val_bytes) = item
-                .into_inner()
-                .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-            let key_ref = key_bytes.as_ref();
-            if key_ref.len() == 10 && key_ref[0] == b'r' && key_ref[1] == b'o' {
-                let arr: [u8; 8] = key_ref[2..10].try_into().map_err(|_| {
-                    FjallStorageError::MetadataCorruption(
-                        "checkpoint root key has wrong alg_id length".to_string(),
-                    )
-                })?;
-                let alg_id = u64::from_be_bytes(arr);
-                roots.push((alg_id, val_bytes.to_vec()));
-            }
-        }
-        Ok(roots)
+        Ok(Vec::new())
     }
 
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
@@ -381,27 +357,25 @@ impl Storage for FjallStorage {
                     at,
                     data,
                     nodes,
-                    checkpoint_roots,
+                    // A per-algorithm checkpoint root is an index over this
+                    // layer's own data; the index belongs at the
+                    // application layer, not here (head's ruling,
+                    // 2026-09-17), so this backend never persists it.
+                    checkpoint_roots: _,
                 } => {
                     batch.insert(&self.leaves, at.to_be_bytes(), *data);
                     for n in *nodes {
                         batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
-                    }
-                    for r in *checkpoint_roots {
-                        batch.insert(&self.metadata, checkpoint_root_key(r.alg_id), r.root);
                     }
                     count += 1;
                 },
                 WriteOp::AppendSubtree {
                     at: _,
                     nodes,
-                    checkpoint_roots,
+                    checkpoint_roots: _,
                 } => {
                     for n in *nodes {
                         batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
-                    }
-                    for r in *checkpoint_roots {
-                        batch.insert(&self.metadata, checkpoint_root_key(r.alg_id), r.root);
                     }
                     count += 1;
                 },
@@ -411,22 +385,20 @@ impl Storage for FjallStorage {
                 WriteOp::RemoveAlgorithm {
                     alg_id,
                     epochs,
-                    frozen_root,
+                    frozen_root: _,
                 } => {
                     batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
-                    batch.insert(&self.metadata, checkpoint_root_key(*alg_id), *frozen_root);
                 },
                 WriteOp::ResumeAlgorithm {
                     alg_id,
                     epochs,
                     nodes,
-                    resumed_root,
+                    resumed_root: _,
                 } => {
                     batch.insert(&self.metadata, alg_id.to_be_bytes(), encode_epochs(epochs));
                     for n in *nodes {
                         batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
                     }
-                    batch.insert(&self.metadata, checkpoint_root_key(*alg_id), *resumed_root);
                 },
                 WriteOp::SeedFrontier { size, algorithms } => {
                     count = *size;
@@ -439,11 +411,6 @@ impl Storage for FjallStorage {
                         for n in seed.nodes {
                             batch.insert(&self.nodes, node_key(n.alg_id, n.left, n.height), n.hash);
                         }
-                        batch.insert(
-                            &self.metadata,
-                            checkpoint_root_key(seed.alg_id),
-                            seed.seeded_root,
-                        );
                     }
                 },
             }
