@@ -8,41 +8,42 @@
 //! Every test here drives `Storage::apply` directly, bypassing
 //! `NaryMerkleLog`, exactly as the gate's own probe did.
 //!
-//! RED today (both confirmed by direct reproduction during this gate's
-//! test-authoring pass):
+//! Found RED during this gate's test-authoring pass and fixed by
+//! `f781b0b` (landed after this file's own `9177ffd`, so every test below
+//! is pinned green against the fix, not against the original defect):
 //!
 //! - `seed_frontier_onto_a_populated_store_is_rejected_on_git` and `..._on_memory`:
-//!   `WriteOp::SeedFrontier` silently rewinds `append_count`/`count` on a store that already holds
-//!   committed appends, on both backends. `MemoryStorage`'s validation arm for this variant is
-//!   `WriteOp::SeedFrontier { .. } => {}` -- literally empty. `GitStorage`'s only checks that the
-//!   seeded algorithm ids are not already registered; it never checks that the store itself is
+//!   `WriteOp::SeedFrontier` silently rewound `append_count`/`count` on a store that already held
+//!   committed appends, on both backends. `MemoryStorage`'s validation arm for this variant was
+//!   `WriteOp::SeedFrontier { .. } => {}` -- literally empty. `GitStorage` only checked that the
+//!   seeded algorithm ids were not already registered; it never checked that the store itself was
 //!   fresh.
 //! - `duplicate_add_algorithm_in_one_batch_is_rejected_on_memory`: a batch carrying two
-//!   `WriteOp::AddAlgorithm` for the same id returns `Ok(())` on `MemoryStorage`, silently
+//!   `WriteOp::AddAlgorithm` for the same id returned `Ok(())` on `MemoryStorage`, silently
 //!   overwriting the first registration, although the trait's own `apply` doc makes rejecting a
-//!   duplicate registration a MUST. `GitStorage` already rejects this (pinned green below as the
-//!   parity target).
+//!   duplicate registration a MUST. `GitStorage` already rejected this (the parity target the fix
+//!   brought `MemoryStorage` up to).
 //!
 //! Two more asymmetries were found while enumerating every MUST this file
 //! checks (not in the gate's deposit; found during this pass, same root
 //! cause as the two above -- `MemoryStorage`'s `SeedFrontier` and
 //! `AddAlgorithm` validation arms not projecting registration state the
-//! way `GitStorage`'s `known()` closure does):
+//! way `GitStorage`'s `known()` closure does), and fixed by the same commit:
 //!
 //! - `seed_frontier_with_a_duplicate_algorithm_id_is_rejected_on_memory`: a single `SeedFrontier`
-//!   batch naming the same `alg_id` twice in its own `algorithms` list returns `Ok(())` on
+//!   batch naming the same `alg_id` twice in its own `algorithms` list returned `Ok(())` on
 //!   `MemoryStorage` (silently keeping only the last write) and `Err` on `GitStorage`.
 //! - `add_then_remove_same_algorithm_in_one_batch_matches_across_backends`: a single batch that
-//!   both registers and immediately freezes the same algorithm id is accepted on `GitStorage` (its
-//!   `known()` closure projects `registered_this_batch` forward within the call) but rejected on
-//!   `MemoryStorage` (whose two-pass validator checks `RemoveAlgorithm`'s precondition against
+//!   both registers and immediately freezes the same algorithm id was accepted on `GitStorage`
+//!   (its `known()` closure projects `registered_this_batch` forward within the call) but rejected
+//!   on `MemoryStorage` (whose two-pass validator checked `RemoveAlgorithm`'s precondition against
 //!   `self.algorithm_metas` alone, never against what the same batch just registered) -- the
-//!   opposite direction from the other three: here `MemoryStorage` wrongly refuses a batch
-//!   `GitStorage` correctly accepts.
+//!   opposite direction from the other three: `MemoryStorage` wrongly refused a batch `GitStorage`
+//!   correctly accepted.
 //!
-//! Enumerated and confirmed identical on both backends today (pinned green,
-//! not blocking, included so the coverage-vs-doc gap stated in the dispatch
-//! is visible): an append at a position other than the current count
+//! Enumerated and confirmed identical on both backends from the start (pinned
+//! green, never blocking, included so the coverage-vs-doc gap stated in the
+//! dispatch is visible): an append at a position other than the current count
 //! (`AppendLeaf` and `AppendSubtree`, each), a `RemoveAlgorithm`/
 //! `ResumeAlgorithm` naming an algorithm the store has never registered.
 //! NOT checked here (out of the trait doc's stated MUSTs, so left as an
