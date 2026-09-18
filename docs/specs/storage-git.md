@@ -97,7 +97,7 @@ Every node and leaf lives at a git tree path derived **only** from its own
 key. There is no peak-and-children hierarchy, no decomposition of a taller
 coordinate into its parts, and no materialized-versus-opaque distinction — a
 write adds exactly the keys it is given, with nothing wired or carried
-forward by decision. `meta`/`epochs`/`roots` are the one exception: small,
+forward by decision. `meta`/`epochs` are the one exception: small,
 non-key-addressed metadata that is genuinely mutated (not merely appended
 to) on each write.
 
@@ -148,8 +148,6 @@ C(n)                          tree
   meta                        blob    §3.1
   epochs/                     tree    one blob per ever-registered algorithm
     hex(alg_id, 16)           blob    §3.2
-  roots/                      tree    one blob per algorithm active at n
-    hex(alg_id, 16)           blob    §3.3
   nodes/                      tree    every sealed node digest, by key
     hex(alg_id, 16)/          tree
       hex(h, 2)/              tree
@@ -159,12 +157,14 @@ C(n)                          tree
 ```
 
 **[SG1]** `C(n)`'s top-level entries MUST be an exhaustive subset of exactly
-`{meta, epochs, roots, nodes, leaves}` — `meta` present always;
+`{meta, epochs, nodes, leaves}` — `meta` present always;
 `epochs`/`nodes`/`leaves` present once anything has ever been written under
-them; `roots` present once at least one algorithm is both active at `n` and
-has been given a checkpoint root (§3.3). No other top-level entry MUST ever
-exist. *Checked by: structural — an exhaustive allow-list walk of `C(n)`'s
-direct entries.*
+them. No other top-level entry MUST ever exist — in particular, no `roots`
+entry ever exists, at any `n`: a per-algorithm root is an index over data
+this layer already stores under `nodes/`, and an index over this layer's
+own data belongs at the application layer, not here (head's ruling,
+2026-09-17). *Checked by: structural — an exhaustive allow-list walk of
+`C(n)`'s direct entries.*
 
 **[SG2]** A node's digest for algorithm `a` at `(left, h)` lives at exactly
 `nodes/hex(a,16)/hex(h,2)/trimmed(left)`; a leaf's raw bytes at exactly
@@ -226,9 +226,9 @@ model encodes or enforces.
 
 ### 2.3 Entry modes and canonical order
 
-**[SG5]** Every blob entry (`meta`, an `epochs`/`roots`/`nodes`/`leaves`
+**[SG5]** Every blob entry (`meta`, an `epochs`/`nodes`/`leaves`
 leaf) MUST use mode `100644` (regular, non-executable). Every tree entry
-(`epochs`, `roots`, `nodes`, `leaves`, and every intermediate
+(`epochs`, `nodes`, `leaves`, and every intermediate
 `hex(alg_id,16)`/`hex(h,2)`/length-segment directory `trimmed(x)` builds)
 MUST use mode `40000`. Nothing this layer writes is
 ever a symlink or a gitlink. *Checked by: structural; `gix::objs::tree::
@@ -236,18 +236,18 @@ EntryKind::{Blob,Tree}` already normalize to exactly these two canonical
 mode strings (`gix-object/src/tree/mod.rs`, confirmed by compiling a check
 against the pinned tag).*
 
-**[SG6]** The five top-level literals (`meta`, `epochs`, `roots`, `nodes`,
+**[SG6]** The four top-level literals (`meta`, `epochs`, `nodes`,
 `leaves`) are mutually distinct and never sit as siblings of a hex- or
-`trimmed`-encoded entry at the same tree level (`epochs`/`roots`/`nodes`/
+`trimmed`-encoded entry at the same tree level (`epochs`/`nodes`/
 `leaves` hold only key-fanned-out or `hex(alg_id,16)`-named subtrees;
-`meta`/`epochs`/`roots` never coexist with a `trimmed`-keyed sibling) —
+`meta`/`epochs` never coexist with a `trimmed`-keyed sibling) —
 unlike the retired peak-and-children layout, where literal names like
 `leaf`/`digest` had to avoid looking like a hex string themselves because
 they sat beside `hex(alg_id,16)`-named siblings, no such ambiguity is
 possible here by construction. Every sibling group within one
 `nodes/`/`leaves` bucket is a `trimmed`-derived length-digit or hex-pair
 segment (SG2's injectivity), never mixed with a literal name. *Checked by:
-structural — the five top-level literals checked pairwise-distinct
+structural — the four top-level literals checked pairwise-distinct
 (`src/layout.rs`'s own unit test), plus SG2's injectivity property.*
 
 **[SG7]** Every tree object this layer writes is assembled through
@@ -292,11 +292,6 @@ identical operation sequence must reach byte-identical `C(n)` for every
 `n`; and, separately again, two logs with byte-identical (empty) content at
 `n == 0` must reach the identical `C(0)` even when one log's first-ever
 append is a leaf and the other's is a subtree.*
-
-The same reasoning extends to `roots/` (§3.3): a checkpoint root supplied at
-`new_count == 0` is exactly as observationally meaningless as any other
-n=0-only signal, so the write side never persists a `roots/` entry at
-`n == 0` regardless of what a batch supplies.
 
 One consequence of SG9 is worth stating precisely, because the exhibit's
 `C(n)` notation can otherwise be misread as "one object per size, forever."
@@ -396,23 +391,6 @@ unchanged blob is freshened (§5, SG22) exactly as a touched one is.
 *Checked by: property test — decode the blob and compare against
 `epochs_at(n)` computed independently.*
 
-### 3.3 A `roots/hex(alg_id, 16)` blob
-
-The algorithm's root digest at size `n`: exactly `Hasher::digest_len()`
-bytes for that algorithm, with no framing. Present only for algorithms
-active at `n` — meaning still open, accepting future appends, per the
-projected epoch timeline (§3.2) — **and** `n > 0` (a checkpoint root
-supplied at `n == 0` is exactly as observationally meaningless as the rest
-of §2.5's purity argument). The moment `RemoveAlgorithm` closes an
-algorithm's epoch, its `roots/` entry is retired in that SAME write, at
-the freeze point itself — a frozen algorithm's terminal root is not
-carried in `roots/` at any `n`, including its own freeze point; it is
-reconstructed, if ever needed, from the `nodes/` digests this layer keeps
-forever (§2.2), never re-derived or cached by this layer itself.
-
-**[SG14]** `roots/` MUST NOT carry an entry for an algorithm not active at
-`n`, nor any entry at all when `n == 0`. *Checked by: property test.*
-
 ### 3.4 A node's blob (`nodes/hex(alg_id,16)/hex(height,2)/trimmed(left)`)
 
 Exactly `Hasher::digest_len()` bytes for that algorithm: `H_a(leaf bytes)`
@@ -449,8 +427,8 @@ are meaningful only for a backend with a git-shaped history.
 
 ### 4.1 Read methods
 
-`len`, `get_leaf`, `get_node`, `load_algorithm_metas`, `append_count`, and
-`load_checkpoint_roots` all read from the **staged tree** — the tree the
+`len`, `get_leaf`, `get_node`, `load_algorithm_metas`, and `append_count`
+all read from the **staged tree** — the tree the
 staging ref (§4.2) currently points at — via the position-lookup algorithm
 of §2.4 and the decodings of §3. `len` reports `0` for a subtree-kind log
 regardless of its nonzero `append_count` (§3.1's kind derivation); `is_empty`
@@ -565,22 +543,20 @@ trait impl instead of an inherent one, or an aliased parameter type would
 each evade them; `tests/tip_tree_contract.rs`'s own header documents the
 eight such evasions found and not guarded against.*
 
-A historical `roots/hex(alg_id,16)` entry (§3.3, SG14) for a size this
-layer no longer serves as its tip is not this layer's to produce: folding
-more than one frontier peak's stored digest into one root needs the
-algorithm's own hash fold (`bag_peaks`), a computation this layer performs
-nowhere in its live write/read path (SG26 — no hash algorithm is ever
-named or assumed here). A consumer that needs that historical root reads
-it from the `C(m)` the checkpoint layer committed at freeze point `m`
-(§8), or reconstructs it itself, outside this layer, from the node digests
-the complete tip tree still stores.
+A per-algorithm root, for any size this layer has ever held — live or
+historical — is not this layer's to produce: folding more than one
+frontier peak's stored digest into one root needs the algorithm's own hash
+fold (`bag_peaks`), a computation this layer performs nowhere in its live
+write/read path (SG26 — no hash algorithm is ever named or assumed here).
+A consumer that needs a root reconstructs it itself, outside this layer,
+from the node digests the complete tip tree still stores.
 
 ### 4.4 `open_at(tree)` — an addition beyond the trait
 
 **[SG21]** `open_at(tree: ObjectId) -> Result<impl ReadOnlyView, Error>` MUST
-return a read-only view exposing `get_leaf`, `get_node`,
-`load_algorithm_metas`, and `load_checkpoint_roots` against the supplied
-tree object, decoded exactly as §2–§3 specify, independent of this
+return a read-only view exposing `get_leaf`, `get_node`, and
+`load_algorithm_metas` against the supplied tree object, decoded exactly as
+§2–§3 specify, independent of this
 instance's own staging ref and current size. It MUST NOT accept or perform
 any mutation. `tree` is supplied by the caller — a `tip_tree()` this layer
 recorded earlier and the caller kept, or a past checkpoint's tree the
