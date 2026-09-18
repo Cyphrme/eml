@@ -272,3 +272,91 @@ fn no_roots_entry_via_direct_apply() {
         );
     });
 }
+
+/// A tree already carrying a `roots/` entry from before this removal is
+/// forged here (no such store exists anywhere in this repository's own
+/// history to reopen instead), by writing a `roots/<hex16(alg_id)>` blob
+/// onto an otherwise-current tip exactly as the pre-removal format would
+/// have committed one, then forcing the staging ref onto that forged tree
+/// -- bypassing `GitStorage`'s own CAS, which never wrote this shape
+/// itself. `gix::object::tree::Editor` carries forward every entry a
+/// batch's own ops never touch, so a `roots/` section already at rest
+/// would otherwise survive every future write unless `build::apply`
+/// unconditionally removes it on every call, whether or not the batch
+/// mentions it. One append against the forged tip must strip the section.
+#[test]
+fn a_preexisting_roots_section_is_stripped_on_the_next_append() {
+    smol::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
+        let staging = "refs/eml/storage/no-index/legacy-carry/staging";
+        let mut storage = GitStorage::new(repo.clone(), staging, 2).expect("open GitStorage");
+        storage
+            .apply(&[WriteOp::AddAlgorithm {
+                alg_id: 0,
+                epochs: &[(0, u64::MAX)],
+            }])
+            .await
+            .unwrap();
+        storage
+            .apply(&[WriteOp::AppendLeaf {
+                at: 0,
+                data: b"one",
+                nodes: &[],
+            }])
+            .await
+            .unwrap();
+
+        let local = repo.to_thread_local();
+        let clean_tip = support::ref_target(&local, staging).expect("tip must exist");
+
+        let root_blob = local
+            .write_blob(vec![0u8; 32])
+            .expect("write forged root blob")
+            .detach();
+        let tree = local.find_tree(clean_tip).expect("tip is a tree");
+        let mut editor = tree.edit().expect("start tree editor");
+        editor
+            .upsert(
+                format!("roots/{}", support::hex(0, 16)).as_str(),
+                gix::objs::tree::EntryKind::Blob,
+                root_blob,
+            )
+            .expect("upsert forged roots entry");
+        let forged_tip = editor.write().expect("write forged tree").detach();
+        assert!(
+            support::find_entry(&local, forged_tip, "roots").is_some(),
+            "the forged fixture must itself carry a roots/ entry, or this test proves nothing"
+        );
+
+        local
+            .edit_reference(gix::refs::transaction::RefEdit {
+                change: gix::refs::transaction::Change::Update {
+                    log: gix::refs::transaction::LogChange::default(),
+                    expected: gix::refs::transaction::PreviousValue::Any,
+                    new: gix::refs::Target::Object(forged_tip),
+                },
+                name: staging.try_into().expect("valid staging ref name"),
+                deref: false,
+            })
+            .expect("force the staging ref onto the forged tree");
+
+        let mut reopened = GitStorage::open(dir.path(), staging, 2).expect("reopen GitStorage");
+        reopened
+            .apply(&[WriteOp::AppendLeaf {
+                at: 1,
+                data: b"two",
+                nodes: &[],
+            }])
+            .await
+            .unwrap();
+
+        let after_tip =
+            support::ref_target(&local, staging).expect("tip must exist after the append");
+        assert_no_roots_entry(
+            &local,
+            after_tip,
+            "one append after reopening a tree that already carried a roots/ entry",
+        );
+    });
+}

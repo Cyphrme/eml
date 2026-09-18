@@ -48,6 +48,16 @@ use crate::layout::{
     trimmed_key_segments,
 };
 
+/// A top-level `roots` section this layer never writes, but may have
+/// inherited from a tree a pre-removal version of this crate committed
+/// (SG1: "no other top-level entry MUST ever exist -- in particular, no
+/// `roots` entry ever exists, at any `n`"). `gix::object::tree::Editor`
+/// carries every entry a batch's own ops never touch forward from the
+/// previous tree unchanged, so a section already at rest would otherwise
+/// survive indefinitely unless every `apply` call removes it explicitly,
+/// whether or not this batch's own ops ever mentioned it.
+const LEGACY_TOP_LEVEL_ROOTS: &str = "roots";
+
 fn invalid(msg: impl Into<String>) -> Error {
     Error::InvalidOperation(msg.into())
 }
@@ -178,6 +188,11 @@ pub(crate) fn apply(
         None => repo.empty_tree(),
     };
     let mut editor = root_tree.edit().map_err(git_err)?;
+
+    // Make SG1's "no roots entry ever exists" true by construction rather
+    // than by assumption about what the previous tree happened to carry: a
+    // no-op on a tree that has none, so no fresh log's tree id moves.
+    editor.remove(LEGACY_TOP_LEVEL_ROOTS).map_err(git_err)?;
 
     let mut count = old.count;
     let mut has_leaves = old.has_leaves;
