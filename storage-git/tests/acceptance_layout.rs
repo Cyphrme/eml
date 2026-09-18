@@ -14,7 +14,7 @@
 //! `key_derived_layout.rs`'s
 //! `nodes_and_leaves_sit_exactly_at_their_derived_key_paths` supersedes
 //! SG1's top-level-shape claim with the new design's own (an exhaustive
-//! allow-list over `nodes`/`leaves`/`meta`/`epochs`/`roots`), and the
+//! allow-list over `nodes`/`leaves`/`meta`/`epochs`), and the
 //! completeness property
 //! (`completeness_property.rs`) supersedes SG4's "every digest given is
 //! present" concern with a stronger, MemoryStorage-backed oracle rather

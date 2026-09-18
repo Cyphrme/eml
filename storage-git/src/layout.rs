@@ -8,18 +8,21 @@
 
 use crate::error::GitStorageError as Error;
 
-/// The five fixed top-level literals a checkpoint tree ever carries (§2,
-/// §3): `nodes`/`leaves` hold only key-fanned-out subtrees; `meta`/`epochs`/
-/// `roots` hold only named metadata. `build.rs` and `read.rs` reference
-/// these constants rather than bare string literals so production's actual
-/// names and this module's own distinctness test
-/// (`tests::top_level_literal_names_are_mutually_distinct`) can never
-/// silently diverge -- there is exactly one name per role, not a copy of it.
+/// The four fixed top-level literals a checkpoint tree ever carries (§2,
+/// §3): `nodes`/`leaves` hold only key-fanned-out subtrees; `meta`/`epochs`
+/// hold only named metadata. A per-algorithm root digest is an index over
+/// this layer's own data (the frontier already stored under `nodes/`), and
+/// an index over this layer's own data belongs at the application layer,
+/// not here (head's ruling, 2026-09-17) -- so no `roots` literal exists.
+/// `build.rs` and `read.rs` reference these constants rather than bare
+/// string literals so production's actual names and this module's own
+/// distinctness test (`tests::top_level_literal_names_are_mutually_distinct`)
+/// can never silently diverge -- there is exactly one name per role, not a
+/// copy of it.
 pub(crate) const TOP_LEVEL_NODES: &str = "nodes";
 pub(crate) const TOP_LEVEL_LEAVES: &str = "leaves";
 pub(crate) const TOP_LEVEL_META: &str = "meta";
 pub(crate) const TOP_LEVEL_EPOCHS: &str = "epochs";
-pub(crate) const TOP_LEVEL_ROOTS: &str = "roots";
 
 /// `hex(x, 16)` — a `u64` rendered as 16 lowercase hex digits.
 #[must_use]
@@ -155,14 +158,6 @@ pub fn epochs_at(history: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// Whether the epoch timeline's last entry is active (open) at `size`.
-#[must_use]
-pub fn is_active_at(epochs_at_size: &[(u64, u64)]) -> bool {
-    epochs_at_size
-        .last()
-        .is_some_and(|&(_, end)| end == u64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use cml::AlgView;
@@ -281,12 +276,12 @@ mod tests {
         assert!(decode_epochs(&[0u8; 15]).is_err());
     }
 
-    /// SG6: the five fixed top-level literals are mutually distinct and
+    /// SG6: the four fixed top-level literals are mutually distinct and
     /// never sit as siblings of a hex- or trimmed-key-encoded entry under
     /// the key-derived layout (`nodes`/`leaves` hold only key-fanned-out
-    /// subtrees; `meta`/`epochs`/`roots` hold only named metadata) -- so,
-    /// unlike the retired peak-and-children layout, no literal name needs to
-    /// avoid looking like a hex string at all: this test only needs the five
+    /// subtrees; `meta`/`epochs` hold only named metadata) -- so, unlike the
+    /// retired peak-and-children layout, no literal name needs to avoid
+    /// looking like a hex string at all: this test only needs the four
     /// literals distinct from one another, checked exhaustively.
     ///
     /// Asserted over the same `TOP_LEVEL_*` constants `build.rs`/`read.rs`
@@ -300,7 +295,6 @@ mod tests {
             TOP_LEVEL_NODES,
             TOP_LEVEL_LEAVES,
             TOP_LEVEL_EPOCHS,
-            TOP_LEVEL_ROOTS,
         ];
         for (i, a) in names.iter().enumerate() {
             for b in &names[i + 1..] {

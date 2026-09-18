@@ -10,8 +10,11 @@
 //! `TOP_LEVEL_*` constants: node storage lives under `nodes`, keyed as
 //! `nodes/<hex16(alg_id)>/<hex2(height)>/<trimmed(left)>`; leaf storage
 //! lives under `leaves`, keyed as `leaves/<trimmed(index)>`; every other
-//! top-level entry (`meta`, and per-algorithm `epochs`/`roots` once an
-//! algorithm is registered) is named metadata, never key-fanned-out.
+//! top-level entry (`meta`, and per-algorithm `epochs` once an algorithm is
+//! registered) is named metadata, never key-fanned-out. There is no
+//! `roots` entry at any point in a log's life: a per-algorithm root is an
+//! index over this layer's own data, which belongs at the application
+//! layer, not here (head's ruling, 2026-09-17).
 
 mod common;
 
@@ -90,17 +93,17 @@ fn assert_layout_matches_written_keys(
 }
 
 /// No entry at the top level of `C(n)` besides the two key-fanned-out
-/// namespaces (`n`, `l`) and named metadata (`meta`, `e`, `r`) -- an
-/// exhaustive allow-list, not a sample.
+/// namespaces (`n`, `l`) and named metadata (`meta`, `e`) -- an exhaustive
+/// allow-list, not a sample. `roots` is deliberately absent from this list:
+/// no tree this layer commits ever carries one (head's ruling,
+/// 2026-09-17).
 fn assert_top_level_is_exactly_namespaces_and_metadata(repo: &gix::Repository, tip: gix::ObjectId) {
-    let allowed: HashSet<&str> = ["nodes", "leaves", "meta", "epochs", "roots"]
-        .into_iter()
-        .collect();
+    let allowed: HashSet<&str> = ["nodes", "leaves", "meta", "epochs"].into_iter().collect();
     for entry in common::read_tree_entries(repo, tip) {
         assert!(
             allowed.contains(entry.name.as_str()),
             "C(n) has an unexpected top-level entry {:?}: only n/l (key-fanned-out storage) and \
-             meta/e/r (named metadata) are permitted",
+             meta/e (named metadata) are permitted",
             entry.name
         );
     }

@@ -1,6 +1,10 @@
 //! Acceptance tests for §3's byte-exact blob encodings, from
 //! `docs/specs/storage-git.md` alone: SG12 (`meta`), SG13 (`epochs/`),
-//! SG14 (`roots/`), SG15 (digest-width corruption), and SG16 (`leaf`).
+//! SG15 (digest-width corruption), and SG16 (`leaf`). SG14 (`roots/`) is not
+//! tested here: a `roots/` entry never exists at all now (head's ruling,
+//! 2026-09-17, `storage-git/tests/acceptance_no_application_index.rs`),
+//! which strictly subsumes the narrower present-iff-active claim SG14 used
+//! to name.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
@@ -154,54 +158,6 @@ fn sg13_epochs_blob_matches_epochs_at() {
                 }
             }
         }
-    });
-}
-
-/// [SG14] `roots/` MUST NOT carry an entry for an algorithm not active at
-/// `n`.
-#[test]
-fn sg14_roots_absent_for_inactive_algorithm() {
-    smol::block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
-        let staging = "refs/eml/storage/sg14/staging";
-        let mut log = new_log(&repo, staging, 2, FixtureHasher::new(32)).await;
-        log.add_algorithm(1, Box::new(FixtureHasher::new(20)))
-            .await
-            .unwrap();
-        for i in 0..4u32 {
-            log.append_leaf(format!("leaf-{i}").as_bytes())
-                .await
-                .unwrap();
-        }
-
-        let local = repo.to_thread_local();
-        let tip_active = support::ref_target(&local, staging).unwrap();
-        let roots_active = support::find_entry(&local, tip_active, "roots")
-            .unwrap()
-            .oid;
-        assert!(
-            support::find_entry(&local, roots_active, &hex(0, 16)).is_some(),
-            "alg0 is active: roots/ must carry it"
-        );
-        assert!(
-            support::find_entry(&local, roots_active, &hex(1, 16)).is_some(),
-            "alg1 is active: roots/ must carry it"
-        );
-
-        log.remove_algorithm(1).await.unwrap(); // freeze alg1 at n=4
-        let tip_frozen = support::ref_target(&local, staging).unwrap();
-        let roots_frozen = support::find_entry(&local, tip_frozen, "roots")
-            .unwrap()
-            .oid;
-        assert!(
-            support::find_entry(&local, roots_frozen, &hex(0, 16)).is_some(),
-            "alg0 is still active: roots/ must carry it"
-        );
-        assert!(
-            support::find_entry(&local, roots_frozen, &hex(1, 16)).is_none(),
-            "alg1 was just frozen: roots/ must not carry an entry for it"
-        );
     });
 }
 

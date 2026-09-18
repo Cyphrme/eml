@@ -6,7 +6,7 @@
 //! write adds exactly the keys it is given, with nothing wired or carried
 //! forward by decision.
 //!
-//! `meta`/`epochs`/`roots` are the one exception: small, non-key-addressed
+//! `meta`/`epochs` are the one exception: small, non-key-addressed
 //! metadata this function rewrites on every call, whether this batch's own
 //! ops touched a given algorithm or not. For an algorithm this batch never
 //! names, that rewrite is byte-identical to what was already stored --
@@ -44,8 +44,8 @@ use polydigest::WriteOp;
 use crate::error::GitStorageError as Error;
 use crate::gitutil;
 use crate::layout::{
-    self, TOP_LEVEL_EPOCHS, TOP_LEVEL_LEAVES, TOP_LEVEL_META, TOP_LEVEL_NODES, TOP_LEVEL_ROOTS,
-    hex2, hex16, trimmed_key_segments,
+    self, TOP_LEVEL_EPOCHS, TOP_LEVEL_LEAVES, TOP_LEVEL_META, TOP_LEVEL_NODES, hex2, hex16,
+    trimmed_key_segments,
 };
 
 fn invalid(msg: impl Into<String>) -> Error {
@@ -99,10 +99,6 @@ fn leaf_path(index: u64) -> String {
 
 fn epochs_path(alg_id: u64) -> String {
     format!("{TOP_LEVEL_EPOCHS}/{}", hex16(alg_id))
-}
-
-fn roots_path(alg_id: u64) -> String {
-    format!("{TOP_LEVEL_ROOTS}/{}", hex16(alg_id))
 }
 
 /// Whether `alg_id` already has an `epochs/` entry in `tree` -- the
@@ -168,24 +164,6 @@ fn read_stored_epochs(
     layout::decode_epochs(&gitutil::read_blob(repo, blob_id)?)
 }
 
-/// Read one algorithm's currently-stored `roots/hex16(alg_id)` blob from
-/// `tree`, or `None` if it has none (never registered a root yet, or
-/// already inactive there).
-fn read_stored_root(
-    repo: &gix::Repository,
-    tree: Option<ObjectId>,
-    alg_id: u64,
-) -> Result<Option<Vec<u8>>, Error> {
-    let Some(tree) = tree else { return Ok(None) };
-    let Some(roots_tree) = gitutil::find_entry(repo, tree, TOP_LEVEL_ROOTS)? else {
-        return Ok(None);
-    };
-    match gitutil::find_entry(repo, roots_tree, &hex16(alg_id))? {
-        Some(id) => Ok(Some(gitutil::read_blob(repo, id)?)),
-        None => Ok(None),
-    }
-}
-
 /// Assemble and write the new checkpoint tree for one atomic batch of
 /// [`polydigest::WriteOp`]s. Does not touch the staging ref; the caller
 /// performs the compare-and-swap once this returns.
@@ -205,14 +183,12 @@ pub(crate) fn apply(
     let mut has_leaves = old.has_leaves;
 
     // Per-algorithm effects this batch's ops carry, collected as the ops
-    // are walked and applied to `epochs`/`roots` in one final pass below --
+    // are walked and applied to `epochs` in one final pass below --
     // deferred because that pass must know every OTHER currently-known
     // algorithm too (to refresh their unchanged entries, SG22), which is
     // only knowable once this batch's own registrations are complete.
     let mut registered_this_batch: HashSet<u64> = HashSet::new();
     let mut epoch_overrides: HashMap<u64, Vec<(u64, u64)>> = HashMap::new();
-    let mut root_overrides: HashMap<u64, Vec<u8>> = HashMap::new();
-    let mut frozen_this_batch: HashSet<u64> = HashSet::new();
 
     let known = |registered_this_batch: &HashSet<u64>, alg_id: u64| -> Result<bool, Error> {
         Ok(registered_this_batch.contains(&alg_id) || epochs_entry_exists(repo, old.tree, alg_id)?)
@@ -224,7 +200,12 @@ pub(crate) fn apply(
                 at,
                 data,
                 nodes,
-                checkpoint_roots,
+                // A per-algorithm checkpoint root is an index over this
+                // layer's own data (the frontier already stored under
+                // `nodes/`); an index over this layer's own data belongs at
+                // the application layer, not here (head's ruling,
+                // 2026-09-17), so this layer never persists it.
+                checkpoint_roots: _,
             } => {
                 if *at != count {
                     return Err(invalid(format!(
@@ -245,16 +226,13 @@ pub(crate) fn apply(
                         )
                         .map_err(git_err)?;
                 }
-                for r in *checkpoint_roots {
-                    root_overrides.insert(r.alg_id, r.root.to_vec());
-                }
                 count += 1;
                 has_leaves = true;
             },
             WriteOp::AppendSubtree {
                 at,
                 nodes,
-                checkpoint_roots,
+                checkpoint_roots: _,
             } => {
                 if *at != count {
                     return Err(invalid(format!(
@@ -271,9 +249,6 @@ pub(crate) fn apply(
                         )
                         .map_err(git_err)?;
                 }
-                for r in *checkpoint_roots {
-                    root_overrides.insert(r.alg_id, r.root.to_vec());
-                }
                 count += 1;
             },
             WriteOp::AddAlgorithm { alg_id, epochs } => {
@@ -286,26 +261,24 @@ pub(crate) fn apply(
             WriteOp::RemoveAlgorithm {
                 alg_id,
                 epochs,
+                // Deliberately never written anywhere: a checkpoint root is
+                // an index over this layer's own data, which belongs at the
+                // application layer, not here (head's ruling, 2026-09-17).
+                // The terminal state this coordinate held at freeze is still
+                // reachable through the nodes/ digests this tree keeps
+                // forever (§2.5).
                 frozen_root: _,
             } => {
                 if !known(&registered_this_batch, *alg_id)? {
                     return Err(invalid(format!("algorithm {alg_id} is not registered")));
                 }
-                // `frozen_root` is deliberately never written anywhere: a
-                // frozen algorithm's roots/ entry -- valid only for
-                // algorithms active at this exact size (SG14) -- is
-                // retired at the freeze point itself; the terminal state
-                // this coordinate held is still reachable through the
-                // nodes/ digests this tree keeps forever (§2.5).
                 epoch_overrides.insert(*alg_id, epochs.to_vec());
-                frozen_this_batch.insert(*alg_id);
-                root_overrides.remove(alg_id);
             },
             WriteOp::ResumeAlgorithm {
                 alg_id,
                 epochs,
                 nodes,
-                resumed_root,
+                resumed_root: _,
             } => {
                 if !known(&registered_this_batch, *alg_id)? {
                     return Err(invalid(format!("algorithm {alg_id} is not registered")));
@@ -321,7 +294,6 @@ pub(crate) fn apply(
                         )
                         .map_err(git_err)?;
                 }
-                root_overrides.insert(*alg_id, resumed_root.to_vec());
             },
             WriteOp::SeedFrontier { size, algorithms } => {
                 if count != 0 || !registered_this_batch.is_empty() {
@@ -357,18 +329,20 @@ pub(crate) fn apply(
                             )
                             .map_err(git_err)?;
                     }
-                    root_overrides.insert(seed.alg_id, seed.seeded_root.to_vec());
+                    // `seed.seeded_root` is deliberately never written: same
+                    // application-layer-index argument as every other root
+                    // (head's ruling, 2026-09-17).
                     registered_this_batch.insert(seed.alg_id);
                 }
             },
         }
     }
 
-    // Project epochs/ and roots/ forward for every currently-known
-    // algorithm -- old ones this batch never mentioned, plus any it just
-    // registered -- applying this batch's own overrides where it has one.
-    // This refreshes an otherwise-unchanged blob's object on every write
-    // (SG22), exactly as every leaf/node write already does.
+    // Project epochs/ forward for every currently-known algorithm -- old
+    // ones this batch never mentioned, plus any it just registered --
+    // applying this batch's own overrides where it has one. This refreshes
+    // an otherwise-unchanged blob's object on every write (SG22), exactly as
+    // every leaf/node write already does.
     let mut all_ids = known_algorithm_ids(repo, old.tree)?;
     for &id in &registered_this_batch {
         if !all_ids.contains(&id) {
@@ -386,29 +360,10 @@ pub(crate) fn apply(
                 "algorithm {alg_id}'s epoch history does not cover size {count}"
             ))
         })?;
-        let active = layout::is_active_at(&projected);
         let epochs_blob = gitutil::write_blob(repo, &layout::encode_epochs(&projected))?;
         editor
             .upsert(epochs_path(alg_id).as_str(), EntryKind::Blob, epochs_blob)
             .map_err(git_err)?;
-
-        let keep_root = !frozen_this_batch.contains(&alg_id) && active && count > 0;
-        if keep_root {
-            let root = match root_overrides.get(&alg_id) {
-                Some(r) => Some(r.clone()),
-                None => read_stored_root(repo, old.tree, alg_id)?,
-            };
-            if let Some(root) = root {
-                let root_blob = gitutil::write_blob(repo, &root)?;
-                editor
-                    .upsert(roots_path(alg_id).as_str(), EntryKind::Blob, root_blob)
-                    .map_err(git_err)?;
-            }
-        } else {
-            editor
-                .remove(roots_path(alg_id).as_str())
-                .map_err(git_err)?;
-        }
     }
 
     let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, count))?;

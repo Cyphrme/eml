@@ -12,8 +12,7 @@ use gix::ObjectId;
 use crate::error::GitStorageError as Error;
 use crate::gitutil;
 use crate::layout::{
-    TOP_LEVEL_EPOCHS, TOP_LEVEL_LEAVES, TOP_LEVEL_NODES, TOP_LEVEL_ROOTS, hex2, hex16,
-    trimmed_key_segments,
+    TOP_LEVEL_EPOCHS, TOP_LEVEL_LEAVES, TOP_LEVEL_NODES, hex2, hex16, trimmed_key_segments,
 };
 
 /// Read item `index`'s raw leaf payload out of the checkpoint tree at
@@ -80,23 +79,16 @@ pub(crate) fn load_algorithm_metas(
     Ok(out)
 }
 
-/// Decode `load_checkpoint_roots`'s result from `tree_id`'s `roots/`.
+/// `Storage::load_checkpoint_roots`'s implementation, interim to this
+/// dispatch: this layer no longer writes a `roots/` entry at all -- a
+/// per-algorithm root is an index over this layer's own data, which belongs
+/// at the application layer, not here (head's ruling, 2026-09-17) -- so
+/// there is nothing to decode. The trait method itself is removed in the
+/// same dispatch's polydigest pass; until then this satisfies it honestly
+/// with the only answer that can ever be true.
 pub(crate) fn load_checkpoint_roots(
-    repo: &gix::Repository,
-    tree_id: ObjectId,
+    _repo: &gix::Repository,
+    _tree_id: ObjectId,
 ) -> Result<Vec<(u64, Vec<u8>)>, Error> {
-    let Some(r) = gitutil::find_entry(repo, tree_id, TOP_LEVEL_ROOTS)? else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    for entry in gitutil::read_tree(repo, r)? {
-        let alg = crate::layout::parse_hex16(&entry.filename.to_string()).ok_or_else(|| {
-            Error::Corruption(format!(
-                "roots/ entry {} is not a hex(alg_id,16) name",
-                entry.filename
-            ))
-        })?;
-        out.push((alg, gitutil::read_blob(repo, entry.oid)?));
-    }
-    Ok(out)
+    Ok(Vec::new())
 }
