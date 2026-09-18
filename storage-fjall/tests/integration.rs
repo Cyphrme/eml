@@ -49,7 +49,6 @@ fn test_fjall_storage_basic_ops() {
                 at: 0,
                 data: b"leaf0",
                 nodes: &[],
-                checkpoint_roots: &[],
             }])
             .await
             .unwrap();
@@ -63,7 +62,6 @@ fn test_fjall_storage_basic_ops() {
                     height: 0,
                     hash: b"hash100",
                 }],
-                checkpoint_roots: &[],
             }])
             .await
             .unwrap();
@@ -212,7 +210,6 @@ fn test_fjall_storage_scoped_prefix_isolation() {
                     height: 3,
                     hash: b"a-node",
                 }],
-                checkpoint_roots: &[],
             }])
             .await
             .unwrap();
@@ -226,7 +223,6 @@ fn test_fjall_storage_scoped_prefix_isolation() {
                     height: 3,
                     hash: b"b-node",
                 }],
-                checkpoint_roots: &[],
             }])
             .await
             .unwrap();
@@ -294,7 +290,6 @@ fn test_fjall_out_of_order_append_is_refused() {
                 at: 10,
                 data: b"index10",
                 nodes: &[],
-                checkpoint_roots: &[],
             }])
             .await;
         assert!(

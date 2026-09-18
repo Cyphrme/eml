@@ -89,13 +89,6 @@ impl Storage for FaultyStorage {
             .map_err(FuzzStorageError::Inner)
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner
-            .load_checkpoint_roots()
-            .await
-            .map_err(FuzzStorageError::Inner)
-    }
-
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         // Top-level fault injection: fail the whole batch before any write,
         // matching the pre-`apply` trait's `write_batch` fault point -- the

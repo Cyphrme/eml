@@ -13,10 +13,10 @@ use spine::Hasher;
 use storage_git::{GitStorage, GitStorageError};
 use tempfile::TempDir;
 
-/// Append one raw leaf directly through [`Storage::apply`], with no node or
-/// checkpoint-root side effects -- the direct-`Storage`-level equivalent of
-/// the old standalone `store_leaf`, for tests exercising `GitStorage`'s CAS
-/// and error-classification behavior below the `NaryMerkleLog` layer.
+/// Append one raw leaf directly through [`Storage::apply`], with no node
+/// side effects -- the direct-`Storage`-level equivalent of the old
+/// standalone `store_leaf`, for tests exercising `GitStorage`'s CAS and
+/// error-classification behavior below the `NaryMerkleLog` layer.
 #[allow(dead_code)]
 pub async fn append_leaf(
     storage: &mut GitStorage,
@@ -28,7 +28,6 @@ pub async fn append_leaf(
             at: index,
             data,
             nodes: &[],
-            checkpoint_roots: &[],
         }])
         .await
 }

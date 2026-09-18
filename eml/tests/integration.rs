@@ -2404,10 +2404,6 @@ impl Storage for MockStorage {
         Ok(0)
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        Ok(vec![])
-    }
-
     async fn apply(&mut self, _ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -2614,10 +2610,6 @@ impl eml::Storage for ErrorMaskingStorage {
 
     async fn append_count(&self) -> Result<u64, Self::Error> {
         self.inner.append_count().await
-    }
-
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner.load_checkpoint_roots().await
     }
 
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {

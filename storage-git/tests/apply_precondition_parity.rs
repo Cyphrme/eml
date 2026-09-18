@@ -67,7 +67,6 @@ async fn append_n_leaves<S: Storage>(storage: &mut S, n: u64) {
                 at: i,
                 data: format!("leaf-{i}").as_bytes(),
                 nodes: &[],
-                checkpoint_roots: &[],
             }])
             .await
             .unwrap_or_else(|_| panic!("append_n_leaves: leaf {i} must apply cleanly"));
@@ -267,13 +266,11 @@ fn seed_frontier_with_a_duplicate_algorithm_id_is_rejected_on_memory() {
                 alg_id: 3,
                 epochs: &[(0, u64::MAX)],
                 nodes: &[],
-                seeded_root: &[1],
             },
             AlgorithmSeed {
                 alg_id: 3,
                 epochs: &[(0, u64::MAX)],
                 nodes: &[],
-                seeded_root: &[2],
             },
         ];
         let result = storage
@@ -303,13 +300,11 @@ fn seed_frontier_with_a_duplicate_algorithm_id_is_rejected_on_git() {
                 alg_id: 3,
                 epochs: &[(0, u64::MAX)],
                 nodes: &[],
-                seeded_root: &[1],
             },
             AlgorithmSeed {
                 alg_id: 3,
                 epochs: &[(0, u64::MAX)],
                 nodes: &[],
-                seeded_root: &[2],
             },
         ];
         let result = storage
@@ -353,7 +348,6 @@ fn add_then_remove_same_algorithm_in_one_batch_matches_across_backends() {
             WriteOp::RemoveAlgorithm {
                 alg_id: 11,
                 epochs: &[(0, 0)],
-                frozen_root: &[9],
             },
         ];
         let git_result = git.apply(&ops).await;
@@ -390,7 +384,6 @@ fn append_leaf_at_wrong_position_is_rejected_on_both_backends() {
                 at: 5,
                 data: b"x",
                 nodes: &[],
-                checkpoint_roots: &[],
             }])
             .await;
         assert!(mem_result.is_err(), "MemoryStorage: {mem_result:?}");
@@ -407,7 +400,6 @@ fn append_leaf_at_wrong_position_is_rejected_on_both_backends() {
                 at: 5,
                 data: b"x",
                 nodes: &[],
-                checkpoint_roots: &[],
             }])
             .await;
         assert!(git_result.is_err(), "GitStorage: {git_result:?}");
@@ -419,11 +411,7 @@ fn append_subtree_at_wrong_position_is_rejected_on_both_backends() {
     smol::block_on(async {
         let mut mem = MemoryStorage::new();
         let mem_result = mem
-            .apply(&[WriteOp::AppendSubtree {
-                at: 5,
-                nodes: &[],
-                checkpoint_roots: &[],
-            }])
+            .apply(&[WriteOp::AppendSubtree { at: 5, nodes: &[] }])
             .await;
         assert!(mem_result.is_err(), "MemoryStorage: {mem_result:?}");
 
@@ -435,11 +423,7 @@ fn append_subtree_at_wrong_position_is_rejected_on_both_backends() {
         )
         .unwrap();
         let git_result = git
-            .apply(&[WriteOp::AppendSubtree {
-                at: 5,
-                nodes: &[],
-                checkpoint_roots: &[],
-            }])
+            .apply(&[WriteOp::AppendSubtree { at: 5, nodes: &[] }])
             .await;
         assert!(git_result.is_err(), "GitStorage: {git_result:?}");
     });
@@ -453,7 +437,6 @@ fn remove_unregistered_algorithm_is_rejected_on_both_backends() {
             .apply(&[WriteOp::RemoveAlgorithm {
                 alg_id: 9,
                 epochs: &[(0, 3)],
-                frozen_root: &[1],
             }])
             .await;
         assert!(mem_result.is_err(), "MemoryStorage: {mem_result:?}");
@@ -469,7 +452,6 @@ fn remove_unregistered_algorithm_is_rejected_on_both_backends() {
             .apply(&[WriteOp::RemoveAlgorithm {
                 alg_id: 9,
                 epochs: &[(0, 3)],
-                frozen_root: &[1],
             }])
             .await;
         assert!(git_result.is_err(), "GitStorage: {git_result:?}");
@@ -485,7 +467,6 @@ fn resume_unregistered_algorithm_is_rejected_on_both_backends() {
                 alg_id: 9,
                 epochs: &[(0, 3)],
                 nodes: &[],
-                resumed_root: &[1],
             }])
             .await;
         assert!(mem_result.is_err(), "MemoryStorage: {mem_result:?}");
@@ -502,7 +483,6 @@ fn resume_unregistered_algorithm_is_rejected_on_both_backends() {
                 alg_id: 9,
                 epochs: &[(0, 3)],
                 nodes: &[],
-                resumed_root: &[1],
             }])
             .await;
         assert!(git_result.is_err(), "GitStorage: {git_result:?}");

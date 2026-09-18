@@ -183,30 +183,16 @@ impl Storage for CountingStorage {
         self.inner.append_count().await
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner.load_checkpoint_roots().await
-    }
-
     async fn apply(&mut self, ops: &[polydigest::WriteOp<'_>]) -> Result<(), Self::Error> {
         self.batch_calls.fetch_add(1, Ordering::Relaxed);
         // Distinct algorithms touched in this single atomic call: the union
-        // of the algorithms appearing across every op's own node/checkpoint
-        // fields.
+        // of the algorithms appearing across every op's own node fields.
         let mut algs: std::collections::HashSet<u64> = std::collections::HashSet::new();
         for op in ops {
             match op {
-                polydigest::WriteOp::AppendLeaf {
-                    nodes,
-                    checkpoint_roots,
-                    ..
-                }
-                | polydigest::WriteOp::AppendSubtree {
-                    nodes,
-                    checkpoint_roots,
-                    ..
-                } => {
+                polydigest::WriteOp::AppendLeaf { nodes, .. }
+                | polydigest::WriteOp::AppendSubtree { nodes, .. } => {
                     algs.extend(nodes.iter().map(|n| n.alg_id));
-                    algs.extend(checkpoint_roots.iter().map(|r| r.alg_id));
                 },
                 polydigest::WriteOp::AddAlgorithm { alg_id, .. }
                 | polydigest::WriteOp::RemoveAlgorithm { alg_id, .. }

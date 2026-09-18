@@ -110,13 +110,6 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner
-            .load_checkpoint_roots()
-            .await
-            .map_err(|_| FaultError::Storage)
-    }
-
     async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         let should_fail = {
             let mut count = self.batch_count.lock().unwrap();
@@ -225,7 +218,13 @@ fn test_verify_non_divergence_tamper_detection() {
             }
         }
 
-        // 2. Internal node hash tampering (frontier node at height 3 covers [0,8))
+        // 2. Internal node hash tampering (frontier node at height 3 covers [0,8)).
+        // `from_storage` no longer checks a stored checkpoint root against
+        // the reconstructed frontier (that per-algorithm root was an index
+        // over this layer's own data and is retired -- head's ruling,
+        // 2026-09-17), so `from_storage` itself now succeeds; the tamper is
+        // still caught, at `verify_non_divergence` instead, the same
+        // fallback already used for leaf tampering above.
         {
             let mut tampered_storage = log.storage().clone();
             let key = (0, 0, 3); // (alg_id, left, height)
@@ -233,22 +232,27 @@ fn test_verify_non_divergence_tamper_detection() {
                 tampered_storage.nodes.entry(key)
             {
                 e.insert(vec![0x00; 32]);
-                // from_storage should detect the checkpoint mismatch.
                 let tampered_log = NaryMerkleLog::from_storage(
                     tampered_storage,
                     vec![(0, Box::new(Sha256Hasher))],
                 )
                 .await;
-                assert!(
-                    tampered_log.is_err(),
-                    "from_storage did not detect tampered frontier node"
-                );
+                match tampered_log {
+                    Err(_) => {},
+                    Ok(log) => {
+                        assert!(
+                            !log.verify_non_divergence(None, &[]).await.unwrap(),
+                            "Failed to detect tampered frontier node"
+                        );
+                    },
+                }
             }
         }
 
-        // 3. Epoch metadata tampering — checkpoint verification catches the
-        // tampered boundary at load time (frontier reconstructed with the
-        // wrong epoch does not match the stored checkpoint root).
+        // 3. Epoch metadata tampering. Same as above: `from_storage` no
+        // longer verifies a stored checkpoint root against the epoch-
+        // projected frontier, so the tamper is caught at
+        // `verify_non_divergence` rather than at load time.
         {
             let mut tampered_storage = log.storage().clone();
             if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&0) {
@@ -259,10 +263,15 @@ fn test_verify_non_divergence_tamper_detection() {
             let tampered_log =
                 NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))])
                     .await;
-            assert!(
-                tampered_log.is_err(),
-                "from_storage did not detect tampered epoch metadata"
-            );
+            match tampered_log {
+                Err(_) => {},
+                Ok(log) => {
+                    assert!(
+                        !log.verify_non_divergence(None, &[]).await.unwrap(),
+                        "Failed to detect tampered epoch metadata"
+                    );
+                },
+            }
         }
     });
 }
@@ -308,8 +317,12 @@ fn test_verify_non_divergence_legitimate_frozen() {
             "Legitimate frozen algorithm failed non-divergence verification"
         );
 
-        // Tamper test: Modify alg 1's frozen deactivation boundary from 5 to 3.
-        // Checkpoint verification catches the tampered boundary at load time.
+        // Tamper test: Modify alg 1's frozen deactivation boundary from 5 to
+        // 3. `from_storage` no longer verifies a stored checkpoint root
+        // against the epoch-projected frontier (that per-algorithm root was
+        // an index over this layer's own data and is retired -- head's
+        // ruling, 2026-09-17), so `from_storage` itself now succeeds; the
+        // tamper is still caught, at `verify_non_divergence` instead.
         {
             let mut tampered_storage = log.storage().clone();
             if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&1) {
@@ -320,10 +333,15 @@ fn test_verify_non_divergence_legitimate_frozen() {
                 (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
             ];
             let tampered_log = NaryMerkleLog::from_storage(tampered_storage, metas).await;
-            assert!(
-                tampered_log.is_err(),
-                "from_storage did not detect tampered epoch boundary for frozen algorithm"
-            );
+            match tampered_log {
+                Err(_) => {},
+                Ok(log) => {
+                    assert!(
+                        !log.verify_non_divergence(None, &[]).await.unwrap(),
+                        "Failed to detect tampered epoch boundary for frozen algorithm"
+                    );
+                },
+            }
         }
     });
 }

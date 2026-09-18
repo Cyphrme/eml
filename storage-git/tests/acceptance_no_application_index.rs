@@ -10,14 +10,19 @@
 //! entry at all, at any point in a log's life -- not only for a size this
 //! layer no longer serves as its tip.
 //!
-//! This is written against the CURRENT `storage-git`/`polydigest` API
+//! This was originally written against the pre-removal `storage-git`/
+//! `polydigest` API
 //! (`WriteOp::{AppendLeaf,AppendSubtree,RemoveAlgorithm,ResumeAlgorithm}`'s
 //! `checkpoint_roots`/`frozen_root`/`resumed_root` fields, and
-//! `Storage::load_checkpoint_roots`), which an implementer follows this
-//! dispatch into the same worktree to remove; every assertion here reads
-//! the committed git tree directly, never the storage-level API this
-//! removal deletes, so nothing here goes stale when that API surface
-//! changes shape.
+//! `Storage::load_checkpoint_roots`), which the same dispatch this file
+//! landed under removes; every assertion here reads the committed git tree
+//! directly, never the storage-level API that removal deleted, so no
+//! assertion in this file needed to change shape.
+//! `no_roots_entry_via_direct_apply` (below) is the one test whose
+//! *construction* code depended on the removed `checkpoint_roots` field
+//! directly rather than only citing it in prose; it is updated to construct
+//! a plain `WriteOp::AppendLeaf` instead, since a write op can no longer
+//! carry a root at all -- the removal's whole point.
 //!
 //! `docs/specs/storage-git.md` itself is not amended by this dispatch
 //! (out of scope, per the dispatch); this file's header cites the spec's
@@ -230,13 +235,16 @@ fn no_roots_entry_after_reopen() {
     });
 }
 
-/// The same claim, one level down: a `WriteOp::AppendLeaf` carrying a
-/// non-empty `checkpoint_roots` slice is still accepted (this dispatch
-/// does not change the trait signature), but the committed tree must not
-/// reflect it under the new invariant -- pins the case where the caller
-/// hands the layer exactly the input the retired behavior used to persist.
+/// The same claim, one level down: exercised through a direct
+/// `Storage::apply` call rather than the `NaryMerkleLog` layer every other
+/// test in this file goes through. A `WriteOp::AppendLeaf` can no longer
+/// carry a checkpoint root at all -- `checkpoint_roots` was removed from the
+/// variant by this same dispatch -- so there is no "supplies one" case left
+/// to construct; what remains, and what no other test here covers, is that
+/// this lower-level entry point into the same `build::apply` also produces
+/// no `roots` entry.
 #[test]
-fn no_roots_entry_even_when_a_write_op_supplies_one() {
+fn no_roots_entry_via_direct_apply() {
     smol::block_on(async {
         let dir = tempfile::tempdir().unwrap();
         let repo = bare_repo(dir.path(), gix::hash::Kind::Sha256);
@@ -249,16 +257,11 @@ fn no_roots_entry_even_when_a_write_op_supplies_one() {
             }])
             .await
             .unwrap();
-        let root_bytes = vec![0xABu8; 32];
         storage
             .apply(&[WriteOp::AppendLeaf {
                 at: 0,
                 data: b"x",
                 nodes: &[],
-                checkpoint_roots: &[polydigest::AlgorithmRoot {
-                    alg_id: 0,
-                    root: &root_bytes,
-                }],
             }])
             .await
             .unwrap();
@@ -267,7 +270,7 @@ fn no_roots_entry_even_when_a_write_op_supplies_one() {
         assert_no_roots_entry(
             &local,
             tip,
-            "direct `apply` call whose `AppendLeaf` op supplies a non-empty checkpoint_roots",
+            "direct `Storage::apply` call, below NaryMerkleLog",
         );
     });
 }

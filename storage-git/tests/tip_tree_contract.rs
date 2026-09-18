@@ -31,8 +31,7 @@ use common::{WideHasher, init_repo};
 use gix::ObjectId;
 use gix::hash::Kind as HashKind;
 use polydigest::{
-    AlgorithmRoot, Hasher, MemoryStorage, NaryMerkleLog, NodeWrite, Storage, Subtree, TreeConfig,
-    WriteOp,
+    Hasher, MemoryStorage, NaryMerkleLog, NodeWrite, Storage, Subtree, TreeConfig, WriteOp,
 };
 use quote::ToTokens;
 use storage_git::GitStorage;
@@ -992,7 +991,6 @@ async fn assert_single_vs_batched_flat(k: u64, n: u64, tag: &str) {
             .unwrap();
     }
     let mem_storage = mem.into_storage();
-    let final_roots = mem_storage.load_checkpoint_roots().await.unwrap();
     let final_metas = mem_storage.load_algorithm_metas().await.unwrap();
 
     let (_dir1, repo1) = init_repo(HashKind::Sha1);
@@ -1029,21 +1027,14 @@ async fn assert_single_vs_batched_flat(k: u64, n: u64, tag: &str) {
             hash: d.as_slice(),
         })
         .collect();
-    let root_writes: Vec<AlgorithmRoot<'_>> = final_roots
-        .iter()
-        .map(|(id, r)| AlgorithmRoot {
-            alg_id: *id,
-            root: r.as_slice(),
-        })
-        .collect();
 
     // The "batched" side: one atomic `apply` call carrying every op this
     // content ever needed -- registering algorithm 0 (never done on this
     // raw `GitStorage`, unlike `NaryMerkleLog::new`'s eager registration)
-    // and every leaf, with the full accumulated node/checkpoint-root set
-    // attached to the final leaf op. Content-addressing means it does not
-    // matter which op in the batch nominally introduces a given
-    // coordinate -- only the final set of keys written.
+    // and every leaf, with the full accumulated node set attached to the
+    // final leaf op. Content-addressing means it does not matter which op
+    // in the batch nominally introduces a given coordinate -- only the
+    // final set of keys written.
     let mut ops: Vec<WriteOp<'_>> = Vec::with_capacity(final_metas.len() + leaves.len());
     for (alg_id, epochs) in &final_metas {
         ops.push(WriteOp::AddAlgorithm {
@@ -1057,7 +1048,6 @@ async fn assert_single_vs_batched_flat(k: u64, n: u64, tag: &str) {
             at: *index,
             data: data.as_slice(),
             nodes: if last { &node_writes } else { &[] },
-            checkpoint_roots: if last { &root_writes } else { &[] },
         });
     }
     git2.apply(&ops).await.unwrap();
@@ -1255,7 +1245,6 @@ fn identical_registered_algorithm_content_at_count_zero_yields_the_identical_tre
                 at: 0,
                 data: b"y",
                 nodes: &[],
-                checkpoint_roots: &[],
             }])
             .await
             .unwrap();

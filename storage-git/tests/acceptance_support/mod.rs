@@ -23,9 +23,9 @@ use polydigest::{MemoryStorage, NaryMerkleLog, Storage, TreeConfig, WriteOp};
 use spine::Hasher;
 use storage_git::{GitStorage, GitStorageError};
 
-/// Append one raw leaf directly through [`Storage::apply`], with no node or
-/// checkpoint-root side effects -- the direct-`Storage`-level equivalent of
-/// the old standalone `store_leaf`, for tests exercising `GitStorage`'s CAS
+/// Append one raw leaf directly through [`Storage::apply`], with no node
+/// side effects -- the direct-`Storage`-level equivalent of the old
+/// standalone `store_leaf`, for tests exercising `GitStorage`'s CAS
 /// behavior below the `NaryMerkleLog` layer.
 #[allow(dead_code)]
 pub async fn append_leaf(
@@ -38,7 +38,6 @@ pub async fn append_leaf(
             at: index,
             data,
             nodes: &[],
-            checkpoint_roots: &[],
         }])
         .await
 }
