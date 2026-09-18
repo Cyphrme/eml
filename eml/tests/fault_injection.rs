@@ -401,12 +401,6 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
         // field mutation, not a `Storage::apply` call, since this simulates a
         // torn write no legal op could ever produce.
         mutated_storage.nodes.insert((0, 0, 2), vec![0xAA; 32]);
-        // Also corrupt the checkpoint root so from_storage doesn't reject alg 0's
-        // current frozen state (we're simulating a pre-resume partial write, not
-        // a post-resume corruption).
-        // The checkpoint root for alg 0 was set when it was still active (before freeze).
-        // After freeze, no new checkpoint is written for alg 0.  Corrupt the node
-        // for alg 1's frontier to simulate a torn write during resume_algorithm.
 
         // 5. Recover/from_storage: metadata is still frozen for alg 0.
         let metas = vec![

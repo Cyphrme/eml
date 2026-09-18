@@ -502,7 +502,7 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Mutable access to the underlying storage backend.
     ///
-    /// Bypasses all tree invariants (size tracking, checkpoint roots).
+    /// Bypasses all tree invariants (size tracking).
     /// Intended for test-only tampering; production callers should use the
     /// tree API.  V3 race safety is structural (non-Clone `FjallStorage`),
     /// not dependent on hiding this method.

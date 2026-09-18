@@ -80,7 +80,7 @@ pub struct AlgorithmSeed<'a> {
 #[derive(Debug, Clone, Copy)]
 pub enum WriteOp<'a> {
     /// Append a raw leaf payload at log position `at`, together with any
-    /// active algorithm's leaf-hash node and refreshed checkpoint root.
+    /// active algorithm's leaf-hash node.
     AppendLeaf {
         /// The append-only position being written (== the count before this op).
         at: u64,
