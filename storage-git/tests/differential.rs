@@ -1,5 +1,5 @@
 //! Differential property tests against `MemoryStorage`: SG2, SG3, SG8, SG9,
-//! SG13, SG14, SG15 -- mirroring `storage-fjall`'s own
+//! SG13, SG15 -- mirroring `storage-fjall`'s own
 //! `tests/proptests.rs` pattern (`storage-fjall/tests/proptests.rs`) and
 //! `polydigest`'s reference oracle.
 

@@ -2,7 +2,7 @@
 //! at the application layer, not at this layer." A per-algorithm root
 //! digest is an index over this layer's own data (the frontier this layer
 //! already stores under `nodes/`), and this layer's own spec already says
-//! as much for the historical case (`docs/specs/storage-git.md:568-578`:
+//! as much for the historical case (`docs/specs/storage-git.md:545-551`:
 //! producing such a root "is not this layer's to produce ... A consumer
 //! that needs that historical root ... reconstructs it itself, outside
 //! this layer"). This file generalizes that rule to the live case: a
@@ -24,11 +24,10 @@
 //! a plain `WriteOp::AppendLeaf` instead, since a write op can no longer
 //! carry a root at all -- the removal's whole point.
 //!
-//! `docs/specs/storage-git.md` itself is not amended by this dispatch
-//! (out of scope, per the dispatch); this file's header cites the spec's
-//! own existing §4.3 argument only to show the removal generalizes a rule
-//! this layer already adopted, not to claim the spec text already states
-//! the live-case rule under test.
+//! `docs/specs/storage-git.md` is amended by this same dispatch: SG1 now
+//! states the live-case rule under test directly ("no `roots` entry ever
+//! exists, at any `n`"), rather than only the historical-case argument at
+//! §4.3 this file's header originally cited to motivate generalizing it.
 
 #[path = "acceptance_support/mod.rs"]
 mod support;
@@ -50,10 +49,9 @@ fn assert_no_roots_entry(repo: &gix::Repository, tip: gix::ObjectId, when: &str)
 }
 
 /// Life point 1: genesis, one algorithm registered, no append yet (`n ==
-/// 0`). SG14 already withholds `roots/` at `n == 0` under current code, so
-/// this checkpoint is not expected to be red today -- it is here so the
-/// walked sequence covers every life point the dispatch names, not just
-/// the ones that currently fail.
+/// 0`). SG1 forbids a `roots` entry at every `n`, not only at zero, so
+/// this life point is covered for completeness of the walked sequence
+/// rather than because it is the only one the rule reaches.
 #[test]
 fn no_roots_entry_at_genesis_before_any_append() {
     smol::block_on(async {
@@ -67,13 +65,13 @@ fn no_roots_entry_at_genesis_before_any_append() {
         )
         .await;
         let local = repo.to_thread_local();
-        let Some(tip) = support::ref_target(&local, "refs/eml/storage/no-index/genesis/staging")
-        else {
-            // A truly untouched staging ref never got a tree at all -- the
-            // invariant holds vacuously.
-            drop(log);
-            return;
-        };
+        // `new_log` always registers algorithm 0 via `add_algorithm`, which
+        // itself performs a `Storage::apply` write -- so the staging ref
+        // always has a tip by this point; there is no untouched-ref case to
+        // handle here.
+        let tip = support::ref_target(&local, "refs/eml/storage/no-index/genesis/staging")
+            .expect("new_log's eager add_algorithm(0, ..) must have written a tip");
+        drop(log);
         assert_no_roots_entry(&local, tip, "genesis, one algorithm registered, n == 0");
     });
 }

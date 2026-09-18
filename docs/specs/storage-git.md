@@ -151,9 +151,9 @@ C(n)                          tree
   nodes/                      tree    every sealed node digest, by key
     hex(alg_id, 16)/          tree
       hex(h, 2)/              tree
-        trimmed(left)         blob    §2.2, §3.4
+        trimmed(left)         blob    §2.2, §3.3
   leaves/                     tree    every leaf, by key
-    trimmed(index)            blob    §2.2, §3.5
+    trimmed(index)            blob    §2.2, §3.4
 ```
 
 **[SG1]** `C(n)`'s top-level entries MUST be an exhaustive subset of exactly
@@ -336,7 +336,7 @@ before," never ambiguous.
 
 ## 3. Byte-exact encodings
 
-Every blob this layer ever writes is one of five shapes. Multi-byte integers
+Every blob this layer ever writes is one of four shapes. Multi-byte integers
 are big-endian throughout, matching the encoding `storage-fjall` already
 uses for the same fields (`storage-fjall/src/lib.rs:163-252`), so a
 migration between backends never has to reconcile endianness.
@@ -391,7 +391,7 @@ unchanged blob is freshened (§5, SG22) exactly as a touched one is.
 *Checked by: property test — decode the blob and compare against
 `epochs_at(n)` computed independently.*
 
-### 3.4 A node's blob (`nodes/hex(alg_id,16)/hex(height,2)/trimmed(left)`)
+### 3.3 A node's blob (`nodes/hex(alg_id,16)/hex(height,2)/trimmed(left)`)
 
 Exactly `Hasher::digest_len()` bytes for that algorithm: `H_a(leaf bytes)`
 at `height = 0`, or the folded node digest at `height > 0`, with no framing
@@ -405,7 +405,7 @@ algorithm the way the retired layout needed.
 length as corruption, mirroring `get_node_hash`'s own check
 (`cml/src/engine.rs:283-291`). *Checked by: property test.*
 
-### 3.5 A leaf's blob (`leaves/trimmed(index)`)
+### 3.4 A leaf's blob (`leaves/trimmed(index)`)
 
 The item's raw payload bytes, verbatim, with no framing — exactly what a
 `WriteOp::AppendLeaf`'s `data` field was called with. Present iff this
@@ -708,7 +708,7 @@ Every `SG<n>` constraint above names its check inline. Summarized, a
 | :-- | :-- |
 | SG1–SG3 (key-derived layout) | Exhaustive top-level allow-list check; property tests comparing the exact set of paths under `nodes/`/`leaves/` against an independent `MemoryStorage` oracle's key set, both directions (nothing missing, nothing extra), across the full operation vocabulary and arities 2–4 |
 | SG2 (`trimmed` injectivity, 256-entry bound) | Unit tests over representative keys (`0`, small, boundary, `u64::MAX`); the exhaustive set-equality property above empirically confirms the bound |
-| SG6–SG7 (canonical order) | Unit test over the five top-level literals; structural walk of a real written tree confirming every sibling group is canonically sorted |
+| SG6–SG7 (canonical order) | Unit test over the four top-level literals; structural walk of a real written tree confirming every sibling group is canonically sorted |
 | SG8 (key-derived position lookup) | Property tests comparing this backend's reads against `MemoryStorage` over the same operation sequence, for a range of `k` and `n` |
 | SG9 (purity, incl. the size-0 kind/root canonicalization) | Property tests over reordered-but-equivalent operation sequences reaching the same logical state; a genesis `C(0)` write compared across differing eventual kinds |
 | SG12–SG16 (byte-exact encodings) | Golden vectors: fixed `(k, leaves, algorithms)` inputs with pinned expected object ids, one per supported object-hash format |
