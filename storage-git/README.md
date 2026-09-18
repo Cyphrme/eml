@@ -51,10 +51,14 @@ condition (SG24, `docs/specs/storage-git.md`).
 
 The full normative contract is `docs/specs/storage-git.md`; each numbered
 invariant (`SG1`, `SG2`, ...) names how it is checked, in its own *Checked
-by:* clause. Run the crate's suite directly:
+by:* clause. `cargo test -p storage-git` runs this crate's own suite for
+quick iteration, but it is a partial check: the repository-wide acceptance
+gate is `./check_acceptance.sh` from the repository root, and that is the
+one that must exit 0 before a branch is considered green.
 
 ```sh
-cargo test -p storage-git
+cargo test -p storage-git   # this crate's suite, for quick iteration
+./check_acceptance.sh       # the repository's acceptance gate — run this before merging
 ```
 
 ## Place in the stack

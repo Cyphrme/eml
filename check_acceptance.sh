@@ -24,8 +24,8 @@ cd "$SCRIPT_DIR"
 echo "==> cargo test --workspace --no-fail-fast"
 cargo test --workspace --no-fail-fast
 
-echo "==> cargo test --release --test complexity -p eml"
-cargo test --release --test complexity -p eml
+echo "==> eml/tests/check_complexity.sh"
+eml/tests/check_complexity.sh
 
 echo "==> cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings

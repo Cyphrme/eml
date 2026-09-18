@@ -176,10 +176,10 @@ pieces individually:
 
 ```sh
 cargo test --workspace                   # all unit, property, and fault-injection tests
-cargo test --release --test complexity   # complexity regression (release profile)
+eml/tests/check_complexity.sh            # complexity regression (release, single-threaded)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
-(cd fuzz && cargo check --all-targets)   # the fuzz crate builds against the current Storage trait
+(cd fuzz && cargo check --all-targets)   # the fuzz crate type-checks against the current Storage trait
 ```
 
 Lean proofs (from `proofs/lean/`):
