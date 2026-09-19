@@ -171,6 +171,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "canonical-ml"
+version = "0.1.0"
+dependencies = [
+ "merkle-spine",
+]
+
+[[package]]
+name = "canonical-mt"
+version = "0.1.0"
+dependencies = [
+ "merkle-spine",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.62"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -187,20 +201,6 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
-name = "cml"
-version = "0.1.0"
-dependencies = [
- "spine",
-]
-
-[[package]]
-name = "cmt"
-version = "0.1.0"
-dependencies = [
- "spine",
-]
 
 [[package]]
 name = "concurrent-queue"
@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "eml"
-version = "0.1.0"
+version = "0.12.0"
 dependencies = [
  "polydigest",
 ]
@@ -404,6 +404,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "merkle-spine"
+version = "0.1.0"
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -444,9 +448,9 @@ dependencies = [
 name = "polydigest"
 version = "0.1.0"
 dependencies = [
- "cml",
- "cmt",
- "spine",
+ "canonical-ml",
+ "canonical-mt",
+ "merkle-spine",
 ]
 
 [[package]]
@@ -535,10 +539,6 @@ dependencies = [
  "blocking",
  "futures-lite",
 ]
-
-[[package]]
-name = "spine"
-version = "0.1.0"
 
 [[package]]
 name = "syn"

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use arbitrary::Arbitrary;
-use eml::{AlgorithmMetas, Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use eml::{AlgorithmMetas, Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig, WriteOp};
 use libfuzzer_sys::fuzz_target;
 use sha2::{Digest, Sha256};
 
@@ -52,16 +52,6 @@ impl FaultyStorage {
 impl Storage for FaultyStorage {
     type Error = FuzzStorageError;
 
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        if self.should_fail() {
-            return Err(FuzzStorageError::Injected("store_leaf failed".to_string()));
-        }
-        self.inner
-            .store_leaf(index, data)
-            .await
-            .map_err(FuzzStorageError::Inner)
-    }
-
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         self.inner
             .get_leaf(index)
@@ -71,22 +61,6 @@ impl Storage for FaultyStorage {
 
     async fn len(&self) -> Result<u64, Self::Error> {
         self.inner.len().await.map_err(FuzzStorageError::Inner)
-    }
-
-    async fn store_node(
-        &mut self,
-        alg_id: u64,
-        left: u64,
-        height: u32,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        if self.should_fail() {
-            return Err(FuzzStorageError::Injected("store_node failed".to_string()));
-        }
-        self.inner
-            .store_node(alg_id, left, height, hash)
-            .await
-            .map_err(FuzzStorageError::Inner)
     }
 
     async fn get_node(
@@ -101,22 +75,6 @@ impl Storage for FaultyStorage {
             .map_err(FuzzStorageError::Inner)
     }
 
-    async fn store_algorithm_meta(
-        &mut self,
-        alg_id: u64,
-        epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        if self.should_fail() {
-            return Err(FuzzStorageError::Injected(
-                "store_algorithm_meta failed".to_string(),
-            ));
-        }
-        self.inner
-            .store_algorithm_meta(alg_id, epochs)
-            .await
-            .map_err(FuzzStorageError::Inner)
-    }
-
     async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, Self::Error> {
         self.inner
             .load_algorithm_metas()
@@ -124,36 +82,21 @@ impl Storage for FaultyStorage {
             .map_err(FuzzStorageError::Inner)
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+    async fn append_count(&self) -> Result<u64, Self::Error> {
         self.inner
-            .load_log_meta()
+            .append_count()
             .await
             .map_err(FuzzStorageError::Inner)
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner
-            .load_checkpoint_roots()
-            .await
-            .map_err(FuzzStorageError::Inner)
-    }
-
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-        algorithm_metas: &[(u64, &[(u64, u64)])],
-        log_meta: Option<(u64, u8)>,
-        checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
-        // Top-level fault injection: fail the whole batch before any write.
+    async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
+        // Top-level fault injection: fail the whole batch before any write,
+        // matching the pre-`apply` trait's `write_batch` fault point -- the
+        // one mutating entry point this trait now exposes.
         if self.should_fail() {
-            return Err(FuzzStorageError::Injected("write_batch failed".to_string()));
+            return Err(FuzzStorageError::Injected("apply failed".to_string()));
         }
-        self.inner
-            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
-            .await
-            .map_err(FuzzStorageError::Inner)
+        self.inner.apply(ops).await.map_err(FuzzStorageError::Inner)
     }
 }
 

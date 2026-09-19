@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use eml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig};
+use eml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, TreeConfig, WriteOp};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -73,13 +73,6 @@ impl std::error::Error for FaultError {}
 impl Storage for FaultInjectingStorage {
     type Error = FaultError;
 
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        self.inner
-            .store_leaf(index, data)
-            .await
-            .map_err(|_| FaultError::Storage)
-    }
-
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         self.inner
             .get_leaf(index)
@@ -89,19 +82,6 @@ impl Storage for FaultInjectingStorage {
 
     async fn len(&self) -> Result<u64, Self::Error> {
         self.inner.len().await.map_err(|_| FaultError::Storage)
-    }
-
-    async fn store_node(
-        &mut self,
-        alg_id: u64,
-        left: u64,
-        height: u32,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        self.inner
-            .store_node(alg_id, left, height, hash)
-            .await
-            .map_err(|_| FaultError::Storage)
     }
 
     async fn get_node(
@@ -116,17 +96,6 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn store_algorithm_meta(
-        &mut self,
-        alg_id: u64,
-        epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        self.inner
-            .store_algorithm_meta(alg_id, epochs)
-            .await
-            .map_err(|_| FaultError::Storage)
-    }
-
     async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
         self.inner
             .load_algorithm_metas()
@@ -134,28 +103,14 @@ impl Storage for FaultInjectingStorage {
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
+    async fn append_count(&self) -> Result<u64, Self::Error> {
         self.inner
-            .load_log_meta()
+            .append_count()
             .await
             .map_err(|_| FaultError::Storage)
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner
-            .load_checkpoint_roots()
-            .await
-            .map_err(|_| FaultError::Storage)
-    }
-
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-        algorithm_metas: &[(u64, &[(u64, u64)])],
-        log_meta: Option<(u64, u8)>,
-        checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
+    async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         let should_fail = {
             let mut count = self.batch_count.lock().unwrap();
             let limit = self.fail_after_batches.lock().unwrap();
@@ -178,12 +133,7 @@ impl Storage for FaultInjectingStorage {
 
         // Apply atomically: snapshot for rollback, apply all, restore on error.
         let backup = self.inner.clone();
-        if self
-            .inner
-            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
-            .await
-            .is_err()
-        {
+        if self.inner.apply(ops).await.is_err() {
             self.inner = backup;
             return Err(FaultError::Storage);
         }
@@ -256,55 +206,89 @@ fn test_verify_non_divergence_tamper_detection() {
             let tampered_log =
                 NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))])
                     .await;
-            // Either from_storage errors (checkpoint mismatch) or verify_non_divergence detects it.
-            match tampered_log {
-                Err(_) => {},
-                Ok(log) => {
-                    assert!(
-                        !log.verify_non_divergence(None, &[]).await.unwrap(),
-                        "Failed to detect tampered leaf data"
-                    );
-                },
-            }
+            // `from_storage` accepts this fixture today (no stored checkpoint
+            // root left to reject it against); the tamper is caught at
+            // `verify_non_divergence`. Assert the arm explicitly rather than
+            // silently accepting an `Err` here too -- if `from_storage` ever
+            // starts erroring on this fixture for an unrelated reason, this
+            // must fail loudly instead of the test going vacuously green.
+            let tampered_log = tampered_log.expect(
+                "from_storage must still accept this fixture; detection happens at \
+                 verify_non_divergence below, not here",
+            );
+            assert!(
+                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                "Failed to detect tampered leaf data"
+            );
         }
 
-        // 2. Internal node hash tampering (frontier node at height 3 covers [0,8))
+        // 2. Internal node hash tampering (frontier node at height 3 covers [0,8)).
+        // `from_storage` no longer checks a stored checkpoint root against
+        // the reconstructed frontier (that per-algorithm root was an index
+        // over this layer's own data and is retired -- head's ruling,
+        // 2026-09-17), so `from_storage` itself now succeeds; the tamper is
+        // still caught, at `verify_non_divergence` instead, the same
+        // fallback already used for leaf tampering above.
         {
             let mut tampered_storage = log.storage().clone();
             let key = (0, 0, 3); // (alg_id, left, height)
-            if let std::collections::hash_map::Entry::Occupied(mut e) =
-                tampered_storage.nodes.entry(key)
-            {
-                e.insert(vec![0x00; 32]);
-                // from_storage should detect the checkpoint mismatch.
-                let tampered_log = NaryMerkleLog::from_storage(
-                    tampered_storage,
-                    vec![(0, Box::new(Sha256Hasher))],
-                )
-                .await;
-                assert!(
-                    tampered_log.is_err(),
-                    "from_storage did not detect tampered frontier node"
-                );
-            }
-        }
-
-        // 3. Epoch metadata tampering — checkpoint verification catches the
-        // tampered boundary at load time (frontier reconstructed with the
-        // wrong epoch does not match the stored checkpoint root).
-        {
-            let mut tampered_storage = log.storage().clone();
-            if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&0) {
-                if !epochs.is_empty() {
-                    epochs[0].1 = 10;
-                }
+            // Assert the coordinate is actually materialized rather than
+            // silently skipping the whole case if it is not -- a future
+            // change that stops materializing (0, 0, 3) must fail this test
+            // loudly instead of leaving it vacuously green.
+            match tampered_storage.nodes.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    e.insert(vec![0x00; 32]);
+                },
+                std::collections::hash_map::Entry::Vacant(_) => {
+                    panic!(
+                        "node coordinate {key:?} is no longer materialized; this test's tamper \
+                         fixture needs updating, not silently skipping"
+                    );
+                },
             }
             let tampered_log =
                 NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))])
                     .await;
+            // Same reasoning as the leaf-tampering case above: assert the
+            // arm explicitly rather than silently accepting `Err`.
+            let tampered_log = tampered_log.expect(
+                "from_storage must still accept this fixture; detection happens at \
+                 verify_non_divergence below, not here",
+            );
             assert!(
-                tampered_log.is_err(),
-                "from_storage did not detect tampered epoch metadata"
+                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                "Failed to detect tampered frontier node"
+            );
+        }
+
+        // 3. Epoch metadata tampering. Same as above: `from_storage` no
+        // longer verifies a stored checkpoint root against the epoch-
+        // projected frontier, so the tamper is caught at
+        // `verify_non_divergence` rather than at load time.
+        {
+            let mut tampered_storage = log.storage().clone();
+            let epochs = tampered_storage
+                .algorithm_metas
+                .get_mut(&0)
+                .expect("algorithm 0 must be registered");
+            assert!(
+                !epochs.is_empty(),
+                "algorithm 0 must have at least one epoch"
+            );
+            epochs[0].1 = 10;
+            let tampered_log =
+                NaryMerkleLog::from_storage(tampered_storage, vec![(0, Box::new(Sha256Hasher))])
+                    .await;
+            // Same reasoning as the leaf-tampering case above: assert the
+            // arm explicitly rather than silently accepting `Err`.
+            let tampered_log = tampered_log.expect(
+                "from_storage must still accept this fixture; detection happens at \
+                 verify_non_divergence below, not here",
+            );
+            assert!(
+                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                "Failed to detect tampered epoch metadata"
             );
         }
     });
@@ -351,21 +335,33 @@ fn test_verify_non_divergence_legitimate_frozen() {
             "Legitimate frozen algorithm failed non-divergence verification"
         );
 
-        // Tamper test: Modify alg 1's frozen deactivation boundary from 5 to 3.
-        // Checkpoint verification catches the tampered boundary at load time.
+        // Tamper test: Modify alg 1's frozen deactivation boundary from 5 to
+        // 3. `from_storage` no longer verifies a stored checkpoint root
+        // against the epoch-projected frontier (that per-algorithm root was
+        // an index over this layer's own data and is retired -- head's
+        // ruling, 2026-09-17), so `from_storage` itself now succeeds; the
+        // tamper is still caught, at `verify_non_divergence` instead.
         {
             let mut tampered_storage = log.storage().clone();
-            if let Some(epochs) = tampered_storage.algorithm_metas.get_mut(&1) {
-                epochs[0].1 = 3;
-            }
+            let epochs = tampered_storage
+                .algorithm_metas
+                .get_mut(&1)
+                .expect("algorithm 1 must be registered");
+            epochs[0].1 = 3;
             let metas = vec![
                 (0, Box::new(Sha256Hasher) as Box<dyn Hasher>),
                 (1, Box::new(Sha256Hasher) as Box<dyn Hasher>),
             ];
             let tampered_log = NaryMerkleLog::from_storage(tampered_storage, metas).await;
+            // Same reasoning as the other tamper cases in this file: assert
+            // the arm explicitly rather than silently accepting `Err`.
+            let tampered_log = tampered_log.expect(
+                "from_storage must still accept this fixture; detection happens at \
+                 verify_non_divergence below, not here",
+            );
             assert!(
-                tampered_log.is_err(),
-                "from_storage did not detect tampered epoch boundary for frozen algorithm"
+                !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+                "Failed to detect tampered epoch boundary for frozen algorithm"
             );
         }
     });
@@ -400,17 +396,11 @@ fn test_resume_algorithm_non_atomic_crash_recovery() {
         let mut mutated_storage = log.storage().clone();
 
         // Write a garbage node to storage at alg 0, left 0, height 2 (root of size 4)
-        // representing a corrupted/partial write.
-        mutated_storage
-            .store_node(0, 0, 2, &[0xAA; 32])
-            .await
-            .unwrap();
-        // Also corrupt the checkpoint root so from_storage doesn't reject alg 0's
-        // current frozen state (we're simulating a pre-resume partial write, not
-        // a post-resume corruption).
-        // The checkpoint root for alg 0 was set when it was still active (before freeze).
-        // After freeze, no new checkpoint is written for alg 0.  Corrupt the node
-        // for alg 1's frontier to simulate a torn write during resume_algorithm.
+        // representing a corrupted/partial write. `MemoryStorage`'s fields are
+        // public precisely for this kind of white-box fixture setup -- direct
+        // field mutation, not a `Storage::apply` call, since this simulates a
+        // torn write no legal op could ever produce.
+        mutated_storage.nodes.insert((0, 0, 2), vec![0xAA; 32]);
 
         // 5. Recover/from_storage: metadata is still frozen for alg 0.
         let metas = vec![
@@ -554,17 +544,18 @@ fn test_v16_subtree_mode_tamper_detected() {
         let tampered_log =
             NaryMerkleLog::from_storage(tampered, vec![(0, Box::new(Sha256Hasher))]).await;
 
-        // from_storage may reject via checkpoint mismatch, or verify_non_divergence
-        // catches the tampered parent via recomputation.
-        match tampered_log {
-            Err(_) => {},
-            Ok(log) => {
-                assert!(
-                    !log.verify_non_divergence(None, &[]).await.unwrap(),
-                    "subtree-mode tampering was not detected"
-                );
-            },
-        }
+        // `from_storage` accepts this fixture today; `verify_non_divergence`
+        // catches the tampered parent via recomputation. Assert the arm
+        // explicitly rather than silently accepting `Err`, matching the
+        // other tamper cases in this file.
+        let tampered_log = tampered_log.expect(
+            "from_storage must still accept this fixture; detection happens at \
+             verify_non_divergence below, not here",
+        );
+        assert!(
+            !tampered_log.verify_non_divergence(None, &[]).await.unwrap(),
+            "subtree-mode tampering was not detected"
+        );
     });
 }
 

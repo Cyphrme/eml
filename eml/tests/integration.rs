@@ -1,4 +1,4 @@
-use eml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig};
+use eml::{Hasher, MemoryStorage, NaryMerkleLog, Storage, Subtree, TreeConfig, WriteOp};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -582,31 +582,31 @@ fn test_epoch_errors() {
         // Duplicate
         assert!(matches!(
             log.add_algorithm(0, Box::new(Sha256Hasher)).await,
-            Err(eml::error::Error::DuplicateAlgorithm(0))
+            Err(eml::Error::DuplicateAlgorithm(0))
         ));
         // Unknown remove
         assert!(matches!(
             log.remove_algorithm(999).await,
-            Err(eml::error::Error::UnknownAlgorithm(999))
+            Err(eml::Error::UnknownAlgorithm(999))
         ));
         // Unknown resume
         assert!(matches!(
             log.resume_algorithm(999).await,
-            Err(eml::error::Error::UnknownAlgorithm(999))
+            Err(eml::Error::UnknownAlgorithm(999))
         ));
 
         log.remove_algorithm(0).await.unwrap();
         // Already frozen
         assert!(matches!(
             log.remove_algorithm(0).await,
-            Err(eml::error::Error::FrozenAlgorithm(0))
+            Err(eml::Error::FrozenAlgorithm(0))
         ));
 
         log.resume_algorithm(0).await.unwrap();
         // Already active
         assert!(matches!(
             log.resume_algorithm(0).await,
-            Err(eml::error::Error::AlgorithmActive(0))
+            Err(eml::Error::AlgorithmActive(0))
         ));
     });
 }
@@ -2357,14 +2357,11 @@ fn test_node_coordinate_storage_roundtrip() {
         let left2 = 1u64 << 48;
         let height2 = 0u32;
 
-        storage
-            .store_node(0, left1, height1, b"hash1")
-            .await
-            .unwrap();
-        storage
-            .store_node(0, left2, height2, b"hash2")
-            .await
-            .unwrap();
+        // Direct field mutation: `MemoryStorage`'s fields are public exactly
+        // for white-box fixture setup like this raw coordinate probe, which
+        // has no relationship to any real append/algorithm operation.
+        storage.nodes.insert((0, left1, height1), b"hash1".to_vec());
+        storage.nodes.insert((0, left2, height2), b"hash2".to_vec());
 
         let h1 = storage.get_node(0, left1, height1).await.unwrap().unwrap();
         let h2 = storage.get_node(0, left2, height2).await.unwrap().unwrap();
@@ -2382,26 +2379,12 @@ struct MockStorage {
 impl Storage for MockStorage {
     type Error = eml::storage::MemoryStorageError;
 
-    async fn store_leaf(&mut self, _index: u64, _data: &[u8]) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
     async fn get_leaf(&self, _index: u64) -> Result<Vec<u8>, Self::Error> {
         Ok(Vec::new())
     }
 
     async fn len(&self) -> Result<u64, Self::Error> {
         Ok(self.len)
-    }
-
-    async fn store_node(
-        &mut self,
-        _alg_id: u64,
-        _left: u64,
-        _height: u32,
-        _hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        Ok(())
     }
 
     async fn get_node(
@@ -2413,34 +2396,15 @@ impl Storage for MockStorage {
         Ok(None)
     }
 
-    async fn store_algorithm_meta(
-        &mut self,
-        _alg_id: u64,
-        _epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
     async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
         self.metas.clone()
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
-        Ok(None)
+    async fn append_count(&self) -> Result<u64, Self::Error> {
+        Ok(0)
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        Ok(vec![])
-    }
-
-    async fn write_batch(
-        &mut self,
-        _leaves: &[(u64, &[u8])],
-        _nodes: &[(u64, u64, u32, &[u8])],
-        _algorithm_metas: &[(u64, &[(u64, u64)])],
-        _log_meta: Option<(u64, u8)>,
-        _checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
+    async fn apply(&mut self, _ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -2455,7 +2419,7 @@ fn test_from_storage_initialization_errors() {
         };
         let res =
             eml::NaryMerkleLog::from_storage(storage_dup, vec![(0, Box::new(Sha256Hasher))]).await;
-        assert!(matches!(res, Err(eml::error::Error::DuplicateAlgorithm(0))));
+        assert!(matches!(res, Err(eml::Error::DuplicateAlgorithm(0))));
 
         // 2. Orphaned metadata error (metas has alg 0, but no hasher for alg 0 is passed)
         let storage_orphaned = MockStorage {
@@ -2463,7 +2427,7 @@ fn test_from_storage_initialization_errors() {
             len: 0,
         };
         let res = eml::NaryMerkleLog::from_storage(storage_orphaned, Vec::new()).await;
-        assert!(matches!(res, Err(eml::error::Error::OrphanedMetadata(0))));
+        assert!(matches!(res, Err(eml::Error::OrphanedMetadata(0))));
 
         // 3. Unknown metadata error (hasher passed for alg 1, but metas only has alg 0)
         let storage_unknown = MockStorage {
@@ -2475,7 +2439,7 @@ fn test_from_storage_initialization_errors() {
             vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
         )
         .await;
-        assert!(matches!(res, Err(eml::error::Error::UnknownMetadata(1))));
+        assert!(matches!(res, Err(eml::Error::UnknownMetadata(1))));
 
         // 4. Corrupted metadata error (invalid log arity < 2)
         let storage_corrupt = MockStorage {
@@ -2490,12 +2454,12 @@ fn test_from_storage_initialization_errors() {
         .await;
         assert!(matches!(
             res,
-            Err(eml::error::Error::CorruptedMetadata { alg_id: 0, .. })
+            Err(eml::Error::CorruptedMetadata { alg_id: 0, .. })
         ));
 
         // 5. Storage error propagation
         let storage_err = MockStorage {
-            metas: Err(eml::storage::MemoryStorageError {
+            metas: Err(eml::storage::MemoryStorageError::LeafNotFound {
                 index: 0,
                 stored: 0,
             }),
@@ -2505,8 +2469,8 @@ fn test_from_storage_initialization_errors() {
             eml::NaryMerkleLog::from_storage(storage_err, vec![(0, Box::new(Sha256Hasher))]).await;
         assert!(matches!(
             res,
-            Err(eml::error::Error::Storage(
-                eml::storage::MemoryStorageError {
+            Err(eml::Error::Storage(
+                eml::storage::MemoryStorageError::LeafNotFound {
                     index: 0,
                     stored: 0
                 }
@@ -2595,49 +2559,17 @@ fn test_proof_sibling_digest_length_mismatch() {
     );
 }
 
-#[test]
-fn test_determine_global_size_probing_out_of_sync() {
-    smol::block_on(async {
-        let mut storage = MemoryStorage::new();
-
-        // Setup metadata for alg 0 and alg 1, both active starting at size 0
-        storage
-            .store_algorithm_meta(0, &[(0, u64::MAX)])
-            .await
-            .unwrap();
-        storage
-            .store_algorithm_meta(1, &[(0, u64::MAX)])
-            .await
-            .unwrap();
-
-        // Write nodes for alg 0 up to index 2 (size 3)
-        let node_val = vec![1; 32];
-        storage.store_node(0, 0, 0, &node_val).await.unwrap();
-        storage.store_node(0, 1, 0, &node_val).await.unwrap();
-        storage.store_node(0, 2, 0, &node_val).await.unwrap();
-
-        // Write nodes for alg 1 only up to index 1 (size 2, index 2 is missing!)
-        storage.store_node(1, 0, 0, &node_val).await.unwrap();
-        storage.store_node(1, 1, 0, &node_val).await.unwrap();
-
-        // Load tree from storage
-        let hashers: Vec<(u64, Box<dyn eml::Hasher>)> =
-            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))];
-
-        // This fails with CorruptedMetadata as expected under R10.
-        let reconstructed = NaryMerkleLog::from_storage_with_config(
-            storage.clone(),
-            hashers,
-            TreeConfig { arity: 2 },
-        )
-        .await;
-
-        assert!(
-            reconstructed.is_err(),
-            "Expected from_storage to fail due to out of sync algorithm frontier nodes"
-        );
-    });
-}
+// `test_determine_global_size_probing_out_of_sync` (the legacy
+// `determine_global_size` linear-probe fallback's own out-of-sync detection)
+// is retired along with that function (head's ruling, 2026-09-17,
+// requirement B): `append_count` is now always authoritative and never
+// falls back to probing `get_node` presence, so the scenario this test
+// constructed -- algorithm metadata registered but no `append_count` ever
+// persisted, nodes written directly and unevenly across algorithms -- is no
+// longer reachable through any legal `Storage::apply` sequence at all (it
+// required the retired standalone `store_algorithm_meta`/`store_node`
+// methods). See `git log` for the removed test if it is useful as a
+// reference for what the probe used to catch.
 
 #[derive(Clone)]
 struct ErrorMaskingStorage {
@@ -2647,15 +2579,6 @@ struct ErrorMaskingStorage {
 
 impl eml::Storage for ErrorMaskingStorage {
     type Error = eml::storage::MemoryStorageError;
-
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        if index < self.inner.leaves.len() as u64 {
-            self.inner.leaves[index as usize] = data.to_vec();
-            Ok(())
-        } else {
-            self.inner.store_leaf(index, data).await
-        }
-    }
 
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         self.inner.get_leaf(index).await
@@ -2672,16 +2595,6 @@ impl eml::Storage for ErrorMaskingStorage {
         }
     }
 
-    async fn store_node(
-        &mut self,
-        alg_id: u64,
-        left: u64,
-        height: u32,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        self.inner.store_node(alg_id, left, height, hash).await
-    }
-
     async fn get_node(
         &self,
         alg_id: u64,
@@ -2691,42 +2604,32 @@ impl eml::Storage for ErrorMaskingStorage {
         self.inner.get_node(alg_id, left, height).await
     }
 
-    async fn store_algorithm_meta(
-        &mut self,
-        alg_id: u64,
-        epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        self.inner.store_algorithm_meta(alg_id, epochs).await
-    }
-
     async fn load_algorithm_metas(&self) -> Result<eml::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().await
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
-        self.inner.load_log_meta().await
+    async fn append_count(&self) -> Result<u64, Self::Error> {
+        self.inner.append_count().await
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner.load_checkpoint_roots().await
-    }
-
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-        algorithm_metas: &[(u64, &[(u64, u64)])],
-        log_meta: Option<(u64, u8)>,
-        checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
-        self.inner
-            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
-            .await
+    async fn apply(&mut self, ops: &[WriteOp<'_>]) -> Result<(), Self::Error> {
+        self.inner.apply(ops).await
     }
 }
 
+/// `append_count` is authoritative and untouched by a masked `len()` --
+/// masking used to also protect the derived `kind`/`size`/`subtree_count`
+/// triple, back when a persisted log-meta kind byte won over `len()`'s own
+/// probe. Under the derived-kind design (head's ruling, 2026-09-17) `kind`
+/// is *always* read straight off `len()` (flat iff `len() > 0`), so masking
+/// `len()` to zero now flips the derived kind to subtree -- `append_count`
+/// stays honest, but `size()`/`subtree_count()` (both `kind`-gated) now
+/// misreport right along with it. That is the correct, intended trade of
+/// deriving kind from content instead of storing a byte a masked read can
+/// no longer be trusted to agree with: this test pins the NEW boundary
+/// (append_count is masking-proof; kind is not) rather than the retired one.
 #[test]
-fn test_storage_len_error_masking_overwrite() {
+fn test_append_count_survives_a_masked_len_but_derived_kind_does_not() {
     smol::block_on(async {
         let mut log = NaryMerkleLog::new(
             MemoryStorage::new(),
@@ -2745,31 +2648,40 @@ fn test_storage_len_error_masking_overwrite() {
             mask_len_to_zero: mask.clone(),
         };
 
-        // Initially we reconstruct size 2
+        // Initially we reconstruct size 2, flat.
         {
             let reconstructed =
                 NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
                     .await
                     .unwrap();
             assert_eq!(reconstructed.size(), 2);
+            assert_eq!(reconstructed.kind(), eml::LogKind::Flat);
         }
 
         // Mask len to zero, simulating a transient read error on the leaf keyspace.
         mask.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        // With persisted log_meta, from_storage reads the authoritative (count, kind)
-        // directly and does not rely on len() for mode inference.
+        assert_eq!(
+            storage.append_count().await.unwrap(),
+            2,
+            "append_count must stay authoritative regardless of what len() reports"
+        );
+
         let log_after_mask =
             NaryMerkleLog::from_storage(storage.clone(), vec![(0, Box::new(Sha256Hasher))])
                 .await
                 .unwrap();
         assert_eq!(
-            log_after_mask.size(),
+            log_after_mask.count(),
             2,
-            "persisted log_meta wins over masked len()"
+            "the total append count is unaffected by a masked len()"
         );
-        assert_eq!(log_after_mask.subtree_count(), 0);
-        assert_eq!(log_after_mask.kind(), eml::LogKind::Flat);
+        assert_eq!(
+            log_after_mask.kind(),
+            eml::LogKind::Subtree,
+            "kind is derived from len() alone, so a masked len() of 0 is indistinguishable from a \
+             genuine subtree-kind log -- this is the accepted cost of never storing a kind byte"
+        );
     });
 }
 
@@ -3978,53 +3890,9 @@ fn test_cross_replica_identical_recovery() {
     });
 }
 
-/// Legacy-probe gap correctness: when no log_meta is present, the linear scan
-/// correctly stops at the first absent node even if gaps exist between
-/// activation epochs (i.e. the binary search assumption was violated).
-#[test]
-fn test_legacy_probe_gap_correctness() {
-    smol::block_on(async {
-        // Build a 3-append subtree log with alg 0 and alg 1, where alg 1
-        // is deactivated at position 1 (creating a gap at index 1 for alg 1).
-        let mut log = NaryMerkleLog::new(
-            MemoryStorage::new(),
-            Box::new(Sha256Hasher),
-            TreeConfig { arity: 2 },
-        )
-        .await
-        .unwrap();
-        log.add_algorithm(1, Box::new(Sha256Hasher)).await.unwrap();
-
-        let st = Subtree::Leaf(b"y".to_vec());
-        log.append_subtree(&st).await.unwrap(); // index 0 — both algs active
-        log.remove_algorithm(1).await.unwrap(); // freeze alg 1 at 1
-        log.append_subtree(&st).await.unwrap(); // index 1 — only alg 0 active
-        log.resume_algorithm(1).await.unwrap(); // reactivate alg 1 at 2
-        log.append_subtree(&st).await.unwrap(); // index 2 — both algs active
-
-        let expected_count = log.count();
-        let expected_root = log.root_for(0).unwrap();
-
-        // Remove log_meta to simulate a legacy store; recovery must use probe.
-        let mut storage = log.into_storage();
-        storage.log_meta = None;
-
-        let r = NaryMerkleLog::from_storage(
-            storage,
-            vec![(0, Box::new(Sha256Hasher)), (1, Box::new(Sha256Hasher))],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            r.count(),
-            expected_count,
-            "legacy probe must recover correct count"
-        );
-        assert_eq!(
-            r.root_for(0).unwrap(),
-            expected_root,
-            "legacy probe must recover correct root"
-        );
-    });
-}
+// `test_legacy_probe_gap_correctness` (the legacy linear-probe fallback's
+// own gap-correctness case) is retired along with `determine_global_size`
+// (head's ruling, 2026-09-17, requirement B): `MemoryStorage` no longer has
+// a `log_meta` field to remove, since `append_count` is always present and
+// authoritative -- there is no "no log_meta" state left to simulate. See
+// `git log` for the removed test if it is useful as a reference.

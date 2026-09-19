@@ -66,7 +66,9 @@ pub use root::{
 pub use sealed::Sealed;
 pub use snapshot::BoundSnapshot;
 pub use snapshot_proof::{ClaimedLeaf, SnapshotProof};
-pub use storage::{AlgorithmMetas, Epochs, MemoryStorage, Storage};
+pub use storage::{
+    AlgorithmMetas, AlgorithmSeed, Epochs, MemoryStorage, NodeWrite, Storage, WriteOp,
+};
 pub use tree::{NaryMerkleLog, TreeConfig};
 
 /// The full proof surface a consumer reaches through `polydigest::proof::*` (and so

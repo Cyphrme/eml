@@ -1,0 +1,330 @@
+//! The byte-exact object layout: hex naming, blob encodings, and the pure
+//! epoch-projection helpers the checkpoint tree's `epochs/` section needs.
+//!
+//! Every function here is a pure transform over bytes/integers; no `gix`
+//! type appears in this module. Keeping the encoding decoupled from the git
+//! plumbing is what makes the golden-vector and property tests in
+//! `tests/structural.rs` exercise it without a repository at all.
+
+use crate::error::GitStorageError as Error;
+
+/// The four fixed top-level literals a checkpoint tree ever carries (§2,
+/// §3): `nodes`/`leaves` hold only key-fanned-out subtrees; `meta`/`epochs`
+/// hold only named metadata. A per-algorithm root digest is an index over
+/// this layer's own data (the frontier already stored under `nodes/`), and
+/// an index over this layer's own data belongs at the application layer,
+/// not here (head's ruling, 2026-09-17) -- so no `roots` literal exists.
+/// `build.rs` and `read.rs` reference these constants rather than bare
+/// string literals so production's actual names and this module's own
+/// distinctness test (`tests::top_level_literal_names_are_mutually_distinct`)
+/// can never silently diverge -- there is exactly one name per role, not a
+/// copy of it.
+pub(crate) const TOP_LEVEL_NODES: &str = "nodes";
+pub(crate) const TOP_LEVEL_LEAVES: &str = "leaves";
+pub(crate) const TOP_LEVEL_META: &str = "meta";
+pub(crate) const TOP_LEVEL_EPOCHS: &str = "epochs";
+
+/// `hex(x, 16)` — a `u64` rendered as 16 lowercase hex digits.
+#[must_use]
+pub fn hex16(x: u64) -> String {
+    format!("{x:016x}")
+}
+
+/// `hex(x, 2)` — a value `0..=255` rendered as 2 lowercase hex digits.
+///
+/// # Panics
+///
+/// Panics if `x > 0xff`; every caller in this crate bounds `x` to `0..k` or
+/// `0..d_j` first, both of which `spine::ARITY_RANGE` (`2..=256`) keeps
+/// within `0..=255`.
+#[must_use]
+pub fn hex2(x: u64) -> String {
+    assert!(x <= 0xff, "hex2: value {x} exceeds 2 hex digits");
+    format!("{x:02x}")
+}
+
+/// Decode a `hex(_, 16)` name back to its `u64`, or `None` if it is not
+/// exactly 16 lowercase hex digits.
+#[must_use]
+pub fn parse_hex16(name: &str) -> Option<u64> {
+    if name.len() != 16 || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(name, 16).ok()
+}
+
+/// The `byte1-be-trim` key path scheme (design rationale in
+/// `docs/specs/storage-git.md` §2.1). A key's
+/// leading zero bytes are stripped, a one-ASCII-digit length segment (the
+/// count of remaining significant bytes, `1..=8`) is prepended, and each
+/// remaining byte becomes its own two-lowercase-hex-digit segment,
+/// most-significant byte first. `key == 0` is one significant (zero) byte,
+/// never zero segments, so every key gets a non-empty path. Distinct keys
+/// always produce distinct segment sequences (the length segment keeps two
+/// keys of different significant-byte-length from ever sharing a directory,
+/// and fixed-width hex-pair segments keep two keys of the same length from
+/// ever sharing one once their bytes differ) -- `tests/key_derived_layout.rs`
+/// checks this by exhaustive round-trip over representative keys.
+#[must_use]
+pub fn trimmed_key_segments(key: u64) -> Vec<String> {
+    let be = key.to_be_bytes();
+    let first_nonzero = be.iter().position(|&b| b != 0).unwrap_or(7);
+    let sig = &be[first_nonzero..];
+    let mut segs = Vec::with_capacity(sig.len() + 1);
+    segs.push(sig.len().to_string());
+    segs.extend(sig.iter().map(|b| format!("{b:02x}")));
+    segs
+}
+
+/// `meta`'s fixed 10-byte encoding (§3.1, SG12): arity, then count. One
+/// shape, for every log regardless of resume history: there is nothing this
+/// early to stay compatible with, so no version byte, no second wider
+/// shape, and no boundary field exist to distinguish one from another. No
+/// kind byte either -- a log's kind is derived from content, never stored
+/// (head's ruling, 2026-09-17); see [`crate::LogMetadata`]'s own doc for the
+/// derivation.
+#[must_use]
+pub fn encode_meta(arity: u64, count: u64) -> [u8; 10] {
+    let mut out = [0u8; 10];
+    out[0..2].copy_from_slice(&(arity as u16).to_be_bytes());
+    out[2..10].copy_from_slice(&count.to_be_bytes());
+    out
+}
+
+/// Decode `meta`'s bytes (§3.1, SG12). Rejects any length other than 10.
+pub fn decode_meta(bytes: &[u8]) -> Result<(u64, u64), Error> {
+    if bytes.len() != 10 {
+        return Err(Error::Corruption(format!(
+            "meta blob must be exactly 10 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let arity = u16::from_be_bytes([bytes[0], bytes[1]]) as u64;
+    let count = u64::from_be_bytes(bytes[2..10].try_into().unwrap());
+    Ok((arity, count))
+}
+
+/// A `epochs/hex(alg_id,16)` blob's encoding (§3.2): a sequence of
+/// `(start, end)` `u64` BE pairs, each 16 bytes.
+#[must_use]
+pub fn encode_epochs(epochs: &[(u64, u64)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(epochs.len() * 16);
+    for &(start, end) in epochs {
+        out.extend_from_slice(&start.to_be_bytes());
+        out.extend_from_slice(&end.to_be_bytes());
+    }
+    out
+}
+
+/// Decode an `epochs/hex(alg_id,16)` blob (§3.2). Rejects a length that is
+/// not a multiple of 16, or an empty result (an algorithm is only ever
+/// recorded once registered, with at least one epoch).
+pub fn decode_epochs(bytes: &[u8]) -> Result<Vec<(u64, u64)>, Error> {
+    if bytes.is_empty() || bytes.len() % 16 != 0 {
+        return Err(Error::Corruption(format!(
+            "epochs blob length {} is not a positive multiple of 16",
+            bytes.len()
+        )));
+    }
+    Ok(bytes
+        .chunks_exact(16)
+        .map(|chunk| {
+            let start = u64::from_be_bytes(chunk[0..8].try_into().unwrap());
+            let end = u64::from_be_bytes(chunk[8..16].try_into().unwrap());
+            (start, end)
+        })
+        .collect())
+}
+
+/// The epoch timeline as it stood at `size`, mirroring
+/// `cml::engine::AlgView::epochs_at` (`cml/src/engine.rs:203-216`) exactly,
+/// reimplemented here as a free function over a raw epoch list so this crate
+/// does not need a `Box<dyn Hasher>` just to call an `AlgView` method.
+/// `tests/epoch_parity.rs` checks this copy against the real `AlgView` for
+/// randomized histories so the two cannot silently drift apart.
+#[must_use]
+pub fn epochs_at(history: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
+    let mut out = Vec::new();
+    for &(start, end) in history {
+        if start > size {
+            break;
+        }
+        if end > size {
+            out.push((start, u64::MAX));
+            break;
+        }
+        out.push((start, end));
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+#[cfg(test)]
+mod tests {
+    use cml::AlgView;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct NullHasher;
+    impl cml::Hasher for NullHasher {
+        fn leaf(&self, _: &[u8]) -> Vec<u8> {
+            vec![0; 4]
+        }
+
+        fn node(&self, _: &[&[u8]]) -> Vec<u8> {
+            vec![0; 4]
+        }
+
+        fn empty(&self) -> Vec<u8> {
+            vec![0; 4]
+        }
+
+        fn hash(&self, _: &[u8]) -> Vec<u8> {
+            vec![0; 4]
+        }
+
+        fn clone_box(&self) -> Box<dyn cml::Hasher> {
+            Box::new(NullHasher)
+        }
+    }
+
+    fn view(epochs: Vec<(u64, u64)>) -> AlgView {
+        AlgView {
+            hasher: Box::new(NullHasher),
+            epochs,
+            frontier: Vec::new(),
+            frontier_coords: Vec::new(),
+        }
+    }
+
+    fn arb_epochs() -> impl Strategy<Value = Vec<(u64, u64)>> {
+        // A handful of monotonically increasing boundaries, the last
+        // optionally left open -- matches AlgView::epochs_at's own
+        // documented shape (`cml/src/engine.rs`).
+        (prop::collection::vec(1u64..20, 1..6), any::<bool>()).prop_map(|(deltas, open)| {
+            let mut bounds = Vec::with_capacity(deltas.len());
+            let mut acc = 0u64;
+            for d in deltas {
+                acc += d;
+                bounds.push(acc);
+            }
+            let mut epochs = Vec::new();
+            for pair in bounds.chunks(2) {
+                match pair {
+                    [start, end] => epochs.push((*start, *end)),
+                    [start] => {
+                        if open {
+                            epochs.push((*start, u64::MAX));
+                        }
+                    },
+                    _ => unreachable!(),
+                }
+            }
+            if epochs.is_empty() {
+                epochs.push((0, u64::MAX));
+            }
+            epochs
+        })
+    }
+
+    proptest! {
+        /// SG13: `layout::epochs_at` mirrors `cml::engine::AlgView::epochs_at`
+        /// exactly, for randomized histories and sizes -- the parity check
+        /// this module's doc comment promises.
+        #[test]
+        fn epochs_at_matches_alg_view(epochs in arb_epochs(), size in 0u64..200) {
+            let expected = view(epochs.clone()).epochs_at(size);
+            let actual = epochs_at(&epochs, size);
+            prop_assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn hex_round_trips() {
+        for x in [0u64, 1, 255, 65535, u64::MAX] {
+            assert_eq!(parse_hex16(&hex16(x)), Some(x));
+        }
+        assert_eq!(parse_hex16("not-hex-at-all!!"), None);
+        assert_eq!(hex2(0), "00");
+        assert_eq!(hex2(255), "ff");
+    }
+
+    #[test]
+    fn meta_round_trip() {
+        let bytes = encode_meta(4, 12345);
+        assert_eq!(bytes.len(), 10, "meta's one fixed shape is 10 bytes");
+        assert_eq!(decode_meta(&bytes).unwrap(), (4, 12345));
+        assert!(decode_meta(&bytes[..9]).is_err());
+    }
+
+    #[test]
+    fn meta_rejects_any_length_other_than_ten() {
+        let bytes = encode_meta(4, 12345);
+        let mut too_long = bytes.to_vec();
+        too_long.push(0);
+        assert!(decode_meta(&too_long).is_err());
+        assert!(decode_meta(&bytes[..9]).is_err());
+    }
+
+    #[test]
+    fn epochs_round_trip() {
+        let epochs = vec![(0, 10), (15, u64::MAX)];
+        let bytes = encode_epochs(&epochs);
+        assert_eq!(decode_epochs(&bytes).unwrap(), epochs);
+        assert!(decode_epochs(&[]).is_err());
+        assert!(decode_epochs(&[0u8; 15]).is_err());
+    }
+
+    /// SG6: the four fixed top-level literals are mutually distinct and
+    /// never sit as siblings of a hex- or trimmed-key-encoded entry under
+    /// the key-derived layout (`nodes`/`leaves` hold only key-fanned-out
+    /// subtrees; `meta`/`epochs` hold only named metadata) -- so, unlike the
+    /// retired peak-and-children layout, no literal name needs to avoid
+    /// looking like a hex string at all: this test only needs the four
+    /// literals distinct from one another, checked exhaustively.
+    ///
+    /// Asserted over the same `TOP_LEVEL_*` constants `build.rs`/`read.rs`
+    /// write and read -- not a copy of their names -- so this test cannot
+    /// pass while production uses a different set: there is only one string
+    /// per role for it to diverge from.
+    #[test]
+    fn top_level_literal_names_are_mutually_distinct() {
+        let names = [
+            TOP_LEVEL_META,
+            TOP_LEVEL_NODES,
+            TOP_LEVEL_LEAVES,
+            TOP_LEVEL_EPOCHS,
+        ];
+        for (i, a) in names.iter().enumerate() {
+            for b in &names[i + 1..] {
+                assert_ne!(a, b, "top-level literal names must be mutually distinct");
+            }
+        }
+    }
+
+    #[test]
+    fn trimmed_shrinks_path_for_small_keys() {
+        assert_eq!(trimmed_key_segments(0), vec!["1", "00"]);
+        assert_eq!(trimmed_key_segments(0xab), vec!["1", "ab"]);
+        assert_eq!(trimmed_key_segments(0x0100), vec!["2", "01", "00"]);
+        assert_eq!(
+            trimmed_key_segments(u64::MAX),
+            vec!["8", "ff", "ff", "ff", "ff", "ff", "ff", "ff", "ff"]
+        );
+    }
+
+    #[test]
+    fn trimmed_length_segment_prevents_cross_length_collision() {
+        assert_ne!(trimmed_key_segments(1)[0], trimmed_key_segments(256)[0]);
+    }
+
+    #[test]
+    fn every_key_round_trips_to_a_distinct_path() {
+        let mut seen = std::collections::HashSet::new();
+        for k in [0u64, 1, 2, 255, 256, 65535, 65536, 1_000_000, u64::MAX] {
+            let p = trimmed_key_segments(k);
+            assert!(seen.insert(p.clone()), "key {k} collided with path {p:?}");
+        }
+    }
+}

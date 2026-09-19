@@ -1,4 +1,4 @@
-use polydigest::{Hasher, NaryMerkleLog, Storage, TreeConfig};
+use polydigest::{Hasher, NaryMerkleLog, NodeWrite, Storage, TreeConfig, WriteOp};
 use sha2::{Digest, Sha256};
 use storage_fjall::FjallStorage;
 use tempfile::tempdir;
@@ -41,15 +41,35 @@ fn test_fjall_storage_basic_ops() {
         // Init
         assert_eq!(storage.len().await.unwrap(), 0);
 
-        // Leaf ops
-        storage.store_leaf(0, b"leaf0").await.unwrap();
-        storage.store_leaf(1, b"leaf1").await.unwrap();
+        // Leaf ops, one `AppendLeaf` op each; the second carries an
+        // otherwise-unrelated node write too -- `nodes` is not required to
+        // sit at the op's own `at` position, only to land atomically with it.
+        storage
+            .apply(&[WriteOp::AppendLeaf {
+                at: 0,
+                data: b"leaf0",
+                nodes: &[],
+            }])
+            .await
+            .unwrap();
+        storage
+            .apply(&[WriteOp::AppendLeaf {
+                at: 1,
+                data: b"leaf1",
+                nodes: &[NodeWrite {
+                    alg_id: 0,
+                    left: 100,
+                    height: 0,
+                    hash: b"hash100",
+                }],
+            }])
+            .await
+            .unwrap();
         assert_eq!(storage.len().await.unwrap(), 2);
         assert_eq!(storage.get_leaf(0).await.unwrap(), b"leaf0");
         assert_eq!(storage.get_leaf(1).await.unwrap(), b"leaf1");
 
         // Node ops
-        storage.store_node(0, 100, 0, b"hash100").await.unwrap();
         assert_eq!(
             storage.get_node(0, 100, 0).await.unwrap().unwrap(),
             b"hash100"
@@ -58,7 +78,13 @@ fn test_fjall_storage_basic_ops() {
 
         // Metadata ops
         let epochs = vec![(0, 10), (15, 20)];
-        storage.store_algorithm_meta(0, &epochs).await.unwrap();
+        storage
+            .apply(&[WriteOp::AddAlgorithm {
+                alg_id: 0,
+                epochs: &epochs,
+            }])
+            .await
+            .unwrap();
         let loaded = storage.load_algorithm_metas().await.unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, 0);
@@ -174,13 +200,34 @@ fn test_fjall_storage_scoped_prefix_isolation() {
         // Same positional keys (leaf index 0, node (alg_id=1, left=2, height=3),
         // alg_id 7) written through two independently-scoped instances sharing
         // one physical database must not collide.
-        tenant_a.store_leaf(0, b"a-leaf-0").await.unwrap();
-        tenant_b.store_leaf(0, b"b-leaf-0").await.unwrap();
+        tenant_a
+            .apply(&[WriteOp::AppendLeaf {
+                at: 0,
+                data: b"a-leaf-0",
+                nodes: &[NodeWrite {
+                    alg_id: 1,
+                    left: 2,
+                    height: 3,
+                    hash: b"a-node",
+                }],
+            }])
+            .await
+            .unwrap();
+        tenant_b
+            .apply(&[WriteOp::AppendLeaf {
+                at: 0,
+                data: b"b-leaf-0",
+                nodes: &[NodeWrite {
+                    alg_id: 1,
+                    left: 2,
+                    height: 3,
+                    hash: b"b-node",
+                }],
+            }])
+            .await
+            .unwrap();
         assert_eq!(tenant_a.get_leaf(0).await.unwrap(), b"a-leaf-0");
         assert_eq!(tenant_b.get_leaf(0).await.unwrap(), b"b-leaf-0");
-
-        tenant_a.store_node(1, 2, 3, b"a-node").await.unwrap();
-        tenant_b.store_node(1, 2, 3, b"b-node").await.unwrap();
         assert_eq!(
             tenant_a.get_node(1, 2, 3).await.unwrap().unwrap(),
             b"a-node"
@@ -192,8 +239,20 @@ fn test_fjall_storage_scoped_prefix_isolation() {
 
         let epochs_a = vec![(0, 5)];
         let epochs_b = vec![(10, 20)];
-        tenant_a.store_algorithm_meta(7, &epochs_a).await.unwrap();
-        tenant_b.store_algorithm_meta(7, &epochs_b).await.unwrap();
+        tenant_a
+            .apply(&[WriteOp::AddAlgorithm {
+                alg_id: 7,
+                epochs: &epochs_a,
+            }])
+            .await
+            .unwrap();
+        tenant_b
+            .apply(&[WriteOp::AddAlgorithm {
+                alg_id: 7,
+                epochs: &epochs_b,
+            }])
+            .await
+            .unwrap();
         assert_eq!(
             tenant_a.load_algorithm_metas().await.unwrap(),
             vec![(7, epochs_a)]
@@ -212,36 +271,31 @@ fn test_fjall_storage_scoped_prefix_rejects_empty() {
     assert!(FjallStorage::with_database_scoped(db, "").is_err());
 }
 
+/// A sparse, out-of-order leaf write is no longer a legal `AppendLeaf` op:
+/// `WriteOp::AppendLeaf::at` is documented as "the append-only position
+/// being written (== the count before this op)", matching
+/// `storage-git::GitStorage`'s own in-order requirement (departure 2,
+/// `storage-git/src/lib.rs`). What used to be `FjallStorage`'s own more
+/// permissive standalone `store_leaf` -- accepting any index, sparse or
+/// out-of-order -- is retired along with the standalone method itself:
+/// there is now exactly one way to write, and that way is append-only.
 #[test]
-fn test_fjall_out_of_order_and_sparse() {
+fn test_fjall_out_of_order_append_is_refused() {
     smol::block_on(async {
         let dir = tempdir().unwrap();
         let mut storage = FjallStorage::open(dir.path()).unwrap();
 
-        // Store index 10 first
-        storage.store_leaf(10, b"index10").await.unwrap();
-
-        // len() should return 11 (highest key + 1)
-        assert_eq!(storage.len().await.unwrap(), 11);
-
-        // index 10 should be found
-        assert_eq!(storage.get_leaf(10).await.unwrap(), b"index10");
-
-        // indices 0..10 should return NotFound
-        for i in 0..10 {
-            assert!(storage.get_leaf(i).await.is_err());
-        }
-
-        // Store index 5
-        storage.store_leaf(5, b"index5").await.unwrap();
-
-        // len() should still be 11
-        assert_eq!(storage.len().await.unwrap(), 11);
-
-        // index 5 should be found
-        assert_eq!(storage.get_leaf(5).await.unwrap(), b"index5");
-
-        // index 10 should still be found
-        assert_eq!(storage.get_leaf(10).await.unwrap(), b"index10");
+        let result = storage
+            .apply(&[WriteOp::AppendLeaf {
+                at: 10,
+                data: b"index10",
+                nodes: &[],
+            }])
+            .await;
+        assert!(
+            result.is_err(),
+            "an AppendLeaf at position 10 on a fresh (append_count == 0) store must be refused, \
+             not silently accepted as a sparse write"
+        );
     });
 }

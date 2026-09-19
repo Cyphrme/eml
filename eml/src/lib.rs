@@ -19,38 +19,28 @@
 //! while the re-exported [`NaryMerkleLog`] still accepts any [`TreeConfig`]
 //! for callers that need a different arity.
 
-pub use polydigest::{
-    AlgorithmMetas, AuditPayload, BindingProof, BoundSnapshot, ClaimedLeaf, ConsistencyProof,
-    CouplingProof, Epochs, FillError, FillKind, FilledTree, Hasher, InclusionProof, LeafProof,
-    LogError, LogKind, LogResult, MemoryStorage, Meta, NaryMerkleLog, NullRun, ProofStep,
-    RunExtent, Seal, Sealed, SkeletonStep, SnapshotProof, Storage, Subtree, TreeConfig,
-    TrustedBindingRoot, VerifierConfig, all_null_runs, bag_peaks, combined_root,
-    committed_active_algs, committed_active_at, constant_time_eq, count_leaves, evaluate, fill,
-    frontier_for_size, hasher, mountain_skeleton, mr, nary_mr, null_digest,
-    null_runs_are_trivial, null_runs_for_alg, reconstruct_consistency_roots,
-    reconstruct_inclusion_root, reduction_count, serialize_null_runs, subtree, topology,
-    validate_committed_epochs, verify_consistency, verify_consistency_with_coupling,
-    verify_epoch_evolution, verify_inactivity_with_coupling, verify_inclusion,
-    verify_inclusion_path_structure, verify_inclusion_with_coupling, within_subtree_path,
-};
 // Module paths (not just their flat items) so `eml::storage::X` and
 // `eml::proof::X` resolve: eml's own integration tests reach
 // `storage::MemoryStorageError` that way, and polydigest documents
 // `eml::proof::*` as the supported path to its append-only proof surface.
-pub use polydigest::proof;
-pub use polydigest::storage;
+pub use polydigest::{
+    AlgorithmMetas, AlgorithmSeed, AuditPayload, BindingProof, BoundSnapshot, ClaimedLeaf,
+    ConsistencyProof, CouplingProof, Epochs, FillError, FillKind, FilledTree, Hasher,
+    InclusionProof, LeafProof, LogError, LogKind, LogResult, MemoryStorage, Meta, NaryMerkleLog,
+    NodeWrite, NullRun, ProofStep, RunExtent, Seal, Sealed, SkeletonStep, SnapshotProof, Storage,
+    Subtree, TreeConfig, TrustedBindingRoot, VerifierConfig, WriteOp, all_null_runs, bag_peaks,
+    combined_root, committed_active_algs, committed_active_at, constant_time_eq, count_leaves,
+    evaluate, fill, frontier_for_size, hasher, mountain_skeleton, mr, nary_mr, null_digest,
+    null_runs_are_trivial, null_runs_for_alg, proof, reconstruct_consistency_roots,
+    reconstruct_inclusion_root, reduction_count, serialize_null_runs, storage, subtree, topology,
+    validate_committed_epochs, verify_consistency, verify_consistency_with_coupling,
+    verify_epoch_evolution, verify_inactivity_with_coupling, verify_inclusion,
+    verify_inclusion_path_structure, verify_inclusion_with_coupling, within_subtree_path,
+};
 // The combinator driver's storage-parameterised error/result are the EML
 // library's public `Error`/`Result` (the combinator also has a distinct,
 // non-parameterised snapshot `Error`, not re-exported under this name).
 pub use polydigest::{LogError as Error, LogResult as Result};
-
-/// The EML library's error surface, reached through `eml::error::*`. The
-/// driver's storage-parameterised [`polydigest::LogError`] is the public
-/// `Error`; this module preserves the `eml::error::Error` path the historical
-/// surface exposed.
-pub mod error {
-    pub use polydigest::{LogError as Error, LogResult as Result};
-}
 
 /// The log arity: binary (`k = 2`).
 pub const LOG_ARITY: u64 = 2;

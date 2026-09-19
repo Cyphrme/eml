@@ -48,6 +48,24 @@ pub enum LogError<E> {
     /// [`crate::BoundSnapshot`] (the committed epochs are not well-formed at the
     /// sealed size).
     MalformedSeal,
+    /// [`crate::NaryMerkleLog::resume`] was handed storage that already
+    /// carries a committed log (`Storage::append_count` is nonzero, or it
+    /// already has a registered algorithm). A resumed log writes forward
+    /// into a fresh backend only; the size already committed there is
+    /// included for diagnostics.
+    ResumeTargetNotFresh(u64),
+    /// [`crate::NaryMerkleLog::verify_non_divergence`] was asked to start
+    /// from a checkpoint at or after this algorithm's first activation, but
+    /// `trusted_roots` carries no entry for it. Checkpoint verification
+    /// trusts a caller-supplied root for the boundary by design -- the same
+    /// way a consistency proof trusts its own starting root -- rather than
+    /// deriving one itself, so there is nothing to check the tail against.
+    /// The algorithm named here is registered; call with
+    /// `checkpoint_size: None` instead to verify by full replay from
+    /// genesis, which derives its own root as it goes (and, on a resumed
+    /// log, fails on the opaque inherited prefix rather than returning a
+    /// verdict, since that history was never stored to replay).
+    MissingTrustedRoot(u64),
 }
 
 impl<E: fmt::Display> fmt::Display for LogError<E> {
@@ -78,6 +96,17 @@ impl<E: fmt::Display> fmt::Display for LogError<E> {
                 write!(f, "corrupted metadata for algorithm {alg_id}: {reason}")
             },
             Self::MalformedSeal => write!(f, "spine rejected the timeline while sealing"),
+            Self::ResumeTargetNotFresh(count) => write!(
+                f,
+                "resume target is not a fresh backend: a fresh backend must have a zero append \
+                 count and no registered algorithms, but this one reports an append count of \
+                 {count}"
+            ),
+            Self::MissingTrustedRoot(id) => write!(
+                f,
+                "checkpoint verification for algorithm {id} needs a trusted root for the \
+                 checkpoint boundary; none was supplied in `trusted_roots`"
+            ),
         }
     }
 }

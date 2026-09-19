@@ -136,7 +136,7 @@ fn leaf_data_is_stored_once_not_per_algorithm() {
     });
 }
 
-/// A `Storage` decorator that counts how many `write_batch` calls happen and the
+/// A `Storage` decorator that counts how many `apply` calls happen and the
 /// max number of distinct algorithms touched in any single batch. Wraps
 /// `MemoryStorage` and forwards everything.
 struct CountingStorage {
@@ -158,26 +158,12 @@ impl CountingStorage {
 impl Storage for CountingStorage {
     type Error = <MemoryStorage as Storage>::Error;
 
-    async fn store_leaf(&mut self, index: u64, data: &[u8]) -> Result<(), Self::Error> {
-        self.inner.store_leaf(index, data).await
-    }
-
     async fn get_leaf(&self, index: u64) -> Result<Vec<u8>, Self::Error> {
         self.inner.get_leaf(index).await
     }
 
     async fn len(&self) -> Result<u64, Self::Error> {
         self.inner.len().await
-    }
-
-    async fn store_node(
-        &mut self,
-        alg_id: u64,
-        left: u64,
-        height: u32,
-        hash: &[u8],
-    ) -> Result<(), Self::Error> {
-        self.inner.store_node(alg_id, left, height, hash).await
     }
 
     async fn get_node(
@@ -189,44 +175,38 @@ impl Storage for CountingStorage {
         self.inner.get_node(alg_id, left, height).await
     }
 
-    async fn store_algorithm_meta(
-        &mut self,
-        alg_id: u64,
-        epochs: &[(u64, u64)],
-    ) -> Result<(), Self::Error> {
-        self.inner.store_algorithm_meta(alg_id, epochs).await
-    }
-
     async fn load_algorithm_metas(&self) -> Result<polydigest::AlgorithmMetas, Self::Error> {
         self.inner.load_algorithm_metas().await
     }
 
-    async fn load_log_meta(&self) -> Result<Option<(u64, u8)>, Self::Error> {
-        self.inner.load_log_meta().await
+    async fn append_count(&self) -> Result<u64, Self::Error> {
+        self.inner.append_count().await
     }
 
-    async fn load_checkpoint_roots(&self) -> Result<Vec<(u64, Vec<u8>)>, Self::Error> {
-        self.inner.load_checkpoint_roots().await
-    }
-
-    async fn write_batch(
-        &mut self,
-        leaves: &[(u64, &[u8])],
-        nodes: &[(u64, u64, u32, &[u8])],
-        algorithm_metas: &[(u64, &[(u64, u64)])],
-        log_meta: Option<(u64, u8)>,
-        checkpoint_roots: &[(u64, &[u8])],
-    ) -> Result<(), Self::Error> {
+    async fn apply(&mut self, ops: &[polydigest::WriteOp<'_>]) -> Result<(), Self::Error> {
         self.batch_calls.fetch_add(1, Ordering::Relaxed);
-        // Distinct algorithms touched in this single atomic batch: the union of
-        // the algorithms appearing across node + checkpoint updates.
-        let mut algs: std::collections::HashSet<u64> = nodes.iter().map(|&(a, ..)| a).collect();
-        algs.extend(checkpoint_roots.iter().map(|&(a, _)| a));
+        // Distinct algorithms touched in this single atomic call: the union
+        // of the algorithms appearing across every op's own node fields.
+        let mut algs: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for op in ops {
+            match op {
+                polydigest::WriteOp::AppendLeaf { nodes, .. }
+                | polydigest::WriteOp::AppendSubtree { nodes, .. } => {
+                    algs.extend(nodes.iter().map(|n| n.alg_id));
+                },
+                polydigest::WriteOp::AddAlgorithm { alg_id, .. }
+                | polydigest::WriteOp::RemoveAlgorithm { alg_id, .. }
+                | polydigest::WriteOp::ResumeAlgorithm { alg_id, .. } => {
+                    algs.insert(*alg_id);
+                },
+                polydigest::WriteOp::SeedFrontier { algorithms, .. } => {
+                    algs.extend(algorithms.iter().map(|s| s.alg_id));
+                },
+            }
+        }
         self.max_algs_in_a_batch
             .fetch_max(algs.len(), Ordering::Relaxed);
-        self.inner
-            .write_batch(leaves, nodes, algorithm_metas, log_meta, checkpoint_roots)
-            .await
+        self.inner.apply(ops).await
     }
 }
 
