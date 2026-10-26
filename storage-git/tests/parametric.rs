@@ -66,8 +66,8 @@ async fn run<H: Hasher + Clone + 'static>(hasher: H, hash_kind: HashKind, arity:
             mem_log.storage().get_leaf(i).await.unwrap()
         );
     }
-    // A digest actually observed must be exactly this hasher's declared
-    // width (SG15's converse: never a width this crate assumed).
+    // The digest this hasher wrote is returned at exactly its declared
+    // width: the bytes come back verbatim (SG15), none substituted.
     let one_node = git_log.storage().get_node(0, 0, 0).await.unwrap().unwrap();
     assert_eq!(one_node.len(), hasher.digest_len());
 }

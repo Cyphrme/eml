@@ -63,7 +63,7 @@ mistake omission for oversight.
   hexadecimal, zero-padded to exactly `w` digits.
 - `H` — an algorithm's digest function, as supplied through `spine::Hasher`
   by the caller. `H`'s output width is `Hasher::digest_len()` for that
-  algorithm and is never assumed by this layer.
+  algorithm; this layer never sees `H` and never assumes or checks it.
 - `k` — the log's arity, `2 <= k <= 256` (`spine::ARITY_RANGE`,
   `spine/src/topology.rs:27`). Persisted in `meta` (§3.1) but otherwise
   irrelevant to this layer's own object layout (§2), which places every node
@@ -73,7 +73,7 @@ mistake omission for oversight.
 - `alg_id` — a `u64` algorithm identifier, opaque to this layer.
 - `T(left, h)` — the sealed perfect `k`-ary subtree covering item indices
   `[left, left + k^h)`. `T(left, 0)` is a single item's node; its digest for
-  algorithm `a` is the raw bytes a [`polydigest::WriteOp`]'s `nodes` field
+  algorithm `a` is the opaque bytes a [`polydigest::WriteOp`]'s `nodes` field
   carried for `(a, left, h)`, with no further internal structure (§2.2).
 - `C(n)` — the checkpoint tree: the complete, self-describing git tree
   recording the log's state at size `n` (§2.1).
@@ -393,17 +393,26 @@ unchanged blob is freshened (§5, SG22) exactly as a touched one is.
 
 ### 3.3 A node's blob (`nodes/hex(alg_id,16)/hex(height,2)/trimmed(left)`)
 
-Exactly `Hasher::digest_len()` bytes for that algorithm: `H_a(leaf bytes)`
-at `height = 0`, or the folded node digest at `height > 0`, with no framing
-and no length prefix — the same raw digest bytes a `WriteOp`'s `nodes`
-field already carried. Since `alg_id` is itself the blob's own path
+The opaque bytes a `WriteOp`'s `nodes` field carried for that key, stored
+verbatim with no framing and no length prefix. This layer assigns them no
+width or format: for a caller whose node is a bare digest they are
+`H_a(leaf bytes)` at `height = 0` or the folded node digest at
+`height > 0`, but a caller may equally store longer, variable-length nodes
+(for example a digest together with a summary). Since `alg_id` is itself the blob's own path
 prefix (§2.1, §2.2), there is no wrapping `digest/` subtree left to key by
 algorithm the way the retired layout needed.
 
-**[SG15]** A node blob's length MUST equal the writing algorithm's
-`Hasher::digest_len()` at read time; a reader MUST treat a mismatched
-length as corruption, mirroring `get_node_hash`'s own check
-(`cml/src/engine.rs:283-291`). *Checked by: property test.*
+**[SG15]** A node blob MUST be stored and returned verbatim, exactly as a
+leaf blob is (§3.4): `get_node` returns the bytes the `WriteOp` carried, of
+whatever length, and this layer MUST NOT reject, truncate or pad a node for
+its length. Any width or format check (for example that a node is exactly
+`Hasher::digest_len()` bytes, as `cml/src/engine.rs:283-291`'s
+`get_node_hash` checks) belongs to the layer that holds the `Hasher` or
+knows the node format; this layer holds neither (SG26). *Checked by: the
+differential tests' `get_node` parity with `MemoryStorage`
+(`storage-git/tests/differential.rs`), which round-trips hasher-produced
+node bytes; no test stores nodes of other lengths, and a width check is
+unchecked at this layer because none exists here.*
 
 ### 3.4 A leaf's blob (`leaves/trimmed(index)`)
 
@@ -670,10 +679,9 @@ restart, is either at the old or the new tree, never anything else.*
 
 **[SG26]** No function in this crate MUST name a specific hash algorithm,
 reference a specific hashing library, or assume a specific digest width.
-Every digest this layer writes or reads is caller-supplied bytes keyed by a
-caller-supplied `alg_id: u64`; the only width this layer ever consults is
-whatever `Hasher::digest_len()` reports for that algorithm at the moment of
-the read that needs it (SG15). *Checked by: source audit at implementation
+Every node this layer writes or reads is caller-supplied opaque bytes keyed
+by a caller-supplied `alg_id: u64`; this layer consults no width at all
+(SG15). *Checked by: source audit at implementation
 time (a grep for known hash-library or hash-function identifiers in this
 crate's source is expected to find none) and by property tests parametrized
 over more than one `Hasher` implementation with different digest widths, so

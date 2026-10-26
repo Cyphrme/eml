@@ -1,6 +1,6 @@
 //! Acceptance tests for §3's byte-exact blob encodings, from
 //! `docs/specs/storage-git.md` alone: SG12 (`meta`), SG13 (`epochs/`),
-//! SG15 (digest-width corruption), and SG16 (`leaf`). SG14 (`roots/`) is not
+//! SG15 (node bytes verbatim), and SG16 (`leaf`). SG14 (`roots/`) is not
 //! tested here: a `roots/` entry never exists at all now (head's ruling,
 //! 2026-09-17, `storage-git/tests/acceptance_no_application_index.rs`),
 //! which strictly subsumes the narrower present-iff-active claim SG14 used
@@ -228,17 +228,12 @@ fn trimmed_key_segments(key: u64) -> Vec<String> {
     segs
 }
 
-// [SG15] is not tested here. A digest blob's length must equal the writing
-// algorithm's `Hasher::digest_len()` "at read time" (per the spec), but
-// `storage-git`'s public API (`GitStorage`/`GitReadOnlyView`) never carries a
-// `Hasher` (SG26: it is deliberately never linked against one) and so has no
-// expected width to compare a digest blob's length against — there is
-// nothing in the public surface capable of performing this check or of
-// exposing whether it happened. SG15's own citation
-// (`cml::engine::get_node_hash`, `cml/src/engine.rs:283-291`) is exactly the
-// one layer up that does carry a `Hasher`; it is not reachable through this
-// crate's API. Recorded here rather than faked with a test that could never
-// go red.
+// [SG15] is not tested here. A node blob is opaque bytes stored and returned
+// verbatim (per the spec); `storage-git`'s public API never carries a `Hasher`
+// (SG26), so no width check can happen at this layer. Verbatim round-trip of
+// hasher-produced nodes is covered by the differential tests' `get_node`
+// parity; nothing here stores other lengths. Recorded here rather than faked
+// with a test that could never go red.
 
 /// [SG12] `meta` MUST have exactly one fixed length and layout for every
 /// log, resumed or not, and that shape MUST be observable straight off the

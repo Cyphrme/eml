@@ -136,8 +136,7 @@ pub fn bare_repo(dir: &Path, object_hash: gix::hash::Kind) -> gix::ThreadSafeRep
 
 /// Reopen an existing repository at `dir` (used to build a second,
 /// independent `GitStorage` instance against the same on-disk repository —
-/// e.g. two concurrent writers for SG17-19, or a corrupted-fixture writer for
-/// SG15).
+/// e.g. two concurrent writers for SG17-19).
 #[must_use]
 pub fn reopen_repo(dir: &Path) -> gix::ThreadSafeRepository {
     gix::ThreadSafeRepository::open(dir).expect("reopen repository")
