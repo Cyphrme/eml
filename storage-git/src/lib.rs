@@ -57,7 +57,7 @@ mod gitutil;
 mod layout;
 mod read;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use error::GitStorageError;
@@ -96,6 +96,10 @@ pub struct LogMetadata {
 pub struct GitStorage {
     repo: gix::ThreadSafeRepository,
     staging_ref: FullName,
+    /// Where `staging_ref`'s loose file lives, and the directory its path is
+    /// relative to: the paths SG31's ref sync covers.
+    ref_file: PathBuf,
+    ref_base: PathBuf,
     arity: u64,
     /// The tree id this instance last observed at `staging_ref`, or `None`
     /// for a fresh instance whose ref has never been created (genesis; the
@@ -145,6 +149,7 @@ impl GitStorage {
             .map_err(|_| GitStorageError::InvalidRef(staging_ref.as_ref().to_string()))?;
 
         let local = repo.to_thread_local();
+        let (ref_file, ref_base) = loose_ref_path(&local, &staging_ref)?;
         let (observed_tip, count, has_leaves) = match local
             .try_find_reference(staging_ref.as_ref())
             .map_err(|e| GitStorageError::Git(e.to_string()))?
@@ -173,6 +178,8 @@ impl GitStorage {
         Ok(Self {
             repo,
             staging_ref,
+            ref_file,
+            ref_base,
             arity,
             observed_tip,
             count,
@@ -316,6 +323,49 @@ impl GitStorage {
     }
 }
 
+/// The loose file `gix-ref` writes `name` to, and the directory that path is
+/// relative to. Mirrors `gix-ref` 0.67.1's `file::Store::reference_path`
+/// (`store/file/find.rs`), which is crate-private. A name in another
+/// worktree's namespace (`main-worktree/`, `worktrees/<id>/`) is refused:
+/// this layer does not resolve where such a file lives, so it could not
+/// sync it (SG31).
+fn loose_ref_path(
+    repo: &gix::Repository,
+    name: &FullName,
+) -> Result<(PathBuf, PathBuf), GitStorageError> {
+    use gix::bstr::ByteSlice as _;
+    use gix::refs::Category;
+    let base = match name.as_ref().category() {
+        None
+        | Some(Category::Tag | Category::LocalBranch | Category::RemoteBranch | Category::Note) => {
+            repo.common_dir()
+        },
+        Some(
+            Category::PseudoRef
+            | Category::Bisect
+            | Category::Rewritten
+            | Category::WorktreePrivate,
+        ) => repo.git_dir(),
+        Some(
+            Category::MainRef
+            | Category::MainPseudoRef
+            | Category::LinkedRef { .. }
+            | Category::LinkedPseudoRef { .. },
+        ) => {
+            return Err(GitStorageError::InvalidRef(format!(
+                "{name:?} names another worktree's ref, which storage-git cannot sync (SG31)"
+            )));
+        },
+    };
+    let mut relative = repo
+        .namespace()
+        .map(|ns| ns.as_bstr().to_owned())
+        .unwrap_or_default();
+    relative.extend_from_slice(name.as_bstr());
+    let file = base.join(gix::path::from_bstr(relative.as_bstr()));
+    Ok((file, base.to_path_buf()))
+}
+
 /// SG19a: true only for the `gix_ref` transaction-preparation errors that
 /// mean "the ref's current value did not match what this write expected" --
 /// the only condition [`GitStorageError::TipMoved`] should ever report.
@@ -386,10 +436,12 @@ impl Storage for GitStorage {
         };
         let applied = build::apply(&repo, self.arity, old, ops)?;
         self.cas(&repo, applied.tree_id)?;
+        // The ref has moved: observe the new tree before the sync below, so
+        // a sync failure leaves this instance agreeing with the ref.
         self.observed_tip = Some(applied.tree_id);
         self.count = applied.count;
         self.has_leaves = applied.has_leaves;
-        Ok(())
+        gitutil::sync_ref(&self.ref_file, &self.ref_base)
     }
 }
 
@@ -469,5 +521,93 @@ impl GitReadOnlyView {
     pub async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, GitStorageError> {
         let repo = self.repo.to_thread_local();
         read::load_algorithm_metas(&repo, self.tree)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! SG31's coverage: what `apply` syncs, read through the recording seam
+    //! in `gitutil`'s `sync_path`. A power loss itself is not simulated.
+
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    use polydigest::{NodeWrite, Storage, WriteOp};
+
+    use super::GitStorage;
+    use crate::gitutil::SYNCED;
+
+    /// After a run of applies, every loose object file in the repository
+    /// and every directory naming one was synced, the staging ref's file
+    /// and each directory from it up to the git directory were synced,
+    /// and within each apply every object sync preceded the ref's.
+    #[test]
+    fn apply_syncs_every_object_and_the_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = gix::ThreadSafeRepository::init_opts(
+            dir.path(),
+            gix::create::Kind::Bare,
+            gix::create::Options::default(),
+            Default::default(),
+        )
+        .unwrap();
+        let mut storage = GitStorage::new(repo, "refs/eml/storage/sync/staging", 2).unwrap();
+        let git_dir = dir.path().to_path_buf();
+        let ref_file = git_dir.join("refs/eml/storage/sync/staging");
+        let objects = git_dir.join("objects");
+
+        let mut synced: Vec<PathBuf> = Vec::new();
+        for i in 0..8u64 {
+            SYNCED.with(|s| s.borrow_mut().clear());
+            let data = i.to_be_bytes();
+            let hash = [u8::try_from(i).unwrap(); 32];
+            let nodes = [NodeWrite {
+                alg_id: 1,
+                left: i,
+                height: 0,
+                hash: &hash,
+            }];
+            smol::block_on(storage.apply(&[WriteOp::AppendLeaf {
+                at: i,
+                data: &data,
+                nodes: &nodes,
+            }]))
+            .unwrap();
+            let this = SYNCED.with(|s| s.borrow().clone());
+            let ref_at = this.iter().position(|p| *p == ref_file).unwrap();
+            assert!(
+                this[..ref_at].iter().all(|p| p.starts_with(&objects)),
+                "apply {i}: something other than an object synced before the ref: {this:?}"
+            );
+            assert!(
+                this[ref_at..].iter().all(|p| !p.starts_with(&objects)),
+                "apply {i}: an object synced after the ref: {this:?}"
+            );
+            synced.extend(this);
+        }
+
+        let synced: HashSet<PathBuf> = synced.into_iter().collect();
+        let mut expected = vec![
+            objects.clone(),
+            ref_file.clone(),
+            git_dir.join("refs/eml/storage/sync"),
+            git_dir.join("refs/eml/storage"),
+            git_dir.join("refs/eml"),
+            git_dir.join("refs"),
+            git_dir.clone(),
+        ];
+        for fanout in std::fs::read_dir(&objects).unwrap() {
+            let fanout = fanout.unwrap().path();
+            let name = fanout.file_name().unwrap().to_str().unwrap();
+            if name.len() != 2 {
+                continue; // `info/`, `pack/`
+            }
+            for object in std::fs::read_dir(&fanout).unwrap() {
+                expected.push(object.unwrap().path());
+            }
+            expected.push(fanout);
+        }
+        let missing: Vec<_> = expected.iter().filter(|p| !synced.contains(*p)).collect();
+        assert!(missing.is_empty(), "never synced: {missing:?}");
     }
 }

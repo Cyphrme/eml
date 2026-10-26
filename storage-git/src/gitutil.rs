@@ -1,7 +1,10 @@
 //! Low-level `gix` plumbing: computing an object id under the repository's
 //! own hash format and writing through the object database handle's
-//! non-shortcut writer (SG22), plus the small set of read helpers the
-//! key-derived path resolution needs.
+//! non-shortcut writer (SG22), syncing what was written to disk (SG31),
+//! plus the small set of read helpers the key-derived path resolution needs.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use gix::bstr::BString;
 use gix::objs::{Kind, Write as _};
@@ -19,6 +22,7 @@ fn git_err(e: impl std::fmt::Display) -> Error {
 /// mtime when its content happens to already exist unreferenced.
 pub(crate) fn write_object(
     repo: &gix::Repository,
+    unsynced: &mut Unsynced,
     kind: Kind,
     data: &[u8],
 ) -> Result<gix::ObjectId, Error> {
@@ -44,12 +48,84 @@ pub(crate) fn write_object(
             )));
         }
     }
+    unsynced.object(repo, oid);
     Ok(oid)
 }
 
 /// Write a blob (SG22 write path).
-pub(crate) fn write_blob(repo: &gix::Repository, data: &[u8]) -> Result<gix::ObjectId, Error> {
-    write_object(repo, Kind::Blob, data)
+pub(crate) fn write_blob(
+    repo: &gix::Repository,
+    unsynced: &mut Unsynced,
+    data: &[u8],
+) -> Result<gix::ObjectId, Error> {
+    write_object(repo, unsynced, Kind::Blob, data)
+}
+
+/// The loose object files one `apply` wrote, and the directories whose
+/// entries name them, not yet synced to disk (SG31). `gix` renames each
+/// object's tempfile into place and never syncs it, nor the directory
+/// holding the new name, so until [`Self::sync`] runs a power loss can drop
+/// either.
+#[derive(Default)]
+pub(crate) struct Unsynced {
+    files: BTreeSet<PathBuf>,
+    dirs: BTreeSet<PathBuf>,
+}
+
+impl Unsynced {
+    /// Record `id`'s loose file, its fan-out directory, and the objects
+    /// directory (which names a fan-out directory `gix` may have just
+    /// created). The path is the one `gix-odb`'s dynamic store writes to:
+    /// the first loose database, which is the repository's own objects
+    /// directory (`gix-odb` 0.84.0 `store_impls/dynamic/write.rs`).
+    fn object(&mut self, repo: &gix::Repository, id: gix::ObjectId) {
+        let objects = repo.objects.store_ref().path();
+        let hex = id.to_hex().to_string();
+        let fanout = objects.join(&hex[..2]);
+        self.files.insert(fanout.join(&hex[2..]));
+        self.dirs.insert(fanout);
+        self.dirs.insert(objects.to_path_buf());
+    }
+
+    /// Sync every recorded file, then every recorded directory.
+    pub(crate) fn sync(self) -> Result<(), Error> {
+        for path in self.files.iter().chain(&self.dirs) {
+            sync_path(path)?;
+        }
+        Ok(())
+    }
+}
+
+/// Sync the loose ref file at `path` and every directory from its parent up
+/// to and including `base`, any of which the ref update may have created
+/// (SG31).
+pub(crate) fn sync_ref(path: &Path, base: &Path) -> Result<(), Error> {
+    sync_path(path)?;
+    for dir in path.ancestors().skip(1) {
+        sync_path(dir)?;
+        if dir == base {
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every path [`sync_path`] was asked to sync on this thread, in order
+    /// -- the seam SG31's coverage test reads.
+    pub(crate) static SYNCED: std::cell::RefCell<Vec<PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `fsync` one file or directory. A directory is synced by opening it, which
+/// is how Linux exposes durability of the names a directory holds.
+fn sync_path(path: &Path) -> Result<(), Error> {
+    #[cfg(test)]
+    SYNCED.with(|s| s.borrow_mut().push(path.to_path_buf()));
+    std::fs::File::open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| Error::Sync(format!("fsync {}: {e}", path.display())))
 }
 
 /// One decoded tree entry, detached from the source tree's borrow.
@@ -156,7 +232,7 @@ mod tests {
         let local = repo.to_thread_local();
         let bytes = b"sg22 probe payload";
 
-        let id1 = write_blob(&local, bytes).unwrap();
+        let id1 = write_blob(&local, &mut Unsynced::default(), bytes).unwrap();
         let path = loose_path(&dir, id1);
         assert!(path.is_file());
 
@@ -168,7 +244,7 @@ mod tests {
         let mtime_before = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(mtime_before, long_ago);
 
-        let id2 = write_blob(&local, bytes).unwrap();
+        let id2 = write_blob(&local, &mut Unsynced::default(), bytes).unwrap();
         assert_eq!(id1, id2);
         let mtime_after = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert!(
@@ -191,13 +267,13 @@ mod tests {
         let local = repo.to_thread_local();
         let bytes = b"sg23 probe payload";
 
-        let id1 = write_blob(&local, bytes).unwrap();
+        let id1 = write_blob(&local, &mut Unsynced::default(), bytes).unwrap();
         let path = loose_path(&dir, id1);
         assert!(path.is_file());
         std::fs::remove_file(&path).unwrap();
         assert!(!path.is_file(), "simulated concurrent prune");
 
-        let id2 = write_blob(&local, bytes).unwrap();
+        let id2 = write_blob(&local, &mut Unsynced::default(), bytes).unwrap();
         assert_eq!(id1, id2);
         assert!(
             path.is_file(),

@@ -675,6 +675,37 @@ through the staging ref. *Checked by: property test — kill the process at
 each of several injection points around a write and assert the ref, on
 restart, is either at the old or the new tree, never anything else.*
 
+SG25 is about a process crash, where the kernel still writes out what the
+process handed it. A power loss is different: `gix` 0.87.1 renames each loose
+object's tempfile into place and writes each loose ref through a lock file
+without ever syncing either, or the directory naming it (a search of `gix`,
+`gix-odb`, `gix-ref`, `gix-lock`, `gix-tempfile`, `gix-fs` and `gix-config`
+at the pinned versions for `fsync`, `sync_all` and `sync_data` finds nothing,
+and no `core.fsync` key is read), so the ref's new value can reach the disk
+before the objects it names.
+
+**[SG31]** When `Storage::apply` returns `Ok`, the batch MUST survive a power
+loss: every object the batch wrote, and the staging ref's new value, MUST be
+on disk. This layer syncs by hand, in this order: (a) every loose object file
+the batch wrote, its fan-out directory, and the objects directory, all before
+the ref's compare-and-swap (SG18c), so the ref can never be durable ahead of
+what it names; (b) after the ref moves, the staging ref's loose file and every
+directory from its parent up to the directory it is relative to, before
+returning. A failure in (a) leaves the ref unmoved; a failure in (b) leaves
+the ref moved, observed by this instance, with its durability unknown; both
+return the distinguished **sync** error. Objects in packfiles, which this
+layer never writes, and anything `git gc`/`git pack-refs` rewrites are out of
+scope: those tools' own durability is governed by git's `core.fsync`. A
+staging ref named in another worktree's namespace (`main-worktree/`,
+`worktrees/<id>/`) is refused at construction, since this layer does not
+resolve where its file lives. *Checked by: a unit test, through a seam
+recording every path synced, that after a run of applies every loose object
+file, fan-out directory, the objects directory, the ref file and its
+directories up to the git directory were synced, with each apply's object
+syncs preceding its ref sync; removing either sync turns it red. That the
+synced data actually survives a power loss is argued from `fsync`'s contract,
+not tested.*
+
 ## 6. Algorithm parametricity — no hash hardcoded
 
 **[SG26]** No function in this crate MUST name a specific hash algorithm,
@@ -729,6 +760,7 @@ Every `SG<n>` constraint above names its check inline. Summarized, a
 | SG22–SG24 (GC safety) | A test asserting the exact `write_buf_with_known_id` call path is used (SG22); a simulated missing-object recovery test (SG23); SG24 is documented, not tested |
 | SG26–SG27 (algorithm and object-hash parametricity) | The full property-test suite run parametrized over at least two `Hasher` implementations of different digest widths and over both git object-hash formats |
 | SG30 (`metadata()`) | Direct-equality check against `NaryMerkleLog::count()`/`kind()` on the live instance and against an independently recomputed `(count, kind)` on a read-only view |
+| SG31 (durability against power loss) | A unit test over a recording seam: every written object, its directories, the ref file and its directories are synced, objects before the ref; surviving an actual power loss is argued, not tested |
 
 This is the CONNECT mapping the specification workflow requires: every
 normative constraint above has a named, deterministic evaluator. None is

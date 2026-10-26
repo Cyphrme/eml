@@ -71,6 +71,14 @@ pub enum GitStorageError {
     /// removal/resume naming an algorithm this store has never registered.
     #[error("invalid apply operation: {0}")]
     InvalidOperation(String),
+
+    /// SG31 -- syncing a written object, the staging ref, or a directory
+    /// naming one of them to disk failed. Returned from the object sync,
+    /// the ref has not moved; returned from the ref sync, the ref has moved
+    /// (this instance already observes the new tree) but whether the move
+    /// survives a power loss is unknown.
+    #[error("sync to disk failed: {0}")]
+    Sync(String),
 }
 
 impl GitStorageError {

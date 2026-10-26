@@ -34,6 +34,10 @@ objects in commits and add ref namespaces, cadence, and retention policy.
 - **A newly-written object is verified present before the write is
   considered durable**, closing the ordinary window between writing an
   object and it becoming reachable (SG22/SG23).
+- **A batch `apply` returned `Ok` for survives a power loss.** Every loose
+  object it wrote and the directories naming them are synced to disk before
+  the staging ref moves, and the ref and its directories are synced before
+  `apply` returns; `gix` syncs none of these itself (SG31).
 
 ## An operator constraint this crate cannot enforce itself
 
