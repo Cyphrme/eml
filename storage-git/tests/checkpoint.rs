@@ -8,15 +8,20 @@
 //!
 //! * `fn checkpoint(&mut self) -> Result<u64, GitStorageError>` returns the append count now
 //!   durable.
-//! * For a staging ref `refs/eml/storage/<name>/staging` the checkpoint refs are
-//!   `refs/eml/storage/<name>/staging.ckpt/a` and `.../b`. Each targets the tree the staging ref
-//!   targeted at that checkpoint (a tree, not a commit: a tree-targeted ref survives `git gc`,
-//!   settled in the report).
-//! * A checkpoint ref is *valid* when it resolves to a tree whose objects all read; the *newer*
-//!   valid one is the one with the larger append count.
-//! * `open` takes the newer valid checkpoint C. If staging resolves, its objects not reachable from
-//!   C all read, it opens at staging and checkpoints; if staging is empty, torn, or an object is
-//!   missing, it resets staging to C.
+//! * Checkpoint refs of a staging ref `S` are `S.ckpt/<generation>`, the generation a zero-padded
+//!   20-digit `u64` that grows with every checkpoint (append counts do not order states: an
+//!   `AddAlgorithm` changes the tree and not the count). At most two exist after a checkpoint: the
+//!   new one and the newest valid earlier one. Each targets the tree staging targeted then (a tree,
+//!   not a commit: a tree-targeted ref survives `git gc`).
+//! * A checkpoint ref is *valid* when it resolves to a tree whose `meta` decodes (objects below it
+//!   were synced before it was written and are trusted); the *newest* valid one is the one with the
+//!   largest generation.
+//! * `checkpoint` makes the staging ref durable before it writes the checkpoint ref, and refuses
+//!   (tip-moved) when staging no longer holds this instance's tip.
+//! * `open` takes the newest valid checkpoint C. If staging resolves and every object reachable
+//!   from it but not from C reads, it keeps staging (and checkpoints it if it differs from C); if
+//!   staging is absent, empty, torn, or an object is missing, it resets staging to C. With no valid
+//!   checkpoint, staging is used as it is, and a torn one is the typed `NoDurableState`.
 //!
 //! No fsync seam is visible to an integration test (`gitutil::SYNCED` is
 //! `cfg(test)` inside the crate), so sync behaviour is read from
@@ -38,8 +43,11 @@ use polydigest::Storage;
 use storage_git::GitStorage;
 
 const STAGING: &str = "refs/eml/storage/ck/staging";
-const CKPT_A: &str = "refs/eml/storage/ck/staging.ckpt/a";
-const CKPT_B: &str = "refs/eml/storage/ck/staging.ckpt/b";
+/// Checkpoint generations 1 and 2 of [`STAGING`]; a checkpoint ref is
+/// `<staging>.ckpt/<generation as 20 zero-padded digits>`.
+const CKPT_A: &str = "refs/eml/storage/ck/staging.ckpt/00000000000000000001";
+const CKPT_B: &str = "refs/eml/storage/ck/staging.ckpt/00000000000000000002";
+const CKPT_C: &str = "refs/eml/storage/ck/staging.ckpt/00000000000000000003";
 const ENV_DIR: &str = "EML_CKPT_DIR";
 
 // ---------------------------------------------------------------- helpers
@@ -72,6 +80,23 @@ fn ref_val(dir: &Path, name: &str) -> Option<String> {
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Checkpoint refs as (generation suffix, target), oldest first.
+fn ckpts(dir: &Path) -> Vec<(String, String)> {
+    let prefix = format!("{STAGING}.ckpt/");
+    let mut v: Vec<(String, String)> = git(
+        dir,
+        &["for-each-ref", "--format=%(refname) %(objectname)", &prefix],
+    )
+    .lines()
+    .map(|l| {
+        let (n, o) = l.split_once(' ').unwrap();
+        (n.strip_prefix(&prefix).unwrap().to_string(), o.to_string())
+    })
+    .collect();
+    v.sort();
+    v
 }
 
 fn open(dir: &Path) -> Result<GitStorage, storage_git::GitStorageError> {
@@ -423,7 +448,8 @@ fn recovery_uses_the_older_checkpoint_when_the_newer_is_torn() {
 }
 
 /// 3d. Process-crash state: every object present, staging ahead of the
-/// checkpoint. Open at staging, and checkpoint it (into the older ref).
+/// checkpoint. Open at staging, and checkpoint it as a new generation,
+/// dropping the oldest.
 #[test]
 fn recovery_keeps_an_intact_staging_ahead_of_the_checkpoint_and_checkpoints_it() {
     let f = fixture();
@@ -433,53 +459,108 @@ fn recovery_keeps_an_intact_staging_ahead_of_the_checkpoint_and_checkpoints_it()
     let st = open(&f.dir).expect("open");
     assert_eq!(len(&st), 9, "intact staging is kept");
     assert_eq!(ref_val(&f.dir, STAGING).as_deref(), Some(f.s.as_str()));
-    let (a, b) = (ref_val(&f.dir, CKPT_A), ref_val(&f.dir, CKPT_B));
     assert_eq!(
-        (a.as_deref(), b.as_deref()),
-        (Some(f.s.as_str()), Some(f.c2.as_str())),
-        "open checkpointed staging over the older ref (a), keeping the newer (b)"
+        (
+            ref_val(&f.dir, CKPT_A),
+            ref_val(&f.dir, CKPT_B),
+            ref_val(&f.dir, CKPT_C)
+        ),
+        (None, Some(f.c2.clone()), Some(f.s.clone())),
+        "open checkpointed staging as generation 3 and dropped generation 1"
     );
     assert_writable(st);
 }
 
-/// 4. Checkpoints alternate between the two refs, overwriting the older.
+/// 4. Each checkpoint is a new generation; the two newest remain.
 #[test]
-fn checkpoints_alternate_between_the_two_refs() {
+fn checkpoints_keep_the_two_newest_generations() {
     let (td, repo) = init_repo(HashKind::Sha1);
     let dir = td.path();
     let mut st = GitStorage::new(repo, STAGING, 2).unwrap();
-    let both = |d: &Path| (ref_val(d, CKPT_A), ref_val(d, CKPT_B));
+    let mut tips = Vec::new();
+    for round in 0..3u64 {
+        append_range(&mut st, round * 2..round * 2 + 2);
+        tips.push(tip(&st));
+        assert_eq!(st.checkpoint().unwrap(), round * 2 + 2);
+        let got = ckpts(dir);
+        let want: Vec<(String, String)> = tips
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (format!("{:020}", i + 1), t.clone()))
+            .rev()
+            .take(2)
+            .rev()
+            .collect();
+        assert_eq!(got, want, "after checkpoint {}", round + 1);
+    }
+}
 
+/// 4b. `AddAlgorithm` changes the tree and not the append count. Two
+/// checkpoints at equal counts recover to the newer, and a clean reopen of
+/// a landed count-preserving write keeps it.
+#[test]
+fn equal_count_states_are_ordered_by_generation_not_count() {
+    let (td, repo) = init_repo(HashKind::Sha1);
+    let dir = td.path();
+    let mut st = GitStorage::new(repo, STAGING, 2).unwrap();
+    append_range(&mut st, 0..1);
+    st.checkpoint().unwrap();
+    smol::block_on(st.apply(&[polydigest::WriteOp::AddAlgorithm {
+        alg_id: 7,
+        epochs: &[(0, u64::MAX)],
+    }]))
+    .unwrap();
+    let landed = tip(&st);
+    drop(st);
+
+    // Clean reopen: staging (count 1, with algorithm 7) is ahead of the
+    // checkpoint (count 1, without) and must be kept.
+    let mut st = open(dir).unwrap();
+    assert_eq!(tip(&st), landed, "a landed write was discarded by reopen");
+    let metas = smol::block_on(st.load_algorithm_metas()).unwrap();
+    assert!(metas.iter().any(|m| m.0 == 7), "algorithm 7 lost");
+    assert_eq!(st.checkpoint().unwrap(), 1, "already checkpointed by open");
+    drop(st);
+
+    // Tear staging: recovery must pick the newest generation (algorithm 7).
+    tear_ref(dir, STAGING, b"");
+    let st = open(dir).unwrap();
+    assert_eq!(tip(&st), landed, "recovered to an older equal-count state");
+}
+
+/// 4c. A checkpoint of a store whose staging ref has moved under it is
+/// refused, writing no checkpoint ref.
+#[test]
+fn checkpoint_refuses_when_staging_moved() {
+    let (td, repo) = init_repo(HashKind::Sha1);
+    let dir = td.path();
+    let mut a = GitStorage::new(repo.clone(), STAGING, 2).unwrap();
+    append_range(&mut a, 0..2);
+    let mut b = GitStorage::new(repo, STAGING, 2).unwrap();
+    append_range(&mut b, 2..4);
+    let before = ckpts(dir);
+    let err = a
+        .checkpoint()
+        .expect_err("stale instance must not checkpoint");
+    assert!(err.is_tip_moved(), "{err}");
+    assert_eq!(ckpts(dir), before, "a refused checkpoint wrote a ref");
+}
+
+/// 4d. Before the first checkpoint nothing is durable: a torn staging ref
+/// is reported as such, not reset to empty.
+#[test]
+fn a_never_checkpointed_store_with_torn_staging_has_no_durable_state() {
+    let (td, repo) = init_repo(HashKind::Sha1);
+    let dir = td.path();
+    let mut st = GitStorage::new(repo, STAGING, 2).unwrap();
     append_range(&mut st, 0..2);
-    let t1 = tip(&st);
-    assert_eq!(st.checkpoint().unwrap(), 2);
-    let (a, b) = both(dir);
-    assert!(
-        matches!((&a, &b), (Some(x), None) | (None, Some(x)) if *x == t1),
-        "first checkpoint writes exactly one ref: {a:?} {b:?}"
-    );
-
-    append_range(&mut st, 2..4);
-    let t2 = tip(&st);
-    assert_eq!(st.checkpoint().unwrap(), 4);
-    let (a, b) = both(dir);
-    let set: BTreeSet<_> = [a.clone(), b.clone()].into_iter().flatten().collect();
-    assert_eq!(
-        set,
-        BTreeSet::from([t1.clone(), t2.clone()]),
-        "second goes to the other ref"
-    );
-
-    append_range(&mut st, 4..6);
-    let t3 = tip(&st);
-    assert_eq!(st.checkpoint().unwrap(), 6);
-    let (a, b) = both(dir);
-    let set: BTreeSet<_> = [a, b].into_iter().flatten().collect();
-    assert_eq!(
-        set,
-        BTreeSet::from([t2, t3]),
-        "third overwrites the older (first) ref"
-    );
+    drop(st);
+    tear_ref(dir, STAGING, b"");
+    match open(dir) {
+        Err(storage_git::GitStorageError::NoDurableState(_)) => {},
+        Err(e) => panic!("expected NoDurableState, got {e}"),
+        Ok(_) => panic!("opened a store with no durable state"),
+    }
 }
 
 /// 5a. A checkpoint after `git pack-refs --all` (the loose staging ref is
@@ -503,9 +584,9 @@ fn checkpoint_succeeds_after_refs_are_packed() {
     );
     let t = tip(&st);
     drop(st);
-    let held = [ref_val(dir, CKPT_A), ref_val(dir, CKPT_B)];
+    let held = ckpts(dir);
     assert!(
-        held.iter().flatten().any(|v| *v == t),
+        held.iter().any(|(_, v)| *v == t),
         "no checkpoint ref holds the tip: {held:?}"
     );
     assert_eq!(len(&open(dir).unwrap()), 3);

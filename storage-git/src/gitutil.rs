@@ -1,7 +1,8 @@
 //! Low-level `gix` plumbing: computing an object id under the repository's
 //! own hash format and writing through the object database handle's
 //! non-shortcut writer (SG22), syncing what was written to disk at a
-//! checkpoint (SG31), plus the small set of read helpers the key-derived path resolution needs.
+//! checkpoint (SG31), plus the small set of read helpers the key-derived path
+//! resolution needs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -120,7 +121,7 @@ pub(crate) fn sync_ref_any_form(file: &Path, base: &Path, packed_refs: &Path) ->
 
 #[cfg(test)]
 thread_local! {
-    /// Every path [`sync_path`] was asked to sync on this thread, in order
+    /// Every path [`sync_if_present`] was asked to sync on this thread, in order
     /// -- the seam SG31's coverage test reads.
     pub(crate) static SYNCED: std::cell::RefCell<Vec<PathBuf>> =
         const { std::cell::RefCell::new(Vec::new()) };

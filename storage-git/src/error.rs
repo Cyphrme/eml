@@ -77,6 +77,13 @@ pub enum GitStorageError {
     /// checkpoints are untouched; the staging ref is as `apply` left it.
     #[error("sync to disk failed: {0}")]
     Sync(String),
+
+    /// SG34 -- the staging ref cannot be read and no valid checkpoint
+    /// exists, so nothing about this store is known to be durable. Not
+    /// recovered by resetting to empty: that would erase whatever a
+    /// salvage might still find.
+    #[error("no durable state: {0}")]
+    NoDurableState(String),
 }
 
 impl GitStorageError {
