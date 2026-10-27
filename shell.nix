@@ -19,6 +19,9 @@ mkShell {
     toolchain
     cargo-fuzz
 
+    # storage-git's checkpoint tests observe fsyncs through it
+    strace
+
     # Whitepaper rendering (docs/paper/)
     quarto
     (texlive.combine {

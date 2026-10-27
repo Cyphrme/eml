@@ -57,12 +57,12 @@ mod gitutil;
 mod layout;
 mod read;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use error::GitStorageError;
 use gix::ObjectId;
-use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit};
+use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use gix::refs::{FullName, Target};
 use polydigest::{AlgorithmMetas, LogKind, Storage, WriteOp};
 
@@ -96,6 +96,12 @@ pub struct LogMetadata {
 pub struct GitStorage {
     repo: gix::ThreadSafeRepository,
     staging_ref: FullName,
+    /// Where `staging_ref`'s loose file lives, and the directory its path is
+    /// relative to: the paths SG33's ref sync covers when recovery resets it.
+    ref_file: PathBuf,
+    ref_base: PathBuf,
+    /// `<staging>.ckpt/`, the prefix of this store's checkpoint refs (SG32).
+    ckpt_prefix: String,
     arity: u64,
     /// The tree id this instance last observed at `staging_ref`, or `None`
     /// for a fresh instance whose ref has never been created (genesis; the
@@ -119,6 +125,12 @@ pub struct GitStorage {
 impl GitStorage {
     /// Open a `storage-git` instance over `repo`'s `staging_ref` (SG17),
     /// creating the ref lazily on the first write rather than here.
+    ///
+    /// If a valid checkpoint exists (SG32) this also recovers (SG34): staging
+    /// that is intact is kept (and checkpointed if ahead), anything else is
+    /// reset to the newest checkpoint. Recovery reads only the subtrees that
+    /// differ between staging and that checkpoint, so it costs O(entries of
+    /// the trees changed since the last checkpoint), never a walk of the store.
     ///
     /// # Errors
     ///
@@ -145,39 +157,96 @@ impl GitStorage {
             .map_err(|_| GitStorageError::InvalidRef(staging_ref.as_ref().to_string()))?;
 
         let local = repo.to_thread_local();
-        let (observed_tip, count, has_leaves) = match local
-            .try_find_reference(staging_ref.as_ref())
-            .map_err(|e| GitStorageError::Git(e.to_string()))?
-        {
-            None => (None, 0, false),
-            Some(mut r) => {
-                let tree_id = r
-                    .peel_to_id()
-                    .map_err(|e| GitStorageError::Git(e.to_string()))?
-                    .detach();
-                let meta_id = gitutil::find_entry(&local, tree_id, "meta")?.ok_or_else(|| {
-                    GitStorageError::Corruption("staging ref's tree has no meta".into())
-                })?;
-                let bytes = gitutil::read_blob(&local, meta_id)?;
-                let (stored_arity, count) = layout::decode_meta(&bytes)?;
-                if stored_arity != arity {
-                    return Err(GitStorageError::InvalidArity(format!(
-                        "instance arity {arity} disagrees with stored meta.arity {stored_arity}"
-                    )));
+        let (ref_file, ref_base) = loose_ref_path(&local, &staging_ref)?;
+        let ckpt_prefix = ckpt_prefix(&staging_ref)?;
+
+        // Newest valid checkpoint, if any (SG32); a valid one with the wrong
+        // arity is the caller's error, as for staging.
+        let ckpts = list_ckpts(&local, &ckpt_prefix, arity)?;
+        let newest = ckpts.iter().rev().find_map(|c| c.snap);
+
+        // What staging held when read, for the reset's compare-and-swap.
+        enum Prior {
+            Absent,
+            Value(ObjectId),
+            Torn,
+        }
+        let mut needs_checkpoint = false;
+        let mut reset: Option<Prior> = None;
+        let staging = match (read_snap(&local, &staging_ref, arity), newest) {
+            (Ok(staging), None) => staging,
+            (Err(e @ GitStorageError::Git(_)), None) => {
+                return Err(GitStorageError::NoDurableState(format!(
+                    "staging ref {:?} is unreadable and no checkpoint exists: {e}",
+                    staging_ref.as_bstr()
+                )));
+            },
+            (Err(e), None) => return Err(e),
+            (Err(e @ GitStorageError::InvalidArity(_)), Some(_)) => return Err(e),
+            (Ok(Some(s)), Some(c)) if s.tree == c.tree => Some(s),
+            (Ok(Some(s)), Some(c)) => {
+                // Append counts do not order states (`AddAlgorithm` changes
+                // the tree and not the count), and staging was made durable
+                // before the checkpoint was written, so a staging that
+                // differs from the checkpoint is a later state: keep it if
+                // everything it adds over the checkpoint reads (a power loss
+                // can leave the ref durable ahead of an object).
+                if gitutil::changed_objects(&local, s.tree, Some(c.tree), &mut Vec::new()).is_ok() {
+                    needs_checkpoint = true;
+                    Some(s)
+                } else {
+                    reset = Some(Prior::Value(s.tree));
+                    Some(c)
                 }
-                let has_leaves = gitutil::find_entry(&local, tree_id, "leaves")?.is_some();
-                (Some(tree_id), count, has_leaves)
+            },
+            (Ok(None), Some(c)) => {
+                reset = Some(Prior::Absent);
+                Some(c)
+            },
+            (Err(_), Some(c)) => {
+                reset = Some(Prior::Torn);
+                Some(c)
             },
         };
 
-        Ok(Self {
+        let mut this = Self {
             repo,
             staging_ref,
+            ref_file,
+            ref_base,
+            ckpt_prefix,
             arity,
-            observed_tip,
-            count,
-            has_leaves,
-        })
+            observed_tip: staging.map(|s| s.tree),
+            count: staging.map_or(0, |s| s.count),
+            has_leaves: staging.is_some_and(|s| s.has_leaves),
+        };
+        if let Some(prior) = reset {
+            // Staging is torn, empty, or names a hole: point it back at the
+            // checkpoint, which was synced before it was recorded. The write
+            // is a compare-and-swap against what was read. A torn ref has no
+            // value to compare against, so it is re-read and must still be
+            // torn.
+            let tree = this.observed_tip.expect("a reset always has a checkpoint");
+            let (expected, seen) = match prior {
+                Prior::Absent => (PreviousValue::MustNotExist, None),
+                Prior::Value(t) => (PreviousValue::MustExistAndMatch(Target::Object(t)), Some(t)),
+                Prior::Torn => {
+                    if let Ok(Some(now)) = read_snap(&local, &this.staging_ref, arity) {
+                        return Err(GitStorageError::TipMoved {
+                            expected: None,
+                            actual: Some(now.tree.to_string()),
+                        });
+                    }
+                    (PreviousValue::Any, None)
+                },
+            };
+            update_ref(&local, &this.staging_ref, expected, tree, seen)?;
+            let packed = local.common_dir().join("packed-refs");
+            gitutil::sync_ref_any_form(&this.ref_file, &this.ref_base, &packed)?;
+        } else if needs_checkpoint {
+            this.checkpoint()?;
+        }
+        Ok(this)
     }
 
     /// Open a `storage-git` instance against the repository at `path`
@@ -243,6 +312,90 @@ impl GitStorage {
         })
     }
 
+    /// Make everything applied so far durable, and return the append count
+    /// that is now.
+    ///
+    /// `apply` syncs nothing (SG31); this syncs every object reachable from
+    /// the staging tip that the newest checkpoint cannot reach, with the
+    /// directories naming them; then the staging ref itself; and only then
+    /// creates the next checkpoint ref and syncs it. So a surviving
+    /// checkpoint implies a durable staging at that value or a later one, and
+    /// no checkpoint is ever durable ahead of what it names. Every ref
+    /// is made durable whether git holds it loose or packed (SG33).
+    ///
+    /// Checkpoint refs are `<staging>.ckpt/<generation>`, the generation a
+    /// 20-digit zero-padded `u64` one greater than the largest present; this
+    /// creates the new ref only if absent, then drops all but the newest
+    /// valid earlier one, leaving at most two. Append counts do not order
+    /// states (`AddAlgorithm` changes the tree and not the count);
+    /// generations do. A staging ref with a path component ending in `.ckpt`
+    /// is refused at open, so stores never share a checkpoint ref.
+    ///
+    /// Cost: a tree walk limited to the subtrees that differ from the newest
+    /// checkpoint, so proportional to the work applied since it (intermediate
+    /// trees of batches the tip no longer reaches are never read or synced),
+    /// plus a constant number of ref syncs. With no checkpoint yet the first
+    /// one walks the whole tree. A store with nothing applied returns `0`.
+    ///
+    /// # Errors
+    ///
+    /// [`GitStorageError::TipMoved`] if the staging ref no longer holds this
+    /// instance's tip, or the generation to create was taken by another
+    /// process; [`GitStorageError::Sync`] if an object, directory or ref
+    /// cannot be synced; [`GitStorageError::Corruption`] if an object the tip
+    /// names is missing.
+    pub fn checkpoint(&mut self) -> Result<u64, GitStorageError> {
+        let Some(tip) = self.observed_tip else {
+            return Ok(0);
+        };
+        let repo = self.thread_local();
+        match read_snap(&repo, &self.staging_ref, self.arity) {
+            Ok(Some(s)) if s.tree == tip => {},
+            other => {
+                return Err(GitStorageError::TipMoved {
+                    expected: Some(tip.to_string()),
+                    actual: other.ok().flatten().map(|s| s.tree.to_string()),
+                });
+            },
+        }
+        let ckpts = list_ckpts(&repo, &self.ckpt_prefix, self.arity)?;
+        let newest = ckpts.iter().rev().find(|c| c.snap.is_some());
+        let newest_snap = newest.and_then(|c| c.snap);
+        if newest_snap.is_some_and(|n| n.tree == tip) {
+            return Ok(self.count);
+        }
+        let mut delta = Vec::new();
+        gitutil::changed_objects(&repo, tip, newest_snap.map(|n| n.tree), &mut delta)?;
+        let mut unsynced = gitutil::Unsynced::default();
+        for id in &delta {
+            unsynced.object(&repo, *id);
+        }
+        unsynced.sync(&repo)?;
+        let packed = repo.common_dir().join("packed-refs");
+        gitutil::sync_ref_any_form(&self.ref_file, &self.ref_base, &packed)?;
+
+        let next = ckpts.last().map_or(1, |c| c.generation + 1);
+        let name = ckpt_name(&self.ckpt_prefix, next)?;
+        update_ref(&repo, &name, PreviousValue::MustNotExist, tip, None)?;
+        let (file, base) = loose_ref_path(&repo, &name)?;
+        gitutil::sync_ref_any_form(&file, &base, &packed)?;
+
+        // Best effort: a stale extra checkpoint is harmless (recovery takes
+        // the newest) and the next checkpoint drops it again.
+        let keep = newest.map(|c| c.generation);
+        for c in ckpts.iter().filter(|c| Some(c.generation) != keep) {
+            let _ = repo.edit_reference(RefEdit {
+                change: Change::Delete {
+                    expected: PreviousValue::MustExistAndMatch(Target::Object(c.target)),
+                    log: RefLog::AndReference,
+                },
+                name: c.name.clone(),
+                deref: false,
+            });
+        }
+        Ok(self.count)
+    }
+
     fn thread_local(&self) -> gix::Repository {
         self.repo.to_thread_local()
     }
@@ -257,63 +410,240 @@ impl GitStorage {
     }
 
     /// Move the staging ref to `new_tree` under its compare-and-swap
-    /// precondition (SG17-SG19). A genuine compare-mismatch
-    /// (`ReferenceOutOfDate`/`MustNotExist`/`MustExist` -- the only
-    /// `gix_ref` transaction variants that ever reached the point of
-    /// comparing a value) returns [`GitStorageError::TipMoved`] immediately,
-    /// never retried: deciding what to write in light of someone else's
-    /// real change is the caller's job, not this layer's. Every other
-    /// failure shape (a lock a concurrent `git gc`/`pack-refs` briefly
-    /// holds, an I/O error, a packed-refs preparation failure) never
-    /// touched the ref's value at all, so it is safe to retry the identical
-    /// edit internally -- bounded by [`RETRY_BOUND`], past which this gives
-    /// up and returns [`GitStorageError::RefUpdateTransient`] rather than
-    /// retrying forever.
+    /// precondition (SG17-SG19); see [`update_ref`].
     fn cas(&self, repo: &gix::Repository, new_tree: ObjectId) -> Result<(), GitStorageError> {
         let expected = match self.observed_tip {
             Some(id) => PreviousValue::MustExistAndMatch(Target::Object(id)),
             None => PreviousValue::MustNotExist,
         };
-        let start = Instant::now();
-        let mut backoff = Duration::from_millis(5);
-        loop {
-            let edit = RefEdit {
-                change: Change::Update {
-                    log: LogChange::default(),
-                    expected: expected.clone(),
-                    new: Target::Object(new_tree),
-                },
-                name: self.staging_ref.clone(),
-                deref: false,
-            };
-            match repo.edit_reference(edit) {
-                Ok(_) => return Ok(()),
-                Err(e) if is_genuine_cas_mismatch(&e) => {
-                    let actual = repo
-                        .try_find_reference(self.staging_ref.as_ref())
-                        .ok()
-                        .flatten()
-                        .map(|r| r.target().id().to_owned().to_string());
-                    return Err(GitStorageError::TipMoved {
-                        expected: self.observed_tip.map(|id| id.to_string()),
-                        actual,
-                    });
-                },
-                Err(e) => {
-                    let elapsed = start.elapsed();
-                    if elapsed >= RETRY_BOUND {
-                        return Err(GitStorageError::RefUpdateTransient(format!(
-                            "ref update to {:?} failed without a compare-mismatch after retrying \
-                             for {RETRY_BOUND:?}: {e}",
-                            self.staging_ref
-                        )));
-                    }
-                    std::thread::sleep(backoff.min(RETRY_BOUND - elapsed));
-                    backoff = (backoff * 2).min(Duration::from_millis(100));
-                },
-            }
+        update_ref(
+            repo,
+            &self.staging_ref,
+            expected,
+            new_tree,
+            self.observed_tip,
+        )
+    }
+}
+
+/// What a ref's tree says about the log it holds.
+#[derive(Clone, Copy)]
+struct Snap {
+    tree: ObjectId,
+    count: u64,
+    has_leaves: bool,
+}
+
+/// One existing checkpoint ref.
+struct CkptRef {
+    generation: u64,
+    name: FullName,
+    target: ObjectId,
+    /// What its tree says, or `None` if the ref or its tree is torn.
+    snap: Option<Snap>,
+}
+
+/// `<staging>.ckpt/`, the prefix of `staging`'s checkpoint refs. Two stores'
+/// checkpoint refs coincide only if their staging refs do. A staging ref with
+/// a path component ending in `.ckpt` is refused, since it could itself be
+/// (or sit under) some store's checkpoint ref.
+fn ckpt_prefix(staging: &FullName) -> Result<String, GitStorageError> {
+    use gix::bstr::ByteSlice as _;
+    let staging = staging.as_bstr().to_str_lossy();
+    if staging.split('/').any(|c| c.ends_with(".ckpt")) {
+        return Err(GitStorageError::InvalidRef(format!(
+            "{staging}: a path component ending in `.ckpt` is reserved for checkpoint refs"
+        )));
+    }
+    Ok(format!("{staging}.ckpt/"))
+}
+
+fn ckpt_name(prefix: &str, generation: u64) -> Result<FullName, GitStorageError> {
+    let full = format!("{prefix}{generation:020}");
+    full.as_str()
+        .try_into()
+        .map_err(|_| GitStorageError::InvalidRef(full.clone()))
+}
+
+/// Every checkpoint ref under `prefix`, loose or packed, by generation. A
+/// ref whose name is not a generation is not ours and is skipped.
+fn list_ckpts(
+    repo: &gix::Repository,
+    prefix: &str,
+    arity: u64,
+) -> Result<Vec<CkptRef>, GitStorageError> {
+    use gix::bstr::ByteSlice as _;
+    let git = |e: &dyn std::fmt::Display| GitStorageError::Git(e.to_string());
+    let mut out = Vec::new();
+    let platform = repo.references().map_err(|e| git(&e))?;
+    for r in platform.prefixed(prefix).map_err(|e| git(&e))? {
+        let Ok(r) = r else { continue };
+        let Some(target) = r.try_id().map(gix::Id::detach) else {
+            continue;
+        };
+        let name = r.name().to_owned();
+        let Some(generation) = name
+            .as_bstr()
+            .to_str_lossy()
+            .strip_prefix(prefix)
+            .filter(|g| g.len() == 20)
+            .and_then(|g| g.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let snap = match read_snap(repo, &name, arity) {
+            Ok(snap) => snap,
+            Err(e @ GitStorageError::InvalidArity(_)) => return Err(e),
+            Err(_) => None,
+        };
+        out.push(CkptRef {
+            generation,
+            name,
+            target,
+            snap,
+        });
+    }
+    out.sort_by_key(|c| c.generation);
+    Ok(out)
+}
+
+/// Read the tree `name` targets as a checkpoint tree: `None` if the ref is
+/// absent, an error if it is torn or its tree is malformed.
+fn read_snap(
+    repo: &gix::Repository,
+    name: &FullName,
+    arity: u64,
+) -> Result<Option<Snap>, GitStorageError> {
+    let Some(mut r) = repo
+        .try_find_reference(name.as_ref())
+        .map_err(|e| GitStorageError::Git(e.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let tree = r
+        .peel_to_id()
+        .map_err(|e| GitStorageError::Git(e.to_string()))?
+        .detach();
+    let meta_id = gitutil::find_entry(repo, tree, "meta")?
+        .ok_or_else(|| GitStorageError::Corruption("ref's tree has no meta".into()))?;
+    let bytes = gitutil::read_blob(repo, meta_id)?;
+    let (stored_arity, count) = layout::decode_meta(&bytes)?;
+    if stored_arity != arity {
+        return Err(GitStorageError::InvalidArity(format!(
+            "instance arity {arity} disagrees with stored meta.arity {stored_arity}"
+        )));
+    }
+    let has_leaves = gitutil::find_entry(repo, tree, "leaves")?.is_some();
+    Ok(Some(Snap {
+        tree,
+        count,
+        has_leaves,
+    }))
+}
+
+/// Move `name` to `new_tree` under `expected` (SG17-SG19). A genuine
+/// compare-mismatch
+/// (`ReferenceOutOfDate`/`MustNotExist`/`MustExist` -- the only
+/// `gix_ref` transaction variants that ever reached the point of
+/// comparing a value) returns [`GitStorageError::TipMoved`] immediately,
+/// never retried: deciding what to write in light of someone else's
+/// real change is the caller's job, not this layer's. Every other
+/// failure shape (a lock a concurrent `git gc`/`pack-refs` briefly
+/// holds, an I/O error, a packed-refs preparation failure) never
+/// touched the ref's value at all, so it is safe to retry the identical
+/// edit internally -- bounded by [`RETRY_BOUND`], past which this gives
+/// up and returns [`GitStorageError::RefUpdateTransient`] rather than
+/// retrying forever. `observed` is what the caller expected, for the
+/// mismatch report.
+fn update_ref(
+    repo: &gix::Repository,
+    name: &FullName,
+    expected: PreviousValue,
+    new_tree: ObjectId,
+    observed: Option<ObjectId>,
+) -> Result<(), GitStorageError> {
+    let start = Instant::now();
+    let mut backoff = Duration::from_millis(5);
+    loop {
+        let edit = RefEdit {
+            change: Change::Update {
+                log: LogChange::default(),
+                expected: expected.clone(),
+                new: Target::Object(new_tree),
+            },
+            name: name.clone(),
+            deref: false,
+        };
+        match repo.edit_reference(edit) {
+            Ok(_) => return Ok(()),
+            Err(e) if is_genuine_cas_mismatch(&e) => {
+                let actual = repo
+                    .try_find_reference(name.as_ref())
+                    .ok()
+                    .flatten()
+                    .map(|r| r.target().id().to_owned().to_string());
+                return Err(GitStorageError::TipMoved {
+                    expected: observed.map(|id| id.to_string()),
+                    actual,
+                });
+            },
+            Err(e) => {
+                let elapsed = start.elapsed();
+                if elapsed >= RETRY_BOUND {
+                    return Err(GitStorageError::RefUpdateTransient(format!(
+                        "ref update to {:?} failed without a compare-mismatch after retrying for \
+                         {RETRY_BOUND:?}: {e}",
+                        name
+                    )));
+                }
+                std::thread::sleep(backoff.min(RETRY_BOUND - elapsed));
+                backoff = (backoff * 2).min(Duration::from_millis(100));
+            },
         }
     }
+}
+
+/// The loose file `gix-ref` writes `name` to, and the directory that path is
+/// relative to. Mirrors `gix-ref` 0.67.1's `file::Store::reference_path`
+/// (`store/file/find.rs`), which is crate-private. A name in another
+/// worktree's namespace (`main-worktree/`, `worktrees/<id>/`) is refused:
+/// this layer does not resolve where such a file lives, so it could not
+/// sync it (SG31).
+fn loose_ref_path(
+    repo: &gix::Repository,
+    name: &FullName,
+) -> Result<(PathBuf, PathBuf), GitStorageError> {
+    use gix::bstr::ByteSlice as _;
+    use gix::refs::Category;
+    let base = match name.as_ref().category() {
+        None
+        | Some(Category::Tag | Category::LocalBranch | Category::RemoteBranch | Category::Note) => {
+            repo.common_dir()
+        },
+        Some(
+            Category::PseudoRef
+            | Category::Bisect
+            | Category::Rewritten
+            | Category::WorktreePrivate,
+        ) => repo.git_dir(),
+        Some(
+            Category::MainRef
+            | Category::MainPseudoRef
+            | Category::LinkedRef { .. }
+            | Category::LinkedPseudoRef { .. },
+        ) => {
+            return Err(GitStorageError::InvalidRef(format!(
+                "{name:?} names another worktree's ref, which storage-git cannot sync (SG31)"
+            )));
+        },
+    };
+    let mut relative = repo
+        .namespace()
+        .map(|ns| ns.as_bstr().to_owned())
+        .unwrap_or_default();
+    relative.extend_from_slice(name.as_bstr());
+    let file = base.join(gix::path::from_bstr(relative.as_bstr()));
+    Ok((file, base.to_path_buf()))
 }
 
 /// SG19a: true only for the `gix_ref` transaction-preparation errors that
@@ -469,5 +799,144 @@ impl GitReadOnlyView {
     pub async fn load_algorithm_metas(&self) -> Result<AlgorithmMetas, GitStorageError> {
         let repo = self.repo.to_thread_local();
         read::load_algorithm_metas(&repo, self.tree)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! SG31's coverage: what `checkpoint` syncs, read through the recording seam
+    //! in `gitutil`'s `sync_if_present`. A power loss itself is not simulated.
+
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    use polydigest::{NodeWrite, Storage, WriteOp};
+
+    use super::GitStorage;
+    use crate::gitutil::SYNCED;
+
+    /// After a run of applies and one checkpoint, every loose object file
+    /// the tip reaches and every directory naming one was synced, the
+    /// checkpoint ref's file and each directory from it up to the git
+    /// directory were synced, and every object sync preceded the ref's.
+    #[test]
+    fn checkpoint_syncs_every_object_and_the_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = gix::ThreadSafeRepository::init_opts(
+            dir.path(),
+            gix::create::Kind::Bare,
+            gix::create::Options::default(),
+            Default::default(),
+        )
+        .unwrap();
+        let mut storage = GitStorage::new(repo, "refs/eml/storage/sync/staging", 2).unwrap();
+        let git_dir = dir.path().to_path_buf();
+        let ref_file = git_dir.join("refs/eml/storage/sync/staging.ckpt/00000000000000000001");
+        let staging_file = git_dir.join("refs/eml/storage/sync/staging");
+        let objects = git_dir.join("objects");
+
+        SYNCED.with(|s| s.borrow_mut().clear());
+        for i in 0..8u64 {
+            let data = i.to_be_bytes();
+            let hash = [u8::try_from(i).unwrap(); 32];
+            let nodes = [NodeWrite {
+                alg_id: 1,
+                left: i,
+                height: 0,
+                hash: &hash,
+            }];
+            smol::block_on(storage.apply(&[WriteOp::AppendLeaf {
+                at: i,
+                data: &data,
+                nodes: &nodes,
+            }]))
+            .unwrap();
+        }
+        assert!(
+            SYNCED.with(|s| s.borrow().is_empty()),
+            "apply must sync nothing"
+        );
+        assert_eq!(storage.checkpoint().unwrap(), 8);
+        let this = SYNCED.with(|s| s.borrow().clone());
+        let staging_at = this.iter().position(|p| *p == staging_file).unwrap();
+        let ref_at = this.iter().position(|p| *p == ref_file).unwrap();
+        assert!(
+            staging_at < ref_at,
+            "the checkpoint ref was synced before the staging ref: {this:?}"
+        );
+        assert!(
+            this[..staging_at].iter().all(|p| p.starts_with(&objects)),
+            "something other than an object synced before the refs: {this:?}"
+        );
+        assert!(
+            this[staging_at..].iter().all(|p| !p.starts_with(&objects)),
+            "an object synced after the refs: {this:?}"
+        );
+
+        let synced: HashSet<PathBuf> = this.into_iter().collect();
+        let mut expected = vec![
+            objects.clone(),
+            ref_file.clone(),
+            staging_file.clone(),
+            git_dir.join("refs/eml/storage/sync"),
+            git_dir.join("refs/eml/storage/sync/staging.ckpt"),
+            git_dir.join("refs/eml/storage"),
+            git_dir.join("refs/eml"),
+            git_dir.join("refs"),
+            git_dir.clone(),
+        ];
+        // Only what the tip reaches is owed durability: the trees of
+        // earlier applies are unreachable and never read or synced.
+        let listing = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&git_dir)
+            .args(["rev-list", "--objects"])
+            .arg(storage.tip_tree().unwrap().to_string())
+            .output()
+            .unwrap();
+        assert!(listing.status.success());
+        for line in String::from_utf8(listing.stdout).unwrap().lines() {
+            let hex = line.split(' ').next().unwrap();
+            let fanout = objects.join(&hex[..2]);
+            expected.push(fanout.join(&hex[2..]));
+            expected.push(fanout);
+        }
+        let missing: Vec<_> = expected.iter().filter(|p| !synced.contains(*p)).collect();
+        assert!(missing.is_empty(), "never synced: {missing:?}");
+    }
+
+    /// A compare-and-swap that does not match is refused as `TipMoved` and
+    /// leaves the ref as it was: the primitive every checkpoint and reset
+    /// write goes through.
+    #[test]
+    fn update_ref_refuses_a_mismatch_and_leaves_the_ref() {
+        use gix::refs::Target;
+        use gix::refs::transaction::PreviousValue;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = gix::ThreadSafeRepository::init_opts(
+            dir.path(),
+            gix::create::Kind::Bare,
+            gix::create::Options::default(),
+            Default::default(),
+        )
+        .unwrap()
+        .to_thread_local();
+        let (a, b) = (
+            repo.empty_tree().id,
+            repo.write_blob(b"x").unwrap().detach(),
+        );
+        let name: gix::refs::FullName = "refs/eml/storage/u/staging".try_into().unwrap();
+
+        super::update_ref(&repo, &name, PreviousValue::MustNotExist, a, None).unwrap();
+        for expected in [
+            PreviousValue::MustNotExist,
+            PreviousValue::MustExistAndMatch(Target::Object(b)),
+        ] {
+            let err = super::update_ref(&repo, &name, expected, b, None).unwrap_err();
+            assert!(err.is_tip_moved(), "{err}");
+            let held = repo.find_reference(name.as_ref()).unwrap().id().detach();
+            assert_eq!(held, a, "a refused update moved the ref");
+        }
     }
 }

@@ -34,6 +34,17 @@ objects in commits and add ref namespaces, cadence, and retention policy.
 - **A newly-written object is verified present before the write is
   considered durable**, closing the ordinary window between writing an
   object and it becoming reachable (SG22/SG23).
+- **Durability is at checkpoints.** `apply` syncs nothing. Call
+  `GitStorage::checkpoint()` when you want everything applied so far to
+  survive a power loss: it syncs the objects the tip adds over the previous
+  checkpoint and makes the staging ref durable, then records the tip as a new
+  generation `<staging>.ckpt/<generation>` (the newest two kept), in
+  whichever form git holds each ref. Opening a store after a crash or power
+  loss resumes from staging if it is intact and recent, else from the newest
+  checkpoint, reading only what changed since it. Before the first
+  checkpoint nothing is durable, and a torn staging ref then opens as a
+  no-durable-state error. The caller decides when to
+  checkpoint (SG31-SG34).
 
 ## An operator constraint this crate cannot enforce itself
 

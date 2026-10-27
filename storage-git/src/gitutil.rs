@@ -1,7 +1,11 @@
 //! Low-level `gix` plumbing: computing an object id under the repository's
 //! own hash format and writing through the object database handle's
-//! non-shortcut writer (SG22), plus the small set of read helpers the
-//! key-derived path resolution needs.
+//! non-shortcut writer (SG22), syncing what was written to disk at a
+//! checkpoint (SG31), plus the small set of read helpers the key-derived path
+//! resolution needs.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use gix::bstr::BString;
 use gix::objs::{Kind, Write as _};
@@ -52,11 +56,96 @@ pub(crate) fn write_blob(repo: &gix::Repository, data: &[u8]) -> Result<gix::Obj
     write_object(repo, Kind::Blob, data)
 }
 
+/// The loose object files a checkpoint must sync, and the directories whose
+/// entries name them (SG31). `gix` renames each object's tempfile into place
+/// and never syncs it, nor the directory holding the new name, so until
+/// [`Self::sync`] runs a power loss can drop either.
+#[derive(Default)]
+pub(crate) struct Unsynced {
+    files: BTreeMap<PathBuf, gix::ObjectId>,
+    dirs: BTreeSet<PathBuf>,
+}
+
+impl Unsynced {
+    /// Record `id`'s loose file, its fan-out directory, and the objects
+    /// directory (which names a fan-out directory `gix` may have just
+    /// created). The path is the one `gix-odb`'s dynamic store writes to:
+    /// the first loose database, which is the repository's own objects
+    /// directory (`gix-odb` 0.84.0 `store_impls/dynamic/write.rs`).
+    pub(crate) fn object(&mut self, repo: &gix::Repository, id: gix::ObjectId) {
+        let objects = repo.objects.store_ref().path();
+        let hex = id.to_hex().to_string();
+        let fanout = objects.join(&hex[..2]);
+        self.files.insert(fanout.join(&hex[2..]), id);
+        self.dirs.insert(fanout);
+        self.dirs.insert(objects.to_path_buf());
+    }
+
+    /// Sync every recorded file, then every recorded directory. A file that has vanished is
+    /// tolerated only if its object still reads (a concurrent `git gc` packed it, and git syncs
+    /// its own packs); a directory that has vanished held nothing left to name.
+    pub(crate) fn sync(&self, repo: &gix::Repository) -> Result<(), Error> {
+        for (path, id) in &self.files {
+            if !sync_if_present(path)? && !object_exists(repo, *id) {
+                return Err(Error::Sync(format!(
+                    "object {id} vanished before its checkpoint ({})",
+                    path.display()
+                )));
+            }
+        }
+        for path in &self.dirs {
+            sync_if_present(path)?;
+        }
+        Ok(())
+    }
+}
+
+/// Make the ref at `file` durable whether git holds it loose or packed
+/// (SG31). `git pack-refs` writes `packed_refs` and only then deletes the
+/// loose file, so a missing loose file means the value is in `packed_refs`
+/// (or the ref was deleted, which is not this layer's write to protect).
+/// Every directory from the ref's parent up to and including `base` is then
+/// synced, since the ref update may have created any of them.
+pub(crate) fn sync_ref_any_form(file: &Path, base: &Path, packed_refs: &Path) -> Result<(), Error> {
+    if !sync_if_present(file)? {
+        sync_if_present(packed_refs)?;
+    }
+    for dir in file.ancestors().skip(1) {
+        sync_if_present(dir)?;
+        if dir == base {
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every path [`sync_if_present`] was asked to sync on this thread, in order
+    /// -- the seam SG31's coverage test reads.
+    pub(crate) static SYNCED: std::cell::RefCell<Vec<PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `fsync` one file or directory, reporting `false` if it does not exist. A
+/// directory is synced by opening it, which is how Linux exposes durability
+/// of the names a directory holds.
+fn sync_if_present(path: &Path) -> Result<bool, Error> {
+    #[cfg(test)]
+    SYNCED.with(|s| s.borrow_mut().push(path.to_path_buf()));
+    match std::fs::File::open(path).and_then(|f| f.sync_all()) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(Error::Sync(format!("fsync {}: {e}", path.display()))),
+    }
+}
+
 /// One decoded tree entry, detached from the source tree's borrow.
 #[derive(Debug, Clone)]
 pub(crate) struct DecodedEntry {
     pub filename: BString,
     pub oid: gix::ObjectId,
+    pub is_tree: bool,
 }
 
 /// Read and decode a tree object's entries.
@@ -72,8 +161,43 @@ pub(crate) fn read_tree(
         .map(|e| DecodedEntry {
             filename: e.filename.to_owned(),
             oid: e.oid.to_owned(),
+            is_tree: e.mode.is_tree(),
         })
         .collect())
+}
+
+/// Every object reachable from tree `new` but not through an identical
+/// entry of tree `old`, each verified to read (a blob by header, a tree by
+/// decoding). Equal subtrees are skipped unread, so the cost is the number of
+/// entries in the trees that differ, never the size of the store.
+pub(crate) fn changed_objects(
+    repo: &gix::Repository,
+    new: gix::ObjectId,
+    old: Option<gix::ObjectId>,
+    out: &mut Vec<gix::ObjectId>,
+) -> Result<(), Error> {
+    out.push(new);
+    let old_entries = match old {
+        Some(id) => read_tree(repo, id)?,
+        None => Vec::new(),
+    };
+    for e in read_tree(repo, new)? {
+        let twin = old_entries.iter().find(|o| o.filename == e.filename);
+        if twin.is_some_and(|o| o.oid == e.oid) {
+            continue;
+        }
+        if e.is_tree {
+            changed_objects(repo, e.oid, twin.filter(|o| o.is_tree).map(|o| o.oid), out)?;
+        } else if object_exists(repo, e.oid) {
+            out.push(e.oid);
+        } else {
+            return Err(Error::Corruption(format!(
+                "object {} named by a tree is missing",
+                e.oid
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Find one named entry in a tree object, or `None`.
