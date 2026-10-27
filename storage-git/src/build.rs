@@ -175,9 +175,8 @@ fn read_stored_epochs(
 }
 
 /// Assemble and write the new checkpoint tree for one atomic batch of
-/// [`polydigest::WriteOp`]s, and sync every object it wrote to disk
-/// (SG31). Does not touch the staging ref; the caller performs the
-/// compare-and-swap once this returns.
+/// [`polydigest::WriteOp`]s. Does not touch the staging ref; the caller
+/// performs the compare-and-swap once this returns.
 pub(crate) fn apply(
     repo: &gix::Repository,
     arity: u64,
@@ -189,7 +188,6 @@ pub(crate) fn apply(
         None => repo.empty_tree(),
     };
     let mut editor = root_tree.edit().map_err(git_err)?;
-    let mut unsynced = gitutil::Unsynced::default();
 
     // Make SG1's "no roots entry ever exists" true by construction rather
     // than by assumption about what the previous tree happened to carry: a
@@ -219,12 +217,12 @@ pub(crate) fn apply(
                         "AppendLeaf at position {at}, expected the current count {count}"
                     )));
                 }
-                let blob = gitutil::write_blob(repo, &mut unsynced, data)?;
+                let blob = gitutil::write_blob(repo, data)?;
                 editor
                     .upsert(leaf_path(*at).as_str(), EntryKind::Blob, blob)
                     .map_err(git_err)?;
                 for n in *nodes {
-                    let node_blob = gitutil::write_blob(repo, &mut unsynced, n.hash)?;
+                    let node_blob = gitutil::write_blob(repo, n.hash)?;
                     editor
                         .upsert(
                             node_path(n.alg_id, n.height, n.left).as_str(),
@@ -243,7 +241,7 @@ pub(crate) fn apply(
                     )));
                 }
                 for n in *nodes {
-                    let node_blob = gitutil::write_blob(repo, &mut unsynced, n.hash)?;
+                    let node_blob = gitutil::write_blob(repo, n.hash)?;
                     editor
                         .upsert(
                             node_path(n.alg_id, n.height, n.left).as_str(),
@@ -277,7 +275,7 @@ pub(crate) fn apply(
                 }
                 epoch_overrides.insert(*alg_id, epochs.to_vec());
                 for n in *nodes {
-                    let node_blob = gitutil::write_blob(repo, &mut unsynced, n.hash)?;
+                    let node_blob = gitutil::write_blob(repo, n.hash)?;
                     editor
                         .upsert(
                             node_path(n.alg_id, n.height, n.left).as_str(),
@@ -312,7 +310,7 @@ pub(crate) fn apply(
                     }
                     epoch_overrides.insert(seed.alg_id, seed.epochs.to_vec());
                     for n in seed.nodes {
-                        let node_blob = gitutil::write_blob(repo, &mut unsynced, n.hash)?;
+                        let node_blob = gitutil::write_blob(repo, n.hash)?;
                         editor
                             .upsert(
                                 node_path(n.alg_id, n.height, n.left).as_str(),
@@ -349,14 +347,13 @@ pub(crate) fn apply(
                 "algorithm {alg_id}'s epoch history does not cover size {count}"
             ))
         })?;
-        let epochs_blob =
-            gitutil::write_blob(repo, &mut unsynced, &layout::encode_epochs(&projected))?;
+        let epochs_blob = gitutil::write_blob(repo, &layout::encode_epochs(&projected))?;
         editor
             .upsert(epochs_path(alg_id).as_str(), EntryKind::Blob, epochs_blob)
             .map_err(git_err)?;
     }
 
-    let meta_blob = gitutil::write_blob(repo, &mut unsynced, &layout::encode_meta(arity, count))?;
+    let meta_blob = gitutil::write_blob(repo, &layout::encode_meta(arity, count))?;
     editor
         .upsert(TOP_LEVEL_META, EntryKind::Blob, meta_blob)
         .map_err(git_err)?;
@@ -365,9 +362,8 @@ pub(crate) fn apply(
     let tree_id: ObjectId = raw.write(|tree| {
         let mut buf = Vec::new();
         tree.write_to(&mut buf).map_err(git_err)?;
-        gitutil::write_object(repo, &mut unsynced, gix::objs::Kind::Tree, &buf)
+        gitutil::write_object(repo, gix::objs::Kind::Tree, &buf)
     })?;
-    unsynced.sync()?;
 
     Ok(Applied {
         tree_id,

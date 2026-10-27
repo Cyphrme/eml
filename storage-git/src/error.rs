@@ -72,11 +72,9 @@ pub enum GitStorageError {
     #[error("invalid apply operation: {0}")]
     InvalidOperation(String),
 
-    /// SG31 -- syncing a written object, the staging ref, or a directory
-    /// naming one of them to disk failed. Returned from the object sync,
-    /// the ref has not moved; returned from the ref sync, the ref has moved
-    /// (this instance already observes the new tree) but whether the move
-    /// survives a power loss is unknown.
+    /// SG31 -- syncing an object, a checkpoint ref, or a directory naming
+    /// one to disk failed during a checkpoint or a recovery. The previous
+    /// checkpoints are untouched; the staging ref is as `apply` left it.
     #[error("sync to disk failed: {0}")]
     Sync(String),
 }
