@@ -229,10 +229,12 @@ impl Traced {
     }
 
     fn out(&self, key: &str) -> String {
+        // libtest prefixes the first line a `--nocapture` test prints with
+        // "test <name> ... ", so the marker is not always at column zero.
         let prefix = format!("OUT {key}=");
         self.stdout
             .lines()
-            .find_map(|l| l.strip_prefix(&prefix))
+            .find_map(|l| l.split_once(&prefix).map(|(_, v)| v))
             .unwrap_or_else(|| panic!("child printed no {key}"))
             .trim()
             .to_string()
@@ -315,7 +317,7 @@ fn apply_performs_zero_fsyncs() {
     );
 }
 
-/// 2. `checkpoint()` syncs every object (and its fan-out directory) written
+/// Test 2: `checkpoint()` syncs every object (and its fan-out directory) written
 /// since the previous checkpoint, nothing from before it, and returns the
 /// durable length.
 #[test]
@@ -554,7 +556,7 @@ fn apply_never_reports_failure_for_a_write_that_landed() {
     );
 }
 
-/// 6. SIGKILL a writer mid-run; the store reopens at or past the last
+/// Test 6: SIGKILL a writer mid-run; the store reopens at or past the last
 /// length it reported durable, and verifies.
 #[test]
 fn a_killed_writer_reopens_at_or_past_its_last_checkpoint() {
