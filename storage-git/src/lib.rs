@@ -250,6 +250,15 @@ impl GitStorage {
         })
     }
 
+    /// Stub: signature only, so the checkpoint acceptance tests compile.
+    ///
+    /// # Errors
+    ///
+    /// Not implemented.
+    pub fn checkpoint(&mut self) -> Result<u64, GitStorageError> {
+        unimplemented!("checkpoint")
+    }
+
     fn thread_local(&self) -> gix::Repository {
         self.repo.to_thread_local()
     }
