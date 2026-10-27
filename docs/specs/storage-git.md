@@ -684,27 +684,71 @@ at the pinned versions for `fsync`, `sync_all` and `sync_data` finds nothing,
 and no `core.fsync` key is read), so the ref's new value can reach the disk
 before the objects it names.
 
-**[SG31]** When `Storage::apply` returns `Ok`, the batch MUST survive a power
-loss: every object the batch wrote, and the staging ref's new value, MUST be
-on disk. This layer syncs by hand, in this order: (a) every loose object file
-the batch wrote, its fan-out directory, and the objects directory, all before
-the ref's compare-and-swap (SG18c), so the ref can never be durable ahead of
-what it names; (b) after the ref moves, the staging ref's loose file and every
-directory from its parent up to the directory it is relative to, before
-returning. A failure in (a) leaves the ref unmoved; a failure in (b) leaves
-the ref moved, observed by this instance, with its durability unknown; both
-return the distinguished **sync** error. Objects in packfiles, which this
-layer never writes, and anything `git gc`/`git pack-refs` rewrites are out of
-scope: those tools' own durability is governed by git's `core.fsync`. A
-staging ref named in another worktree's namespace (`main-worktree/`,
-`worktrees/<id>/`) is refused at construction, since this layer does not
-resolve where its file lives. *Checked by: a unit test, through a seam
-recording every path synced, that after a run of applies every loose object
-file, fan-out directory, the objects directory, the ref file and its
-directories up to the git directory were synced, with each apply's object
-syncs preceding its ref sync; removing either sync turns it red. That the
-synced data actually survives a power loss is argued from `fsync`'s contract,
-not tested.*
+**[SG31]** `Storage::apply` MUST NOT sync anything: its commit point is the
+staging ref's compare-and-swap (SG25), and its cost is the object writes and
+that one ref edit. Durability is a separate, caller-driven act,
+`GitStorage::checkpoint() -> Result<u64, GitStorageError>`, which returns the
+append count that is durable when it returns. It does four things in order:
+(a) every loose object reachable from the staging tip that the newest valid
+checkpoint (SG32) cannot reach is synced, with its fan-out directory and the
+objects directory, found by a tree walk that skips every subtree identical to
+the checkpoint's; (b) the staging tip's tree is written to the *older* of the
+two checkpoint refs (SG32); (c) that ref is made durable (SG33); (d) the count
+is returned. The order makes a checkpoint ref durable only after everything it
+names. Objects of intermediate batches that the tip no longer reaches are
+never read or synced. With no valid checkpoint the first one walks the whole
+tree; a store with nothing applied has nothing to sync and returns `0`. A
+failure of (a) or (c) returns the distinguished **sync** error and leaves the
+previous checkpoints untouched. Objects in packfiles, which this layer never
+writes, and anything `git gc`/`git pack-refs` rewrites are out of scope: those
+tools' own durability is governed by git's `core.fsync`. A staging ref named
+in another worktree's namespace (`main-worktree/`, `worktrees/<id>/`) is
+refused at construction, since this layer does not resolve where its file
+lives. Between checkpoints a power loss may lose applies (SG34 recovers to the
+last checkpoint); it MUST NOT leave a store that fails to open. *Checked by:
+`tests/checkpoint.rs` observing `fsync` through `strace` over a child process:
+`apply` performs zero, `checkpoint` syncs exactly the delta's object files,
+fan-out directories and the objects directory and nothing older; and a unit
+test over a recording seam that every object the tip reaches, its directories,
+the checkpoint ref and its directories are synced, objects before the ref.
+That synced data survives a power loss is argued from `fsync`'s contract, not
+tested.*
+
+**[SG32]** The checkpoint refs are `ckpt/a` and `ckpt/b` in a directory
+beside the staging ref: staging `refs/eml/storage/<name>/staging` has
+`refs/eml/storage/<name>/ckpt/a` and `.../ckpt/b`. One such directory
+therefore serves one store. Each targets the tree (never a commit, as the
+staging ref does, so `git gc` keeps it reachable) the staging ref targeted at
+that checkpoint. A checkpoint ref is *valid* when it resolves to a tree whose
+`meta` decodes with this instance's arity; objects below it are trusted
+because (a) of SG31 synced them before the ref was written. The *newer* valid
+ref is the one with the larger append count. Each checkpoint overwrites the
+older ref (an absent or invalid ref counts as oldest), so the newer one is
+never at risk. A checkpoint is skipped when the newest valid ref already
+targets the tip. *Checked by: `tests/checkpoint.rs` alternation test.*
+
+**[SG33]** A ref's durability MUST hold whichever form git keeps it in.
+After a ref is written the layer syncs its loose file; if that file is gone
+(`git pack-refs` moves a ref into `packed-refs` and then deletes the loose
+file), it syncs `packed-refs` instead; in both cases it syncs every directory
+from the ref's parent up to the directory the ref is relative to. A path that
+has vanished is never reported as a sync failure, so a write that already
+landed is never reported as failed. *Checked by: `tests/checkpoint.rs`
+checkpoint-after-`pack-refs` and pack-refs-racing-writer tests; `tests/gc_race.rs`.*
+
+**[SG34]** Opening a store recovers from what a crash or power loss can leave.
+Let C be the newest valid checkpoint (SG32). With no valid checkpoint, the
+staging ref is used as it is. Otherwise: if staging targets C's tree, open. If
+staging is ahead of C (larger append count) and every object reachable from it
+but not from C reads, open at staging and checkpoint it (SG31), which writes
+the older ref. Otherwise (staging is absent, empty, torn, behind C, or an
+object it adds over C is missing) staging is reset to C's tree and made
+durable (SG33); the instance opens at C. Recovery reads only the subtrees that
+differ between staging and C, so it costs O(entries of the trees changed since
+the last checkpoint), never a walk of the store. An arity mismatch is
+reported, never recovered from. *Checked by: `tests/checkpoint.rs` recovery
+tests (missing object, torn or empty staging, torn newer checkpoint, intact
+staging ahead) and the SIGKILL test.*
 
 ## 6. Algorithm parametricity — no hash hardcoded
 
@@ -760,7 +804,10 @@ Every `SG<n>` constraint above names its check inline. Summarized, a
 | SG22–SG24 (GC safety) | A test asserting the exact `write_buf_with_known_id` call path is used (SG22); a simulated missing-object recovery test (SG23); SG24 is documented, not tested |
 | SG26–SG27 (algorithm and object-hash parametricity) | The full property-test suite run parametrized over at least two `Hasher` implementations of different digest widths and over both git object-hash formats |
 | SG30 (`metadata()`) | Direct-equality check against `NaryMerkleLog::count()`/`kind()` on the live instance and against an independently recomputed `(count, kind)` on a read-only view |
-| SG31 (durability against power loss) | A unit test over a recording seam: every written object, its directories, the ref file and its directories are synced, objects before the ref; surviving an actual power loss is argued, not tested |
+| SG31 (checkpoint durability) | `tests/checkpoint.rs` under `strace`: `apply` fsyncs nothing, `checkpoint` syncs exactly the delta; a unit test over a recording seam for ordering and coverage; surviving an actual power loss is argued, not tested |
+| SG32 (checkpoint refs) | `tests/checkpoint.rs`: names, alternation, newer-valid selection |
+| SG33 (ref durability, loose or packed) | `tests/checkpoint.rs` pack-refs tests; `tests/gc_race.rs` |
+| SG34 (recovery on open) | `tests/checkpoint.rs` recovery and SIGKILL tests |
 
 This is the CONNECT mapping the specification workflow requires: every
 normative constraint above has a named, deterministic evaluator. None is
