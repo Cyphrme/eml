@@ -1,7 +1,7 @@
 //! Acceptance tests for checkpoint durability: `apply` syncs nothing, and a
 //! new `GitStorage::checkpoint()` makes everything applied so far durable
 //! by syncing it and recording the staging tip in the older of two
-//! checkpoint refs (`ckpt/a`, `ckpt/b`, beside the staging ref). Opening a
+//! checkpoint refs (`<staging>.ckpt/a`, `<staging>.ckpt/b`). Opening a
 //! store recovers from the on-disk states a crash or power loss can leave.
 //!
 //! ## Contract these tests fix (the implementation must match it)
@@ -9,7 +9,7 @@
 //! * `fn checkpoint(&mut self) -> Result<u64, GitStorageError>` returns the append count now
 //!   durable.
 //! * For a staging ref `refs/eml/storage/<name>/staging` the checkpoint refs are
-//!   `refs/eml/storage/<name>/ckpt/a` and `.../ckpt/b`. Each targets the tree the staging ref
+//!   `refs/eml/storage/<name>/staging.ckpt/a` and `.../b`. Each targets the tree the staging ref
 //!   targeted at that checkpoint (a tree, not a commit: a tree-targeted ref survives `git gc`,
 //!   settled in the report).
 //! * A checkpoint ref is *valid* when it resolves to a tree whose objects all read; the *newer*
@@ -38,8 +38,8 @@ use polydigest::Storage;
 use storage_git::GitStorage;
 
 const STAGING: &str = "refs/eml/storage/ck/staging";
-const CKPT_A: &str = "refs/eml/storage/ck/ckpt/a";
-const CKPT_B: &str = "refs/eml/storage/ck/ckpt/b";
+const CKPT_A: &str = "refs/eml/storage/ck/staging.ckpt/a";
+const CKPT_B: &str = "refs/eml/storage/ck/staging.ckpt/b";
 const ENV_DIR: &str = "EML_CKPT_DIR";
 
 // ---------------------------------------------------------------- helpers
@@ -621,4 +621,43 @@ fn a_killed_writer_reopens_at_or_past_its_last_checkpoint() {
     }
     reach(&repo, t);
     assert_writable(st);
+}
+
+/// Test 7: two stores in one repository whose staging refs share a directory keep
+/// separate checkpoints: each recovers to its own, and a staging name that
+/// could alias a checkpoint ref is refused.
+#[test]
+fn stores_sharing_a_directory_checkpoint_and_recover_independently() {
+    let (td, repo) = init_repo(HashKind::Sha1);
+    let dir = td.path();
+    let (sx, sy) = ("refs/eml/storage/shared/x", "refs/eml/storage/shared/y");
+    let mut x = GitStorage::new(repo.clone(), sx, 2).unwrap();
+    let mut y = GitStorage::new(repo, sy, 2).unwrap();
+    append_range(&mut x, 0..3);
+    append_range(&mut y, 0..5);
+    assert_eq!(x.checkpoint().unwrap(), 3);
+    assert_eq!(y.checkpoint().unwrap(), 5);
+    let (tx, ty) = (tip(&x), tip(&y));
+    drop((x, y));
+
+    // Tear each staging ref: each store must come back at its own checkpoint.
+    tear_ref(dir, sx, b"");
+    tear_ref(dir, sy, b"");
+    let x = GitStorage::open(dir, sx, 2).expect("x recovers");
+    let y = GitStorage::open(dir, sy, 2).expect("y recovers");
+    assert_eq!((len(&x), tip(&x)), (3, tx));
+    assert_eq!((len(&y), tip(&y)), (5, ty));
+
+    for bad in [
+        "refs/eml/storage/shared/x.ckpt/a",
+        "refs/eml/storage/shared.ckpt/x",
+    ] {
+        assert!(
+            matches!(
+                GitStorage::open(dir, bad, 2),
+                Err(storage_git::GitStorageError::InvalidRef(_))
+            ),
+            "{bad} must be refused"
+        );
+    }
 }

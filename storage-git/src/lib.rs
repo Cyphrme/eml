@@ -309,10 +309,10 @@ impl GitStorage {
     /// plus a constant number of ref syncs. With no checkpoint yet the first
     /// one walks the whole tree. A store with nothing applied returns `0`.
     ///
-    /// The checkpoint refs are `ckpt/a` and `ckpt/b` in a directory beside
-    /// the staging ref (`refs/eml/storage/<name>/staging` has
-    /// `refs/eml/storage/<name>/ckpt/a`), so one such directory serves one
-    /// store. Each targets the tree staging targeted at that checkpoint.
+    /// The checkpoint refs are `<staging>.ckpt/a` and `<staging>.ckpt/b`
+    /// (`refs/eml/storage/x` has `refs/eml/storage/x.ckpt/a`), so stores
+    /// never share one; a staging ref with a path component ending in
+    /// `.ckpt` is refused at open. Each targets the tree staging targeted at that checkpoint.
     ///
     /// # Errors
     ///
@@ -410,8 +410,10 @@ struct Snap {
     has_leaves: bool,
 }
 
-/// The checkpoint ref `which` beside `staging`: the staging ref's directory,
-/// then `ckpt/<which>`.
+/// The checkpoint ref `which` of `staging`: `<staging>.ckpt/<which>`. Two
+/// stores' checkpoint refs coincide only if their staging refs do. A staging
+/// ref with a path component ending in `.ckpt` is refused, since it could
+/// itself be (or sit under) some store's checkpoint ref.
 fn ckpt_ref(
     repo: &gix::Repository,
     staging: &FullName,
@@ -419,10 +421,16 @@ fn ckpt_ref(
 ) -> Result<Ckpt, GitStorageError> {
     use gix::bstr::ByteSlice as _;
     let staging = staging.as_bstr().to_str_lossy();
-    let dir = staging.rsplit_once('/').map_or("", |(d, _)| d);
-    let name: FullName = format!("{dir}/ckpt/{which}")
+    if staging.split('/').any(|c| c.ends_with(".ckpt")) {
+        return Err(GitStorageError::InvalidRef(format!(
+            "{staging}: a path component ending in `.ckpt` is reserved for checkpoint refs"
+        )));
+    }
+    let full = format!("{staging}.ckpt/{which}");
+    let name: FullName = full
+        .as_str()
         .try_into()
-        .map_err(|_| GitStorageError::InvalidRef(format!("{dir}/ckpt/{which}")))?;
+        .map_err(|_| GitStorageError::InvalidRef(full.clone()))?;
     let (file, base) = loose_ref_path(repo, &name)?;
     Ok(Ckpt { name, file, base })
 }
@@ -751,7 +759,7 @@ mod tests {
         .unwrap();
         let mut storage = GitStorage::new(repo, "refs/eml/storage/sync/staging", 2).unwrap();
         let git_dir = dir.path().to_path_buf();
-        let ref_file = git_dir.join("refs/eml/storage/sync/ckpt/a");
+        let ref_file = git_dir.join("refs/eml/storage/sync/staging.ckpt/a");
         let objects = git_dir.join("objects");
 
         SYNCED.with(|s| s.borrow_mut().clear());
@@ -792,6 +800,7 @@ mod tests {
             objects.clone(),
             ref_file.clone(),
             git_dir.join("refs/eml/storage/sync"),
+            git_dir.join("refs/eml/storage/sync/staging.ckpt"),
             git_dir.join("refs/eml/storage"),
             git_dir.join("refs/eml"),
             git_dir.join("refs"),

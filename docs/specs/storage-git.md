@@ -714,10 +714,13 @@ the checkpoint ref and its directories are synced, objects before the ref.
 That synced data survives a power loss is argued from `fsync`'s contract, not
 tested.*
 
-**[SG32]** The checkpoint refs are `ckpt/a` and `ckpt/b` in a directory
-beside the staging ref: staging `refs/eml/storage/<name>/staging` has
-`refs/eml/storage/<name>/ckpt/a` and `.../ckpt/b`. One such directory
-therefore serves one store. Each targets the tree (never a commit, as the
+**[SG32]** The checkpoint refs of a staging ref `S` are `S.ckpt/a` and
+`S.ckpt/b` (staging `refs/eml/storage/x` has `refs/eml/storage/x.ckpt/a`).
+They coincide with another store's checkpoint refs only if the staging refs
+are the same, so several stores may share a repository and a directory. A
+staging ref with any path component ending in `.ckpt` is refused at
+construction with the invalid-ref error, since it could itself be, or sit
+under, a checkpoint ref. Each targets the tree (never a commit, as the
 staging ref does, so `git gc` keeps it reachable) the staging ref targeted at
 that checkpoint. A checkpoint ref is *valid* when it resolves to a tree whose
 `meta` decodes with this instance's arity; objects below it are trusted
@@ -725,7 +728,7 @@ because (a) of SG31 synced them before the ref was written. The *newer* valid
 ref is the one with the larger append count. Each checkpoint overwrites the
 older ref (an absent or invalid ref counts as oldest), so the newer one is
 never at risk. A checkpoint is skipped when the newest valid ref already
-targets the tip. *Checked by: `tests/checkpoint.rs` alternation test.*
+targets the tip. *Checked by: `tests/checkpoint.rs` alternation test, and a test of two stores whose staging refs share a directory recovering each to its own checkpoint, with `.ckpt` staging names refused.*
 
 **[SG33]** A ref's durability MUST hold whichever form git keeps it in.
 After a ref is written the layer syncs its loose file; if that file is gone
