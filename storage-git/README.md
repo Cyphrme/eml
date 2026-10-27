@@ -37,11 +37,13 @@ objects in commits and add ref namespaces, cadence, and retention policy.
 - **Durability is at checkpoints.** `apply` syncs nothing. Call
   `GitStorage::checkpoint()` when you want everything applied so far to
   survive a power loss: it syncs the objects the tip adds over the previous
-  checkpoint and records the tip in the older of two refs (`<staging>.ckpt/a`,
-  `<staging>.ckpt/b`), in
-  whichever form git holds the ref. Opening a store after a crash or power
+  checkpoint and makes the staging ref durable, then records the tip as a new
+  generation `<staging>.ckpt/<generation>` (the newest two kept), in
+  whichever form git holds each ref. Opening a store after a crash or power
   loss resumes from staging if it is intact and recent, else from the newest
-  checkpoint, reading only what changed since it. The caller decides when to
+  checkpoint, reading only what changed since it. Before the first
+  checkpoint nothing is durable, and a torn staging ref then opens as a
+  no-durable-state error. The caller decides when to
   checkpoint (SG31-SG34).
 
 ## An operator constraint this crate cannot enforce itself
