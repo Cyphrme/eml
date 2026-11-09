@@ -3438,7 +3438,7 @@ fn test_genesis_promotion_boundary() {
         };
         let config = eml::VerifierConfig::default();
         assert!(
-            !promoted_coupling.authenticate(&Sha256Hasher, 1, 2, &cr_at_1_after, &[0], config),
+            !promoted_coupling.authenticate(&Sha256Hasher, 0, 1, 2, &cr_at_1_after, &[0], config),
             "promoted proof against hashed CR must fail"
         );
 
@@ -3451,7 +3451,7 @@ fn test_genesis_promotion_boundary() {
         };
         // cr_at_1_genesis is the promoted form (= raw root).
         assert!(
-            !hashed_coupling.authenticate(&Sha256Hasher, 1, 2, &cr_at_1_genesis, &[0], config),
+            !hashed_coupling.authenticate(&Sha256Hasher, 0, 1, 2, &cr_at_1_genesis, &[0], config),
             "hashed proof against promoted CR must fail"
         );
 

@@ -134,8 +134,18 @@ impl BindingProof {
     /// Returns `false` for an empty trusted set (nothing to bind), for a
     /// structurally malformed committed timeline at `tree_size`, for member
     /// roots not strictly sorted by algorithm ID, or for any trusted binding
-    /// root whose algorithm has no member root in the proof. These reject
+    /// root whose algorithm has no member root in the proof, or whose member
+    /// root is not exactly `t.hasher.digest_len()` bytes (the concatenation is
+    /// unprefixed, so a mis-cut boundary shows as a wrong length). These reject
     /// ill-formed inputs before any hashing.
+    ///
+    /// # What `true` authenticates
+    ///
+    /// Only the member roots of algorithms that appear in `trusted` are
+    /// width-checked. Member roots of algorithms with no trusted hasher are
+    /// folded into the recomputed root but their boundaries are not
+    /// authenticated by a `true` result; a caller reading one must compare it
+    /// to a digest of that algorithm's own width.
     #[must_use]
     pub fn verify(&self, trusted: &[TrustedBindingRoot<'_>], tree_size: u64, arity: u64) -> bool {
         // An empty trusted set binds nothing; reject rather than vacuously
@@ -157,11 +167,12 @@ impl BindingProof {
         }
 
         // Every trusted binding root must name an algorithm that has a member
-        // root in this proof — otherwise the trusted set and the shared
+        // root of its own digest width in this proof — otherwise the trusted set and the shared
         // structure disagree on which algorithms are bound.
         for t in trusted {
-            if !self.member_roots.iter().any(|(id, _)| *id == t.alg_id) {
-                return false;
+            match self.member_roots.iter().find(|(id, _)| *id == t.alg_id) {
+                Some((_, r)) if r.len() == t.hasher.digest_len() => {},
+                _ => return false,
             }
         }
 
@@ -468,5 +479,26 @@ mod tests {
         // Flip one byte of a member digest: the recomputed roots no longer match.
         proof.member_roots[0].1[0] ^= 0x01;
         assert!(!proof.verify(&trusted, sz, 2));
+    }
+
+    #[test]
+    fn miscut_member_roots_rejected() {
+        // Same concatenated bytes, cut 31 + 33 instead of 32 + 32: the recomputed
+        // binding root is identical, but alg 0's root has the wrong width.
+        let h_a = Sha256Hasher;
+        let alg_epochs = vec![(0u64, vec![(0u64, MAX)]), (1u64, vec![(0u64, MAX)])];
+        let honest = vec![(0u64, vec![0xAA; 32]), (1u64, vec![0xBB; 32])];
+        let br_a = combined_root(&h_a, &honest, &alg_epochs, 4, 2);
+        let trusted = [TrustedBindingRoot {
+            alg_id: 0,
+            hasher: &h_a,
+            root: &br_a,
+        }];
+        assert!(BindingProof::produce(honest.clone(), alg_epochs.clone()).verify(&trusted, 4, 2));
+
+        let all = [honest[0].1.as_slice(), honest[1].1.as_slice()].concat();
+        let miscut = vec![(0u64, all[..31].to_vec()), (1u64, all[31..].to_vec())];
+        assert_eq!(combined_root(&h_a, &miscut, &alg_epochs, 4, 2), br_a);
+        assert!(!BindingProof::produce(miscut, alg_epochs).verify(&trusted, 4, 2));
     }
 }
