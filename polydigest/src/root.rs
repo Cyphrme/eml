@@ -366,12 +366,20 @@ impl CouplingProof {
     /// Validates structure (canonical ordering, bounds, well-formed epochs,
     /// active set consistent with the timeline) and reconstructs the combined
     /// root via the canonicalization fold ([`combined_root`]) over the
-    /// member-root children. On success both `active_roots` and `alg_epochs` are
-    /// authenticated by the root.
+    /// member-root children. On success `alg_epochs` is authenticated by the
+    /// root, and so is the member root of `alg_id`, the algorithm `hasher`
+    /// belongs to: it must be exactly `hasher.digest_len()` bytes (a mis-cut of
+    /// the unprefixed concatenation has the wrong length), checked when `alg_id`
+    /// has an active root. The member roots of *other* algorithms are folded but
+    /// not width-checked here, since no hasher for them is supplied: a `true`
+    /// result does not authenticate their boundaries, and a caller reading one
+    /// must compare it to a digest of that algorithm's own width.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn authenticate(
         &self,
         hasher: &dyn Hasher,
+        alg_id: u64,
         tree_size: u64,
         arity: u64,
         expected_combined_root: &[u8],
@@ -411,6 +419,17 @@ impl CouplingProof {
             if *id != expected_id {
                 return false;
             }
+        }
+
+        // The verifying algorithm's own root must be a digest of its width: the
+        // binding root's concatenation is unprefixed, so a mis-cut boundary
+        // shows up as a wrong length here.
+        if self
+            .active_roots
+            .iter()
+            .any(|(id, r)| *id == alg_id && r.len() != hasher.digest_len())
+        {
+            return false;
         }
 
         // DoS Mitigation: assert individual companion root sizes are within bounds
@@ -477,6 +496,7 @@ impl CouplingProof {
     ) -> Option<Vec<u8>> {
         if !self.authenticate(
             hasher,
+            target_alg_id,
             tree_size,
             arity,
             combined_root,
@@ -587,6 +607,7 @@ pub fn verify_inactivity_with_coupling(
 
     if !coupling.authenticate(
         hasher,
+        alg_id,
         tree_size,
         arity,
         combined_root,
@@ -671,6 +692,58 @@ mod tests {
         fn clone_box(&self) -> Box<dyn Hasher> {
             Box::new(H)
         }
+    }
+
+    /// Member roots of different algorithms differ in width (32 + 48 bytes). The
+    /// combined root is still the plain unprefixed concatenation hash, and a
+    /// root cut at the wrong boundary is rejected by `authenticate` (wrong width
+    /// for the verifying algorithm) and by inclusion verification.
+    #[test]
+    fn mixed_width_member_roots_fold_plain_and_miscut_is_rejected() {
+        let r0 = Sha256::digest(b"leaf").to_vec(); // 32 bytes
+        let r1 = sha2::Sha384::digest(b"other").to_vec(); // 48 bytes
+        let epochs = vec![(0u64, vec![(0u64, MAX)]), (1u64, vec![(0u64, MAX)])];
+        let roots = vec![(0u64, r0.clone()), (1u64, r1.clone())];
+
+        let combined = combined_root(&H, &roots, &epochs, 1, 2);
+        assert_eq!(
+            combined,
+            Sha256::digest([r0.as_slice(), r1.as_slice()].concat()).to_vec()
+        );
+
+        let honest = CouplingProof {
+            active_roots: roots,
+            alg_epochs: epochs.clone(),
+        };
+        let cfg = VerifierConfig::default();
+        let check = |c: &CouplingProof| {
+            verify_inclusion_with_coupling(
+                &H,
+                0,
+                &r0,
+                0,
+                1,
+                2,
+                &[],
+                &[],
+                c,
+                &combined,
+                &[0, 1],
+                cfg,
+            )
+        };
+        assert!(check(&honest));
+
+        // Same bytes, cut 31 + 49: the binding root is unchanged, but alg 0's
+        // root is 31 bytes, not its hasher's 32.
+        let all = [r0.as_slice(), r1.as_slice()].concat();
+        let miscut = CouplingProof {
+            active_roots: vec![(0, all[..31].to_vec()), (1, all[31..].to_vec())],
+            alg_epochs: epochs,
+        };
+        assert!(!miscut.authenticate(&H, 0, 1, 2, &combined, &[0, 1], cfg));
+        assert!(honest.authenticate(&H, 0, 1, 2, &combined, &[0, 1], cfg));
+        assert!(!check(&miscut));
     }
 
     #[test]

@@ -1890,22 +1890,14 @@ fn test_coupling_proof_verify_validation() {
             .is_none()
     );
 
-    // 15-16. FIXED-WIDTH MEMBER ROOTS (was "Length-Ambiguity / Empty Roots").
+    // 15-16. EQUAL-WIDTH MEMBER ROOTS (was "Length-Ambiguity / Empty Roots").
     //
-    // These cases formerly fed *variable-width* member roots (a 20-byte root
-    // beside a 32-byte one) and an *empty* root into `combined_root` and asserted
-    // the verifier accepted them. That asserted design-forbidden behavior: the
-    // combined root concatenates member roots **raw, with no length prefix**
-    // (`polydigest::combined_root`), so distinct member-root lists of unequal widths can
-    // share a node preimage — an ambiguity that voids binding-root soundness. The
-    // `Hasher` fixed-width contract now makes this explicit, and `nary_mr`
-    // `debug_assert`s that a node's children share a width; the inclusion verifier
-    // (`spine::reconstruct_inclusion_root`) already rejects any sibling whose length
-    // differs from `digest_len`. So variable/empty-width member roots are a
-    // contract violation, not a supported input — there is nothing to "accept".
+    // Member roots of different algorithms may differ in width; the combined
+    // root is their plain concatenation hash. A mis-cut root is rejected
+    // downstream, where the extracted root is compared with a digest of its own
+    // algorithm's width (see `mixed_width_member_roots_*` in polydigest).
     //
-    // The supported path is equal-width member roots, exercised throughout this
-    // suite (32-byte SHA-256 roots) and re-confirmed here: two same-width roots
+    // This suite uses 32-byte SHA-256 roots throughout; two such roots
     // fold to a combined root the coupling proof verifies and extracts from.
     let fw_root_0 = vec![9u8; 32];
     let fw_root_1 = vec![5u8; 32];
@@ -3446,7 +3438,7 @@ fn test_genesis_promotion_boundary() {
         };
         let config = eml::VerifierConfig::default();
         assert!(
-            !promoted_coupling.authenticate(&Sha256Hasher, 1, 2, &cr_at_1_after, &[0], config),
+            !promoted_coupling.authenticate(&Sha256Hasher, 0, 1, 2, &cr_at_1_after, &[0], config),
             "promoted proof against hashed CR must fail"
         );
 
@@ -3459,7 +3451,7 @@ fn test_genesis_promotion_boundary() {
         };
         // cr_at_1_genesis is the promoted form (= raw root).
         assert!(
-            !hashed_coupling.authenticate(&Sha256Hasher, 1, 2, &cr_at_1_genesis, &[0], config),
+            !hashed_coupling.authenticate(&Sha256Hasher, 0, 1, 2, &cr_at_1_genesis, &[0], config),
             "hashed proof against promoted CR must fail"
         );
 

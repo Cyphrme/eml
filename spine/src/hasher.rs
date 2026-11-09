@@ -8,35 +8,29 @@ use std::fmt::Debug;
 
 /// Hash operations required by the Merkle Spine.
 ///
-/// # Fixed-width contract (load-bearing for binding soundness)
+/// # Fixed-width contract (per hasher)
 ///
 /// Every digest a single `Hasher` produces — from [`Hasher::leaf`],
 /// [`Hasher::node`], [`Hasher::empty`], [`Hasher::null`], and [`Hasher::hash`] —
 /// **must** be the same constant byte length, reported by [`Hasher::digest_len`].
-/// The node hash concatenates child digests **without a length prefix**
-/// (`node(c₁ ‖ … ‖ cₘ)`); only equal-width children make that concatenation
-/// uniquely parseable, so a fixed width is what lets a node digest bind its
-/// child-digest *list* (and not merely some other splitting of the same bytes).
+/// Within one tree this is what lets the inclusion and consistency verifiers
+/// reject any sibling or peak of the wrong width.
 ///
-/// The Lean corpus discharges binding-root soundness over exactly this seam:
-/// `combinedChildrenWith_bound` (`proofs/lean/EMLProof/Polydigest.lean`) recovers the
-/// committed child-digest list from an equal node hash with **no** uniform-width
-/// assumption *in the model* because the model's `Digest` is abstract — the Rust
-/// realization supplies that uniformity here, via this contract, so the abstract
-/// list-binding maps onto byte-level binding. A variable-width hasher would let
-/// distinct child lists share a node preimage without a hash collision, voiding
-/// the soundness the proof establishes.
-///
-/// The fold boundary ([`crate::mr::nary_mr`]) `debug_assert`s that the children
-/// it hashes share a width, catching a contract violation in test/debug builds.
+/// The contract is per hasher, not across hashers. The node hash concatenates
+/// child digests **without a length prefix**, and a binding-root node's children
+/// are the member roots of *different* algorithms, so they may differ in width
+/// (e.g. 32 and 48 bytes). That is sound because a member root extracted from a
+/// binding root is only ever used by comparing it to a digest recomputed under
+/// its own algorithm's hasher (the spine path check, consistency check, and
+/// snapshot leaf proofs); a root cut at the wrong boundary has the wrong length
+/// or content and cannot match. [`crate::mr::nary_mr`] therefore does not
+/// constrain child widths.
 pub trait Hasher: Debug + Send + Sync {
     /// The constant byte length of every digest this hasher produces.
     ///
     /// All of [`Self::leaf`], [`Self::node`], [`Self::empty`], [`Self::null`],
     /// and [`Self::hash`] return exactly this many bytes. See the trait-level
-    /// *Fixed-width contract*: this width is what makes the unprefixed node-hash
-    /// concatenation injective in its child boundaries, on which binding-root
-    /// soundness rests.
+    /// *Fixed-width contract*.
     ///
     /// The default derives the width from [`Self::empty`] — the hash of the
     /// empty string is a digest like any other, so under the fixed-width
@@ -50,16 +44,16 @@ pub trait Hasher: Debug + Send + Sync {
 
     /// Hash leaf data: H(data). No prefix byte.
     ///
-    /// Returns [`Self::digest_len`] bytes (fixed-width contract).
+    /// Returns [`Self::digest_len`] bytes.
     #[must_use]
     fn leaf(&self, data: &[u8]) -> Vec<u8>;
 
     /// Hash n children: H(c₁ ‖ c₂ ‖ ... ‖ cₘ). No prefix byte.
     /// Caller guarantees m ≥ 2 (a lone child is handled by promotion).
     ///
-    /// Children are concatenated without a length prefix; per the fixed-width
-    /// contract every child is [`Self::digest_len`] bytes, so the boundaries are
-    /// recoverable. Returns [`Self::digest_len`] bytes.
+    /// Children are concatenated without a length prefix and may differ in width
+    /// (binding-root children are other algorithms' roots); see the trait-level
+    /// contract. Returns [`Self::digest_len`] bytes.
     #[must_use]
     fn node(&self, children: &[&[u8]]) -> Vec<u8>;
 
