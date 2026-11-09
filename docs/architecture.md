@@ -60,9 +60,13 @@ canonical Merkle structure. Its contents are the *non-arbitrary* structural choi
 
 A construction reaches its hash through one trait, `Hasher`
 (`spine/src/hasher.rs`). The **fixed-width contract** — every digest a single
-hasher produces is the same constant byte length — is load-bearing: the unprefixed
-node-hash concatenation is injective in its child boundaries only when all children
-are the same width, and binding-root soundness rests on that injectivity. Prefix
+hasher produces is the same constant byte length — is what lets a tree's
+verifiers reject any wrong-width sibling. It is per hasher: the node hash is the
+plain concatenation of its children with no length prefix, and a binding-root
+node's children are the member roots of *different* algorithms, so they may
+differ in width. That is sound because an extracted member root is only used by
+comparing it to a digest recomputed under its own algorithm's hasher (inclusion
+path, consistency, snapshot leaf proofs); a mis-cut root cannot match. Prefix
 domain separation is deliberately **not** a Spine axis — `leaf(d)` is `H(d)` with no
 prefix byte, and an application that wants domain separation supplies a prefixing
 `Hasher` wrapper. This keeps the libraries parameterized essentially by the arity

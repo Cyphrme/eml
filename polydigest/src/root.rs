@@ -673,6 +673,57 @@ mod tests {
         }
     }
 
+    /// Member roots of different algorithms differ in width (32 + 48 bytes). The
+    /// combined root is still the plain unprefixed concatenation hash, and a
+    /// root cut at the wrong boundary authenticates as a binding but is rejected
+    /// by the downstream check against a digest of the algorithm's own width.
+    #[test]
+    fn mixed_width_member_roots_fold_plain_and_miscut_is_rejected() {
+        let r0 = Sha256::digest(b"leaf").to_vec(); // 32 bytes
+        let r1 = sha2::Sha384::digest(b"other").to_vec(); // 48 bytes
+        let epochs = vec![(0u64, vec![(0u64, MAX)]), (1u64, vec![(0u64, MAX)])];
+        let roots = vec![(0u64, r0.clone()), (1u64, r1.clone())];
+
+        let combined = combined_root(&H, &roots, &epochs, 1, 2);
+        assert_eq!(
+            combined,
+            Sha256::digest([r0.as_slice(), r1.as_slice()].concat()).to_vec()
+        );
+
+        let honest = CouplingProof {
+            active_roots: roots,
+            alg_epochs: epochs.clone(),
+        };
+        let cfg = VerifierConfig::default();
+        let check = |c: &CouplingProof| {
+            verify_inclusion_with_coupling(
+                &H,
+                0,
+                &r0,
+                0,
+                1,
+                2,
+                &[],
+                &[],
+                c,
+                &combined,
+                &[0, 1],
+                cfg,
+            )
+        };
+        assert!(check(&honest));
+
+        // Same bytes, cut 31 + 49: the binding root is unchanged, but alg 0's
+        // extracted root is 31 bytes and can never equal a 32-byte digest.
+        let all = [r0.as_slice(), r1.as_slice()].concat();
+        let miscut = CouplingProof {
+            active_roots: vec![(0, all[..31].to_vec()), (1, all[31..].to_vec())],
+            alg_epochs: epochs,
+        };
+        assert!(miscut.authenticate(&H, 1, 2, &combined, &[0, 1], cfg));
+        assert!(!check(&miscut));
+    }
+
     #[test]
     fn activation_trivial_is_informativeness_not_cardinality() {
         // No null run anywhere ⇒ trivial activation (no coverage child).
