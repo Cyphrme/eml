@@ -10,18 +10,19 @@
 //! root, the atomic multi-tree append, and the seal.
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 use cml::engine::{self, AlgView};
 use cml::{LogKind, reduction_count};
 use spine::{
-    ARITY_RANGE, Hasher, Subtree, constant_time_eq, evaluate, fold_frontier, frontier_for_size,
-    nary_mr,
+    ARITY_RANGE, Hasher, Subtree, constant_time_eq, fold_frontier, frontier_for_size, nary_mr,
 };
 
 use crate::log_error::{LogError, LogResult as Result};
 use crate::root::{
     combined_root, committed_active_algs, committed_active_at, validate_committed_epochs,
 };
+use crate::staged::{Generation, Staged, apply_ops};
 use crate::storage::{AlgorithmSeed, NodeWrite, Storage, StorageReader, WriteOp};
 
 /// Configuration for the n-ary Merkle tree.
@@ -54,17 +55,6 @@ pub struct NaryMerkleLog<S: Storage> {
     count: u64,
     /// Whether appends are flat leaf or subtree appends.
     kind: LogKind,
-}
-
-/// Owned batch data computed by `build_append_state`.
-///
-/// Assembled into a [`WriteOp::AppendLeaf`]/[`WriteOp::AppendSubtree`] and
-/// passed to [`Storage::apply`]; assembled before any state mutation so a
-/// storage failure leaves `self.algs` and `self.count` unchanged. Leaf
-/// payloads are not included here — `append_leaf` carries them directly in
-/// its own `WriteOp` because the raw bytes are also stored separately.
-struct OwnedBatch {
-    nodes: Vec<(u64, u64, u32, Vec<u8>)>,
 }
 
 /// One algorithm's owned genesis-seed data, assembled in [`NaryMerkleLog::resume`]
@@ -373,53 +363,6 @@ impl<S: Storage> NaryMerkleLog<S> {
         })
     }
 
-    /// Build the next-state algorithm map and the batch to write, without
-    /// mutating `self`.
-    ///
-    /// `digest_fn(alg_id, view)` returns the per-algorithm digest for the item
-    /// being appended and any leaf-level node to persist. Returns the proposed
-    /// new algorithm map and an [`OwnedBatch`] the caller assembles into a
-    /// [`WriteOp::AppendLeaf`]/[`WriteOp::AppendSubtree`]. The caller MUST
-    /// write the batch to storage before swapping the returned map into
-    /// `self.algs`.
-    fn build_append_state<F>(
-        &self,
-        digest_fn: F,
-    ) -> Result<(HashMap<u64, AlgView>, OwnedBatch), S::Error>
-    where
-        F: Fn(u64, &AlgView) -> (Vec<u8>, Option<(u64, u64, u32, Vec<u8>)>),
-        S::Error: Send,
-    {
-        let mut new_algs = self.algs.clone();
-        let mut batch_nodes: Vec<(u64, u64, u32, Vec<u8>)> = Vec::new();
-
-        for (&alg_id, view) in &mut new_algs {
-            if !view.is_active() {
-                continue;
-            }
-
-            let (digest, extra_node) = digest_fn(alg_id, view);
-            if let Some(node) = extra_node {
-                batch_nodes.push(node);
-            }
-
-            // The single-algorithm frontier carry is the CML engine's; the
-            // combinator drives it once per active algorithm over the one store.
-            engine::carry(
-                view,
-                alg_id,
-                digest,
-                self.count,
-                self.config.arity,
-                &mut batch_nodes,
-            )?;
-        }
-
-        let batch = OwnedBatch { nodes: batch_nodes };
-
-        Ok((new_algs, batch))
-    }
-
     /// Retrieve the tree configuration.
     #[must_use]
     pub fn config(&self) -> &TreeConfig {
@@ -513,6 +456,9 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Register a new algorithm, activating it at the current tree size.
     ///
+    /// Equivalent to [`Self::stage`], [`Staged::add_algorithm`], then
+    /// [`Self::commit`].
+    ///
     /// # Errors
     ///
     /// Returns [`LogError::DuplicateAlgorithm`] if already registered, or a
@@ -522,38 +468,9 @@ impl<S: Storage> NaryMerkleLog<S> {
         alg_id: u64,
         hasher: Box<dyn Hasher>,
     ) -> Result<(), S::Error> {
-        if self.algs.contains_key(&alg_id) {
-            return Err(LogError::DuplicateAlgorithm(alg_id));
-        }
-
-        let current_size = self.count;
-
-        let epochs = vec![(current_size, u64::MAX)];
-
-        // Persist metadata BEFORE committing in-memory state.
-        self.storage
-            .apply(&[WriteOp::AddAlgorithm {
-                alg_id,
-                epochs: &epochs,
-            }])
-            .await
-            .map_err(LogError::Storage)?;
-
-        let k = self.config.arity;
-        let coords = frontier_for_size(current_size, k);
-        let stack = vec![hasher.null(); coords.len()];
-
-        self.algs.insert(
-            alg_id,
-            AlgView {
-                hasher,
-                epochs,
-                frontier: stack,
-                frontier_coords: coords,
-            },
-        );
-
-        Ok(())
+        let mut staged = self.stage();
+        staged.add_algorithm(alg_id, hasher)?;
+        self.commit(staged).await
     }
 
     /// Deactivate (freeze) an algorithm at the current tree size.
@@ -684,132 +601,88 @@ impl<S: Storage> NaryMerkleLog<S> {
 
     /// Append a single flat leaf to the log.
     ///
+    /// Equivalent to [`Self::stage`], [`Staged::append_leaf`], then
+    /// [`Self::commit`].
+    ///
     /// # Errors
     ///
     /// Returns [`LogError`] on a kind conflict, capacity overflow, no active
     /// algorithms, or a storage error.
     pub async fn append_leaf(&mut self, data: &[u8]) -> Result<(), S::Error> {
-        // Kind is only binding once an append has happened; an empty log
-        // (including one reloaded from an empty store) accepts either kind.
-        if self.kind == LogKind::Subtree && self.count > 0 {
-            return Err(LogError::CorruptedMetadata {
-                alg_id: 0,
-                reason: "cannot append leaf after subtree appends".to_string(),
-            });
-        }
-
-        if self.count >= (1u64 << 47) {
-            return Err(LogError::CorruptedMetadata {
-                alg_id: 0,
-                reason: "log capacity exceeded (max 2^47 items)".to_string(),
-            });
-        }
-
-        if !self.algs.values().any(|s| s.is_active()) {
-            return Err(LogError::NoActiveAlgorithms);
-        }
-
-        // `build_append_state` takes &self: the new alg map and batch are
-        // assembled without touching self.algs; the swap happens only after
-        // `apply` succeeds (structural rollback guarantee).
-        let at = self.count;
-        let (new_algs, batch) = self.build_append_state(|alg_id, view| {
-            if view.is_active_at(at) {
-                let leaf_hash = view.hasher.leaf(data);
-                let node = (alg_id, at, 0u32, leaf_hash.clone());
-                (leaf_hash, Some(node))
-            } else {
-                (view.hasher.null(), None)
-            }
-        })?;
-
-        let nodes_ref: Vec<NodeWrite<'_>> = batch
-            .nodes
-            .iter()
-            .map(|(a, l, h, hash)| NodeWrite {
-                alg_id: *a,
-                left: *l,
-                height: *h,
-                hash: hash.as_slice(),
-            })
-            .collect();
-
-        self.storage
-            .apply(&[WriteOp::AppendLeaf {
-                at,
-                data,
-                nodes: &nodes_ref,
-            }])
-            .await
-            .map_err(LogError::Storage)?;
-
-        // Storage committed: safe to update in-memory state.
-        self.algs = new_algs;
-        self.count = at + 1;
-        self.kind = LogKind::Flat;
-        Ok(())
+        let mut staged = self.stage();
+        staged.append_leaf(data)?;
+        self.commit(staged).await
     }
 
     /// Append a structured subtree to the log.
+    ///
+    /// Equivalent to [`Self::stage`], [`Staged::append_subtree`], then
+    /// [`Self::commit`].
     ///
     /// # Errors
     ///
     /// Returns [`LogError`] on a kind conflict, capacity overflow, no active
     /// algorithms, or a storage error.
     pub async fn append_subtree(&mut self, subtree: &Subtree) -> Result<(), S::Error> {
-        if self.kind == LogKind::Flat && self.count > 0 {
-            return Err(LogError::CorruptedMetadata {
-                alg_id: 0,
-                reason: "cannot append subtree after leaf appends".to_string(),
-            });
+        let mut staged = self.stage();
+        staged.append_subtree(subtree)?;
+        self.commit(staged).await
+    }
+
+    /// Snapshot this log's current generation into an owned [`Staged`] that
+    /// algorithm activations and appends can be applied to in memory.
+    ///
+    /// Nothing is written until [`Self::commit`]; dropping the `Staged`
+    /// aborts. See [`Staged`] for the contract tying it to this generation
+    /// of this log.
+    #[must_use]
+    pub fn stage(&self) -> Staged<S> {
+        Staged {
+            base: self.generation(),
+            arity: self.config.arity,
+            algs: self.algs.clone(),
+            count: self.count,
+            kind: self.kind,
+            ops: Vec::new(),
+            _storage: PhantomData,
         }
+    }
 
-        if self.count >= (1u64 << 47) {
-            return Err(LogError::CorruptedMetadata {
-                alg_id: 0,
-                reason: "log capacity exceeded (max 2^47 items)".to_string(),
-            });
+    /// Write every op of `staged` in one atomic [`Storage::apply`], then
+    /// adopt its state.
+    ///
+    /// The in-memory adoption follows the write with no `.await` between
+    /// them, so a caller that drops this future either cancels before the
+    /// write (nothing durable, log unchanged) or not at all once the write
+    /// has returned. A failed write leaves the log exactly as it was. A
+    /// `Staged` holding no ops writes nothing.
+    ///
+    /// `staged` MUST have been staged from this log at its current
+    /// generation (see [`Staged`]'s contract); a stale `Staged` panics in
+    /// debug builds and is not checked in release builds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error if `apply` fails.
+    pub async fn commit(&mut self, staged: Staged<S>) -> Result<(), S::Error> {
+        debug_assert!(
+            staged.base == self.generation(),
+            "stale Staged: committed after the log moved on from the generation it was staged at"
+        );
+        if !staged.ops.is_empty() {
+            apply_ops(&mut self.storage, &staged.ops)
+                .await
+                .map_err(LogError::Storage)?;
         }
-
-        if !self.algs.values().any(|s| s.is_active()) {
-            return Err(LogError::NoActiveAlgorithms);
-        }
-
-        let at = self.count;
-        let (new_algs, batch) = self.build_append_state(|alg_id, view| {
-            if view.is_active_at(at) {
-                let root_hash = evaluate(view.hasher.as_ref(), subtree);
-                let node = (alg_id, at, 0u32, root_hash.clone());
-                (root_hash, Some(node))
-            } else {
-                (view.hasher.null(), None)
-            }
-        })?;
-
-        let nodes_ref: Vec<NodeWrite<'_>> = batch
-            .nodes
-            .iter()
-            .map(|(a, l, h, hash)| NodeWrite {
-                alg_id: *a,
-                left: *l,
-                height: *h,
-                hash: hash.as_slice(),
-            })
-            .collect();
-
-        self.storage
-            .apply(&[WriteOp::AppendSubtree {
-                at,
-                nodes: &nodes_ref,
-            }])
-            .await
-            .map_err(LogError::Storage)?;
-
-        // Storage committed: safe to update in-memory state.
-        self.algs = new_algs;
-        self.count = at + 1;
-        self.kind = LogKind::Subtree;
+        // Storage committed: adopt the staged state, with no await between.
+        self.algs = staged.algs;
+        self.count = staged.count;
+        self.kind = staged.kind;
         Ok(())
+    }
+
+    fn generation(&self) -> Generation {
+        Generation::of(self.count, self.kind, &self.algs)
     }
 
     /// Compute the current combined root — the live primary root of the log,
