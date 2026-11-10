@@ -315,7 +315,9 @@ fn child_two_checkpoints() {
 fn child_writer_loop() {
     use std::io::Write as _;
     let mut st = open(&child_dir()).unwrap();
-    for i in 0u64.. {
+    // The parent kills this child; `u64::MAX` is a bound no run reaches,
+    // so the loop is effectively unbounded without tripping clippy.
+    for i in 0..u64::MAX {
         append(&mut st, i);
         if i % 3 == 2 {
             let l = st.checkpoint().unwrap();
