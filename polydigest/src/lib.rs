@@ -33,6 +33,7 @@ pub mod root;
 pub mod seal;
 pub mod snapshot;
 pub mod snapshot_proof;
+pub mod staged;
 pub mod storage;
 pub mod tree;
 
@@ -66,6 +67,7 @@ pub use root::{
 pub use sealed::Sealed;
 pub use snapshot::BoundSnapshot;
 pub use snapshot_proof::{ClaimedLeaf, SnapshotProof};
+pub use staged::Staged;
 pub use storage::{
     AlgorithmMetas, AlgorithmSeed, Epochs, MemoryStorage, NodeWrite, Storage, WriteOp,
 };

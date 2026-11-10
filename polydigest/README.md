@@ -29,6 +29,23 @@ It adds the three concepts the structural core (`spine`) deliberately omits:
   by a `BindingProof`. Member roots enter as opaque digests, so no algorithm's break
   weakens another.
 
+## Staged appends
+
+Every log mutation is computed in memory before anything is written.
+`NaryMerkleLog::stage` returns an owned `Staged`: algorithm activations
+(`add_algorithm`) and appends (`append_leaf`, `append_subtree`) apply to it
+in call order, and its `root_for` and `size` report exactly what the log
+will report once it is committed. `NaryMerkleLog::commit` writes all of its
+ops in one atomic `Storage::apply` and then adopts the staged state, with
+no `.await` between the two; a failed write leaves the log unchanged, and
+dropping a `Staged` writes nothing. This lets a caller derive a value from
+the post-append root, and refuse, before anything is durable.
+
+A `Staged` is valid only for the generation of the log it was staged from:
+committing it after the log has changed is a contract breach, caught by a
+`debug_assert` and not reported as an error. `append_leaf`,
+`append_subtree` and `add_algorithm` on the log are stage plus commit.
+
 ## Snapshots and filling
 
 The combinator's frozen snapshot is `Sealed` — the `BoundSnapshot` epoch facet over
