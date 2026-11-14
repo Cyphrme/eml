@@ -1,6 +1,6 @@
 [package]
 name          = "merkle-spine"
-version       = "0.1.0"
+version       = "0.1.1"
 description   = "Merkle Spine — the structural core: canonicalization (collapse + promotion), the proof spine, inclusion and leaf proofs, and the general structural Seal. Epoch-free."
 edition       = "2024"
 rust-version  = "1.85"

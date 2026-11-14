@@ -1,6 +1,6 @@
 [package]
 name          = "polydigest-storage-fjall"
-version       = "0.1.0"
+version       = "0.2.0"
 description   = "Fjall-backed storage backend for the EML append-only library"
 edition       = "2024"
 rust-version  = "1.85"
@@ -17,7 +17,7 @@ doctest = false
 
 [dependencies]
 # The Storage trait is the polydigest combinator's; this backend implements it.
-polydigest = { version = "0.1", path = "../polydigest" }
+polydigest = { version = "0.2", path = "../polydigest" }
 fjall      = "3"
 thiserror  = "2"
 

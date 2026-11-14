@@ -24,7 +24,7 @@ doctest = false
 
 [dependencies]
 # The Storage trait is the polydigest combinator's; this backend implements it.
-polydigest = { version = "0.1", path = "../polydigest" }
+polydigest = { version = "0.2", path = "../polydigest" }
 # Structural primitives (frontier decomposition, arity range) shared with the
 # rest of the log stack -- already a transitive dependency via polydigest, so
 # depending on it directly names no new layer.

@@ -17,7 +17,7 @@ name = "eml"
 [dependencies]
 # The EML library is the polydigest combinator over the CML single-algorithm
 # engine; this crate is its k=2, no-prefix instantiation.
-polydigest = { version = "0.1", path = "../polydigest" }
+polydigest = { version = "0.2", path = "../polydigest" }
 
 [dev-dependencies]
 sha2 = "0.10"
@@ -26,4 +26,4 @@ big_o = "0.1"
 cpu-time = "1"
 proptest = "1"
 smol = "2.0"
-polydigest = { version = "0.1", path = "../polydigest" }
+polydigest = { version = "0.2", path = "../polydigest" }
