@@ -193,3 +193,62 @@ fn every_position_with_an_earlier_dormant_gap() {
         }
     });
 }
+
+/// The dormant frontier is O(log n) peaks at the close size, survives
+/// `with_meta`, and a mismatched peak count is refused.
+#[test]
+fn dormant_frontier_is_logarithmic_and_validated() {
+    smol::block_on(async {
+        let sealed = build(2, 1, &[(5, Ev::Close)], 40)
+            .await
+            .seal_with_meta(polydigest::Meta::new(b"m".to_vec()))
+            .await
+            .unwrap();
+        let dormant = sealed.dormant_frontiers();
+        assert_eq!(dormant.len(), 1);
+        assert_eq!(dormant[0].0, 1);
+        // Close size 5 = 0b101: two peaks, not 40 leaves' worth.
+        assert_eq!(dormant[0].1.len(), 2);
+        assert!(sealed.peaks(1).is_none(), "closed alg has no active peaks");
+
+        assert!(
+            sealed
+                .clone()
+                .with_dormant_frontiers(vec![(1, vec![vec![0; 32]])])
+                .is_err(),
+            "wrong peak count for close size 5"
+        );
+        assert!(
+            sealed.with_dormant_frontiers(vec![(0, vec![])]).is_err(),
+            "alg 0 is still open"
+        );
+    });
+}
+
+/// A caller that supplies no hasher for a closed algorithm still resumes (as
+/// resume always has); the algorithm is then unknown to the resumed log. A
+/// missing hasher for an active algorithm stays an error.
+#[test]
+fn closed_algorithm_hasher_is_optional_on_resume() {
+    smol::block_on(async {
+        let sealed = build(2, 1, &[(3, Ev::Close)], 5)
+            .await
+            .seal()
+            .await
+            .unwrap();
+        let hashers = |ids: &[u64]| -> Vec<(u64, Box<dyn Hasher>)> {
+            ids.iter()
+                .map(|&id| (id, Box::new(FixtureHasher) as Box<dyn Hasher>))
+                .collect()
+        };
+        let mut log = NaryMerkleLog::resume(&sealed, MemoryStorage::new(), hashers(&[0]))
+            .await
+            .unwrap();
+        assert!(log.resume_algorithm(1).await.is_err());
+        assert!(
+            NaryMerkleLog::resume(&sealed, MemoryStorage::new(), hashers(&[1]))
+                .await
+                .is_err()
+        );
+    });
+}

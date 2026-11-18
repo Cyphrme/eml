@@ -852,7 +852,11 @@ where
                 }
                 h as u32
             };
-            if view.fully_active(lo, hi) {
+            // A subtree-kind log (resumed from a seal) holds no leaves, so the
+            // stored peak is the only record of a range that straddles a dormant
+            // span; trust it rather than recursing into children that were never
+            // stored.
+            if view.fully_active(lo, hi) || kind == LogKind::Subtree {
                 if let Some(hash) = reader
                     .get_node(alg_id, lo, height)
                     .await

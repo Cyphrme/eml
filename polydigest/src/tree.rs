@@ -169,7 +169,6 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         let config = TreeConfig { arity: k };
         let size = sealed.tree_size();
-        let coords = frontier_for_size(size, k);
 
         let mut hasher_map: HashMap<u64, Box<dyn Hasher>> = hashers.into_iter().collect();
 
@@ -178,10 +177,33 @@ impl<S: Storage> NaryMerkleLog<S> {
         // `WriteOp::SeedFrontier` is built.
         let mut owned_seeds: Vec<OwnedAlgorithmSeed> = Vec::new();
 
-        for (alg_id, peaks) in sealed.frontiers() {
-            let hasher = hasher_map
-                .remove(alg_id)
-                .ok_or(LogError::UnknownAlgorithm(*alg_id))?;
+        // Active algorithms are seeded at the sealed size, closed ones at their
+        // close size: the frontier a later `resume_algorithm` reads back.
+        let seeded = sealed
+            .frontiers()
+            .iter()
+            .map(|(id, peaks)| (id, peaks, size, false))
+            .chain(sealed.dormant_frontiers().iter().map(|(id, peaks)| {
+                let close = sealed
+                    .alg_epochs()
+                    .iter()
+                    .find(|(eid, _)| eid == id)
+                    .and_then(|(_, e)| e.last())
+                    .map_or(0, |&(_, end)| end);
+                (id, peaks, close, true)
+            }));
+
+        for (alg_id, peaks, frontier_size, closed) in seeded {
+            let coords = frontier_for_size(frontier_size, k);
+            // A closed algorithm is optional: a caller that supplies no hasher
+            // for it resumes a log without it, as resume always has, and a later
+            // `resume_algorithm` of it reports `UnknownAlgorithm`. An algorithm
+            // active at the sealed size cannot be dropped.
+            let hasher = match hasher_map.remove(alg_id) {
+                Some(hasher) => hasher,
+                None if closed => continue,
+                None => return Err(LogError::UnknownAlgorithm(*alg_id)),
+            };
 
             // The resumed algorithm's committed timeline is carried from the
             // seal so its binding root at the sealed size is reproduced; a live
