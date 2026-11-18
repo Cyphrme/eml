@@ -1,6 +1,6 @@
 [package]
 name          = "polydigest"
-version       = "0.2.0"
+version       = "0.2.1"
 description   = "Polydigest combinator — lifts the Merkle Spine across N algorithms over one shared substrate: the activation timeline, null-run-extents, the binding root, coupling, and the bound snapshot."
 edition       = "2024"
 rust-version  = "1.85"
@@ -18,14 +18,14 @@ categories.workspace = true
 # append-only per-algorithm engine), and CMT (the mutable single-algorithm tree
 # it lifts as `polydigest(cmt)`).
 spine = { version = "0.1.1", path = "../spine", package = "merkle-spine" }
-cml = { version = "0.1", path = "../cml", package = "canonical-ml" }
+cml = { version = "0.1.1", path = "../cml", package = "canonical-ml" }
 cmt = { version = "0.1", path = "../cmt", package = "canonical-mt" }
 
 [dev-dependencies]
 sha2 = "0.10"
 smol = "2.0"
 spine = { version = "0.1.1", path = "../spine", package = "merkle-spine" }
-cml = { version = "0.1", path = "../cml", package = "canonical-ml" }
+cml = { version = "0.1.1", path = "../cml", package = "canonical-ml" }
 cmt = { version = "0.1", path = "../cmt", package = "canonical-mt" }
 # Compile-level API-surface lint (tests/api_surface.rs): parses this crate's
 # own `src/storage.rs` to check the `Storage` trait's mutating-method count,

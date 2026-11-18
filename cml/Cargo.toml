@@ -1,6 +1,6 @@
 [package]
 name          = "canonical-ml"
-version       = "0.1.0"
+version       = "0.1.1"
 description   = "CML — the single-algorithm canonical append log over the Merkle Spine: frontier carry, root folds, the append-only consistency proof, inclusion/leaf proof generation, and the structural snapshot facet. No epochs, no multi-algorithm."
 edition       = "2024"
 rust-version  = "1.85"
