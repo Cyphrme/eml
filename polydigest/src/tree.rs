@@ -51,10 +51,24 @@ pub struct NaryMerkleLog<S: Storage> {
     storage: S,
     config: TreeConfig,
     algs: HashMap<u64, AlgView>,
+    /// Closed algorithms registered in storage whose hasher was not supplied:
+    /// no view, so they cannot resume, but their ids stay taken so
+    /// `add_algorithm` cannot re-register one over nulls.
+    hasherless: HashMap<u64, Hasherless>,
     /// Total number of log-level appends (leaves for `Flat`, subtrees for `Subtree`).
     count: u64,
     /// Whether appends are flat leaf or subtree appends.
     kind: LogKind,
+}
+
+/// A closed algorithm held without its hasher: its committed timeline and the
+/// frontier peaks at its close size, carried so a later seal still freezes it.
+#[derive(Debug, Clone)]
+pub(crate) struct Hasherless {
+    pub(crate) epochs: Vec<(u64, u64)>,
+    /// `None` for a peak whose range carries no active leaf and was not
+    /// stored: its null constant is the missing hasher's.
+    pub(crate) peaks: Vec<Option<Vec<u8>>>,
 }
 
 /// One algorithm's owned genesis-seed data, assembled in [`NaryMerkleLog::resume`]
@@ -89,6 +103,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             storage,
             config,
             algs: HashMap::new(),
+            hasherless: HashMap::new(),
             count: 0,
             kind: LogKind::Flat,
         };
@@ -139,6 +154,15 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// seeded frontier reproduces that algorithm's sealed member root, so a
     /// consistency proof bridges the resume.
     ///
+    /// Each algorithm closed before the seal ([`crate::Sealed::dormant_frontiers`])
+    /// is reopened at its close size so [`Self::resume_algorithm`] works on it;
+    /// pass its hasher to get that. If a closed algorithm's hasher is omitted,
+    /// its id, timeline and peaks are still recorded: it cannot resume,
+    /// [`Self::add_algorithm`] of that id fails with
+    /// [`LogError::DuplicateAlgorithm`], a later [`Self::seal`] still freezes it,
+    /// and reopening that storage with [`Self::from_storage`] requires its
+    /// hasher ([`LogError::OrphanedMetadata`]).
+    ///
     /// # Errors
     ///
     /// Returns [`LogError::ResumeTargetNotFresh`] if `storage` already
@@ -169,19 +193,74 @@ impl<S: Storage> NaryMerkleLog<S> {
         }
         let config = TreeConfig { arity: k };
         let size = sealed.tree_size();
-        let coords = frontier_for_size(size, k);
 
         let mut hasher_map: HashMap<u64, Box<dyn Hasher>> = hashers.into_iter().collect();
 
         let mut algs = HashMap::new();
+        let mut hasherless: HashMap<u64, Hasherless> = HashMap::new();
         // Owned per-algorithm seed data, assembled before any borrow into
         // `WriteOp::SeedFrontier` is built.
         let mut owned_seeds: Vec<OwnedAlgorithmSeed> = Vec::new();
 
-        for (alg_id, peaks) in sealed.frontiers() {
-            let hasher = hasher_map
-                .remove(alg_id)
-                .ok_or(LogError::UnknownAlgorithm(*alg_id))?;
+        // Active algorithms are seeded at the sealed size, closed ones at their
+        // close size: the frontier a later `resume_algorithm` reads back.
+        let seeded = sealed
+            .frontiers()
+            .iter()
+            .map(|(id, peaks)| (id, peaks, size, false))
+            .chain(sealed.dormant_frontiers().iter().map(|(id, peaks)| {
+                let close = sealed
+                    .alg_epochs()
+                    .iter()
+                    .find(|(eid, _)| eid == id)
+                    .and_then(|(_, e)| e.last())
+                    .map_or(0, |&(_, end)| end);
+                (id, peaks, close, true)
+            }));
+
+        for (alg_id, peaks, frontier_size, closed) in seeded {
+            let coords = frontier_for_size(frontier_size, k);
+            // A closed algorithm is optional: a caller that supplies no hasher
+            // for it resumes a log without it, as resume always has, and a later
+            // `resume_algorithm` of it reports `UnknownAlgorithm`. An algorithm
+            // active at the sealed size cannot be dropped.
+            let hasher = match hasher_map.remove(alg_id) {
+                Some(hasher) => hasher,
+                None if closed => {
+                    // Persist the id, timeline and peaks without a view, so
+                    // the id stays registered and a reopen with the hasher
+                    // can resume it.
+                    let epochs = sealed
+                        .alg_epochs()
+                        .iter()
+                        .find(|(id, _)| id == alg_id)
+                        .map(|(_, e)| e.clone())
+                        .unwrap_or_default();
+                    let nodes = frontier_for_size(frontier_size, k)
+                        .into_iter()
+                        .zip(peaks.iter())
+                        .filter(|&((left, height), _)| {
+                            let hi = left + k.pow(height);
+                            epochs.iter().any(|&(st, end)| st < hi && end > left)
+                        })
+                        .map(|((left, height), peak)| (left, height, peak.clone()))
+                        .collect();
+                    owned_seeds.push(OwnedAlgorithmSeed {
+                        alg_id: *alg_id,
+                        epochs: epochs.clone(),
+                        nodes,
+                    });
+                    hasherless.insert(
+                        *alg_id,
+                        Hasherless {
+                            epochs,
+                            peaks: peaks.iter().cloned().map(Some).collect(),
+                        },
+                    );
+                    continue;
+                },
+                None => return Err(LogError::UnknownAlgorithm(*alg_id)),
+            };
 
             // The resumed algorithm's committed timeline is carried from the
             // seal so its binding root at the sealed size is reproduced; a live
@@ -260,6 +339,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             storage,
             config,
             algs,
+            hasherless,
             count: size,
             kind: LogKind::Subtree,
         })
@@ -310,7 +390,12 @@ impl<S: Storage> NaryMerkleLog<S> {
             if !seen.insert(alg_id) {
                 return Err(LogError::DuplicateAlgorithm(alg_id));
             }
-            if !hasher_map.contains_key(&alg_id) {
+            // A closed algorithm's hasher is optional, as on `resume`; an
+            // open one cannot be loaded without it.
+            let closed = metas
+                .iter()
+                .any(|(id, e)| *id == alg_id && e.last().is_some_and(|&(_, end)| end != u64::MAX));
+            if !hasher_map.contains_key(&alg_id) && !closed {
                 return Err(LogError::OrphanedMetadata(alg_id));
             }
         }
@@ -337,11 +422,24 @@ impl<S: Storage> NaryMerkleLog<S> {
         };
 
         let mut algs = HashMap::new();
+        let mut hasherless: HashMap<u64, Hasherless> = HashMap::new();
         let k = config.arity;
         for (alg_id, epochs) in metas {
-            let hasher = hasher_map
-                .remove(&alg_id)
-                .ok_or(LogError::OrphanedMetadata(alg_id))?;
+            let Some(hasher) = hasher_map.remove(&alg_id) else {
+                // Closed and hasherless (checked above): keep the timeline
+                // and whichever close-size peaks are stored.
+                let close = epochs.last().map_or(0, |&(_, end)| end);
+                let reader = StorageReader(&storage);
+                let mut peaks = Vec::new();
+                for (left, height) in frontier_for_size(close, k) {
+                    let stored = engine::NodeReader::get_node(&reader, alg_id, left, height)
+                        .await
+                        .map_err(LogError::Storage)?;
+                    peaks.push(stored);
+                }
+                hasherless.insert(alg_id, Hasherless { epochs, peaks });
+                continue;
+            };
             let view = engine::reconstruct_view(
                 &StorageReader(&storage),
                 alg_id,
@@ -358,9 +456,16 @@ impl<S: Storage> NaryMerkleLog<S> {
             storage,
             config,
             algs,
+            hasherless,
             count: global_size,
             kind,
         })
+    }
+
+    /// The timeline and close-size peaks of each closed algorithm registered
+    /// without a hasher (see [`Self::resume`]).
+    pub(crate) fn hasherless_frozen(&self) -> &HashMap<u64, Hasherless> {
+        &self.hasherless
     }
 
     /// Retrieve the tree configuration.
@@ -641,6 +746,7 @@ impl<S: Storage> NaryMerkleLog<S> {
             base: self.generation(),
             arity: self.config.arity,
             algs: self.algs.clone(),
+            hasherless: self.hasherless.keys().copied().collect(),
             count: self.count,
             kind: self.kind,
             ops: Vec::new(),
@@ -868,11 +974,14 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// This is the timeline bound into the combined root (Design A+).
     #[must_use]
     pub fn committed_epochs_at(&self, size: u64) -> Vec<(u64, Vec<(u64, u64)>)> {
-        let mut out: Vec<_> = self
-            .algs
-            .iter()
-            .filter_map(|(&id, view)| view.epochs_at(size).map(|e| (id, e)))
-            .collect();
+        let mut out: Vec<_> =
+            self.algs
+                .iter()
+                .filter_map(|(&id, view)| view.epochs_at(size).map(|e| (id, e)))
+                .chain(self.hasherless.iter().filter_map(|(&id, h)| {
+                    engine::epochs_at_size(&h.epochs, size).map(|e| (id, e))
+                }))
+                .collect();
         out.sort_unstable_by_key(|&(id, _)| id);
         out
     }
@@ -1197,6 +1306,14 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut active_algs = Vec::new();
         for (&id, view) in &self.algs {
             if size > 0 && view.is_active_at(size - 1) {
+                active_algs.push(id);
+            }
+        }
+        // A closed algorithm held without its hasher is active at sizes before
+        // its close. Its member root is then needed and cannot be had, so the
+        // callers fail closed with `UnknownAlgorithm`.
+        for (&id, h) in &self.hasherless {
+            if size > 0 && h.epochs.iter().any(|&(s, e)| s < size && size <= e) {
                 active_algs.push(id);
             }
         }

@@ -10,7 +10,7 @@
 //! must derive something from the post-append root (and refuse before
 //! anything is durable) reads it from the `Staged` and drops it to abort.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
 use cml::LogKind;
@@ -149,6 +149,7 @@ pub struct Staged<S: Storage> {
     pub(crate) base: Generation,
     pub(crate) arity: u64,
     pub(crate) algs: HashMap<u64, AlgView>,
+    pub(crate) hasherless: HashSet<u64>,
     pub(crate) count: u64,
     pub(crate) kind: LogKind,
     pub(crate) ops: Vec<StagedOp>,
@@ -165,9 +166,10 @@ impl<S: Storage> Staged<S> {
     /// # Errors
     ///
     /// Returns [`LogError::DuplicateAlgorithm`] if `alg_id` is already
-    /// registered on the log or earlier in this `Staged`.
+    /// registered on the log (including a closed algorithm resumed without its
+    /// hasher) or earlier in this `Staged`.
     pub fn add_algorithm(&mut self, alg_id: u64, hasher: Box<dyn Hasher>) -> Result<(), S::Error> {
-        if self.algs.contains_key(&alg_id) {
+        if self.algs.contains_key(&alg_id) || self.hasherless.contains(&alg_id) {
             return Err(LogError::DuplicateAlgorithm(alg_id));
         }
         let epochs = vec![(self.count, u64::MAX)];

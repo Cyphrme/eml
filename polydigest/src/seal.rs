@@ -6,7 +6,8 @@
 //! resumable frontier, so every `Sealed` uniformly carries a frontier whatever
 //! sealed it. An append-only log already holds its frontier natively, so its
 //! seal freezes the active algorithms' frontier peaks at the sealed size and
-//! pairs them with the committed timeline (the epoch facet, D13).
+//! each closed algorithm's peaks at its close size, and pairs them with the
+//! committed timeline (the epoch facet, D13).
 //!
 //! The seal is one-way: it consumes the log and there is no path back to one
 //! (C-SEAL-ONEWAY). The way *forward* from a `Sealed` is the orthogonal
@@ -25,7 +26,10 @@
 //! position) the seal freezes that algorithm's **frontier peaks** — the digests
 //! of the perfect k-ary subtrees [`spine::frontier_for_size`] names — together
 //! with the committed epoch timeline and an optional opaque metadata payload
-//! ([`spine::Meta`]). The member root, binding root, and run-extents are
+//! ([`spine::Meta`]). An algorithm closed before the seal has no member root at
+//! the sealed size, so its peaks at its close size ride beside the structural
+//! seal ([`Sealed::dormant_frontiers`]); that is O(log n) per algorithm, and
+//! lets a resumed log resume it. The member root, binding root, and run-extents are
 //! *derived views* of the `Sealed`, not stored.
 
 use spine::Meta;
@@ -39,8 +43,9 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// Seal this log into the commitment currency [`Sealed`] at its current size,
     /// consuming the log.
     ///
-    /// Freezes the frontier peaks of every algorithm active at the sealed size
-    /// and the committed epoch timeline. The transition is one-way: the log is
+    /// Freezes the frontier peaks of every algorithm active at the sealed size,
+    /// the peaks of every closed algorithm at its close size, and the committed
+    /// epoch timeline. The transition is one-way: the log is
     /// consumed and a `Sealed` cannot be walked back to a log (C-SEAL-ONEWAY).
     ///
     /// To attach an optional opaque metadata payload (where a tree-head
@@ -74,24 +79,46 @@ impl<S: Storage> NaryMerkleLog<S> {
         let k = self.config().arity;
 
         // At size 0 there is no active algorithm and no timeline to freeze.
-        let (frontiers, alg_epochs) = if size == 0 {
-            (Vec::new(), Vec::new())
+        let (frontiers, dormant, alg_epochs) = if size == 0 {
+            (Vec::new(), Vec::new(), Vec::new())
         } else {
             let alg_epochs = self.committed_epochs_at(size);
+            let frozen = self.hasherless_frozen();
 
-            // Only algorithms active at the sealed size contribute a frontier.
+            // Active algorithms contribute a frontier at the sealed size; a
+            // closed one contributes its frontier at its close size, which a
+            // resume needs to bring it back.
             let mut frontiers = Vec::new();
-            for &(id, _) in &alg_epochs {
-                if let Some(true) = crate::committed_active_at(&alg_epochs, id, size) {
-                    let peaks = self.frontier_peaks_at(id, size).await?;
-                    frontiers.push((id, peaks));
+            let mut dormant = Vec::new();
+            for (id, epochs) in &alg_epochs {
+                // A closed algorithm held without its hasher has no view; its
+                // close-size peaks were carried from the seal it came from, or
+                // read from storage, so freezing them again keeps it from
+                // being forgotten.
+                if let Some(h) = frozen.get(id) {
+                    let peaks: Option<Vec<Vec<u8>>> = h.peaks.iter().cloned().collect();
+                    let peaks = peaks.ok_or(LogError::UnknownAlgorithm(*id))?;
+                    dormant.push((*id, peaks));
+                    continue;
+                }
+                match crate::committed_active_at(&alg_epochs, *id, size) {
+                    Some(true) => {
+                        let peaks = self.frontier_peaks_at(*id, size).await?;
+                        frontiers.push((*id, peaks));
+                    },
+                    _ => {
+                        let close = epochs.last().map_or(0, |&(_, end)| end);
+                        let peaks = self.frontier_peaks_at(*id, close).await?;
+                        dormant.push((*id, peaks));
+                    },
                 }
             }
-            (frontiers, alg_epochs)
+            (frontiers, dormant, alg_epochs)
         };
 
-        let sealed =
-            Sealed::new(size, k, frontiers, alg_epochs).map_err(|_| LogError::MalformedSeal)?;
+        let sealed = Sealed::new(size, k, frontiers, alg_epochs)
+            .and_then(|s| s.with_dormant_frontiers(dormant))
+            .map_err(|_| LogError::MalformedSeal)?;
         Ok(match meta {
             Some(m) => sealed.with_meta(m),
             None => sealed,

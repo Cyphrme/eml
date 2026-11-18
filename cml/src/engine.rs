@@ -201,19 +201,26 @@ impl AlgView {
     /// freshness). Returns `None` if the algorithm was not yet registered.
     #[must_use]
     pub fn epochs_at(&self, size: u64) -> Option<Vec<(u64, u64)>> {
-        let mut out = Vec::new();
-        for &(start, end) in &self.epochs {
-            if start > size {
-                break;
-            }
-            if end > size {
-                out.push((start, u64::MAX));
-                break;
-            }
-            out.push((start, end));
-        }
-        if out.is_empty() { None } else { Some(out) }
+        epochs_at_size(&self.epochs, size)
     }
+}
+
+/// [`AlgView::epochs_at`] over a bare timeline, for an algorithm held without
+/// a hasher (and so without a view).
+#[must_use]
+pub fn epochs_at_size(epochs: &[(u64, u64)], size: u64) -> Option<Vec<(u64, u64)>> {
+    let mut out = Vec::new();
+    for &(start, end) in epochs {
+        if start > size {
+            break;
+        }
+        if end > size {
+            out.push((start, u64::MAX));
+            break;
+        }
+        out.push((start, end));
+    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 /// Compute the member root from an algorithm's in-memory frontier — the MMR
@@ -852,7 +859,11 @@ where
                 }
                 h as u32
             };
-            if view.fully_active(lo, hi) {
+            // A subtree-kind log (resumed from a seal) holds no leaves, so the
+            // stored peak is the only record of a range that straddles a dormant
+            // span; trust it rather than recursing into children that were never
+            // stored.
+            if view.fully_active(lo, hi) || kind == LogKind::Subtree {
                 if let Some(hash) = reader
                     .get_node(alg_id, lo, height)
                     .await
