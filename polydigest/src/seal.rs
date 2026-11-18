@@ -82,7 +82,7 @@ impl<S: Storage> NaryMerkleLog<S> {
         let (frontiers, dormant, alg_epochs) = if size == 0 {
             (Vec::new(), Vec::new(), Vec::new())
         } else {
-            let alg_epochs = self.committed_epochs_at(size);
+            let mut alg_epochs = self.committed_epochs_at(size);
 
             // Active algorithms contribute a frontier at the sealed size; a
             // closed one contributes its frontier at its close size, which a
@@ -102,6 +102,14 @@ impl<S: Storage> NaryMerkleLog<S> {
                     },
                 }
             }
+            // A closed algorithm held without its hasher has no view but its
+            // timeline and close-size peaks were carried from the seal it came
+            // from; freezing them again keeps it from being forgotten.
+            for (id, frozen) in self.hasherless_frozen() {
+                alg_epochs.push((id, frozen.epochs));
+                dormant.push((id, frozen.peaks));
+            }
+            alg_epochs.sort_unstable_by_key(|&(id, _)| id);
             (frontiers, dormant, alg_epochs)
         };
 

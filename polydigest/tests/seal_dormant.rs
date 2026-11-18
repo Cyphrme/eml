@@ -288,8 +288,8 @@ fn hashers_for(ids: &[u64]) -> Vec<(u64, Box<dyn Hasher>)> {
 
 /// Resuming without a closed algorithm's hasher must leave a record of its
 /// id: re-adding it would register it fresh over nulls and root differently
-/// from the original log. It stays unresumable, un-re-addable, unsealable
-/// (a seal would forget it), and the record survives a reopen.
+/// from the original log. It stays unresumable and un-re-addable, and the
+/// record survives a reopen. A re-seal still carries it.
 #[test]
 fn hasherless_closed_algorithm_cannot_be_re_added() {
     smol::block_on(async {
@@ -315,14 +315,29 @@ fn hasherless_closed_algorithm_cannot_be_re_added() {
                 .is_err()
         );
 
-        let reopened = NaryMerkleLog::from_storage(log.into_storage(), hashers_for(&[0]))
+        // Sealing again still freezes it: same dormant frontier and timeline.
+        let resealed = NaryMerkleLog::resume(&sealed, MemoryStorage::new(), hashers_for(&[0]))
+            .await
+            .unwrap()
+            .seal()
             .await
             .unwrap();
-        let mut reopened = reopened;
+        assert_eq!(resealed, sealed);
+
+        // Reopening needs the hasher for every stored algorithm; with it
+        // the id is still taken.
+        let storage = log.into_storage();
+        let mut reopened = NaryMerkleLog::from_storage(storage, hashers_for(&[0, 1]))
+            .await
+            .unwrap();
         assert!(matches!(
             reopened.add_algorithm(1, Box::new(FixtureHasher)).await,
             Err(polydigest::LogError::DuplicateAlgorithm(1))
         ));
-        assert!(reopened.seal().await.is_err(), "a seal would forget alg 1");
+        let storage = reopened.into_storage();
+        assert!(matches!(
+            NaryMerkleLog::from_storage(storage, hashers_for(&[0])).await,
+            Err(polydigest::LogError::OrphanedMetadata(1))
+        ));
     });
 }
