@@ -341,3 +341,79 @@ fn hasherless_closed_algorithm_cannot_be_re_added() {
         ));
     });
 }
+
+/// Roots a log reports after `extra` more appends: both algorithms'
+/// combined roots where alg 1 is registered, else alg 0's alone.
+async fn live_roots(log: &mut Log, from: u64, extra: u64, subtree: bool) -> Vec<Vec<u8>> {
+    for i in from..from + extra {
+        push(log, i, subtree).await;
+    }
+    vec![log.combined_root_for(0).await.unwrap()]
+}
+
+/// A hasherless resumed log must report the same combined roots as the
+/// original: the coverage child binds every algorithm's timeline, the closed
+/// one included, with no hasher needed for it.
+#[test]
+fn hasherless_resumed_log_has_the_original_combined_root() {
+    smol::block_on(async {
+        for k in 2..=3u64 {
+            for add in 0..=3u64 {
+                for c in (add + 1)..=6u64 {
+                    for n in c..=8u64 {
+                        let evs = [(c, Ev::Close)];
+                        let mut original = build(k, add, &evs, n).await;
+                        let sealed = build(k, add, &evs, n).await.seal().await.unwrap();
+                        let mut resumed =
+                            NaryMerkleLog::resume(&sealed, MemoryStorage::new(), hashers_for(&[0]))
+                                .await
+                                .unwrap();
+                        assert_eq!(
+                            original.combined_root_for(0).await.unwrap(),
+                            resumed.combined_root_for(0).await.unwrap(),
+                            "k={k} add={add} close={c} at sealed size {n}"
+                        );
+                        assert_eq!(
+                            live_roots(&mut original, n, 3, false).await,
+                            live_roots(&mut resumed, n, 3, true).await,
+                            "k={k} add={add} close={c} sealed at {n}, after appends"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// A closed algorithm's hasher is optional on `from_storage` too, as on
+/// `resume`: reopening with active hashers only keeps the id taken and the
+/// roots equal.
+#[test]
+fn from_storage_loads_a_closed_algorithm_without_its_hasher() {
+    smol::block_on(async {
+        let mut original = build(2, 1, &[(3, Ev::Close)], 5).await;
+        let sealed = build(2, 1, &[(3, Ev::Close)], 5)
+            .await
+            .seal()
+            .await
+            .unwrap();
+        let log = NaryMerkleLog::resume(&sealed, MemoryStorage::new(), hashers_for(&[0]))
+            .await
+            .unwrap();
+        let mut reopened = NaryMerkleLog::from_storage(log.into_storage(), hashers_for(&[0]))
+            .await
+            .unwrap();
+        assert!(matches!(
+            reopened.add_algorithm(1, Box::new(FixtureHasher)).await,
+            Err(polydigest::LogError::DuplicateAlgorithm(1))
+        ));
+        assert_eq!(
+            original.combined_root_for(0).await.unwrap(),
+            reopened.combined_root_for(0).await.unwrap()
+        );
+        assert_eq!(
+            live_roots(&mut original, 5, 3, false).await,
+            live_roots(&mut reopened, 5, 3, true).await
+        );
+    });
+}
