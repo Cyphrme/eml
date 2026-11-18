@@ -324,8 +324,7 @@ fn hasherless_closed_algorithm_cannot_be_re_added() {
             .unwrap();
         assert_eq!(resealed, sealed);
 
-        // Reopening needs the hasher for every stored algorithm; with it
-        // the id is still taken.
+        // Reopening with the hasher keeps the id taken.
         let storage = log.into_storage();
         let mut reopened = NaryMerkleLog::from_storage(storage, hashers_for(&[0, 1]))
             .await
@@ -335,9 +334,10 @@ fn hasherless_closed_algorithm_cannot_be_re_added() {
             Err(polydigest::LogError::DuplicateAlgorithm(1))
         ));
         let storage = reopened.into_storage();
+        // An open algorithm's hasher is still required.
         assert!(matches!(
-            NaryMerkleLog::from_storage(storage, hashers_for(&[0])).await,
-            Err(polydigest::LogError::OrphanedMetadata(1))
+            NaryMerkleLog::from_storage(storage, hashers_for(&[1])).await,
+            Err(polydigest::LogError::OrphanedMetadata(0))
         ));
     });
 }
@@ -360,7 +360,10 @@ fn hasherless_resumed_log_has_the_original_combined_root() {
         for k in 2..=3u64 {
             for add in 0..=3u64 {
                 for c in (add + 1)..=6u64 {
-                    for n in c..=8u64 {
+                    // n > c: at n == c the closed algorithm still holds the tip
+                    // position, so its member root enters the fold and the
+                    // hasherless log must fail closed there instead.
+                    for n in (c + 1)..=8u64 {
                         let evs = [(c, Ev::Close)];
                         let mut original = build(k, add, &evs, n).await;
                         let sealed = build(k, add, &evs, n).await.seal().await.unwrap();
@@ -415,5 +418,26 @@ fn from_storage_loads_a_closed_algorithm_without_its_hasher() {
             live_roots(&mut original, 5, 3, false).await,
             live_roots(&mut reopened, 5, 3, true).await
         );
+    });
+}
+
+/// Closed exactly at the sealed size, the algorithm still holds the tip
+/// position, so its member root belongs in the combined root and a hasherless
+/// log cannot produce it: it fails closed rather than report a wrong root.
+#[test]
+fn hasherless_log_fails_closed_where_the_missing_member_root_is_needed() {
+    smol::block_on(async {
+        let sealed = build(2, 1, &[(3, Ev::Close)], 3)
+            .await
+            .seal()
+            .await
+            .unwrap();
+        let log = NaryMerkleLog::resume(&sealed, MemoryStorage::new(), hashers_for(&[0]))
+            .await
+            .unwrap();
+        assert!(matches!(
+            log.combined_root_for(0).await,
+            Err(polydigest::LogError::UnknownAlgorithm(1))
+        ));
     });
 }

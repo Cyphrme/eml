@@ -2413,9 +2413,11 @@ fn test_from_storage_initialization_errors() {
             eml::NaryMerkleLog::from_storage(storage_dup, vec![(0, Box::new(Sha256Hasher))]).await;
         assert!(matches!(res, Err(eml::Error::DuplicateAlgorithm(0))));
 
-        // 2. Orphaned metadata error (metas has alg 0, but no hasher for alg 0 is passed)
+        // 2. Orphaned metadata error (metas has an open alg 0, but no hasher for alg 0 is passed).
+        //    A closed algorithm without a hasher is accepted (hasherless, as in `resume`), so only
+        //    an open one is orphaned.
         let storage_orphaned = MockStorage {
-            metas: Ok(vec![(0, vec![(0, 0)])]),
+            metas: Ok(vec![(0, vec![(0, u64::MAX)])]),
             len: 0,
         };
         let res = eml::NaryMerkleLog::from_storage(storage_orphaned, Vec::new()).await;

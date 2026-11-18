@@ -66,7 +66,9 @@ pub struct NaryMerkleLog<S: Storage> {
 #[derive(Debug, Clone)]
 pub(crate) struct Hasherless {
     pub(crate) epochs: Vec<(u64, u64)>,
-    pub(crate) peaks: Vec<Vec<u8>>,
+    /// `None` for a peak whose range carries no active leaf and was not
+    /// stored: its null constant is the missing hasher's.
+    pub(crate) peaks: Vec<Option<Vec<u8>>>,
 }
 
 /// One algorithm's owned genesis-seed data, assembled in [`NaryMerkleLog::resume`]
@@ -252,7 +254,7 @@ impl<S: Storage> NaryMerkleLog<S> {
                         *alg_id,
                         Hasherless {
                             epochs,
-                            peaks: peaks.clone(),
+                            peaks: peaks.iter().cloned().map(Some).collect(),
                         },
                     );
                     continue;
@@ -388,7 +390,12 @@ impl<S: Storage> NaryMerkleLog<S> {
             if !seen.insert(alg_id) {
                 return Err(LogError::DuplicateAlgorithm(alg_id));
             }
-            if !hasher_map.contains_key(&alg_id) {
+            // A closed algorithm's hasher is optional, as on `resume`; an
+            // open one cannot be loaded without it.
+            let closed = metas
+                .iter()
+                .any(|(id, e)| *id == alg_id && e.last().is_some_and(|&(_, end)| end != u64::MAX));
+            if !hasher_map.contains_key(&alg_id) && !closed {
                 return Err(LogError::OrphanedMetadata(alg_id));
             }
         }
@@ -415,11 +422,24 @@ impl<S: Storage> NaryMerkleLog<S> {
         };
 
         let mut algs = HashMap::new();
+        let mut hasherless: HashMap<u64, Hasherless> = HashMap::new();
         let k = config.arity;
         for (alg_id, epochs) in metas {
-            let hasher = hasher_map
-                .remove(&alg_id)
-                .ok_or(LogError::OrphanedMetadata(alg_id))?;
+            let Some(hasher) = hasher_map.remove(&alg_id) else {
+                // Closed and hasherless (checked above): keep the timeline
+                // and whichever close-size peaks are stored.
+                let close = epochs.last().map_or(0, |&(_, end)| end);
+                let reader = StorageReader(&storage);
+                let mut peaks = Vec::new();
+                for (left, height) in frontier_for_size(close, k) {
+                    let stored = engine::NodeReader::get_node(&reader, alg_id, left, height)
+                        .await
+                        .map_err(LogError::Storage)?;
+                    peaks.push(stored);
+                }
+                hasherless.insert(alg_id, Hasherless { epochs, peaks });
+                continue;
+            };
             let view = engine::reconstruct_view(
                 &StorageReader(&storage),
                 alg_id,
@@ -436,22 +456,16 @@ impl<S: Storage> NaryMerkleLog<S> {
             storage,
             config,
             algs,
-            hasherless: HashMap::new(),
+            hasherless,
             count: global_size,
             kind,
         })
     }
 
     /// The timeline and close-size peaks of each closed algorithm registered
-    /// without a hasher (see [`Self::resume`]), sorted by id.
-    pub(crate) fn hasherless_frozen(&self) -> Vec<(u64, Hasherless)> {
-        let mut out: Vec<_> = self
-            .hasherless
-            .iter()
-            .map(|(&id, h)| (id, h.clone()))
-            .collect();
-        out.sort_unstable_by_key(|&(id, _)| id);
-        out
+    /// without a hasher (see [`Self::resume`]).
+    pub(crate) fn hasherless_frozen(&self) -> &HashMap<u64, Hasherless> {
+        &self.hasherless
     }
 
     /// Retrieve the tree configuration.
@@ -960,11 +974,14 @@ impl<S: Storage> NaryMerkleLog<S> {
     /// This is the timeline bound into the combined root (Design A+).
     #[must_use]
     pub fn committed_epochs_at(&self, size: u64) -> Vec<(u64, Vec<(u64, u64)>)> {
-        let mut out: Vec<_> = self
-            .algs
-            .iter()
-            .filter_map(|(&id, view)| view.epochs_at(size).map(|e| (id, e)))
-            .collect();
+        let mut out: Vec<_> =
+            self.algs
+                .iter()
+                .filter_map(|(&id, view)| view.epochs_at(size).map(|e| (id, e)))
+                .chain(self.hasherless.iter().filter_map(|(&id, h)| {
+                    engine::epochs_at_size(&h.epochs, size).map(|e| (id, e))
+                }))
+                .collect();
         out.sort_unstable_by_key(|&(id, _)| id);
         out
     }
@@ -1289,6 +1306,14 @@ impl<S: Storage> NaryMerkleLog<S> {
         let mut active_algs = Vec::new();
         for (&id, view) in &self.algs {
             if size > 0 && view.is_active_at(size - 1) {
+                active_algs.push(id);
+            }
+        }
+        // A closed algorithm held without its hasher is active at sizes before
+        // its close. Its member root is then needed and cannot be had, so the
+        // callers fail closed with `UnknownAlgorithm`.
+        for (&id, h) in &self.hasherless {
+            if size > 0 && h.epochs.iter().any(|&(s, e)| s < size && size <= e) {
                 active_algs.push(id);
             }
         }

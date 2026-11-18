@@ -31,9 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sealed.dormant_frontiers()`, not only `sealed.frontiers()`. A closed
   algorithm resumed without its hasher stays registered (so `add_algorithm`
   of that id fails `DuplicateAlgorithm` instead of silently re-registering
-  it) but cannot be resumed, is still frozen by a later `seal`, and makes
-  `from_storage` on that storage fail `OrphanedMetadata` unless the hasher is
-  supplied then.
+  it) but cannot be resumed and is still frozen by a later `seal`. A closed
+  algorithm's hasher is optional everywhere: `from_storage` likewise loads a
+  stored closed algorithm without one (an open algorithm still needs its
+  hasher, `OrphanedMetadata` otherwise). The combined roots of such a log
+  include the closed algorithm's timeline, as the original log's do. The
+  one exception is a seal of a log reopened from storage whose close-size
+  frontier has a peak over a range that never held a leaf: that peak's null
+  constant belongs to the missing hasher, so `seal` fails `UnknownAlgorithm`.
 
 ## [0.12.0]
 

@@ -82,7 +82,8 @@ impl<S: Storage> NaryMerkleLog<S> {
         let (frontiers, dormant, alg_epochs) = if size == 0 {
             (Vec::new(), Vec::new(), Vec::new())
         } else {
-            let mut alg_epochs = self.committed_epochs_at(size);
+            let alg_epochs = self.committed_epochs_at(size);
+            let frozen = self.hasherless_frozen();
 
             // Active algorithms contribute a frontier at the sealed size; a
             // closed one contributes its frontier at its close size, which a
@@ -90,6 +91,16 @@ impl<S: Storage> NaryMerkleLog<S> {
             let mut frontiers = Vec::new();
             let mut dormant = Vec::new();
             for (id, epochs) in &alg_epochs {
+                // A closed algorithm held without its hasher has no view; its
+                // close-size peaks were carried from the seal it came from, or
+                // read from storage, so freezing them again keeps it from
+                // being forgotten.
+                if let Some(h) = frozen.get(id) {
+                    let peaks: Option<Vec<Vec<u8>>> = h.peaks.iter().cloned().collect();
+                    let peaks = peaks.ok_or(LogError::UnknownAlgorithm(*id))?;
+                    dormant.push((*id, peaks));
+                    continue;
+                }
                 match crate::committed_active_at(&alg_epochs, *id, size) {
                     Some(true) => {
                         let peaks = self.frontier_peaks_at(*id, size).await?;
@@ -102,14 +113,6 @@ impl<S: Storage> NaryMerkleLog<S> {
                     },
                 }
             }
-            // A closed algorithm held without its hasher has no view but its
-            // timeline and close-size peaks were carried from the seal it came
-            // from; freezing them again keeps it from being forgotten.
-            for (id, frozen) in self.hasherless_frozen() {
-                alg_epochs.push((id, frozen.epochs));
-                dormant.push((id, frozen.peaks));
-            }
-            alg_epochs.sort_unstable_by_key(|&(id, _)| id);
             (frontiers, dormant, alg_epochs)
         };
 
