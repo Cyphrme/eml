@@ -74,7 +74,7 @@ async fn push(log: &mut Log, i: u64, subtree: bool) {
 
 /// Build alg 0 (always active) and alg 1 (added at `add`), applying `evs`
 /// to alg 1 at the given sizes, up to `n` leaves.
-async fn build(k: u64, add: u64, evs: &[(u64, Ev)], n: u64) -> Log {
+async fn build_as(k: u64, add: u64, evs: &[(u64, Ev)], n: u64, subtree: bool) -> Log {
     let mut log = new_log(k).await;
     for s in 0..=n {
         if s == add {
@@ -89,10 +89,14 @@ async fn build(k: u64, add: u64, evs: &[(u64, Ev)], n: u64) -> Log {
             }
         }
         if s < n {
-            push(&mut log, s, false).await;
+            push(&mut log, s, subtree).await;
         }
     }
     log
+}
+
+async fn build(k: u64, add: u64, evs: &[(u64, Ev)], n: u64) -> Log {
+    build_as(k, add, evs, n, false).await
 }
 
 /// Continue a log (sealed-and-resumed or not): append to size `r`, resume
@@ -250,5 +254,75 @@ fn closed_algorithm_hasher_is_optional_on_resume() {
                 .await
                 .is_err()
         );
+    });
+}
+
+/// A natively subtree-kind log (subtree appends from genesis, never resumed)
+/// with an algorithm partially active across the appended subtrees must root
+/// exactly as the flat log of the same leaves does, including after the
+/// algorithm is resumed: pins the stored-node read path outside `resume`.
+#[test]
+fn native_subtree_log_matches_flat_with_a_partially_active_algorithm() {
+    smol::block_on(async {
+        for k in 2..=3u64 {
+            for add in 0..=3u64 {
+                for c in (add + 1)..=6u64 {
+                    for r in c..=8u64 {
+                        let evs = [(c, Ev::Close)];
+                        let flat =
+                            tail(build_as(k, add, &evs, c, false).await, false, r, r + 3).await;
+                        let sub = tail(build_as(k, add, &evs, c, true).await, true, r, r + 3).await;
+                        assert_eq!(flat, sub, "k={k} add={add} close={c} resume={r}");
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn hashers_for(ids: &[u64]) -> Vec<(u64, Box<dyn Hasher>)> {
+    ids.iter()
+        .map(|&id| (id, Box::new(FixtureHasher) as Box<dyn Hasher>))
+        .collect()
+}
+
+/// Resuming without a closed algorithm's hasher must leave a record of its
+/// id: re-adding it would register it fresh over nulls and root differently
+/// from the original log. It stays unresumable, un-re-addable, unsealable
+/// (a seal would forget it), and the record survives a reopen.
+#[test]
+fn hasherless_closed_algorithm_cannot_be_re_added() {
+    smol::block_on(async {
+        let sealed = build(2, 1, &[(3, Ev::Close)], 5)
+            .await
+            .seal()
+            .await
+            .unwrap();
+        let mut log = NaryMerkleLog::resume(&sealed, MemoryStorage::new(), hashers_for(&[0]))
+            .await
+            .unwrap();
+        assert!(matches!(
+            log.add_algorithm(1, Box::new(FixtureHasher)).await,
+            Err(polydigest::LogError::DuplicateAlgorithm(1))
+        ));
+        assert!(matches!(
+            log.resume_algorithm(1).await,
+            Err(polydigest::LogError::UnknownAlgorithm(1))
+        ));
+        assert!(
+            log.stage()
+                .add_algorithm(1, Box::new(FixtureHasher))
+                .is_err()
+        );
+
+        let reopened = NaryMerkleLog::from_storage(log.into_storage(), hashers_for(&[0]))
+            .await
+            .unwrap();
+        let mut reopened = reopened;
+        assert!(matches!(
+            reopened.add_algorithm(1, Box::new(FixtureHasher)).await,
+            Err(polydigest::LogError::DuplicateAlgorithm(1))
+        ));
+        assert!(reopened.seal().await.is_err(), "a seal would forget alg 1");
     });
 }
