@@ -150,7 +150,8 @@ fn test_fjall_metadata_corruption() {
             let metadata = db
                 .keyspace("eml_metadata", fjall::KeyspaceCreateOptions::default)
                 .unwrap();
-            metadata.insert(b"short", [0; 16]).unwrap();
+            // Empty-scope prefix (u16 BE 0), then a suffix of the wrong length.
+            metadata.insert(b"\0\0short", [0; 16]).unwrap();
         }
 
         let storage = FjallStorage::open(dir.path()).unwrap();
@@ -171,7 +172,9 @@ fn test_fjall_metadata_corruption() {
             let metadata = db
                 .keyspace("eml_metadata", fjall::KeyspaceCreateOptions::default)
                 .unwrap();
-            metadata.insert(0u64.to_be_bytes(), [0; 15]).unwrap();
+            let mut key = vec![0u8, 0];
+            key.extend_from_slice(&0u64.to_be_bytes());
+            metadata.insert(key, [0; 15]).unwrap();
         }
 
         let storage = FjallStorage::open(dir.path()).unwrap();
@@ -194,8 +197,9 @@ fn test_fjall_storage_scoped_prefix_isolation() {
         let dir = tempdir().unwrap();
         let db = fjall::Database::builder(dir.path()).open().unwrap();
 
-        let mut tenant_a = FjallStorage::with_database_scoped(db.clone(), "tenant_a").unwrap();
-        let mut tenant_b = FjallStorage::with_database_scoped(db, "tenant_b").unwrap();
+        let keyspaces = storage_fjall::LogKeyspaces::open(db).unwrap();
+        let mut tenant_a = FjallStorage::scoped(&keyspaces, b"tenant_a").unwrap();
+        let mut tenant_b = FjallStorage::scoped(&keyspaces, b"tenant_b").unwrap();
 
         // Same positional keys (leaf index 0, node (alg_id=1, left=2, height=3),
         // alg_id 7) written through two independently-scoped instances sharing
@@ -262,13 +266,6 @@ fn test_fjall_storage_scoped_prefix_isolation() {
             vec![(7, epochs_b)]
         );
     });
-}
-
-#[test]
-fn test_fjall_storage_scoped_prefix_rejects_empty() {
-    let dir = tempdir().unwrap();
-    let db = fjall::Database::builder(dir.path()).open().unwrap();
-    assert!(FjallStorage::with_database_scoped(db, "").is_err());
 }
 
 /// A sparse, out-of-order leaf write is no longer a legal `AppendLeaf` op:
