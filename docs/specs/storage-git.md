@@ -338,7 +338,7 @@ before," never ambiguous.
 
 Every blob this layer ever writes is one of four shapes. Multi-byte integers
 are big-endian throughout, matching the encoding `storage-fjall` already
-uses for the same fields (`storage-fjall/src/lib.rs:163-252`), so a
+uses for the same fields (`storage-fjall`'s `encode_epochs`, `node_suffix` and the `Storage` impl), so a
 migration between backends never has to reconcile endianness.
 
 ### 3.1 `meta` (fixed 10 bytes)
@@ -513,8 +513,7 @@ succeed; a lock held for the whole test forces the bound to be hit and the
 write to return within a generous external ceiling, never hang.*
 
 Because every `storage-git` instance is single-writer within its own
-process (mirroring `storage-fjall`'s non-`Clone` `FjallStorage`,
-`storage-fjall/src/lib.rs:53`), the race SG19/SG19a guards against is only
+process (mirroring `storage-fjall`'s non-`Clone` `FjallStorage`), the race SG19/SG19a guards against is only
 ever against another process, another instance, or git's own housekeeping —
 never against concurrent calls on the same instance, which Rust's `&mut
 self` on every mutating trait method already forecloses.
