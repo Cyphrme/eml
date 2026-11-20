@@ -16,17 +16,53 @@ compaction guarantees.
 
 - **Durable leaf storage** — leaves persisted to disk via Fjall's LSM engine
 - **Concurrent access** — thread-safe key-value operations with isolation
-- **Multi-database support** — scoped keyspaces per tenant via `with_database`
+- **Many logs, fixed keyspaces** — scopes are a length-prefixed key prefix over one
+  keyspace triplet, so adding a log creates no keyspace
 - **Configurable backends** — Fjall's column families for flexible schema design
 
 ## Usage
 
 ```rust
-use storage_fjall::FjallStorage;
+use storage_fjall::{FjallStorage, LogKeyspaces};
 
-let storage = FjallStorage::with_database(db, "leaves")?;
+// Once per database: creates `eml_leaves`, `eml_nodes`, `eml_metadata`.
+let keyspaces = LogKeyspaces::open(db)?;
+
+// Per log (e.g. per principal): no IO, no keyspace creation. Free to call
+// on every load.
+let storage = FjallStorage::scoped(&keyspaces, principal_id_bytes)?;
 // Pass to polydigest/EML constructors...
+
+// Retire a log: one batch, not synced.
+FjallStorage::scoped(&keyspaces, old_scope)?.drop_scope()?;
 ```
+
+`FjallStorage::open(path)` and `with_database(db)` remain for the
+single-log case; they use the empty scope.
+
+## Scoping and durability
+
+Every key is `u16 BE scope length ++ scope ++ suffix`, so no scope's keys
+collide with, or are a byte-prefix of, another's, and scans stay inside
+their scope. Scope is a key prefix and not a keyspace name because creating a
+fjall keyspace costs about 14 fsyncs under a database-wide lock, which a
+per-principal keyspace triplet paid on every new principal.
+
+`apply` commits one fjall batch and never syncs; durability policy
+(`Database::persist`) belongs to the caller, who can then cover a log write
+and its other writes with one sync.
+
+## Migrating from 0.2
+
+0.3.0 is breaking in API and on-disk layout.
+
+- `with_database_scoped(db, prefix)` is removed, with
+  `FjallStorageError::InvalidPrefix`. Use `LogKeyspaces::open` once and
+  `FjallStorage::scoped`; the scope is arbitrary bytes (at most 65535), and
+  a too-long one is `InvalidScope`.
+- Keys now carry the scope prefix, including the empty scope that `open` and
+  `with_database` use. Data written by 0.2 is not readable; rebuild it from
+  its source of truth, and delete any leftover `{prefix}_eml_*` keyspaces.
 
 ## Place in the stack
 

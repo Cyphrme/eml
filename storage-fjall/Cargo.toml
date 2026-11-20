@@ -1,6 +1,6 @@
 [package]
 name          = "polydigest-storage-fjall"
-version       = "0.2.0"
+version       = "0.3.0"
 description   = "Fjall-backed storage backend for the EML append-only library"
 edition       = "2024"
 rust-version  = "1.85"

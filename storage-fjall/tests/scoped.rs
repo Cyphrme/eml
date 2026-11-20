@@ -80,8 +80,12 @@ async fn assert_scope_matches(storage: &FjallStorage, model: &Model) {
             }
         }
     }
-    let metas: BTreeMap<u64, Vec<(u64, u64)>> =
-        storage.load_algorithm_metas().await.unwrap().into_iter().collect();
+    let metas: BTreeMap<u64, Vec<(u64, u64)>> = storage
+        .load_algorithm_metas()
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
     assert_eq!(metas, model.algs);
 }
 

@@ -49,7 +49,8 @@ impl Hasher for Sha256Hasher {
 /// `eml_metadata` keyspace -- independent of `FjallStorage::append_count`'s
 /// own decoding (which is exactly the function under scrutiny).
 fn log_meta_value_len(dir: &std::path::Path) -> usize {
-    const LOG_META_KEY: &[u8; 9] = b"_logmeta_";
+    // Empty scope: u16 BE length 0, then the 9-byte reserved suffix.
+    const LOG_META_KEY: &[u8; 11] = b"\0\0_logmeta_";
     let db = fjall::Database::builder(dir).open().unwrap();
     let metadata = db
         .keyspace("eml_metadata", fjall::KeyspaceCreateOptions::default)
