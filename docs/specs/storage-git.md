@@ -448,7 +448,7 @@ keeps the trait's default (`len() == 0`) unchanged.
 **[SG17]** Each `storage-git` instance owns exactly one git reference (the
 **staging ref**), supplied at construction (for example
 `refs/eml/storage/<name>/staging`), analogous to `storage-fjall`'s
-per-instance keyspace prefix (`storage-fjall/src/lib.rs:100-157`) — this is
+per-scope key prefix (`FjallStorage::scoped`) — this is
 how two logical logs share one repository without colliding. The staging
 ref's target MUST always be a tree object, `C(n)` for the instance's current
 `n`; it MUST NOT be a commit. *Checked by: structural; a compiled check against the pinned tag confirms `gix`
