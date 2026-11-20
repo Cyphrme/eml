@@ -124,8 +124,10 @@ impl LogKeyspaces {
 /// A production-grade EML storage backend backed by a Fjall database: one
 /// scope over the shared [`LogKeyspaces`].
 ///
-/// Not `Clone` — enforces single-writer ownership so the tree-level
-/// read-count→write-at-count window cannot race across aliased handles.
+/// Not `Clone`, but [`FjallStorage::scoped`] can mint a second handle to the
+/// same scope, so nothing here prevents aliased writers: the caller must
+/// serialize writers per scope, because the tree-level
+/// read-count→write-at-count window is not atomic across handles.
 /// Durability policy (journal sync) is the caller's: [`Storage::apply`]
 /// commits one batch and never persists.
 pub struct FjallStorage {
@@ -183,7 +185,8 @@ impl FjallStorage {
 
     /// Delete every key of this scope, in one fjall batch (fjall has no
     /// keyspace range delete, so the scope's keys are scanned and
-    /// tombstoned). Not synced. Other scopes are untouched; the scope may be
+    /// tombstoned). Memory and the journal entry are O(keys in the scope).
+    /// Not synced. Other scopes are untouched; the scope may be
     /// reused afterwards from position 0.
     ///
     /// Consumes the handle: it describes a log that no longer exists.
@@ -240,7 +243,12 @@ impl Storage for FjallStorage {
                 let key = guard
                     .key()
                     .map_err(|e| FjallStorageError::Database(e.to_string()))?;
-                let arr: [u8; 8] = key[self.prefix.len()..].try_into().map_err(|_| {
+                let suffix = key.strip_prefix(self.prefix.as_slice()).ok_or_else(|| {
+                    FjallStorageError::MetadataCorruption(
+                        "leaf key lacks its scope prefix".to_string(),
+                    )
+                })?;
+                let arr: [u8; 8] = suffix.try_into().map_err(|_| {
                     FjallStorageError::MetadataCorruption("leaf key has wrong length".to_string())
                 })?;
                 Ok(u64::from_be_bytes(arr) + 1)
@@ -269,7 +277,13 @@ impl Storage for FjallStorage {
                 .into_inner()
                 .map_err(|e| FjallStorageError::Database(e.to_string()))?;
             // Skip the reserved log-metadata entry (9 bytes).
-            let key_ref = &key_bytes[self.prefix.len()..];
+            let key_ref = key_bytes
+                .strip_prefix(self.prefix.as_slice())
+                .ok_or_else(|| {
+                    FjallStorageError::MetadataCorruption(
+                        "metadata key lacks its scope prefix".to_string(),
+                    )
+                })?;
             if key_ref == LOG_META_KEY {
                 continue;
             }

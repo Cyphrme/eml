@@ -61,8 +61,12 @@ and its other writes with one sync.
   `FjallStorage::scoped`; the scope is arbitrary bytes (at most 65535), and
   a too-long one is `InvalidScope`.
 - Keys now carry the scope prefix, including the empty scope that `open` and
-  `with_database` use. Data written by 0.2 is not readable; rebuild it from
-  its source of truth, and delete any leftover `{prefix}_eml_*` keyspaces.
+  `with_database` use. A 0.2 store is not readable and must be rebuilt from
+  its source of truth; delete any leftover `{prefix}_eml_*` keyspaces. Opened
+  with 0.3, it reports `MetadataCorruption` (`len`: "leaf key has wrong
+  length"; `load_algorithm_metas`), and `append_count` reads 0 -- 0.2 keys
+  that begin with two zero bytes fall under the empty scope's prefix. This
+  is the layout change, not disk corruption.
 
 ## Place in the stack
 
